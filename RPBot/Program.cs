@@ -527,6 +527,42 @@ namespace DiscordBot
         }
     }
 
+    public class RollDiceCommands : ModuleBase<SocketCommandContext>
+    {
+        private string ValidateRollInput(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return "Ввод не может быть пустым.";
+
+            if (!input.Contains('d', StringComparison.OrdinalIgnoreCase))
+                return "Ввод должен содержать символ `d` (например, `2d6`).";
+
+            var parts = input.Split(new[] { 'd', '+', '-' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Проверяем количество частей
+            if (parts.Length < 1 || parts.Length > 3)
+                return "Некорректное количество параметров. Используйте формат `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`.";
+
+            // Проверяем, что все части являются числами
+            foreach (var part in parts)
+            {
+                if (!int.TryParse(part, out _) && !part.StartsWith('[') && !part.EndsWith(']'))
+                    return $"Некорректное значение: `{part}`. Ожидается число или диапазон в формате `[min,max]`.";
+            }
+
+            // Проверяем диапазоны (если есть)
+            if (input.Contains('[') || input.Contains(']'))
+            {
+                var rangePattern = @"\[\d+,\d+\]";
+                if (!Regex.IsMatch(input, rangePattern))
+                    return "Некорректный формат диапазона. Используйте `[min,max]`, где `min` и `max` — числа.";
+            }
+
+            // Если всё в порядке, возвращаем null
+            return null;
+        }
+    }
+
     public class InfoCommands : ModuleBase<SocketCommandContext>
     {
         [Command("help")]
