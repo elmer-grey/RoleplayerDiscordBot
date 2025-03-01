@@ -790,7 +790,6 @@ namespace DiscordBot
 
             return new Color(r, g, b);
         }
-
     }
 
     public class InfoCommands : ModuleBase<SocketCommandContext>
@@ -803,6 +802,7 @@ namespace DiscordBot
             helpMessage.AppendLine("**Список доступных команд:**");
             helpMessage.AppendLine("> `/help` - Вы находитесь здесь.");
             helpMessage.AppendLine("> `/help_r` - Выводит список команд, где указаны все вариации для бросков кубов.");
+            helpMessage.AppendLine("> `/help_gs` - Выводит список команд, которые используются для подсчёта времени игры.");
             helpMessage.AppendLine("> `/bug_report` - Позволяет отправить администратору сообщение об ошибке, " +
                 "которая связана с ботом, или любое ваше предложение по его улучшению.");
             helpMessage.AppendLine("> `/serverinfo` - Показывает очень краткую информацию о сервере.");
