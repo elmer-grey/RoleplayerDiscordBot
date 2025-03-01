@@ -60,7 +60,7 @@ namespace DiscordBot
             _client.MessageReceived += HandleCommandAsync;
             _client.Ready += OnReady;
             _client.SlashCommandExecuted += OnSlashCommandExecuted;
-            Console.WriteLine("Попытка входа в систему...");
+            _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
             await _client.LoginAsync(TokenType.Bot, "MTMzMTYyODkxMDE1MjEyMjM4OA.GzWsZE.WJgvlfflP5wkFxFGqce6tK3mDYOygSvc0q2TBk");
             Console.WriteLine("Вход выполнен успешно.");
             await _client.StartAsync();
@@ -1264,7 +1264,7 @@ namespace DiscordBot
             });
         }
     }
-    
+
     public class GameSession
     {
         public string GameName { get; set; }
@@ -1284,6 +1284,38 @@ namespace DiscordBot
         public GameSessionCommands(DiscordSocketClient client)
         {
             _client = client;
+        }
+
+        public static async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent, DiscordSocketClient client)
+        {
+            var gameName = guildEvent.Name;
+
+            var creator = guildEvent.Creator as SocketGuildUser;
+            if (creator == null || !creator.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine($"Мероприятие '{gameName}' запущено не мастером. Пропускаем.");
+                return;
+            }
+
+            _currentSession = new GameSession
+            {
+                GameName = gameName,
+                MasterName = creator.DisplayName,
+                StartTime = DateTime.Now
+            };
+
+            ulong channelId = 1345036014519058464;
+            var channel = client.GetChannel(channelId) as ITextChannel;
+            if (channel != null)
+            {
+                await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{_currentSession.MasterName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
+            }
+            else
+            {
+                Console.WriteLine($"Канал с ID {channelId} не найден или это не текстовый канал.");
+            }
+
+            Console.WriteLine($"Оповещение: Игра '{gameName}' начата.");
         }
 
         [Command("start")]
