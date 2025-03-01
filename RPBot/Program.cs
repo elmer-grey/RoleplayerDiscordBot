@@ -44,6 +44,7 @@ namespace DiscordBot
                 .AddSingleton(_commandService)
                 .AddSingleton<QueueModule>()
                 .AddSingleton<InfoCommands>()
+                .AddSingleton<RollDiceCommands>()
                 .AddSingleton<GameSessionCommands>()
                 .BuildServiceProvider();
 
@@ -386,7 +387,7 @@ namespace DiscordBot
             var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
             var input = inputOption?.Value?.ToString();
 
-            var diceModule = _services.GetService<InfoCommands>();
+            var diceModule = _services.GetService<RollDiceCommands>();
             await diceModule.RollDice(command, input);
         }
 
@@ -561,97 +562,6 @@ namespace DiscordBot
             // Если всё в порядке, возвращаем null
             return null;
         }
-    }
-
-    public class InfoCommands : ModuleBase<SocketCommandContext>
-    {
-        [Command("help")]
-        public async Task Help(SocketSlashCommand command)
-        {
-            var helpMessage = new StringBuilder();
-
-            helpMessage.AppendLine("**Список доступных команд:**");
-            helpMessage.AppendLine("> `/help` - Вы находитесь здесь.");
-            helpMessage.AppendLine("> `/help_r` - Выводит список команд, где указаны все вариации для бросков кубов.");
-            helpMessage.AppendLine("> `/bug_report` - Позволяет отправить администратору сообщение об ошибке, " +
-                "которая связана с ботом, или любое ваше предложение по его улучшению.");
-            helpMessage.AppendLine("> `/serverinfo` - Показывает очень краткую информацию о сервере.");
-            helpMessage.AppendLine("> `/roll XdY` - Выполняет заданное количество `Х` бросков кубика заданного номинала `Y`. " +
-                "Если оставить аргумент `X` пустым, то будет совершён один бросок.");
-            helpMessage.AppendLine("> `/queue Z` - Запускает очередь с необходимым `Z` количеством персонажей в сцене. __Доступ ограничен__");
-            helpMessage.AppendLine("> `/q dY` - **Только при активной очереди!** Совершается бросок кубика выбранного номинала `Y`. " +
-                "Добавляет вас в очередь на выполнение действия. Может быть использована несколько раз одним человеком.");
-            helpMessage.AppendLine("> `/stop_q` - Останавливает текущую очередь, если она активна. __Доступ ограничен__");
-            helpMessage.AppendLine("> `/clr X` - Удаляет выбранное количество сообщений `X`. __Доступ ограничен__");
-            helpMessage.AppendLine("-# *Некоторые пасхалки скрыты в коде. Количество команд будет добавляться. Данный бот всё ещё в разработке.*");
-            helpMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(helpMessage.ToString());
-        }
-
-        [Command("serverinfo")]
-        public async Task ServerInfo(SocketSlashCommand command)
-        {
-            var server = (command.Channel as SocketGuildChannel)?.Guild;
-
-            if (server == null)
-            {
-                await command.RespondAsync("Не удалось получить информацию о сервере.");
-                return;
-            }
-            // Получаем информацию о участниках
-            int totalMembers = server.MemberCount;
-            int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Offline);
-            int botCount = server.Users.Count(u => u.IsBot);
-            int humanCount = totalMembers - botCount;
-            var embed = new EmbedBuilder()
-                .WithTitle("Информация о сервере")
-                .AddField("Название", server.Name)
-                .AddField("Создан", server.CreatedAt)
-                .AddField("Участники",
-                $"Всего участников: {totalMembers}\n" +
-                $"Участников в сети: {onlineMembers}\n" +
-                $"Ботов: {botCount}\n" +
-                $"Людей: {humanCount}")
-                .AddField("Важная дата", "*20.11.2020*")
-                .AddField("Первое включение бота на сервере", "*01.02.2025*")
-                .WithColor(Color.Blue)
-                .Build();
-
-            await command.RespondAsync(embed: embed);
-        }
-
-        [Command("help_r")]
-        public async Task Help_R(SocketSlashCommand command)
-        {
-            var help_RMessage = new StringBuilder();
-
-            help_RMessage.AppendLine("**Команды поддерживаются следующего вида:**");
-            help_RMessage.AppendLine("> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с верхней границей с номиналом `Y`.");
-            help_RMessage.AppendLine("> `/roll XdY+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
-                "с верхней границей с номиналом `Y`. Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`." +
-                " Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
-            help_RMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(help_RMessage.ToString());
-        }
-
-        [Command("help_gs")]
-        public async Task Help_GS(SocketSlashCommand command)
-        {
-            var help_GSMessage = new StringBuilder();
-
-            help_GSMessage.AppendLine("**Последовательнсть команд:**");
-            help_GSMessage.AppendLine("> 1) `/start *game_name*` - Это команда запускает секундомер и оповещает о начале игры. В `game_name` необходимо указать название " +
-                "текущей игры.");
-            help_GSMessage.AppendLine("> 2) `/pause` и `/resume` - Данные команды создают начало и конец перерыва, чтобы его время не учитывать в итоговой статистике.");
-            help_GSMessage.AppendLine("> 3) `/stop` - Остановка секундомера и вывод статистики.");
-            help_GSMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(help_GSMessage.ToString());
-        }
 
         [Command("roll")]
         public async Task RollDice(SocketSlashCommand command, string input)
@@ -665,13 +575,23 @@ namespace DiscordBot
             }
 
             var _input = input.Trim();
-            var rollPattern = @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?|(?:(\d+)\[(\d+),(\d+)\])([+-]\d+)?|(?:(\d*)d\[(\d+),(\d+)\])([+-]\d+)?)$";
-            var match = Regex.Match(_input, rollPattern, RegexOptions.IgnoreCase);
+
+            // Проверяем ввод
+            var errorMessage = ValidateRollInput(_input);
+            if (errorMessage != null)
+            {
+                await command.RespondAsync($"Ошибка: {errorMessage}");
+                Console.WriteLine($"Предупреждение: Был введён неверный формат. Ошибка: {errorMessage}");
+                return;
+            }
+
+            // Если ввод корректен, продолжаем обработку
+            var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?|(?:(\d+)\[(\d+),(\d+)\])([+-]\d+)?|(?:(\d*)d\[(\d+),(\d+)\])([+-]\d+)?)$", RegexOptions.IgnoreCase);
 
             if (!match.Success)
             {
-                await command.RespondAsync($"Неверный формат! Введено: `{input}`. Используйте `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`, где `X`, `Y`, `Z` — строго больше 0.");
-                Console.WriteLine("Предупреждение: Был введён неверный формат. Ошибка отправлена.");
+                await command.RespondAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`, где `X`, `Y`, `Z` — строго больше 0.");
+                Console.WriteLine("Предупреждение: Был введён неверный формат.");
                 return;
             }
 
@@ -773,45 +693,42 @@ namespace DiscordBot
                 }
                 else
                 {*/
-                    var result = random.Next(1, max + 1);
-                    Console.WriteLine($"Полученное значение: {result}");
-                    var filePath = Path.Combine("Numbers", $"{result}.png");
-                    Color embedColor = GetGradientColor(result, 1, max);
+                var result = random.Next(1, max + 1);
+                Console.WriteLine($"Полученное значение: {result}");
+                var filePath = Path.Combine("Numbers", $"{result}.png");
+                Color embedColor = GetGradientColor(result, 1, max);
 
-                    if (File.Exists(filePath))
-                    {
-                        var embed = new EmbedBuilder()
-                            //.WithTitle($"Результат броска {user.DisplayName}: {result}")
-                            .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
-                            .WithColor(embedColor)
-                            .Build();
-                        // Отправляем сообщение с файлом и embed без присвоения результата
-                        await command.RespondWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
-                        await command.RespondAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
-                    }
-                    return;
+                if (File.Exists(filePath))
+                {
+                    var embed = new EmbedBuilder()
+                        //.WithTitle($"Результат броска {user.DisplayName}: {result}")
+                        .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                        .WithColor(embedColor)
+                        .Build();
+                    await command.RespondWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                }
+                else
+                {
+                    Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
+                    await command.RespondAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                }
+                return;
                 //}
             }
 
-            // Обработка других случаев
             results = Enumerable.Range(0, count).Select(_ => {
                 int result = random.Next(min, max + 1);
                 Console.WriteLine($"Полученное значение: {result}");
                 return result;
             }).ToList();
 
-            // Форматирование результата
             string resultMessage = "__**Результат броска**__\n" +
                                    "```plaintext\n";
 
             if (count == 1)
             {
-                var rolledValue = results[0]; // Выпавшее значение
-                int finalValue = rolledValue + modifier; // Полученное значение с модификатором
+                var rolledValue = results[0];
+                int finalValue = rolledValue + modifier;
 
                 if (modifier != 0)
                 {
@@ -821,16 +738,15 @@ namespace DiscordBot
                 }
                 else
                 {
-                    resultMessage += $"Полученное значение: {rolledValue}\n"; // Если модификатор 0, просто выводим выпавшее значение
+                    resultMessage += $"Полученное значение: {rolledValue}\n";
                 }
             }
             else
             {
-                // Обработка нескольких бросков
                 for (int i = 0; i < results.Count; i++)
                 {
-                    var rolledValue = results[i]; // Выпавшее значение
-                    int finalValue = rolledValue + modifier; // Полученное значение с модификатором
+                    var rolledValue = results[i];
+                    int finalValue = rolledValue + modifier;
 
                     if (modifier != 0)
                     {
@@ -840,14 +756,13 @@ namespace DiscordBot
                     }
                     else
                     {
-                        resultMessage += $"Бросок {i + 1}: Полученное значение: {rolledValue}\n"; // Если модификатор 0, просто выводим выпавшее значение
+                        resultMessage += $"Бросок {i + 1}: Полученное значение: {rolledValue}\n";
                     }
                 }
             }
 
             resultMessage += "```";
 
-            // Отправка сообщения
             await command.RespondAsync(resultMessage);
             Console.WriteLine($"Совершён бросок. {resultMessage}");
         }
@@ -874,6 +789,98 @@ namespace DiscordBot
             }
 
             return new Color(r, g, b);
+        }
+
+    }
+
+    public class InfoCommands : ModuleBase<SocketCommandContext>
+    {
+        [Command("help")]
+        public async Task Help(SocketSlashCommand command)
+        {
+            var helpMessage = new StringBuilder();
+
+            helpMessage.AppendLine("**Список доступных команд:**");
+            helpMessage.AppendLine("> `/help` - Вы находитесь здесь.");
+            helpMessage.AppendLine("> `/help_r` - Выводит список команд, где указаны все вариации для бросков кубов.");
+            helpMessage.AppendLine("> `/bug_report` - Позволяет отправить администратору сообщение об ошибке, " +
+                "которая связана с ботом, или любое ваше предложение по его улучшению.");
+            helpMessage.AppendLine("> `/serverinfo` - Показывает очень краткую информацию о сервере.");
+            helpMessage.AppendLine("> `/roll XdY` - Выполняет заданное количество `Х` бросков кубика заданного номинала `Y`. " +
+                "Если оставить аргумент `X` пустым, то будет совершён один бросок.");
+            helpMessage.AppendLine("> `/queue Z` - Запускает очередь с необходимым `Z` количеством персонажей в сцене. __Доступ ограничен__");
+            helpMessage.AppendLine("> `/q dY` - **Только при активной очереди!** Совершается бросок кубика выбранного номинала `Y`. " +
+                "Добавляет вас в очередь на выполнение действия. Может быть использована несколько раз одним человеком.");
+            helpMessage.AppendLine("> `/stop_q` - Останавливает текущую очередь, если она активна. __Доступ ограничен__");
+            helpMessage.AppendLine("> `/clr X` - Удаляет выбранное количество сообщений `X`. __Доступ ограничен__");
+            helpMessage.AppendLine("-# *Некоторые пасхалки скрыты в коде. Количество команд будет добавляться. Данный бот всё ещё в разработке.*");
+            helpMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
+
+            await command.RespondAsync(helpMessage.ToString());
+        }
+
+        [Command("serverinfo")]
+        public async Task ServerInfo(SocketSlashCommand command)
+        {
+            var server = (command.Channel as SocketGuildChannel)?.Guild;
+
+            if (server == null)
+            {
+                await command.RespondAsync("Не удалось получить информацию о сервере.");
+                return;
+            }
+            // Получаем информацию о участниках
+            int totalMembers = server.MemberCount;
+            int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Offline);
+            int botCount = server.Users.Count(u => u.IsBot);
+            int humanCount = totalMembers - botCount;
+            var embed = new EmbedBuilder()
+                .WithTitle("Информация о сервере")
+                .AddField("Название", server.Name)
+                .AddField("Создан", server.CreatedAt)
+                .AddField("Участники",
+                $"Всего участников: {totalMembers}\n" +
+                $"Участников в сети: {onlineMembers}\n" +
+                $"Ботов: {botCount}\n" +
+                $"Людей: {humanCount}")
+                .AddField("Важная дата", "*20.11.2020*")
+                .AddField("Первое включение бота на сервере", "*01.02.2025*")
+                .WithColor(Color.Blue)
+                .Build();
+
+            await command.RespondAsync(embed: embed);
+        }
+
+        [Command("help_r")]
+        public async Task Help_R(SocketSlashCommand command)
+        {
+            var help_RMessage = new StringBuilder();
+
+            help_RMessage.AppendLine("**Команды поддерживаются следующего вида:**");
+            help_RMessage.AppendLine("> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с верхней границей с номиналом `Y`.");
+            help_RMessage.AppendLine("> `/roll XdY+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
+                "с верхней границей с номиналом `Y`. Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
+            help_RMessage.AppendLine("> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`.");
+            help_RMessage.AppendLine("> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`." +
+                " Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
+            help_RMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
+
+            await command.RespondAsync(help_RMessage.ToString());
+        }
+
+        [Command("help_gs")]
+        public async Task Help_GS(SocketSlashCommand command)
+        {
+            var help_GSMessage = new StringBuilder();
+
+            help_GSMessage.AppendLine("**Последовательнсть команд:**");
+            help_GSMessage.AppendLine("> 1) `/start *game_name*` - Это команда запускает секундомер и оповещает о начале игры. В `game_name` необходимо указать название " +
+                "текущей игры.");
+            help_GSMessage.AppendLine("> 2) `/pause` и `/resume` - Данные команды создают начало и конец перерыва, чтобы его время не учитывать в итоговой статистике.");
+            help_GSMessage.AppendLine("> 3) `/stop` - Остановка секундомера и вывод статистики.");
+            help_GSMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
+
+            await command.RespondAsync(help_GSMessage.ToString());
         }
 
         [Command("clr")]
