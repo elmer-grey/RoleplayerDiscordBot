@@ -27,7 +27,7 @@ namespace DiscordBot
             var config = new DiscordSocketConfig
             {
                 GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers | GatewayIntents.GuildMessages |
-                GatewayIntents.MessageContent,
+                GatewayIntents.MessageContent | GatewayIntents.GuildScheduledEvents,
 
                 ConnectionTimeout = 15000,
                 MessageCacheSize = 100,
