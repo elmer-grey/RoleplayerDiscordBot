@@ -104,7 +104,8 @@ namespace RPBot
                     new SlashCommandBuilder()
                 .WithName("start")
                 .WithDescription("Запустить игру.")
-                .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true),
+                .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
+                .AddOption("master_name", ApplicationCommandOptionType.String, "Имя мастера, проводящего игру", isRequired: false),
                     new SlashCommandBuilder()
                 .WithName("pause")
                 .WithDescription("Приостановить игру."),

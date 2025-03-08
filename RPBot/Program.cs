@@ -37,8 +37,6 @@ namespace DiscordBot
             _client = new DiscordSocketClient(config);
             _commandService = new CommandService();
 
-            //var guild = _client.GetGuild(1288192593137635359);
-            //var guild = _client.GetGuild(295189463376855040); //Переключить в субботу! //Канал "КнР"
             var services = new ServiceCollection()
                 .AddSingleton(_client)
                 .AddSingleton(_commandService)
@@ -434,8 +432,11 @@ namespace DiscordBot
             var gameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "game_name");
             var gameName = gameNameOption?.Value?.ToString();
 
+            var masterNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "master_name");
+            var masterName = masterNameOption?.Value?.ToString(); // Извлекаем имя мастера, если оно указано
+
             var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.StartGameSession(command, gameName);
+            await gameSessionModule.StartGameSession(command, gameName, masterName); // Передаём masterName
             Console.WriteLine("Игра начата.");
         }
 
@@ -1319,7 +1320,7 @@ namespace DiscordBot
         }
 
         [Command("start")]
-        public async Task StartGameSession(SocketSlashCommand command, string gameName)
+        public async Task StartGameSession(SocketSlashCommand command, string gameName, string masterName = null)
         {
             var user = command.User as SocketGuildUser;
 
@@ -1335,15 +1336,17 @@ namespace DiscordBot
                 return;
             }
 
+            var masterDisplayName = string.IsNullOrEmpty(masterName) ? user.DisplayName : masterName;
+
             _currentSession = new GameSession
             {
                 GameName = gameName,
-                MasterName = user.DisplayName,
+                MasterName = masterDisplayName,
                 StartTime = DateTime.Now,
                 IsStopped = false
             };
             Console.WriteLine("Оповещение: Создание новой записи времени.");
-            await command.RespondAsync($"Игра **{gameName}** запущена мастером **{user.DisplayName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
+            await command.RespondAsync($"Игра **{gameName}** запущена мастером **{masterDisplayName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
         }
 
         [Command("pause")]
