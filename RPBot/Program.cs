@@ -432,11 +432,11 @@ namespace DiscordBot
             var gameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "game_name");
             var gameName = gameNameOption?.Value?.ToString();
 
-            var masterNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "master_name");
-            var masterName = masterNameOption?.Value?.ToString(); // Извлекаем имя мастера, если оно указано
+            var masterOption = command.Data.Options.FirstOrDefault(o => o.Name == "master");
+            var masterUser = masterOption?.Value as SocketUser; // Извлекаем выбранного мастера
 
             var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.StartGameSession(command, gameName, masterName); // Передаём masterName
+            await gameSessionModule.StartGameSession(command, gameName, masterUser); // Передаём masterUser
             Console.WriteLine("Игра начата.");
         }
 
@@ -537,13 +537,13 @@ namespace DiscordBot
                 return "Ввод не может быть пустым.";
 
             if (!input.Contains('d', StringComparison.OrdinalIgnoreCase))
-                return "Ввод должен содержать символ `d` (например, `2d6`).";
+                return $"Введено `{input}`. Ввод должен содержать символ `d` (например, `2d6`).";
 
             var parts = input.Split(new[] { 'd', '+', '-' }, StringSplitOptions.RemoveEmptyEntries);
 
             // Проверяем количество частей
             if (parts.Length < 1 || parts.Length > 3)
-                return "Некорректное количество параметров. Используйте формат `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`.";
+                return $"Введено `{input}`. Некорректное количество параметров. Используйте формат `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`.";
 
             // Проверяем, что все части являются числами
             foreach (var part in parts)
@@ -557,7 +557,7 @@ namespace DiscordBot
             {
                 var rangePattern = @"\[\d+,\d+\]";
                 if (!Regex.IsMatch(input, rangePattern))
-                    return "Некорректный формат диапазона. Используйте `[min,max]`, где `min` и `max` — числа.";
+                    return $"Введено `{input}`. Некорректный формат диапазона. Используйте `[min,max]`, где `min` и `max` — числа.";
             }
 
             // Если всё в порядке, возвращаем null
@@ -663,7 +663,7 @@ namespace DiscordBot
             }
             if (count > 20)
             {
-                await command.RespondAsync("Давайте сильно не наглеть? 20 бросков - это максимум.", ephemeral: true);
+                await command.RespondAsync("Давайте сильно не наглеть? 20 бросков - это максимум.", ephemeral: false);
                 return;
             }
 
@@ -1320,7 +1320,7 @@ namespace DiscordBot
         }
 
         [Command("start")]
-        public async Task StartGameSession(SocketSlashCommand command, string gameName, string masterName = null)
+        public async Task StartGameSession(SocketSlashCommand command, string gameName, SocketUser masterUser = null)
         {
             var user = command.User as SocketGuildUser;
 
@@ -1336,17 +1336,25 @@ namespace DiscordBot
                 return;
             }
 
-            var masterDisplayName = string.IsNullOrEmpty(masterName) ? user.DisplayName : masterName;
+            // Используем выбранного мастера или пользователя, вызвавшего команду, если мастер не указан
+            var master = masterUser as SocketGuildUser ?? user;
+
+            // Проверяем, что выбранный мастер имеет роль "Мастер НРИ"
+            if (!master.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+            {
+                await command.RespondAsync("Выбранный пользователь не является мастером.", ephemeral: true);
+                return;
+            }
 
             _currentSession = new GameSession
             {
                 GameName = gameName,
-                MasterName = masterDisplayName,
+                MasterName = master.DisplayName,
                 StartTime = DateTime.Now,
                 IsStopped = false
             };
             Console.WriteLine("Оповещение: Создание новой записи времени.");
-            await command.RespondAsync($"Игра **{gameName}** запущена мастером **{masterDisplayName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
+            await command.RespondAsync($"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
         }
 
         [Command("pause")]
