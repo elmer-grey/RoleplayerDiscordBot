@@ -59,6 +59,7 @@ namespace DiscordBot
             _client.Ready += OnReady;
             _client.SlashCommandExecuted += OnSlashCommandExecuted;
             _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
+
             await _client.LoginAsync(TokenType.Bot, "MTMzMTYyODkxMDE1MjEyMjM4OA.GzWsZE.WJgvlfflP5wkFxFGqce6tK3mDYOygSvc0q2TBk");
             Console.WriteLine("Вход выполнен успешно.");
             await _client.StartAsync();
@@ -567,11 +568,13 @@ namespace DiscordBot
         [Command("roll")]
         public async Task RollDice(SocketSlashCommand command, string input)
         {
+            await command.DeferAsync();
+
             Console.WriteLine($"\nБыло введено условие: {input}");
             var user = command.User as SocketGuildUser;
             if (user == null)
             {
-                await command.RespondAsync("Не удалось получить информацию о пользователе.");
+                await command.FollowupAsync("Не удалось получить информацию о пользователе.");
                 return;
             }
 
@@ -581,7 +584,7 @@ namespace DiscordBot
             var errorMessage = ValidateRollInput(_input);
             if (errorMessage != null)
             {
-                await command.RespondAsync($"Ошибка: {errorMessage}");
+                await command.FollowupAsync($"Ошибка: {errorMessage}");
                 Console.WriteLine($"Предупреждение: Был введён неверный формат. Ошибка: {errorMessage}");
                 return;
             }
@@ -591,7 +594,7 @@ namespace DiscordBot
 
             if (!match.Success)
             {
-                await command.RespondAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`, где `X`, `Y`, `Z` — строго больше 0.");
+                await command.FollowupAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`, где `X`, `Y`, `Z` — строго больше 0.");
                 Console.WriteLine("Предупреждение: Был введён неверный формат.");
                 return;
             }
@@ -635,7 +638,7 @@ namespace DiscordBot
                 max = int.Parse(match.Groups[8].Value);
                 if (min >= max)
                 {
-                    await command.RespondAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
+                    await command.FollowupAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
                     return;
                 }
             }
@@ -647,7 +650,7 @@ namespace DiscordBot
                 max = int.Parse(match.Groups[11].Value);
                 if (min >= max)
                 {
-                    await command.RespondAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
+                    await command.FollowupAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
                     return;
                 }
                 if (match.Groups[12].Success)
@@ -658,12 +661,12 @@ namespace DiscordBot
 
             if (count <= 0 || max <= 0)
             {
-                await command.RespondAsync("Количество бросков и верхняя граница должны быть больше нуля.", ephemeral: true);
+                await command.FollowupAsync("Количество бросков и верхняя граница должны быть больше нуля.", ephemeral: true);
                 return;
             }
             if (count > 20)
             {
-                await command.RespondAsync("Давайте сильно не наглеть? 20 бросков - это максимум.", ephemeral: false);
+                await command.FollowupAsync("Давайте сильно не наглеть? 20 бросков - это максимум.", ephemeral: false);
                 return;
             }
 
@@ -706,12 +709,12 @@ namespace DiscordBot
                         .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                         .WithColor(embedColor)
                         .Build();
-                    await command.RespondWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                    await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
                 }
                 else
                 {
                     Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
-                    await command.RespondAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                    await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
                 }
                 return;
                 //}
@@ -764,7 +767,7 @@ namespace DiscordBot
 
             resultMessage += "```";
 
-            await command.RespondAsync(resultMessage);
+            await command.FollowupAsync(resultMessage);
             Console.WriteLine($"Совершён бросок. {resultMessage}");
         }
 
