@@ -105,7 +105,8 @@ namespace RPBot
                 .WithName("start")
                 .WithDescription("Запустить игру.")
                 .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
-                .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false),
+                .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false)
+                .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии", isRequired: false),
                     new SlashCommandBuilder()
                 .WithName("pause")
                 .WithDescription("Приостановить игру."),
@@ -115,6 +116,14 @@ namespace RPBot
                     new SlashCommandBuilder()
                 .WithName("stop")
                 .WithDescription("Остановить игру."),
+                    new SlashCommandBuilder()
+                .WithName("close_chat")
+                .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
+                .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
+                    new SlashCommandBuilder()
+                .WithName("open_chat")
+                .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
+                .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
                 };
 
                 foreach (var command in commands)
@@ -123,6 +132,5 @@ namespace RPBot
                 }
             }
         }
-
     }
 }
