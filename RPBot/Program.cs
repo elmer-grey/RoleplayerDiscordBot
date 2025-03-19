@@ -1792,12 +1792,12 @@ namespace DiscordBot
                 // Если это текстовый канал, перемещаем его в архив и закрываем доступ
                 SocketCategoryChannel archiveCategory = guild.CategoryChannels.FirstOrDefault(cat => cat.Name == "Архив");
 
-                if (archiveCategory != null && textChannel.CategoryId == archiveCategory.Id)
+                /*if (archiveCategory != null && textChannel.CategoryId == archiveCategory.Id)
                 {
                     Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} уже находится в архиве.");
                     await command.FollowupAsync($"Чат {textChannel.Mention} уже находится в архиве.", ephemeral: true);
                     return;
-                }
+                }*/
 
                 if (archiveCategory == null)
                 {
@@ -1831,35 +1831,47 @@ namespace DiscordBot
                 }
 
                 // Закрываем доступ на отправку сообщений для всех пользователей
-                foreach (var guildUser in guild.Users)
+                // Получаем всех пользователей на сервере
+                var users = await guild.GetUsersAsync().Flatten().ToListAsync();
+
+                // Закрываем доступ на отправку сообщений для пользователей, у которых есть доступ к каналу
+                foreach (var guildUser in users)
                 {
-                    // Получаем текущие переопределения прав для пользователя
-                    var overwrite = textChannel.GetPermissionOverwrite(guildUser);
+                    // Проверяем, есть ли у пользователя доступ к каналу
+                    var permissions = guildUser.GetPermissions(textChannel);
 
-                    if (overwrite != null)
+                    if (permissions.ViewChannel) // Если пользователь имеет доступ к каналу
                     {
-                        // Получаем текущие разрешения и запреты
-                        var allow = overwrite.Value.AllowValue; // Разрешения
-                        var deny = overwrite.Value.DenyValue;  // Запреты
+                        // Получаем текущие переопределения прав для пользователя
+                        var overwrite = textChannel.GetPermissionOverwrite(guildUser);
 
-                        // Убираем разрешение на отправку сообщений
-                        allow &= ~(ulong)Discord.ChannelPermission.SendMessages;
+                        if (overwrite != null)
+                        {
+                            // Получаем текущие разрешения и запреты
+                            var allow = overwrite.Value.AllowValue; // Разрешения
+                            var deny = overwrite.Value.DenyValue;  // Запреты
 
-                        // Добавляем запрет на отправку сообщений
-                        deny |= (ulong)Discord.ChannelPermission.SendMessages;
+                            // Убираем разрешение на отправку сообщений
+                            allow &= ~(ulong)Discord.ChannelPermission.SendMessages;
 
-                        // Создаём новые переопределения
-                        var newOverwrite = new OverwritePermissions(allow, deny);
+                            // Добавляем запрет на отправку сообщений
+                            deny |= (ulong)Discord.ChannelPermission.SendMessages;
 
-                        // Обновляем переопределение прав
-                        await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
-                        Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
+                            // Создаём новые переопределения
+                            var newOverwrite = new OverwritePermissions(allow, deny);
+
+                            // Обновляем переопределение прав
+                            await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
+                            Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
+                        }
+                        else
+                        {
+                            // Если переопределения нет, создаём новое с запретом на отправку сообщений
+                            await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Deny));
+                            Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
+                        }
                     }
-                    else
-                    { 
-                        await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Deny));
-                        Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
-                    }
+                    await Task.Delay(100);
                 }
 
                 Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} перемещён в архив и закрыт. Причина: {reason}");
@@ -1875,7 +1887,11 @@ namespace DiscordBot
         [Command("open_chat")]
         public async Task OpenChat(SocketSlashCommand command)
         {
+            // Отложим ответ, чтобы Discord не считал команду "зависшей"
+            await command.DeferAsync();
+
             Console.WriteLine($"[{DateTime.UtcNow}] Команда '/open_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
+
             // Проверяем, что команду выполняет "perekrestok_mirov" или "domen_"
             var allowedUsers = new[] { "perekrestok_mirov", "domen_" };
             var user = command.User as SocketGuildUser;
@@ -1883,7 +1899,7 @@ namespace DiscordBot
             if (user == null || !allowedUsers.Contains(user.Username))
             {
                 Console.WriteLine($"[{DateTime.UtcNow}] Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
-                await command.RespondAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
+                await command.FollowupAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
                 return;
             }
 
@@ -1892,14 +1908,14 @@ namespace DiscordBot
 
             if (guild == null)
             {
-                await command.RespondAsync("Эта команда может быть выполнена только на сервере.", ephemeral: true);
+                await command.FollowupAsync("Эта команда может быть выполнена только на сервере.", ephemeral: true);
                 return;
             }
 
             if (channel is not SocketTextChannel textChannel)
             {
                 Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: команда выполнена в неподдерживаемом типе канала.");
-                await command.RespondAsync("Эта команда может быть выполнена только в текстовом канале.", ephemeral: true);
+                await command.FollowupAsync("Эта команда может быть выполнена только в текстовом канале.", ephemeral: true);
                 return;
             }
 
@@ -1909,7 +1925,7 @@ namespace DiscordBot
             if (string.IsNullOrEmpty(categoryName))
             {
                 Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: не указана категория для перемещения.");
-                await command.RespondAsync("Не указана категория для перемещения.", ephemeral: true);
+                await command.FollowupAsync("Не указана категория для перемещения.", ephemeral: true);
                 return;
             }
 
@@ -1918,16 +1934,52 @@ namespace DiscordBot
 
             if (targetCategory == null)
             {
-                await command.RespondAsync($"Категория с именем '{categoryName}' не найдена.", ephemeral: true);
+                Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: категория '{categoryName}' не найдена.");
+                await command.FollowupAsync($"Категория с именем '{categoryName}' не найдена.", ephemeral: true);
                 return;
             }
 
-            Console.WriteLine($"[{DateTime.UtcNow}] Возвращение доступа на запись всем участникам канала {textChannel.Name}.");
-            // Возвращаем доступ на запись всем участникам
-            foreach (var guildUser in guild.Users)
+            // Получаем всех пользователей на сервере
+            var users = await guild.GetUsersAsync().Flatten().ToListAsync();
+
+            // Возвращаем доступ на запись только тем, кто уже есть в чате
+            foreach (var guildUser in users)
             {
-                var permissions = textChannel.GetPermissionOverwrite(guildUser) ?? new OverwritePermissions();
-                await textChannel.AddPermissionOverwriteAsync(guildUser, permissions.Modify(sendMessages: PermValue.Allow, viewChannel: PermValue.Allow));
+                // Проверяем, есть ли у пользователя доступ к каналу
+                var permissions = guildUser.GetPermissions(textChannel);
+
+                if (permissions.ViewChannel) // Если пользователь имеет доступ к каналу
+                {
+                    // Получаем текущие переопределения прав для пользователя
+                    var overwrite = textChannel.GetPermissionOverwrite(guildUser);
+
+                    if (overwrite != null)
+                    {
+                        // Получаем текущие разрешения и запреты
+                        var allow = overwrite.Value.AllowValue; // Разрешения
+                        var deny = overwrite.Value.DenyValue;  // Запреты
+
+                        // Убираем запрет на отправку сообщений
+                        deny &= ~(ulong)Discord.ChannelPermission.SendMessages;
+
+                        // Добавляем разрешение на отправку сообщений
+                        allow |= (ulong)Discord.ChannelPermission.SendMessages;
+
+                        // Создаём новые переопределения
+                        var newOverwrite = new OverwritePermissions(allow, deny);
+
+                        // Обновляем переопределение прав
+                        await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
+                        Console.WriteLine($"[{DateTime.UtcNow}] Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
+                    }
+                    else
+                    {
+                        // Если переопределения нет, создаём новое с разрешением на отправку сообщений
+                        await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Allow));
+                        Console.WriteLine($"[{DateTime.UtcNow}] Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
+                    }
+                }
+                await Task.Delay(100);
             }
 
             // Перемещаем канал в указанную категорию
@@ -1938,7 +1990,7 @@ namespace DiscordBot
             });
 
             Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} открыт и перемещён в категорию '{targetCategory.Name}'.");
-            await command.RespondAsync($"Чат {textChannel.Mention} был открыт и перемещён в категорию '{targetCategory.Name}'.");
+            await command.FollowupAsync($"Чат {textChannel.Mention} был открыт и перемещён в категорию '{targetCategory.Name}'.");
         }
 
         [Command("clr")]
