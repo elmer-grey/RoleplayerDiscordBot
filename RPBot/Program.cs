@@ -347,6 +347,9 @@ namespace DiscordBot
                 case "roll":
                     await RollCommand(command);
                     break;
+                case "roll20":
+                    await Roll20Command(command);
+                    break;
                 case "serverinfo":
                     await ServerInfoCommand(command);
                     break;
@@ -453,6 +456,12 @@ namespace DiscordBot
 
             var diceModule = _services.GetService<RollDiceCommands>();
             await diceModule.RollDice(command, input);
+        }
+
+        private async Task Roll20Command(SocketSlashCommand command)
+        {
+            var diceModule = _services.GetService<RollDiceCommands>();
+            await diceModule.Roll20(command);
         }
 
         private async Task ServerInfoCommand(SocketSlashCommand command)
@@ -649,6 +658,7 @@ namespace DiscordBot
 
     public class RollDiceCommands : ModuleBase<SocketCommandContext>
     {
+        private static readonly Dictionary<ulong, int> _lastUserRolls = new Dictionary<ulong, int>();
         private string ValidateRollInput(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -903,6 +913,60 @@ namespace DiscordBot
 
             await command.FollowupAsync(resultMessage);
             Console.WriteLine($"Совершён бросок. {resultMessage}");
+        }
+
+        [Command("roll20")]
+        public async Task Roll20(SocketSlashCommand command)
+        {
+            await command.DeferAsync();
+
+            var user = command.User as SocketGuildUser;
+            if (user == null)
+            {
+                await command.FollowupAsync("Не удалось получить информацию о пользователе.");
+                return;
+            }
+
+            Random random = new Random();
+            int result = random.Next(1, 21);
+            Console.WriteLine($"Полученное значение: {result}");
+
+            // Проверка на повторный результат
+            bool rerollOnDuplicate = true; // Переменная для управления повторной рандомизацией
+            if (rerollOnDuplicate)
+            {
+                // Проверяем, есть ли запись для пользователя в словаре
+                if (_lastUserRolls.ContainsKey(user.Id))
+                {
+                    // Если запись есть, получаем последний результат и сравниваем
+                    if (_lastUserRolls[user.Id] == result)
+                    {
+                        result = random.Next(1, 21); // Повторная рандомизация
+                        Console.WriteLine($"Повторный бросок: {result}");
+                    }
+                }
+
+                // Обновляем последний результат пользователя
+                _lastUserRolls[user.Id] = result;
+            }            
+
+            //Console.WriteLine($"Полученное значение: {result}");
+            var filePath = Path.Combine("Numbers", $"{result}.png");
+            Color embedColor = GetGradientColor(result, 1, 20);
+
+            if (File.Exists(filePath))
+            {
+                var embed = new EmbedBuilder()
+                    .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                    .WithColor(embedColor)
+                    .Build();
+                await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+            }
+            else
+            {
+                Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
+                await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+            }
         }
 
         private Color GetGradientColor(int value, int minValue, int maxValue)

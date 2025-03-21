@@ -91,6 +91,9 @@ namespace RPBot
                 .WithDescription("Выполняет бросок кубика с заданными условиями. Подробнее в команде /help_r.")
                 .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true),
                     new SlashCommandBuilder()
+                .WithName("roll20")
+                .WithDescription("Выполняет бросок кубика d20."),
+                    new SlashCommandBuilder()
                 .WithName("queue")
                 .WithDescription("Показывает текущее состояние очереди и список участников.")
                 .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
