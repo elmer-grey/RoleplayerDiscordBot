@@ -10,6 +10,7 @@ using System.Text;
 using RPBot;
 using System.Text.RegularExpressions;
 using System.IO;
+using System.Diagnostics;
 
 namespace DiscordBot
 {
@@ -87,11 +88,11 @@ namespace DiscordBot
         }*/
         private async Task OnReady()
         {
-            await _commandHandler.InitializeAsync();
+            //await _commandHandler.InitializeAsync();
             Console.WriteLine("Команды инициализированы.");
             LogToFile($"Команды инициализированы в {DateTime.Now}.");
 
-            await _commandHandler.ListSlashCommandsAsync();
+            //await _commandHandler.ListSlashCommandsAsync();
             Console.WriteLine($"Bot is connected as {_client.CurrentUser}");
 
             ulong channelId = 1288192593137635362; // ID канала - 373788351246893056 (КнР), 1288192593137635362 (тест)
@@ -103,6 +104,7 @@ namespace DiscordBot
             if (channel != null)
             {
                 // Отправляем сообщение в канал
+                //await channel.SendMessageAsync("Ничего не активно. Надоел...");
                 await channel.SendMessageAsync("Все системы активны. Ожидаю сообщение от пользователя...");
                 LogToFile($"Запуск всех систем в {DateTime.Now}.");
             }
@@ -189,12 +191,35 @@ namespace DiscordBot
 
             if (message.Content.ToLower().Contains("бот, перезагрузка") && user.Username == "perekrestok_mirov")
             {
-                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите...");
+                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 2 минут.");
                 Console.WriteLine($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
                 LogToFile($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
-                System.Diagnostics.Process.Start(AppDomain.CurrentDomain.FriendlyName);
-                await _client.StopAsync();
-                Environment.Exit(0);
+
+                var scriptPath = "C:/Favorites/Bot Discord/RPBot/RPBot/restart_bot.ps1";
+
+                // Запуск скрипта для перекомпиляции и перезапуска
+                var processStartInfo = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe", // Для Windows
+                    Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                    RedirectStandardOutput = false, // Отключаем перенаправление вывода
+                    RedirectStandardError = false,  // Отключаем перенаправление ошибок
+                    UseShellExecute = true,        // Запуск через оболочку (показывает окно)
+                    CreateNoWindow = false         // Показывать окно
+                };
+
+                try
+                {
+                    using (var process = new Process { StartInfo = processStartInfo })
+                    {
+                        process.Start();
+                        await process.WaitForExitAsync(); // Асинхронное ожидание завершения процесса
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Ошибка при запуске скрипта: " + ex.Message);
+                }
             }
 
             if (message.Content.ToLower().Contains("привет, ролевой бот") && message.Channel.Id == fludChannelId)
@@ -928,7 +953,7 @@ namespace DiscordBot
             }
 
             Random random = new Random();
-            int result = random.Next(1, 21);
+            int result = random.Next(1, 1);
             Console.WriteLine($"Полученное значение: {result}");
 
             // Проверка на повторный результат
