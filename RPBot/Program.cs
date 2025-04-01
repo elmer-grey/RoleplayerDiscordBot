@@ -953,11 +953,11 @@ namespace DiscordBot
             }
 
             Random random = new Random();
-            int result = random.Next(1, 1);
+            int result = random.Next(1, 21);
             Console.WriteLine($"Полученное значение: {result}");
 
             // Проверка на повторный результат
-            bool rerollOnDuplicate = true; // Переменная для управления повторной рандомизацией
+            bool rerollOnDuplicate = false; // Переменная для управления повторной рандомизацией
             if (rerollOnDuplicate)
             {
                 // Проверяем, есть ли запись для пользователя в словаре
@@ -1049,33 +1049,51 @@ namespace DiscordBot
         [Command("serverinfo")]
         public async Task ServerInfo(SocketSlashCommand command)
         {
+            // Сообщаем Discord, что команда обрабатывается
+            await command.DeferAsync();
+
             var server = (command.Channel as SocketGuildChannel)?.Guild;
 
             if (server == null)
             {
-                await command.RespondAsync("Не удалось получить информацию о сервере.");
+                await command.FollowupAsync("Не удалось получить информацию о сервере.");
                 return;
             }
-            // Получаем информацию о участниках
-            int totalMembers = server.MemberCount;
-            int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Offline);
-            int botCount = server.Users.Count(u => u.IsBot);
-            int humanCount = totalMembers - botCount;
-            var embed = new EmbedBuilder()
-                .WithTitle("Информация о сервере")
-                .AddField("Название", server.Name)
-                .AddField("Создан", server.CreatedAt)
-                .AddField("Участники",
-                $"Всего участников: {totalMembers}\n" +
-                $"Участников в сети: {onlineMembers}\n" +
-                $"Ботов: {botCount}\n" +
-                $"Людей: {humanCount}")
-                .AddField("Важная дата", "*20.11.2020*")
-                .AddField("Первое включение бота на сервере", "*01.02.2025*")
-                .WithColor(Color.Blue)
-                .Build();
 
-            await command.RespondAsync(embed: embed);
+            try
+            {
+                // Загружаем всех пользователей сервера в кэш (асинхронно) Не работает
+                //await Task.Run(async () => await server.DownloadUsersAsync());
+
+                // Получаем информацию о участниках
+                int totalMembers = server.MemberCount;
+                int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Online);
+                int botCount = server.Users.Count(u => u.IsBot);
+                int humanCount = totalMembers - botCount;
+
+                var embed = new EmbedBuilder()
+                    .WithTitle("Информация о сервере")
+                    .AddField("Название", server.Name)
+                    .AddField("Создан", server.CreatedAt)
+                    .AddField("Участники",
+                    $"Всего участников: {totalMembers}\n" +
+                    $"Участников в сети: Не работает\n" +
+                    $"Ботов: Не работает\n" +
+                    $"Людей: Не работает")
+                    .AddField("Важная дата", "*20.11.2020*")
+                    .AddField("Первое включение бота на сервере", "*01.02.2025*")
+                    .WithColor(Color.Blue)
+                    .Build();
+
+                // Отправляем результат с помощью FollowupAsync
+                await command.FollowupAsync(embed: embed);
+            }
+            catch (Exception ex)
+            {
+                // Логируем ошибку
+                Console.WriteLine($"Ошибка при выполнении команды serverinfo: {ex.Message}");
+                await command.FollowupAsync("Произошла ошибка при обработке команды.");
+            }
         }
 
         [Command("help_r")]

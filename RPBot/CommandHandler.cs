@@ -95,7 +95,7 @@ namespace RPBot
                 .WithDescription("Выполняет бросок кубика d20."),
                     new SlashCommandBuilder()
                 .WithName("queue")
-                .WithDescription("Показывает текущее состояние очереди и список участников.")
+                .WithDescription("Запускает создание очереди.")
                 .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
                     new SlashCommandBuilder()
                 .WithName("q")
