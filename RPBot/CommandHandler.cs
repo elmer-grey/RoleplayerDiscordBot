@@ -1,37 +1,53 @@
 ﻿using Discord;
 using Discord.Commands;
+using Discord.Interactions;
 using Discord.WebSocket;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Design;
+using System.Reflection;
 using System.Threading.Tasks;
+
 namespace RPBot
 {
     public class CommandHandler
     {
         private readonly DiscordSocketClient _client;
-        private readonly CommandService _commandService;
-        private readonly List<ulong> GuildIDs; // Список идентификаторов гильдий
+        private readonly InteractionService _interactionService;
+        private readonly IServiceProvider _services;
+        private readonly List<ulong> GuildIDs;
 
-        public CommandHandler(DiscordSocketClient client)
+        public CommandHandler(DiscordSocketClient client, IServiceProvider services)
         {
-            // Идентификаторы гильдий, на которых будет работать бот
-            GuildIDs = new List<ulong>
-            {
-                295189463376855040, // Канал "КнР"
-                1288192593137635359  // Канал "Тест"
-            };
-
             _client = client;
-            _commandService = new CommandService();
+            _services = services;
+            _interactionService = new InteractionService(client.Rest);
+            GuildIDs = new List<ulong> { 295189463376855040, 1288192593137635359 };
         }
 
         public async Task InitializeAsync()
         {
+            await _interactionService.AddModulesAsync(Assembly.GetEntryAssembly(), _services);
+            _client.InteractionCreated += HandleInteraction;
             await RegisterCommandsAsync();
         }
+        private async Task HandleInteraction(SocketInteraction interaction)
+        {
+            try
+            {
+                var context = new SocketInteractionContext(_client, interaction);
+                await _interactionService.ExecuteCommandAsync(context, _services);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка выполнения команды: {ex}");
+                if (interaction.Type == InteractionType.ApplicationCommand)
+                {
+                    await interaction.GetOriginalResponseAsync().ContinueWith(msg => msg.Result?.DeleteAsync());
+                }
+            }
+        }
 
-        public async Task ListSlashCommandsAsync()
+        public async Task ListAllCommandsAsync()
         {
             foreach (var guildId in GuildIDs)
             {
@@ -39,15 +55,28 @@ namespace RPBot
 
                 if (guild == null)
                 {
-                    Console.WriteLine($"Не удалось получить гильдию с ID: {guildId}. Пропускаем вывод команд для этой гильдии.");
+                    Console.WriteLine($"Гильдия с ID {guildId} не найдена.");
                     continue;
                 }
 
-                var commands = await _client.GetGuild(guildId).GetApplicationCommandsAsync();
+                var commands = await guild.GetApplicationCommandsAsync();
+                Console.WriteLine($"\nКоманды на сервере {guild.Name}:");
 
-                foreach (var command in commands)
+                foreach (var cmd in commands)
                 {
-                    Console.WriteLine($"Гильдия: {guildId}, Команда: {command.Name}, ID: {command.Id}");
+                    Console.WriteLine($"\n/{cmd.Name}: {cmd.Description}");
+
+                    foreach (var option in cmd.Options)
+                    {
+                        Console.WriteLine($"  • {option.Name}: {option.Description}");
+                        if (option.Options != null)
+                        {
+                            foreach (var subOption in option.Options)
+                            {
+                                Console.WriteLine($"    ◦ {subOption.Name}: {subOption.Description}");
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -60,78 +89,134 @@ namespace RPBot
 
                 if (guild == null)
                 {
-                    Console.WriteLine($"Не удалось получить гильдию с ID: {guildId}. Пропускаем регистрацию команд для этой гильдии.");
+                    Console.WriteLine($"Гильдия с ID {guildId} не найдена. Пропускаем регистрацию команд.");
                     continue;
                 }
 
+                // Основные команды
                 var commands = new List<SlashCommandBuilder>
                 {
                     new SlashCommandBuilder()
-                .WithName("help")
-                .WithDescription("Выводит список доступных команд."),
+                        .WithName("help")
+                        .WithDescription("Выводит список доступных команд."),
+
                     new SlashCommandBuilder()
-                .WithName("help_r")
-                .WithDescription("Выводит список команд для бросков кубов."),
+                        .WithName("help_r")
+                        .WithDescription("Выводит список команд для бросков кубов."),
+
                     new SlashCommandBuilder()
-                .WithName("help_gs")
-                .WithDescription("Выводит список команд, которые используются для подсчёта времени игры."),
+                        .WithName("help_gs")
+                        .WithDescription("Выводит список команд для подсчёта времени игры."),
+
                     new SlashCommandBuilder()
-                .WithName("clr")
-                .WithDescription("Удаляет выбранное количество сообщений.")
-                .AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений, которые нужно удалить", isRequired: true),
+                        .WithName("clr")
+                        .WithDescription("Удаляет выбранное количество сообщений.")
+                        .AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений", isRequired: true),
+
                     new SlashCommandBuilder()
-                .WithName("serverinfo")
-                .WithDescription("Показывает информацию о текущем сервере."),
+                        .WithName("serverinfo")
+                        .WithDescription("Показывает информацию о сервере."),
+
                     new SlashCommandBuilder()
-                .WithName("bug_report")
-                .WithDescription("Отправка сообщения об ошибке, которая связана с ботом, или любое предложение по его улучшению.")
-                .AddOption("input", ApplicationCommandOptionType.String, "Введите описание ошибки бота или ваше предложение, которое можно реализовать", isRequired: true),
+                        .WithName("bug_report")
+                        .WithDescription("Сообщение об ошибке или предложение по улучшению.")
+                        .AddOption("input", ApplicationCommandOptionType.String, "Описание проблемы или идеи", isRequired: true),
+
                     new SlashCommandBuilder()
-                .WithName("roll")
-                .WithDescription("Выполняет бросок кубика с заданными условиями. Подробнее в команде /help_r.")
-                .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true),
+                        .WithName("roll")
+                        .WithDescription("Бросок кубика (формат: XdY)")
+                        .AddOption("input", ApplicationCommandOptionType.String, "Пример: 2d20", isRequired: true),
+
                     new SlashCommandBuilder()
-                .WithName("roll20")
-                .WithDescription("Выполняет бросок кубика d20."),
+                        .WithName("roll20")
+                        .WithDescription("Бросок d20"),
+
                     new SlashCommandBuilder()
-                .WithName("queue")
-                .WithDescription("Запускает создание очереди.")
-                .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
+                        .WithName("queue")
+                        .WithDescription("Создание очереди")
+                        .AddOption("input", ApplicationCommandOptionType.String, "Количество участников", isRequired: true),
+
                     new SlashCommandBuilder()
-                .WithName("q")
-                .WithDescription("Добавляет вас в очередь на выполнение действия.")
-                .AddOption("input", ApplicationCommandOptionType.String, "Формат: dY, где Y - верхняя граница", isRequired: true),
+                        .WithName("q")
+                        .WithDescription("Добавление в очередь")
+                        .AddOption("input", ApplicationCommandOptionType.String, "Формат: dY", isRequired: true),
+
                     new SlashCommandBuilder()
-                .WithName("stop_q")
-                .WithDescription("Останавливает текущую очередь, если она активна."),
+                        .WithName("stop_q")
+                        .WithDescription("Остановка очереди"),
+
                     new SlashCommandBuilder()
-                .WithName("start")
-                .WithDescription("Запустить игру.")
-                .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
-                .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false)
-                .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии", isRequired: false),
+                        .WithName("start")
+                        .WithDescription("Запуск игры")
+                        .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", true)
+                        .AddOption("master", ApplicationCommandOptionType.User, "Мастер игры", false)
+                        .AddOption("comment", ApplicationCommandOptionType.String, "Комментарий", false),
+
                     new SlashCommandBuilder()
-                .WithName("pause")
-                .WithDescription("Приостановить игру."),
+                        .WithName("pause")
+                        .WithDescription("Приостановка игры"),
+
                     new SlashCommandBuilder()
-                .WithName("resume")
-                .WithDescription("Продолжить игру."),
+                        .WithName("resume")
+                        .WithDescription("Продолжение игры"),
+
                     new SlashCommandBuilder()
-                .WithName("stop")
-                .WithDescription("Остановить игру."),
+                        .WithName("stop")
+                        .WithDescription("Остановка игры"),
+
                     new SlashCommandBuilder()
-                .WithName("close_chat")
-                .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
-                .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
+                        .WithName("close_chat")
+                        .WithDescription("Закрытие чата/ветки")
+                        .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", false),
+
                     new SlashCommandBuilder()
-                .WithName("open_chat")
-                .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
-                .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
+                        .WithName("open_chat")
+                        .WithDescription("Открытие чата")
+                        .AddOption("category", ApplicationCommandOptionType.String, "Категория", true)
                 };
 
+                // Вампирские команды
+                var vampireCommand = new SlashCommandBuilder()
+                    .WithName("vampire")
+                    .WithDescription("Управление персонажами Vampire")
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("create")
+                        .WithDescription("Создать персонажа")
+                        .WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("player", ApplicationCommandOptionType.String, "Discord имя", true)
+                        .AddOption("character", ApplicationCommandOptionType.String, "Имя персонажа", true)
+                        .AddOption("parameters", ApplicationCommandOptionType.String, "Формат: Сила=3 Ловкость=2", false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("update")
+                        .WithDescription("Изменить параметры")
+                        .WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("player", ApplicationCommandOptionType.String, "Discord имя", true)
+                        .AddOption("changes", ApplicationCommandOptionType.String, "Формат: Сила+1 Ловкость=2", true))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("view")
+                        .WithDescription("Просмотр персонажа")
+                        .WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("player", ApplicationCommandOptionType.String, "Discord имя", true)
+                        .AddOption("public", ApplicationCommandOptionType.Boolean, "Видно всем", false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("delete")
+                        .WithDescription("Удаление персонажа")
+                        .WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("player", ApplicationCommandOptionType.String, "Discord имя", true));
+
+                commands.Add(vampireCommand);
+
+                // Регистрация всех команд
                 foreach (var command in commands)
                 {
-                    await guild.CreateApplicationCommandAsync(command.Build());
+                    try
+                    {
+                        await guild.CreateApplicationCommandAsync(command.Build());
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка при регистрации команды {command.Name}: {ex.Message}");
+                    }
                 }
             }
         }

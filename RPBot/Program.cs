@@ -28,9 +28,7 @@ namespace DiscordBot
         {
             var config = new DiscordSocketConfig
             {
-                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers | GatewayIntents.GuildMessages |
-                GatewayIntents.MessageContent | GatewayIntents.GuildScheduledEvents,
-
+                GatewayIntents = GatewayIntents.All,
                 ConnectionTimeout = 15000,
                 MessageCacheSize = 100,
                 LogLevel = LogSeverity.Info 
@@ -42,14 +40,18 @@ namespace DiscordBot
             var services = new ServiceCollection()
                 .AddSingleton(_client)
                 .AddSingleton(_commandService)
+                .AddSingleton<CommandHandler>()
                 .AddSingleton<QueueModule>()
                 .AddSingleton<InfoCommands>()
                 .AddSingleton<RollDiceCommands>()
                 .AddSingleton<GameSessionCommands>()
                 .AddSingleton<ModerationCommands>()
+                .AddSingleton<VampireModule>()
                 .BuildServiceProvider();
 
             _services = services;
+            var client = services.GetRequiredService<DiscordSocketClient>();
+            var commandHandler = services.GetRequiredService<CommandHandler>();
         }
 
         public async Task RunBotAsync()
@@ -88,11 +90,11 @@ namespace DiscordBot
         }*/
         private async Task OnReady()
         {
-            //await _commandHandler.InitializeAsync();
+            await _commandHandler.InitializeAsync();
             Console.WriteLine("Команды инициализированы.");
             LogToFile($"Команды инициализированы в {DateTime.Now}.");
 
-            //await _commandHandler.ListSlashCommandsAsync();
+            await _commandHandler.ListAllCommandsAsync();
             Console.WriteLine($"Bot is connected as {_client.CurrentUser}");
 
             ulong channelId = 1288192593137635362; // ID канала - 373788351246893056 (КнР), 1288192593137635362 (тест)
@@ -355,63 +357,73 @@ namespace DiscordBot
 
         private async Task OnSlashCommandExecuted(SocketSlashCommand command)
         {
-            switch (command.Data.Name)
+            await command.DeferAsync(ephemeral: true);
+            try
             {
-                case "stop_q":
-                    await StopQueue(command);
-                    break;
-                case "queue":
-                    await QueueCommand(command);
-                    break;
-                case "q":
-                    await Q_InCommand(command);
-                    break;
-                case "clr":
-                    await ClearMessage(command);
-                    break;
-                case "roll":
-                    await RollCommand(command);
-                    break;
-                case "roll20":
-                    await Roll20Command(command);
-                    break;
-                case "serverinfo":
-                    await ServerInfoCommand(command);
-                    break;
-                case "help":
-                    await HelpCommand(command);
-                    break;
-                case "help_r":
-                    await Help_RollCommand(command);
-                    break;
-                case "help_gs":
-                    await Help_GameSessionCommand(command);
-                    break;
-                case "bug_report":
-                    await Bug_ReportCommand(command);
-                    break;
-                case "start":
-                    await StartGameSession(command);
-                    break;
-                case "pause":
-                    await PauseGameSession(command);
-                    break;
-                case "resume":
-                    await ResumeGameSession(command);
-                    break;
-                case "stop":
-                    await StopGameSession(command);
-                    break;
-                case "close_chat":
-                    await CloseChatCommand(command);
-                    break;
-                case "open_chat":
-                    await OpenChatCommand(command);
-                    break;
-                default:
-                    await command.RespondAsync("Команда не распознана.");
-                    break;
+                switch (command.Data.Name)
+                {
+                    case "stop_q":
+                        await StopQueue(command);
+                        break;
+                    case "queue":
+                        await QueueCommand(command);
+                        break;
+                    case "q":
+                        await Q_InCommand(command);
+                        break;
+                    case "clr":
+                        await ClearMessage(command);
+                        break;
+                    case "roll":
+                        await RollCommand(command);
+                        break;
+                    case "roll20":
+                        await Roll20Command(command);
+                        break;
+                    case "serverinfo":
+                        await ServerInfoCommand(command);
+                        break;
+                    case "help":
+                        await HelpCommand(command);
+                        break;
+                    case "help_r":
+                        await Help_RollCommand(command);
+                        break;
+                    case "help_gs":
+                        await Help_GameSessionCommand(command);
+                        break;
+                    case "bug_report":
+                        await Bug_ReportCommand(command);
+                        break;
+                    case "start":
+                        await StartGameSession(command);
+                        break;
+                    case "pause":
+                        await PauseGameSession(command);
+                        break;
+                    case "resume":
+                        await ResumeGameSession(command);
+                        break;
+                    case "stop":
+                        await StopGameSession(command);
+                        break;
+                    case "close_chat":
+                        await CloseChatCommand(command);
+                        break;
+                    case "open_chat":
+                        await OpenChatCommand(command);
+                        break;
+                    default:
+                        await command.RespondAsync("Команда не распознана.");
+                        break;
+                }
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка выполнения команды: {ex}");
+                await command.FollowupAsync("Произошла ошибка при выполнении команды", ephemeral: true);
+            }
+            
         }
 
         private async Task StopQueue(SocketSlashCommand command)
