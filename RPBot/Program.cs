@@ -75,24 +75,18 @@ namespace DiscordBot
             Console.WriteLine("Вход выполнен успешно.");
             await _client.StartAsync();
             Console.WriteLine("Бот запущен и подключен к Discord.");
-            //await RegisterSlashCommandsAsync(_services);
-            //await _commandService.AddModulesAsync(Assembly.GetEntryAssembly(), _services);
 
             _commandHandler = new CommandHandler(_client);
             await Task.Delay(-1);
         }
-        /*private static async Task RegisterSlashCommandsAsync(IServiceProvider services)
-        {
-            var commandService = services.GetRequiredService<CommandService>();
-            //await commandService.AddModulesAsync(Assembly.GetEntryAssembly(), services);
-        }*/
+
         private async Task OnReady()
         {
-            //await _commandHandler.InitializeAsync();
+            await _commandHandler.InitializeAsync();
             Console.WriteLine("Команды инициализированы.");
             LogToFile($"Команды инициализированы в {DateTime.Now}.");
 
-            //await _commandHandler.ListSlashCommandsAsync();
+            await _commandHandler.ListSlashCommandsAsync();
             Console.WriteLine($"Bot is connected as {_client.CurrentUser}");
 
             ulong channelId = 1288192593137635362; // ID канала - 373788351246893056 (КнР), 1288192593137635362 (тест)
@@ -104,7 +98,6 @@ namespace DiscordBot
             if (channel != null)
             {
                 // Отправляем сообщение в канал
-                //await channel.SendMessageAsync("Ничего не активно. Надоел...");
                 await channel.SendMessageAsync("Все системы активны. Ожидаю сообщение от пользователя...");
                 LogToFile($"Запуск всех систем в {DateTime.Now}.");
             }
