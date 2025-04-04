@@ -184,7 +184,7 @@ namespace DiscordBot
 
             if (message.Content.ToLower().Contains("бот, перезагрузка") && user.Username == "perekrestok_mirov")
             {
-                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 2 минут.");
+                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
                 Console.WriteLine($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
                 LogToFile($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
 
