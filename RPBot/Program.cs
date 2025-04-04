@@ -1,15 +1,10 @@
-﻿using System;
-using System.Reflection;
-using System.Linq;
-using System.Threading.Tasks;
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text;
 using RPBot;
 using System.Text.RegularExpressions;
-using System.IO;
 using System.Diagnostics;
 
 namespace DiscordBot
@@ -31,13 +26,15 @@ namespace DiscordBot
                 GatewayIntents = GatewayIntents.All,
                 ConnectionTimeout = 15000,
                 MessageCacheSize = 100,
-                LogLevel = LogSeverity.Info 
-
+                LogLevel = LogSeverity.Info,
+                AlwaysDownloadUsers = true,
+                UseInteractionSnowflakeDate = false
             };
+
             _client = new DiscordSocketClient(config);
             _commandService = new CommandService();
 
-            var services = new ServiceCollection()
+            _services = new ServiceCollection()
                 .AddSingleton(_client)
                 .AddSingleton(_commandService)
                 .AddSingleton<CommandHandler>()
@@ -48,10 +45,6 @@ namespace DiscordBot
                 .AddSingleton<ModerationCommands>()
                 .AddSingleton<VampireModule>()
                 .BuildServiceProvider();
-
-            _services = services;
-            var client = services.GetRequiredService<DiscordSocketClient>();
-            var commandHandler = services.GetRequiredService<CommandHandler>();
         }
 
         public async Task RunBotAsync()
@@ -65,48 +58,38 @@ namespace DiscordBot
             _client.UserJoined += UserJoined;
             _client.MessageReceived += HandleCommandAsync;
             _client.Ready += OnReady;
-            _client.SlashCommandExecuted += OnSlashCommandExecuted;
+            //_client.SlashCommandExecuted += OnSlashCommandExecuted;
             _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
-            _client.ButtonExecuted += async (component) =>
-            {
-                var gameSessionCommands = new GameSessionCommands(_client);
-                await gameSessionCommands.HandleStatsButton(component);
-            };
 
+            _commandHandler = _services.GetRequiredService<CommandHandler>();
+            _client.InteractionCreated += HandleInteractionProxy;
             await _client.LoginAsync(TokenType.Bot, "MTMzMTYyODkxMDE1MjEyMjM4OA.GzWsZE.WJgvlfflP5wkFxFGqce6tK3mDYOygSvc0q2TBk");
             Console.WriteLine("Вход выполнен успешно.");
             await _client.StartAsync();
             Console.WriteLine("Бот запущен и подключен к Discord.");
-            //await RegisterSlashCommandsAsync(_services);
-            //await _commandService.AddModulesAsync(Assembly.GetEntryAssembly(), _services);
-
-            _commandHandler = new CommandHandler(_client);
             await Task.Delay(-1);
         }
-        /*private static async Task RegisterSlashCommandsAsync(IServiceProvider services)
+        private async Task HandleInteractionProxy(SocketInteraction interaction)
         {
-            var commandService = services.GetRequiredService<CommandService>();
-            //await commandService.AddModulesAsync(Assembly.GetEntryAssembly(), services);
-        }*/
+            using var scope = _services.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<CommandHandler>();
+            await handler.HandleInteraction(interaction);
+        }
+
         private async Task OnReady()
         {
             await _commandHandler.InitializeAsync();
             Console.WriteLine("Команды инициализированы.");
             LogToFile($"Команды инициализированы в {DateTime.Now}.");
 
-            await _commandHandler.ListAllCommandsAsync();
             Console.WriteLine($"Bot is connected as {_client.CurrentUser}");
 
             ulong channelId = 1288192593137635362; // ID канала - 373788351246893056 (КнР), 1288192593137635362 (тест)
 
-            // Получаем канал
             var channel = _client.GetChannel(channelId) as ITextChannel;
 
-            // Проверяем, что канал существует и это текстовый канал
             if (channel != null)
             {
-                // Отправляем сообщение в канал
-                //await channel.SendMessageAsync("Ничего не активно. Надоел...");
                 await channel.SendMessageAsync("Все системы активны. Ожидаю сообщение от пользователя...");
                 LogToFile($"Запуск всех систем в {DateTime.Now}.");
             }
