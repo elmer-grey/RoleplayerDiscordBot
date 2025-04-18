@@ -55,7 +55,7 @@ namespace DiscordBot
         public async Task RunBotAsync()
         {
             // Загрузка текстовых блоков из файла            
-            _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
+            _textBlocks = LoadTextFromFile("E:/НРИ/RoleplayerBotDiscord/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
 
             Console.WriteLine("Инициализация бота...");
             LogToFile($"Инициализация бота в {DateTime.Now}.");
@@ -188,7 +188,7 @@ namespace DiscordBot
                 Console.WriteLine($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
                 LogToFile($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
 
-                var scriptPath = "C:/Favorites/Bot Discord/RPBot/RPBot/restart_bot.ps1";
+                var scriptPath = "E:/НРИ/RoleplayerBotDiscord/RPBot/restart_bot.ps1";
 
                 // Запуск скрипта для перекомпиляции и перезапуска
                 var processStartInfo = new ProcessStartInfo
@@ -336,7 +336,7 @@ namespace DiscordBot
 
         private int GetBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
 
             if (File.Exists(counterFilePath))
             {
@@ -559,7 +559,7 @@ namespace DiscordBot
 
         private Task Log(LogMessage arg)
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt"; // Укажите путь к вашему файлу
+            string path = @"E:\НРИ\RoleplayerBotDiscord\Logs\LogFile.txt"; // Укажите путь к вашему файлу
             Console.WriteLine(arg);
             using (StreamWriter writer = new StreamWriter(path, true)) // true для добавления в конец файла
             {
@@ -570,7 +570,7 @@ namespace DiscordBot
 
         private void LogToFile(string message)
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt"; // Укажите путь к вашему файлу
+            string path = @"E:\НРИ\RoleplayerBotDiscord\Logs\LogFile.txt"; // Укажите путь к вашему файлу
             if (!File.Exists(path))
             {
                 using (File.Create(path)) { } // Создаем файл, если он не существует
@@ -850,7 +850,7 @@ namespace DiscordBot
                 {*/
                 var result = random.Next(1, max + 1);
                 Console.WriteLine($"Полученное значение: {result}");
-                var filePath = Path.Combine("Numbers", $"{result}.png");
+                var filePath = Path.Combine("E:/НРИ/RoleplayerBotDiscord/Numbers", $"{result}.png");
                 Color embedColor = GetGradientColor(result, 1, max);
 
                 // Проверяем, что игра активна и не на паузе
@@ -966,10 +966,10 @@ namespace DiscordBot
 
                 // Обновляем последний результат пользователя
                 _lastUserRolls[user.Id] = result;
-            }            
+            }
 
             //Console.WriteLine($"Полученное значение: {result}");
-            var filePath = Path.Combine("Numbers", $"{result}.png");
+            var filePath = Path.Combine("E:/НРИ/RoleplayerBotDiscord/Numbers", $"{result}.png");
             Color embedColor = GetGradientColor(result, 1, 20);
 
             if (File.Exists(filePath))
