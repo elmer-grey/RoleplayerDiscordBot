@@ -184,7 +184,7 @@ namespace DiscordBot
 
             if (message.Content.ToLower().Contains("бот, перезагрузка") && user.Username == "perekrestok_mirov")
             {
-                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
+                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания до 3 минут.");
                 Console.WriteLine($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
                 LogToFile($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
 
@@ -586,7 +586,7 @@ namespace DiscordBot
 
         private async Task UserJoined(SocketGuildUser user) 
         {
-            Console.WriteLine($"{user.Username} joined the server.");
+            Console.WriteLine($"{user.Username} присоеденился к серверу.");
             try
             {
                 var guild = user.Guild;
@@ -596,12 +596,12 @@ namespace DiscordBot
                     var welcomeChannel = _client.GetChannel(373788351246893056) as IMessageChannel;
                     if (welcomeChannel != null)
                     {
-                        Console.WriteLine($"Sending message to channel: {welcomeChannel.Name}");
+                        Console.WriteLine($"Сообщение отправлено в канал: {welcomeChannel.Name}");
                         await welcomeChannel.SendMessageAsync($"Привет, {user.Mention}!");
                     }
                     else
                     {
-                        Console.WriteLine("Welcome channel not found.");
+                        Console.WriteLine("Приветственный канал не найден.");
                     }
                 }
                 else if (guild.Id == 1288192593137635359) // ID Тест
@@ -609,12 +609,12 @@ namespace DiscordBot
                     var welcomeChannel = _client.GetChannel(1288192593137635362) as IMessageChannel;
                     if (welcomeChannel != null)
                     {
-                        Console.WriteLine($"Sending message to channel: {welcomeChannel.Name}");
+                        Console.WriteLine($"Сообщение отправлено в канал: {welcomeChannel.Name}");
                         await welcomeChannel.SendMessageAsync($"Привет, {user.Mention}!");
                     }
                     else
                     {
-                        Console.WriteLine("Welcome channel not found.");
+                        Console.WriteLine("Приветственный канал не найден.");
                     }
                 }
             }
@@ -849,7 +849,7 @@ namespace DiscordBot
                 else
                 {*/
                 var result = random.Next(1, max + 1);
-                Console.WriteLine($"Полученное значение: {result}");
+                Console.WriteLine($"Полученное значение: {result}\n");
                 var filePath = Path.Combine("E:/НРИ/RoleplayerBotDiscord/Numbers", $"{result}.png");
                 Color embedColor = GetGradientColor(result, 1, max);
 
@@ -945,9 +945,10 @@ namespace DiscordBot
                 return;
             }
 
+            Console.Write($"Была введена команда на бросок d20 => ");
             Random random = new Random();
             int result = random.Next(1, 21);
-            Console.WriteLine($"Полученное значение: {result}");
+            Console.WriteLine($"Полученное значение: {result}\n");
 
             // Проверка на повторный результат
             bool rerollOnDuplicate = false; // Переменная для управления повторной рандомизацией
@@ -1138,7 +1139,7 @@ namespace DiscordBot
                 return;
             }
 
-            string directoryPath = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string directoryPath = @"E:\НРИ\RoleplayerBotDiscord\Logs";
             Directory.CreateDirectory(directoryPath);
 
             string filePath = Path.Combine(directoryPath, $"{user.Username}.txt");
@@ -1156,7 +1157,7 @@ namespace DiscordBot
 
         private void IncrementBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
 
             if (!File.Exists(counterFilePath))
             {
@@ -1484,10 +1485,24 @@ namespace DiscordBot
         {
             var gameName = guildEvent.Name;
 
+            ulong channelId = 1345036014519058464;
+            var channel = client.GetChannel(channelId) as ITextChannel;
             var creator = guildEvent.Creator as SocketGuildUser;
             if (creator == null || !creator.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
             {
                 Console.WriteLine($"Мероприятие '{gameName}' запущено не мастером. Пропускаем.");
+                return;
+            }
+
+            if (_currentSession != null && !_currentSession.IsStopped)
+            {
+                var msg = await channel.SendMessageAsync("Запущено событие после ручного запуска. Запись времени продолжается.");
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(10000);
+                    await msg.DeleteAsync();                    
+                });
+                Console.WriteLine("Игра уже запущена. Сначала остановите текущую сессию.");
                 return;
             }
 
@@ -1498,8 +1513,6 @@ namespace DiscordBot
                 StartTime = DateTime.Now
             };
 
-            ulong channelId = 1345036014519058464;
-            var channel = client.GetChannel(channelId) as ITextChannel;
             if (channel != null)
             {
                 await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{_currentSession.MasterName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
