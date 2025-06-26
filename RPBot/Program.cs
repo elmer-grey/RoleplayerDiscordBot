@@ -395,6 +395,9 @@ namespace DiscordBot
                 case "stop":
                     await StopGameSession(command);
                     break;
+                case "edit_session":
+                    await EditGameSession(command);
+                    break;
                 case "close_chat":
                     await CloseChatCommand(command);
                     break;
@@ -534,6 +537,21 @@ namespace DiscordBot
             var gameSessionModule = _services.GetService<GameSessionCommands>();
             await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
             Console.WriteLine("Игра начата.");
+        }
+        
+        private async Task EditGameSession(SocketSlashCommand command)
+        {
+            var newGameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_game_name");
+            var newGameName = newGameNameOption?.Value?.ToString();
+
+            var newMasterOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_master");
+            var newMaster = newMasterOption?.Value as SocketUser;
+
+            var newCommentOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_comment");
+            var newComment = newCommentOption?.Value?.ToString();
+
+            var gameSessionModule = _services.GetService<GameSessionCommands>();
+            await gameSessionModule.EditGameSession(command, newGameName, newMaster, newComment);
         }
 
         private async Task PauseGameSession(SocketSlashCommand command)
@@ -938,6 +956,13 @@ namespace DiscordBot
         {
             await command.DeferAsync();
 
+            // Проверяем, не на паузе ли игра
+            if (GameSessionCommands._currentSession != null && GameSessionCommands._currentSession.IsPaused)
+            {
+                await command.FollowupAsync("Игра на паузе. Броски не учитываются.", ephemeral: true);
+                return;
+            }
+
             var user = command.User as SocketGuildUser;
             if (user == null)
             {
@@ -947,7 +972,7 @@ namespace DiscordBot
 
             Random random = new Random();
             int result = random.Next(1, 21);
-            Console.WriteLine($"Полученное значение: {result}");
+            Console.WriteLine($"Полученное значение (d20): {result}\n");
 
             // Проверка на повторный результат
             bool rerollOnDuplicate = false; // Переменная для управления повторной рандомизацией
@@ -966,9 +991,19 @@ namespace DiscordBot
 
                 // Обновляем последний результат пользователя
                 _lastUserRolls[user.Id] = result;
-            }            
+            }
 
-            //Console.WriteLine($"Полученное значение: {result}");
+            // Проверяем, что игра активна и не на паузе
+            if (GameSessionCommands._currentSession != null && !GameSessionCommands._currentSession.IsStopped && !GameSessionCommands._currentSession.IsPaused)
+            {
+                // Добавляем статистику только если игра активна
+                GameSessionCommands._currentSession.Rolls.Add(new RollStatistic
+                {
+                    PlayerName = command.User.GlobalName,
+                    RollValue = result
+                });
+            }
+
             var filePath = Path.Combine("Numbers", $"{result}.png");
             Color embedColor = GetGradientColor(result, 1, 20);
 
@@ -1474,6 +1509,7 @@ namespace DiscordBot
     {
         private readonly DiscordSocketClient _client;
         public static GameSession _currentSession;
+        private static readonly object _sessionLock = new object();
 
         public GameSessionCommands(DiscordSocketClient client)
         {
@@ -1482,27 +1518,42 @@ namespace DiscordBot
 
         public static async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent, DiscordSocketClient client)
         {
-            var gameName = guildEvent.Name;
+            lock (_sessionLock)
+            {
+                if (_currentSession != null && !_currentSession.IsStopped)
+                {
+                    Console.WriteLine($"Игровая сессия '{_currentSession.GameName}' уже активна. Событие '{guildEvent.Name}' не будет запускать новую сессию.\n");
+                    return;
+                }
+            }
 
+            var gameName = guildEvent.Name;
             var creator = guildEvent.Creator as SocketGuildUser;
+
             if (creator == null || !creator.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
             {
                 Console.WriteLine($"Мероприятие '{gameName}' запущено не мастером. Пропускаем.");
                 return;
             }
 
-            _currentSession = new GameSession
+            var newSession = new GameSession
             {
                 GameName = gameName,
                 MasterName = creator.DisplayName,
-                StartTime = DateTime.Now
+                StartTime = DateTime.Now,
+                IsStopped = false
             };
 
-            ulong channelId = 1345036014519058464;
+            lock (_sessionLock)
+            {
+                _currentSession = newSession;
+            }
+
+            ulong channelId = 1345036014519058464; //Чат "Запись времени" в КнР
             var channel = client.GetChannel(channelId) as ITextChannel;
             if (channel != null)
             {
-                await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{_currentSession.MasterName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
+                await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{newSession.MasterName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}");
             }
             else
             {
@@ -1516,30 +1567,39 @@ namespace DiscordBot
         public async Task StartGameSession(SocketSlashCommand command, string gameName, SocketUser masterUser = null, string gameComment = null)
         {
             var user = command.User as SocketGuildUser;
-
             if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
             {
                 await command.RespondAsync("Только мастера могут запускать игру.", ephemeral: true);
                 return;
             }
 
-            if (_currentSession != null && !_currentSession.IsStopped)
+            string activeGameName = null;
+            lock (_sessionLock)
             {
-                await command.RespondAsync("Игра уже запущена. Сначала остановите текущую сессию.", ephemeral: true);
+                if (_currentSession != null && !_currentSession.IsStopped)
+                {
+                    activeGameName = _currentSession.GameName; // Сохраняем для сообщения
+                }
+            }
+
+            if (activeGameName != null)
+            {
+                await command.RespondAsync(
+                    $"Игра '{activeGameName}' уже запущена. " +
+                    "Сначала остановите текущую сессию.",
+                    ephemeral: true);
+                Console.WriteLine($"Игровая сессия '{activeGameName}' уже активна. Событие '{gameName}' не будет запускать новую сессию.\n");
                 return;
             }
 
-            // Используем выбранного мастера или пользователя, вызвавшего команду, если мастер не указан
             var master = masterUser as SocketGuildUser ?? user;
-
-            // Проверяем, что выбранный мастер имеет роль "Мастер НРИ"
             if (!master.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
             {
                 await command.RespondAsync("Выбранный пользователь не является мастером.", ephemeral: true);
                 return;
             }
 
-            _currentSession = new GameSession
+            var newSession = new GameSession
             {
                 GameName = gameName,
                 MasterName = master.DisplayName,
@@ -1547,12 +1607,76 @@ namespace DiscordBot
                 StartTime = DateTime.Now,
                 IsStopped = false
             };
-            Console.WriteLine("Оповещение: Создание новой записи времени.");
-            if (gameComment==null)
-                await command.RespondAsync($"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
-            else
-                await command.RespondAsync($"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nДополнительная информация: *{gameComment}*\nВремя начала: {_currentSession.StartTime:HH:mm:ss}");
 
+            lock (_sessionLock)
+            {
+                _currentSession = newSession;
+            }
+
+            Console.WriteLine($"Оповещение: Создана новая игровая сессия '{gameName}'\n");
+            string response = gameComment == null
+                ? $"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}"
+                : $"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nДополнительная информация: *{gameComment}*\nВремя начала: {newSession.StartTime:HH:mm:ss}";
+
+            await command.RespondAsync(response);
+        }
+
+        [Command("edit_session")]
+        public async Task EditGameSession(SocketSlashCommand command, string newGameName = null, SocketUser newMaster = null, string newComment = null)
+        {
+            var user = command.User as SocketGuildUser;
+            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+            {
+                await command.RespondAsync("Только мастера могут изменять параметры игры.", ephemeral: true);
+                return;
+            }
+
+            if (_currentSession == null || _currentSession.IsStopped)
+            {
+                await command.RespondAsync("Нет активной игры для изменения.", ephemeral: true);
+                return;
+            }
+
+            bool changed = false;
+            var message = new StringBuilder("Изменены параметры игры:\n");
+
+            lock (_sessionLock)
+            {
+                if (!string.IsNullOrEmpty(newGameName) && _currentSession.GameName != newGameName)
+                {
+                    message.AppendLine($"- Название: {_currentSession.GameName} → {newGameName}");
+                    _currentSession.GameName = newGameName;
+                    changed = true;
+                }
+
+                if (newMaster != null)
+                {
+                    var masterGuildUser = newMaster as SocketGuildUser;
+                    if (masterGuildUser != null &&
+                        masterGuildUser.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        message.AppendLine($"- Мастер: {_currentSession.MasterName} → {masterGuildUser.DisplayName}");
+                        _currentSession.MasterName = masterGuildUser.DisplayName;
+                        changed = true;
+                    }
+                }
+
+                if (newComment != null && _currentSession.GameComment != newComment)
+                {
+                    message.AppendLine($"- Комментарий: {_currentSession.GameComment ?? "нет"} → {newComment}");
+                    _currentSession.GameComment = newComment;
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+            {
+                await command.RespondAsync("Не указаны параметры для изменения или новые значения совпадают с текущими.", ephemeral: false);
+                return;
+            }
+
+            Console.WriteLine($"Изменены параметры игры: {_currentSession.GameName}");
+            await command.RespondAsync(message.ToString(), ephemeral: true);
         }
 
         [Command("pause")]
@@ -1680,7 +1804,7 @@ namespace DiscordBot
             message.AppendLine($"# Игра **{_currentSession.GameName}** завершена.");
             message.AppendLine($"- **Мастер:** {_currentSession.MasterName}");
             message.AppendLine($"- **Начало:** {_currentSession.StartTime:dd.MM.yyyy HH:mm}");
-            message.AppendLine($"- **Конец:** {_currentSession.EndTime:HH:mm}");
+            message.AppendLine($"- **Конец:** {_currentSession.EndTime:dd.MM.yyyy HH:mm}");
             message.AppendLine($"- **Общее время:** {FormatTimeSpan(totalDuration.Value)}");
             message.AppendLine($"- **Активное время:** {FormatTimeSpan(TimeSpan.FromSeconds(activeDuration))}");
             if (_currentSession.GameComment != null)

@@ -120,6 +120,12 @@ namespace RPBot
                 .WithName("stop")
                 .WithDescription("Остановить игру."),
                     new SlashCommandBuilder()
+                .WithName("edit_session")
+                .WithDescription("Изменить параметры текущей игры (только для мастеров)")
+                .AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
+                .AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер", isRequired: false)
+                .AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
+                    new SlashCommandBuilder()
                 .WithName("close_chat")
                 .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
                 .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
