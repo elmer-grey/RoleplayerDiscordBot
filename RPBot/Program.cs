@@ -1503,6 +1503,7 @@ namespace DiscordBot
         public bool IsPaused { get; set; }
         public bool IsStopped { get; set; }
         public List<RollStatistic> Rolls { get; set; } = new List<RollStatistic>();
+        public string EventDescription { get; set; }
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
@@ -1541,7 +1542,8 @@ namespace DiscordBot
                 GameName = gameName,
                 MasterName = creator.DisplayName,
                 StartTime = DateTime.Now,
-                IsStopped = false
+                IsStopped = false,
+                EventDescription = guildEvent.Description // Добавляем описание события
             };
 
             lock (_sessionLock)
@@ -1807,9 +1809,18 @@ namespace DiscordBot
             message.AppendLine($"- **Конец:** {_currentSession.EndTime:dd.MM.yyyy HH:mm}");
             message.AppendLine($"- **Общее время:** {FormatTimeSpan(totalDuration.Value)}");
             message.AppendLine($"- **Активное время:** {FormatTimeSpan(TimeSpan.FromSeconds(activeDuration))}");
-            if (_currentSession.GameComment != null)
-                message.AppendLine($"- **Комментарий:** *{_currentSession.GameComment}*");
 
+            // Добавляем описание события, если оно есть
+            if (!string.IsNullOrEmpty(_currentSession.EventDescription))
+            {
+                message.AppendLine($"- **Описание события:** *{_currentSession.EventDescription}*");
+            }
+
+            // Добавляем комментарий, если он есть
+            if (_currentSession.GameComment != null)
+            {
+                message.AppendLine($"- **Комментарий:** *{_currentSession.GameComment}*");
+            }
             if (_currentSession.PausePeriods.Any())
             {
                 message.AppendLine("## Перерывы:");
