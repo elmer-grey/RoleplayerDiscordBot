@@ -1,16 +1,17 @@
-﻿using System;
-using System.Reflection;
-using System.Linq;
-using System.Threading.Tasks;
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
-using System.Text;
 using RPBot;
-using System.Text.RegularExpressions;
-using System.IO;
+using System;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace DiscordBot
 {
@@ -1504,6 +1505,7 @@ namespace DiscordBot
         public bool IsStopped { get; set; }
         public List<RollStatistic> Rolls { get; set; } = new List<RollStatistic>();
         public string EventDescription { get; set; }
+        public int MessagesToDeleteCount { get; set; } = 0;
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
@@ -1531,11 +1533,6 @@ namespace DiscordBot
             var gameName = guildEvent.Name;
             var creator = guildEvent.Creator as SocketGuildUser;
 
-            if (creator == null || !creator.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-            {
-                Console.WriteLine($"Мероприятие '{gameName}' запущено не мастером. Пропускаем.");
-                return;
-            }
 
             var newSession = new GameSession
             {
@@ -1555,7 +1552,8 @@ namespace DiscordBot
             var channel = client.GetChannel(channelId) as ITextChannel;
             if (channel != null)
             {
-                await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{newSession.MasterName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}");
+                await channel.SendMessageAsync($"Игра **{gameName}** начата мастером **{newSession.MasterName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}" +
+                    $"\nДополнительная информация: *{newSession.EventDescription}*");
             }
             else
             {
@@ -1621,6 +1619,7 @@ namespace DiscordBot
                 : $"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nДополнительная информация: *{gameComment}*\nВремя начала: {newSession.StartTime:HH:mm:ss}";
 
             await command.RespondAsync(response);
+            _currentSession.MessagesToDeleteCount++;
         }
 
         [Command("edit_session")]
@@ -1708,7 +1707,9 @@ namespace DiscordBot
             _currentSession.IsPaused = true;
 
             Console.WriteLine("Оповещение: Игра приостановлена.");
+
             await command.RespondAsync("Игра приостановлена.");
+            _currentSession.MessagesToDeleteCount++;
 
             // Запоминаем время начала паузы
             var pauseStartTime = DateTime.Now;
@@ -1765,6 +1766,7 @@ namespace DiscordBot
             _currentSession.IsPaused = false;
             Console.WriteLine("Оповещение: Игра продолжена.");
             await command.RespondAsync("Игра продолжена.");
+            _currentSession.MessagesToDeleteCount++;
         }
 
         [Command("stop")]
@@ -1791,6 +1793,9 @@ namespace DiscordBot
                 _currentSession.PausePeriods[^1] = (lastPause.Start, DateTime.Now); // Завершаем перерыв текущим временем
                 _currentSession.IsPaused = false;
             }
+
+            await DeleteLastMessages(command.Channel, _currentSession.MessagesToDeleteCount);
+            _currentSession.MessagesToDeleteCount = 0;
 
             _currentSession.EndTime = DateTime.Now;
             _currentSession.IsStopped = true;
@@ -1953,6 +1958,32 @@ namespace DiscordBot
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
             _currentSession = null;
+        }
+
+        private async Task DeleteLastMessages(ISocketMessageChannel channel, int count)
+        {
+            if (count <= 0 || channel is not ITextChannel textChannel) return;
+
+            try
+            {
+                var messages = (await textChannel.GetMessagesAsync(count).FlattenAsync())
+                    .Where(m => m.Author.Id == _client.CurrentUser.Id)
+                    .Take(count)
+                    .ToList();
+
+                if (messages.Any())
+                {
+                    // Удаляем пачками по 100 сообщений
+                    foreach (var batch in messages.Chunk(100))
+                    {
+                        await textChannel.DeleteMessagesAsync(batch);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при удалении сообщений: {ex.Message}");
+            }
         }
     }
 
