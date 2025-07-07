@@ -1732,6 +1732,7 @@ namespace DiscordBot
                             int totalMinutes = (int)totalPauseDuration.TotalMinutes;
 
                             await channel.SendMessageAsync($"{user.Mention}, перерыв длится уже {totalMinutes} минут. Не забудьте возобновить игру с помощью команды `/resume`!");
+                            _currentSession.MessagesToDeleteCount++;
                         }
                     }
                 }
@@ -1794,9 +1795,6 @@ namespace DiscordBot
                 _currentSession.IsPaused = false;
             }
 
-            await DeleteLastMessages(command.Channel, _currentSession.MessagesToDeleteCount);
-            _currentSession.MessagesToDeleteCount = 0;
-
             _currentSession.EndTime = DateTime.Now;
             _currentSession.IsStopped = true;
 
@@ -1806,6 +1804,9 @@ namespace DiscordBot
                 .Sum(p => (p.End.Value - p.Start).TotalSeconds);
 
             var activeDuration = totalDuration.Value.TotalSeconds - pauseDuration;
+
+            await DeleteLastMessages(command.Channel, _currentSession.MessagesToDeleteCount);
+            _currentSession.MessagesToDeleteCount = 0;
 
             var message = new StringBuilder();
             message.AppendLine($"# Игра **{_currentSession.GameName}** завершена.");
