@@ -91,8 +91,11 @@ namespace RPBot
                 .WithDescription("Выполняет бросок кубика с заданными условиями. Подробнее в команде /help_r.")
                 .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true),
                     new SlashCommandBuilder()
+                .WithName("roll20")
+                .WithDescription("Выполняет бросок кубика d20."),
+                    new SlashCommandBuilder()
                 .WithName("queue")
-                .WithDescription("Показывает текущее состояние очереди и список участников.")
+                .WithDescription("Запускает создание очереди.")
                 .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
                     new SlashCommandBuilder()
                 .WithName("q")
@@ -104,7 +107,9 @@ namespace RPBot
                     new SlashCommandBuilder()
                 .WithName("start")
                 .WithDescription("Запустить игру.")
-                .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true),
+                .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
+                .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false)
+                .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии", isRequired: false),
                     new SlashCommandBuilder()
                 .WithName("pause")
                 .WithDescription("Приостановить игру."),
@@ -114,6 +119,14 @@ namespace RPBot
                     new SlashCommandBuilder()
                 .WithName("stop")
                 .WithDescription("Остановить игру."),
+                    new SlashCommandBuilder()
+                .WithName("close_chat")
+                .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
+                .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
+                    new SlashCommandBuilder()
+                .WithName("open_chat")
+                .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
+                .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
                 };
 
                 foreach (var command in commands)
@@ -122,6 +135,5 @@ namespace RPBot
                 }
             }
         }
-
     }
 }
