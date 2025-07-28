@@ -72,7 +72,7 @@ namespace DiscordBot
             // Загрузка текстовых блоков из файла            
             _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
 
-            Console.WriteLine("Инициализация бота...");
+            Console.WriteLine("Инициализация бота... Версия 0.4.2.0");
             LogToFile($"Инициализация бота в {DateTime.Now}.");
             _client.Log += Log;
             _client.UserJoined += UserJoined;
@@ -80,6 +80,7 @@ namespace DiscordBot
             _client.Ready += OnReady;
             _client.SlashCommandExecuted += OnSlashCommandExecuted;
             _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
+            _client.GuildScheduledEventCompleted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client);
             _client.ButtonExecuted += async (component) =>
             {
                 var gameSessionCommands = new GameSessionCommands(_client);
@@ -611,15 +612,22 @@ namespace DiscordBot
             await gameSessionModule.StopGameSession(command);
         }
 
-        private Task Log(LogMessage arg)
+        private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
+
+        private async Task Log(LogMessage arg)
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt"; // Укажите путь к вашему файлу
+            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt";
             Console.WriteLine(arg);
-            using (StreamWriter writer = new StreamWriter(path, true)) // true для добавления в конец файла
+
+            await _logSemaphore.WaitAsync(); // Асинхронная блокировка
+            try
             {
-                writer.WriteLine(arg);
+                await File.AppendAllTextAsync(path, arg + Environment.NewLine);
             }
-            return Task.CompletedTask;
+            finally
+            {
+                _logSemaphore.Release(); // Освобождение семафора
+            }
         }
 
         private void LogToFile(string message)
@@ -875,87 +883,169 @@ namespace DiscordBot
             List<int> results;
 
             // Обработка случая d20 отдельно
-            if (max == 20 && count == 1 && modifier == 0)
+            if (max == 20 && modifier == 0)
             {
-                /*if (user.Username == "perekrestok_mirov")
-                {
-                    var result1 = random.Next(15, 21);
-                    Console.WriteLine($"Полученное значение: {result1}");
-                    var filePath1 = Path.Combine("Numbers", $"{result1}.png");
-                    Color embedColor1 = GetGradientColor(result1, 1, max);
+                results = Enumerable.Range(0, count).Select(_ => random.Next(1, max + 1)).ToList();
 
-                    if (File.Exists(filePath1))
-                    {
-                        var embed = new EmbedBuilder()
-                            .WithTitle($"Результат броска {user.DisplayName}: {result1}")
-                            .WithImageUrl($"attachment://{Path.GetFileName(filePath1)}")
-                            .WithColor(embedColor1)
-                            .Build();
-                        // Отправляем сообщение с файлом и embed без присвоения результата
-                        await command.RespondWithFileAsync(filePath1, embed: embed, isTTS: false, allowedMentions: null);
-                        return;
-                    }
-                }
-                else
-                {*/
-                var result = random.Next(1, max + 1);
-                Console.WriteLine($"Полученное значение: {result}");
-                var filePath = Path.Combine("Numbers", $"{result}.png");
-                Color embedColor = GetGradientColor(result, 1, max);
-
+                // Для каждого броска d20 выводим отдельное изображение и сохраняем в статистику
                 if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var activeSession))
                 {
-                    activeSession.Rolls.Add(new RollStatistic
+                    foreach (var result in results)
                     {
-                        PlayerName = command.User.GlobalName,
-                        RollValue = result
-                    });
+                        activeSession.Rolls.Add(new RollStatistic
+                        {
+                            PlayerName = command.User.GlobalName,
+                            RollValue = result
+                        });
+                    }
                 }
 
-                if (File.Exists(filePath))
+                // Если только один бросок d20 - выводим одно изображение
+                if (count == 1)
                 {
-                    var embed = new EmbedBuilder()
-                        .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
-                        .WithColor(embedColor)
-                        .Build();
-                    await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                    var result = results[0];
+                    var filePath = Path.Combine("Numbers", $"{result}.png");
+                    Color embedColor = GetGradientColor(result, 1, max);
+
+                    Console.WriteLine($"Результат броска: {result}");
+
+                    if (File.Exists(filePath))
+                    {
+                        var embed = new EmbedBuilder()
+                            .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                            .WithColor(embedColor)
+                            .Build();
+                        await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
+                        await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                    }
+                    return;
                 }
+                // Если несколько бросков d20 - выводим все изображения
                 else
                 {
-                    Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
-                    await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                    var embeds = new List<Embed>();
+                    var files = new List<FileAttachment>();
+                    int count_rols = 1;
+
+                    // Логируем результаты в консоль
+                    foreach (var result in results)
+                    {
+                        Console.WriteLine($"Результат броска {count_rols}: {result}");
+                        count_rols++;
+                    }
+
+                    // Подготавливаем файлы и embed'ы
+                    count_rols = 1;
+                    foreach (var result in results)
+                    {
+                        var filePath = Path.Combine("Numbers", $"{result}.png");
+                        if (File.Exists(filePath))
+                        {
+                            // Для embed'ов не нужно менять имена файлов, даже если результаты одинаковые
+                            files.Add(new FileAttachment(filePath, Path.GetFileName(filePath)));
+                            embeds.Add(new EmbedBuilder()
+                                .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                                .WithColor(GetGradientColor(result, 1, max))
+                                .Build());
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
+                        }
+                        count_rols++;
+                    }
+
+                    if (files.Count > 0)
+                    {
+                        //1.Первое сообщение с текстом
+                        //string responseText = files.Count switch
+                        //{
+                        //    2 => "Результаты броска с помехой/преимуществом:",
+                        //    _ => $"Результаты {files.Count} бросков:"
+                        //};
+
+                        //await command.FollowupAsync(responseText);
+
+                        //2.Затем отправляем embed'ы с задержкой
+                        //for (int i = 0; i < files.Count; i++)
+                        //{
+                        //    if (i > 0)
+                        //    {
+                        //        await Task.Delay(500); // Задержка между бросками (0.5 сек)
+                        //    }
+
+                        //    await command.FollowupWithFileAsync(
+                        //        files[i],
+                        //        embed: embeds[i]);
+                        //}
+
+                        // 3. Комбинированное сообщение с текстом и всеми embed'ами
+                        var combinedMessage = files.Count switch
+                        {
+                            2 => "Результаты броска с помехой/преимуществом:",
+                            _ => $"Результаты {files.Count} бросков:"
+                        };
+
+                        // Создаем новый список файловых вложений
+                        var fileAttachments = files.Select(f => new FileAttachment(f.Stream, f.FileName)).ToList();
+
+                        // Отправляем комбинированное сообщение
+                        await command.FollowupWithFilesAsync(
+                            attachments: fileAttachments,
+                            text: combinedMessage,
+                            embeds: embeds.ToArray());
+                    }
+                    else
+                    {
+                        await command.FollowupAsync("Не удалось загрузить изображения для результатов.");
+                    }
+                    return;
                 }
-                return;
-                //}
             }
 
             results = Enumerable.Range(0, count).Select(_ => {
                 int result = random.Next(min, max + 1);
-                Console.WriteLine($"Полученное значение: {result}");
                 return result;
             }).ToList();
 
-            string resultMessage = "__**Результат броска**__\n" +
-                                   "```plaintext\n";
+            // Формируем сообщение для вывода
+            var resultMessage = new StringBuilder();
+            var consoleMessage = new StringBuilder();
 
             if (count == 1)
             {
                 var rolledValue = results[0];
                 int finalValue = rolledValue + modifier;
 
+                resultMessage.AppendLine("__**Результат броска**__");
+                resultMessage.AppendLine("```plaintext");
+
                 if (modifier != 0)
                 {
-                    resultMessage += $"Выпавшее значение: {rolledValue}\n" +
-                                     $"Модификатор: {modifier}\n" +
-                                     $"Полученное значение: {finalValue}\n";
+                    resultMessage.AppendLine($"Выпавшее значение: {rolledValue}");
+                    resultMessage.AppendLine($"Модификатор: {modifier}");
+                    resultMessage.AppendLine($"Полученное значение: {finalValue}\n");
+
+                    consoleMessage.AppendLine($"Выпавшее значение: {rolledValue}");
+                    consoleMessage.AppendLine($"Модификатор: {modifier}");
+                    consoleMessage.AppendLine($"Полученное значение: {finalValue}\n");
                 }
                 else
                 {
-                    resultMessage += $"Полученное значение: {rolledValue}\n";
+                    resultMessage.AppendLine($"Полученное значение: {rolledValue}\n");
+                    consoleMessage.AppendLine($"Полученное значение: {rolledValue}\n");
                 }
+                resultMessage.Append("```");
             }
             else
             {
+                resultMessage.AppendLine("__**Результаты бросков**__");
+                resultMessage.AppendLine("```plaintext");
+
                 for (int i = 0; i < results.Count; i++)
                 {
                     var rolledValue = results[i];
@@ -963,21 +1053,25 @@ namespace DiscordBot
 
                     if (modifier != 0)
                     {
-                        resultMessage += $"Бросок {i + 1}: Выпавшее значение: {rolledValue}\n" +
-                                         $"Модификатор: {modifier}\n" +
-                                         $"Полученное значение: {finalValue}\n";
+                        resultMessage.AppendLine($"Бросок {i + 1}: Выпавшее значение: {rolledValue}");
+                        resultMessage.AppendLine($"Модификатор: {modifier}");
+                        resultMessage.AppendLine($"Полученное значение: {finalValue} \n");
+
+                        consoleMessage.AppendLine($"Бросок {i + 1}: Выпавшее значение: {rolledValue}");
+                        consoleMessage.AppendLine($"Модификатор: {modifier}");
+                        consoleMessage.AppendLine($"Полученное значение: {finalValue} \n");
                     }
                     else
                     {
-                        resultMessage += $"Бросок {i + 1}: Полученное значение: {rolledValue}\n";
+                        resultMessage.AppendLine($"Бросок {i + 1}: Полученное значение: {rolledValue}\n");
+                        consoleMessage.AppendLine($"Бросок {i + 1}: Полученное значение: {rolledValue}\n");
                     }
                 }
+                resultMessage.Append("```");
             }
 
-            resultMessage += "```";
-
-            await command.FollowupAsync(resultMessage);
-            Console.WriteLine($"Совершён бросок. {resultMessage}");
+            await command.FollowupAsync(resultMessage.ToString());
+            Console.WriteLine(consoleMessage.ToString());
         }
 
         [Command("roll20")]
@@ -1881,13 +1975,140 @@ namespace DiscordBot
             {
                 _sessionSemaphore.Release();
             }
-            Console.WriteLine($"Оповещение: Игра {session.GameName} остановлена запущены дальнейшие процедуры.\n");
+            Console.WriteLine($"Оповещение: Игра {session.GameName} остановлена. Запущены дальнейшие процедуры.");
 
             // Очищаем сообщения бота между /start и /stop
             await CleanupSessionMessages(command.Channel, session.MessagesToDeleteCount);
 
             // Формируем и отправляем статистику
             await SendSessionResults(command, session);
+        }
+
+        public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client)
+        {
+            var guildId = guildEvent.Guild.Id;
+
+            await _sessionSemaphore.WaitAsync();
+            try
+            {
+                if (!_sessions.TryGetValue(guildId, out var session))
+                {
+                    Console.WriteLine($"Не найдена активная сессия для события '{guildEvent.Name}'");
+                    return;
+                }
+
+                // Копируем логику из команды stop
+                if (session.IsPaused)
+                {
+                    var lastPause = session.PausePeriods.Last();
+                    session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                    session.IsPaused = false;
+                }
+
+                session.EndTime = DateTime.Now;
+                session.IsStopped = true;
+
+                Console.WriteLine($"Оповещение: Игра {session.GameName} завершена по событию. Запущены дальнейшие процедуры.");
+
+                // Получаем канал для уведомлений
+                var channel = client.GetChannel(Program.ServerConfigs[guildId].RecordChannelID) as SocketTextChannel;
+                if (channel == null) return;
+
+                // Создаем экземпляр GameSessionCommands для доступа к нестатическим методам
+                var commands = new GameSessionCommands(client);
+
+                // Очищаем сообщения бота
+                await commands.CleanupSessionMessages(channel, session.MessagesToDeleteCount);
+
+                // Отправляем статистику через новый метод
+                await SendSessionResultsForEvent(client, session, channel, commands);
+
+                // Удаляем сессию
+                //_sessions.TryRemove(guildId, out _);
+            }
+            finally
+            {
+                _sessionSemaphore.Release();
+            }
+        }
+
+        // Есть повтор в SendSessionResults --- Обратить внимание!
+        private static async Task SendSessionResultsForEvent(DiscordSocketClient client, GameSession session,
+            ISocketMessageChannel channel, GameSessionCommands commands)
+        {
+            var statsMessage = commands.BuildSessionStats(session);
+
+            var notification = await channel.SendMessageAsync("Игра остановлена по событию. Статистика отправлена в личные сообщения админу.");
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000);
+                await notification.DeleteAsync();
+            });
+
+            // Отправка админу
+            var targetUser = client.GetUser(263758178091532288);
+            if (targetUser == null)
+            {
+                await channel.SendMessageAsync("Пользователь *Админ* не найден.");
+            }
+            else
+            {
+                try
+                {
+                    var dmChannel = await targetUser.CreateDMChannelAsync();
+                    await dmChannel.SendMessageAsync(statsMessage);
+                }
+                catch (Exception ex)
+                {
+                    await channel.SendMessageAsync($"Ошибка: Не удалось отправить результаты пользователю {targetUser.Mention}.");
+                    Console.WriteLine($"Ошибка отправки статистики: {ex.Message}");
+                }
+            }
+
+            // Отправка статистики в канал
+            var statsMsg = await channel.SendMessageAsync(statsMessage);
+
+            // Проверяем, были ли броски
+            if (session.Rolls.Count == 0)
+            {
+                var noRollsMessage = await channel.SendMessageAsync(
+                    "Не совершено ни одного броска. Сессия будет удалена через 10 секунд.");
+
+                // Удаляем сообщение и сессию через 10 секунд
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(10000);
+                    await noRollsMessage.DeleteAsync();
+
+                    await _sessionSemaphore.WaitAsync();
+                    try
+                    {
+                        _sessions.TryRemove(session.GuildId, out _);
+                    }
+                    finally
+                    {
+                        _sessionSemaphore.Release();
+                    }
+                });
+                return;
+            }
+
+            // Отправка кнопок в statsChannel
+            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) &&
+                client.GetChannel(config.StatsChannelId) is ITextChannel statsChannel)
+            {
+                var buttons = new ComponentBuilder()
+                    .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
+                    .WithButton("Общая", "general_stats", ButtonStyle.Primary)
+                    .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
+                    .Build();
+
+                var buttonsMsg = await statsChannel.SendMessageAsync(
+                    $"Статистика для игры `{session.GameName}`. Какую вывести?",
+                    components: buttons);
+
+                session.StatsMessageId = buttonsMsg.Id;
+            }
         }
 
         private async Task CleanupSessionMessages(ISocketMessageChannel channel, int count)
@@ -1921,12 +2142,10 @@ namespace DiscordBot
             var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null) return;
 
-            // Получаем ID сообщения, к которому прикреплены кнопки
-            var buttonsMessageId = component.Message.Id;
-
             await _sessionSemaphore.WaitAsync();
             try
             {
+                var buttonsMessageId = component.Message.Id;
                 var session = _sessions.Values.FirstOrDefault(s =>
                     s.GuildId == guildId && s.StatsMessageId == buttonsMessageId);
 
@@ -1940,6 +2159,7 @@ namespace DiscordBot
                 {
                     case "no":
                         await component.Message.DeleteAsync();
+                        _sessions.TryRemove(session.GuildId, out _);
                         break;
                     case "general":
                         await ShowGeneralStats(component, session);
@@ -2015,22 +2235,50 @@ namespace DiscordBot
             if (targetUser == null)
             {
                 await command.Channel.SendMessageAsync("Пользователь *Админ* не найден.");
-                return;
             }
-
-            try
+            else
             {
-                var dmChannel = await targetUser.CreateDMChannelAsync();
-                await dmChannel.SendMessageAsync(statsMessage.ToString());
-            }
-            catch (Exception ex)
-            {
-                await command.Channel.SendMessageAsync($"Ошибка: Не удалось отправить результаты пользователю {targetUser.Mention}. Убедитесь, что у него открыты личные сообщения для бота.");
-                Console.WriteLine($"Ошибка отправки статистики: {ex.Message}");
-            }
+                try
+                {
+                    var dmChannel = await targetUser.CreateDMChannelAsync();
+                    await dmChannel.SendMessageAsync(statsMessage.ToString());
+                }
+                catch (Exception ex)
+                {
+                    await command.Channel.SendMessageAsync($"Ошибка: Не удалось отправить результаты пользователю {targetUser.Mention}. Убедитесь, что у него открыты личные сообщения для бота.");
+                    Console.WriteLine($"Ошибка отправки статистики: {ex.Message}");
+                }
+            }                
 
             // Отправляем статистику в игровой канал
             var statsMsg = await command.Channel.SendMessageAsync(statsMessage);
+
+            // Проверяем, были ли броски
+            if (session.Rolls.Count == 0)
+            {
+                var noRollsMessage = await command.FollowupAsync(
+                    "Не совершено ни одного броска. Сессия будет удалена через 10 секунд.",
+                    ephemeral: true);
+
+                // Удаляем сообщение и сессию через 10 секунд
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(10000);
+                    await noRollsMessage.DeleteAsync();
+
+                    await _sessionSemaphore.WaitAsync();
+                    try
+                    {
+                        _sessions.TryRemove(session.GuildId, out _);
+                    }
+                    finally
+                    {
+                        _sessionSemaphore.Release();
+                    }
+                });
+
+                return;
+            }
 
             // Отправляем кнопки в statsChannel
             if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) &&
@@ -2063,8 +2311,7 @@ namespace DiscordBot
                 message.AppendLine($"- {roll.Value}: {roll.Count} раз");
             }
 
-            try { _sessions.TryRemove(session.GuildId, out _); }
-            finally { _sessionSemaphore.Release(); }
+            _sessions.TryRemove(session.GuildId, out _);
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
         }
@@ -2090,8 +2337,7 @@ namespace DiscordBot
                 }
             }
 
-            try { _sessions.TryRemove(session.GuildId, out _); }
-            finally { _sessionSemaphore.Release(); }
+            _sessions.TryRemove(session.GuildId, out _);
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
         }
