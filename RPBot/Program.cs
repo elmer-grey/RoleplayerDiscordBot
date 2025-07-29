@@ -69,8 +69,8 @@ namespace DiscordBot
 
         public async Task RunBotAsync()
         {
-            // Загрузка текстовых блоков из файла            
-            _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
+            // Укажите путь к вашему файлу        
+            _textBlocks = LoadTextFromFile("E:/НРИ/RoleplayerBotDiscord/RPBot/pasty.txt"); // Сохраняем текстовые блоки в поле класса
 
             Console.WriteLine("Инициализация бота... Версия 0.4.2.0");
             LogToFile($"Инициализация бота в {DateTime.Now}.");
@@ -153,13 +153,13 @@ namespace DiscordBot
                 commandsList.AppendLine("`!ссылки` - полезные ссылки");
 
                 await message.Channel.SendMessageAsync(commandsList.ToString());
-                return; // Прерываем выполнение, чтобы не обрабатывать другие команды
+                return;
             }
 
             // Обработка сообщений, начинающихся с "!"
             if (message.Content.StartsWith("!"))
             {
-                var key = message.Content.Split(' ')[0]; // Берём первое слово (например, "!пример")
+                var key = message.Content.Split(' ')[0];
                 if (_textBlocks.ContainsKey(key))
                 {
                     await message.Channel.SendMessageAsync(_textBlocks[key]);
@@ -375,9 +375,9 @@ namespace DiscordBot
             Console.WriteLine("Линия отправлена");
         }
 
-        private int GetBugReportCounter()
+        private int GetBugReportCounter() // Укажите путь к вашему файлу
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
 
             if (File.Exists(counterFilePath))
             {
@@ -614,28 +614,28 @@ namespace DiscordBot
 
         private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
-        private async Task Log(LogMessage arg)
+        private async Task Log(LogMessage arg) // Укажите путь к вашему файлу
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt";
+            string path = @"E:\НРИ\RoleplayerBotDiscord\Logs\LogFile.txt";
             Console.WriteLine(arg);
 
-            await _logSemaphore.WaitAsync(); // Асинхронная блокировка
+            await _logSemaphore.WaitAsync();
             try
             {
                 await File.AppendAllTextAsync(path, arg + Environment.NewLine);
             }
             finally
             {
-                _logSemaphore.Release(); // Освобождение семафора
+                _logSemaphore.Release();
             }
         }
 
-        private void LogToFile(string message)
+        private void LogToFile(string message) // Укажите путь к вашему файлу
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt"; // Укажите путь к вашему файлу
+            string path = @"E:\НРИ\RoleplayerBotDiscord\Logs\LogFile.txt"; 
             if (!File.Exists(path))
             {
-                using (File.Create(path)) { } // Создаем файл, если он не существует
+                using (File.Create(path)) { }
             }
 
             // Записываем сообщение в файл
@@ -648,26 +648,67 @@ namespace DiscordBot
 
         private async Task UserJoined(SocketGuildUser user)
         {
-            Console.WriteLine($"{user.Username} joined the server.");
+            Console.WriteLine($"{user.Username} присоединился к серверу {user.Guild.Name}.");
             try
             {
+                // 1. Получаем необходимые объекты сервера
+                var guild = user.Guild;
+                var defaultRole = guild.GetRole(776013522370560031);
+
+                // 2. Выдаём роль (если роль найдена)
+                if (defaultRole != null)
+                {
+                    try
+                    {
+                        await user.AddRoleAsync(defaultRole);
+                        Console.WriteLine($"Выдана роль {defaultRole.Name} пользователю {user.Username}.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка при выдаче роли: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Роль не найдена! Проверьте ID роли.");
+                }
+                // 3. Отправляем приветственное сообщение в embed
                 if (ServerConfigs.TryGetValue(user.Guild.Id, out var config))
                 {
                     var welcomeChannel = _client.GetChannel(config.WelcomeChannelId) as IMessageChannel;
                     if (welcomeChannel != null)
                     {
-                        Console.WriteLine($"Sending message to channel: {welcomeChannel.Name}");
-                        //await welcomeChannel.SendMessageAsync($"Привет, {user.Mention}!");
+                        Console.WriteLine($"Отправка приветственного сообщения в {welcomeChannel.Name}");
+                        
+                        // Создаем EmbedBuilder
+                        var embed = new EmbedBuilder()
+                            .WithAuthor(new EmbedAuthorBuilder()
+                                .WithName("Смотрящий за костром")
+                                .WithIconUrl("https://media.discordapp.net/attachments/710469293996769405/1241391979477205192/1.png?ex=664a07df&is=6648b65f&hm=b8a054e85315f85feb24a756fed87bfffd8a004e6e32bf1eb77db58f41f9b62e&=&format=webp&quality=lossless"))
+                            .WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
+                                             "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                             "На сервере также действует несколько команд, которые работают только в следующих чатах: **флудилка** и **общий-ролевой-чат**, с важной информацией:\n" +
+                                             "1. `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                             "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                             "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")
+                            .WithColor(new Color(0xE67E22)) // Оранжевый цвет, как у огня
+                            .WithImageUrl("https://media.discordapp.net/attachments/710469293996769405/1241392720883482674/fe5ff45b6397f151c147b890c29eaa26af6741f60a592d7baf3594ff7b424f24.gif?ex=664a0890&is=6648b710&hm=4b766b8801c0ad863731c4f3")
+                            .WithFooter(new EmbedFooterBuilder()
+                                .WithText("Приятного времяпрепровождения у костра!")
+                            )
+                            .WithCurrentTimestamp();
+
+                        await welcomeChannel.SendMessageAsync(embed: embed.Build());
                     }
                     else
                     {
-                        Console.WriteLine("Welcome channel not found.");
+                        Console.WriteLine("Канал для приветствий не был найден.");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error: {ex.Message}");
+                Console.WriteLine($"Ошибка! Текст ошибки: {ex.Message}");
             }
         }
 
@@ -695,7 +736,6 @@ namespace DiscordBot
 
                 if (line.StartsWith("!"))
                 {
-                    // Если найден новый ключ, сохраняем предыдущий блок
                     if (currentKey != null)
                     {
                         textBlocks[currentKey] = currentText.ToString().Trim();
@@ -706,12 +746,10 @@ namespace DiscordBot
                 }
                 else
                 {
-                    // Добавляем строку к текущему тексту
                     currentText.AppendLine(line);
                 }
             }
 
-            // Сохраняем последний блок
             if (currentKey != null)
             {
                 textBlocks[currentKey] = currentText.ToString().Trim();
@@ -882,12 +920,10 @@ namespace DiscordBot
             Random random = new Random();
             List<int> results;
 
-            // Обработка случая d20 отдельно
             if (max == 20 && modifier == 0)
             {
                 results = Enumerable.Range(0, count).Select(_ => random.Next(1, max + 1)).ToList();
 
-                // Для каждого броска d20 выводим отдельное изображение и сохраняем в статистику
                 if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var activeSession))
                 {
                     foreach (var result in results)
@@ -900,11 +936,10 @@ namespace DiscordBot
                     }
                 }
 
-                // Если только один бросок d20 - выводим одно изображение
                 if (count == 1)
                 {
                     var result = results[0];
-                    var filePath = Path.Combine("Numbers", $"{result}.png");
+                    var filePath = Path.Combine("DiceRoll", $"{result}.png");
                     Color embedColor = GetGradientColor(result, 1, max);
 
                     Console.WriteLine($"Результат броска: {result}");
@@ -924,28 +959,24 @@ namespace DiscordBot
                     }
                     return;
                 }
-                // Если несколько бросков d20 - выводим все изображения
                 else
                 {
                     var embeds = new List<Embed>();
                     var files = new List<FileAttachment>();
                     int count_rols = 1;
 
-                    // Логируем результаты в консоль
                     foreach (var result in results)
                     {
                         Console.WriteLine($"Результат броска {count_rols}: {result}");
                         count_rols++;
                     }
 
-                    // Подготавливаем файлы и embed'ы
                     count_rols = 1;
                     foreach (var result in results)
                     {
                         var filePath = Path.Combine("Numbers", $"{result}.png");
                         if (File.Exists(filePath))
                         {
-                            // Для embed'ов не нужно менять имена файлов, даже если результаты одинаковые
                             files.Add(new FileAttachment(filePath, Path.GetFileName(filePath)));
                             embeds.Add(new EmbedBuilder()
                                 .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
@@ -961,39 +992,38 @@ namespace DiscordBot
 
                     if (files.Count > 0)
                     {
-                        //1.Первое сообщение с текстом
-                        //string responseText = files.Count switch
-                        //{
-                        //    2 => "Результаты броска с помехой/преимуществом:",
-                        //    _ => $"Результаты {files.Count} бросков:"
-                        //};
+                        /*1.Первое сообщение с текстом
+                        string responseText = files.Count switch
+                        {
+                            2 => "Результаты броска с помехой/преимуществом:",
+                            _ => $"Результаты {files.Count} бросков:"
+                        };
 
-                        //await command.FollowupAsync(responseText);
+                        await command.FollowupAsync(responseText);
 
-                        //2.Затем отправляем embed'ы с задержкой
-                        //for (int i = 0; i < files.Count; i++)
-                        //{
-                        //    if (i > 0)
-                        //    {
-                        //        await Task.Delay(500); // Задержка между бросками (0.5 сек)
-                        //    }
+                        2.Затем отправляем embed'ы с задержкой
+                        for (int i = 0; i < files.Count; i++)
+                        {
+                            if (i > 0)
+                            {
+                                await Task.Delay(500); // Задержка между бросками (0.5 сек)
+                            }
 
-                        //    await command.FollowupWithFileAsync(
-                        //        files[i],
-                        //        embed: embeds[i]);
-                        //}
+                            await command.FollowupWithFileAsync(
+                                files[i],
+                                embed: embeds[i]);
+                        }
+                        */
 
-                        // 3. Комбинированное сообщение с текстом и всеми embed'ами
+                        // Комбинированное сообщение с текстом и всеми embed'ами
                         var combinedMessage = files.Count switch
                         {
                             2 => "Результаты броска с помехой/преимуществом:",
                             _ => $"Результаты {files.Count} бросков:"
                         };
 
-                        // Создаем новый список файловых вложений
                         var fileAttachments = files.Select(f => new FileAttachment(f.Stream, f.FileName)).ToList();
 
-                        // Отправляем комбинированное сообщение
                         await command.FollowupWithFilesAsync(
                             attachments: fileAttachments,
                             text: combinedMessage,
@@ -1012,7 +1042,6 @@ namespace DiscordBot
                 return result;
             }).ToList();
 
-            // Формируем сообщение для вывода
             var resultMessage = new StringBuilder();
             var consoleMessage = new StringBuilder();
 
@@ -1081,7 +1110,6 @@ namespace DiscordBot
 
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
 
-            // Проверка активной сессии только на текущем сервере
             if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var session))
             {
                 if (session.IsPaused)
@@ -1107,14 +1135,14 @@ namespace DiscordBot
             int result = random.Next(1, 21);
             Console.WriteLine($"Полученное значение (d20): {result}\n");
 
-            // Проверка на повторный результат
+            /*Проверка на повторный результат
             bool rerollOnDuplicate = false; // Переменная для управления повторной рандомизацией
             if (rerollOnDuplicate)
             {
-                // Проверяем, есть ли запись для пользователя в словаре
+                Проверяем, есть ли запись для пользователя в словаре
                 if (_lastUserRolls.ContainsKey(user.Id))
                 {
-                    // Если запись есть, получаем последний результат и сравниваем
+                    Если запись есть, получаем последний результат и сравниваем
                     if (_lastUserRolls[user.Id] == result)
                     {
                         result = random.Next(1, 21); // Повторная рандомизация
@@ -1122,11 +1150,10 @@ namespace DiscordBot
                     }
                 }
 
-                // Обновляем последний результат пользователя
+                Обновляем последний результат пользователя
                 _lastUserRolls[user.Id] = result;
-            }
+            }*/
 
-            // Добавляем в статистику только если есть активная сессия
             if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var activeSession))
             {
                 activeSession.Rolls.Add(new RollStatistic
@@ -1136,7 +1163,7 @@ namespace DiscordBot
                 });
             }
 
-            var filePath = Path.Combine("Numbers", $"{result}.png");
+            var filePath = Path.Combine("DiceRoll", $"{result}.png");
             Color embedColor = GetGradientColor(result, 1, 20);
 
             if (File.Exists(filePath))
@@ -1162,15 +1189,13 @@ namespace DiscordBot
 
             if (normalizedValue < 0.5f) // от 1 до 10
             {
-                // Красный к желтому
                 r = 255;
-                g = (int)(255 * (normalizedValue * 2)); // Увеличиваем зеленый
+                g = (int)(255 * (normalizedValue * 2));
                 b = 0;
             }
             else // от 10 до 20
             {
-                // Желтый к зеленому
-                r = (int)(255 * (1 - (normalizedValue - 0.5f) * 2)); // Уменьшаем красный
+                r = (int)(255 * (1 - (normalizedValue - 0.5f) * 2));
                 g = 255;
                 b = 0;
             }
@@ -1181,7 +1206,7 @@ namespace DiscordBot
 
     public class InfoCommands : ModuleBase<SocketCommandContext>
     {
-        [Command("help")]
+        [Command("help")] //переписать
         public async Task Help(SocketSlashCommand command)
         {
             var helpMessage = new StringBuilder();
@@ -1222,9 +1247,6 @@ namespace DiscordBot
 
             try
             {
-                // Загружаем всех пользователей сервера в кэш (асинхронно) Не работает
-                //await Task.Run(async () => await server.DownloadUsersAsync());
-
                 // Получаем информацию о участниках
                 int totalMembers = server.MemberCount;
                 int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Online);
@@ -1261,12 +1283,13 @@ namespace DiscordBot
         {
             var help_RMessage = new StringBuilder();
 
-            help_RMessage.AppendLine("**Команды поддерживаются следующего вида:**");
-            help_RMessage.AppendLine("> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с верхней границей с номиналом `Y`.");
+            help_RMessage.AppendLine("**Поддерживаются команды следующего вида:**");
+            help_RMessage.AppendLine("> `/roll20` - Будет совершён бросок кубика с номиналом `20`.");
+            help_RMessage.AppendLine("> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с номиналом `Y`.");
             help_RMessage.AppendLine("> `/roll XdY+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
-                "с верхней границей с номиналом `Y`. Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`." +
+                "с номиналом `Y`. Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
+            help_RMessage.AppendLine("> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами от`min` до `max`.");
+            help_RMessage.AppendLine("> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами от`min` до `max`." +
                 " Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
             help_RMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
 
@@ -1305,7 +1328,7 @@ namespace DiscordBot
                 return;
             }
 
-            string directoryPath = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string directoryPath = @"E:\НРИ\RoleplayerBotDiscord\Logs";
             Directory.CreateDirectory(directoryPath);
 
             string filePath = Path.Combine(directoryPath, $"{user.Username}.txt");
@@ -1323,7 +1346,7 @@ namespace DiscordBot
 
         private void IncrementBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
 
             if (!File.Exists(counterFilePath))
             {
@@ -2022,9 +2045,6 @@ namespace DiscordBot
 
                 // Отправляем статистику через новый метод
                 await SendSessionResultsForEvent(client, session, channel, commands);
-
-                // Удаляем сессию
-                //_sessions.TryRemove(guildId, out _);
             }
             finally
             {
