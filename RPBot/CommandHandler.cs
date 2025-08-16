@@ -13,7 +13,7 @@ namespace RPBot
         private readonly CommandService _commandService;
         private readonly List<ulong> GuildIDs; // Список идентификаторов гильдий
 
-        public CommandHandler(DiscordSocketClient client)
+        public CommandHandler(DiscordSocketClient client, CommandService commands, IServiceProvider services)
         {
             // Идентификаторы гильдий, на которых будет работать бот
             GuildIDs = new List<ulong>
@@ -104,27 +104,30 @@ namespace RPBot
                     new SlashCommandBuilder()
                 .WithName("stop_q")
                 .WithDescription("Останавливает текущую очередь, если она активна."),
+                                        new SlashCommandBuilder()
+                .WithName("ping")
+                .WithDescription("Test."),
                     new SlashCommandBuilder()
                 .WithName("start")
                 .WithDescription("Запустить игру.")
                 .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
                 .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false)
                 .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии", isRequired: false),
-                    new SlashCommandBuilder()
-                .WithName("pause")
-                .WithDescription("Приостановить игру."),
-                    new SlashCommandBuilder()
-                .WithName("resume")
-                .WithDescription("Продолжить игру."),
-                    new SlashCommandBuilder()
-                .WithName("stop")
-                .WithDescription("Остановить игру."),
-                    new SlashCommandBuilder()
-                .WithName("edit_session")
-                .WithDescription("Изменить параметры текущей игры (только для мастеров)")
-                .AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
-                .AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер", isRequired: false)
-                .AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
+                //    new SlashCommandBuilder()
+                //.WithName("pause")
+                //.WithDescription("Приостановить игру."),
+                //    new SlashCommandBuilder()
+                //.WithName("resume")
+                //.WithDescription("Продолжить игру."),
+                //    new SlashCommandBuilder()
+                //.WithName("stop")
+                //.WithDescription("Остановить игру."),
+                //    new SlashCommandBuilder()
+                //.WithName("edit_session")
+                //.WithDescription("Изменить параметры текущей игры (только для мастеров)")
+                //.AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
+                //.AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер", isRequired: false)
+                //.AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
                     new SlashCommandBuilder()
                 .WithName("close_chat")
                 .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
