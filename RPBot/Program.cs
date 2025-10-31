@@ -19,42 +19,43 @@ namespace DiscordBot
 {
     public class ServerConfig
     {
-        public ulong GuildId { get; set; }
-        public ulong ModerateChannelId { get; set; }
-        public ulong WelcomeChannelId { get; set; }
-        public ulong LineChannelId { get; set; }
-        public ulong StatsChannelId { get; set; }
+        public ulong GuildID { get; set; }
+        public ulong ModerateChannelID { get; set; }
+        public ulong WelcomeChannelID { get; set; }
+        public ulong GeneralRGChannelID { get; set; }
+        public ulong RollChannelID { get; set; }
+        public ulong StatsChannelID { get; set; }
         public ulong RecordChannelID { get; set; }
         public string WelcomeMessage { get; set; }
         public string LineMessage { get; set; }
+        public ulong DefaultRoleID { get; set; }
     }
 
-    class Program
+    class Program : IDisposable
     {
         private DiscordSocketClient _client;
         private CommandService _commandService;
         private IServiceProvider _services;
         private CommandHandler _commandHandler;
-        private Dictionary<string, string> _textBlocks; //Хранение текстовых блоков
+        private Dictionary<string, string> _textBlocks;
+        private readonly SemaphoreSlim _restartLock = new(1, 1);
+        private bool _isDisposed;
+        private bool _shouldExit = false;
+        private bool _isReconnecting = false;
+        private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);
 
-        static void Main(string[] args) => new Program().RunBotAsync().GetAwaiter().GetResult();
+        static async Task Main(string[] args)
+        {
+            using var program = new Program();
+            await program.RunBotAsync();
+        }
 
         public Program()
         {
-            var config = new DiscordSocketConfig
-            {
-                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers | GatewayIntents.GuildMessages |
-                GatewayIntents.MessageContent | GatewayIntents.GuildScheduledEvents,
-
-                ConnectionTimeout = 15000,
-                MessageCacheSize = 100,
-                LogLevel = LogSeverity.Info 
-
-            };
-            _client = new DiscordSocketClient(config);
+            _client = CreateDiscordClient();
             _commandService = new CommandService();
 
-            var services = new ServiceCollection()
+            _services = new ServiceCollection()
                 .AddSingleton(_client)
                 .AddSingleton(_commandService)
                 .AddSingleton<QueueModule>()
@@ -63,65 +64,282 @@ namespace DiscordBot
                 .AddSingleton<GameSessionCommands>()
                 .AddSingleton<ModerationCommands>()
                 .BuildServiceProvider();
+        }
 
-            _services = services;
+        private DiscordSocketClient CreateDiscordClient()
+        {
+            var config = new DiscordSocketConfig
+            {
+                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
+                               GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
+                               GatewayIntents.GuildScheduledEvents,
+                ConnectionTimeout = 30000,
+                MessageCacheSize = 50,
+                LogLevel = LogSeverity.Info,
+                AlwaysDownloadUsers = true,
+                HandlerTimeout = 15000,
+                TotalShards = 1,
+                LargeThreshold = 250,
+                UseSystemClock = false
+            };
+            return new DiscordSocketClient(config);
         }
 
         public async Task RunBotAsync()
         {
-            // Загрузка текстовых блоков из файла            
             _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
 
-            Console.WriteLine("Инициализация бота... Версия 0.4.2.0");
-            LogToFile($"Инициализация бота в {DateTime.Now}.");
-            _client.Log += Log;
-            _client.UserJoined += UserJoined;
-            _client.MessageReceived += HandleCommandAsync;
-            _client.Ready += OnReady;
-            _client.SlashCommandExecuted += OnSlashCommandExecuted;
-            _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
-            _client.GuildScheduledEventCompleted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client);
-            _client.ButtonExecuted += async (component) =>
+            while (!_isDisposed && !_shouldExit)
             {
-                var gameSessionCommands = new GameSessionCommands(_client);
-                await gameSessionCommands.HandleStatsButton(component);
-            };
+                await _restartLock.WaitAsync();
+                try
+                {
+                    await LogStartup("Инициализация бота... Версия 0.5.3.4.9 (тест скрипта 3)");
 
-            await _client.LoginAsync(TokenType.Bot, "MTMzMTYyODkxMDE1MjEyMjM4OA.GzWsZE.WJgvlfflP5wkFxFGqce6tK3mDYOygSvc0q2TBk");
-            Console.WriteLine("Вход выполнен успешно.");
-            await _client.StartAsync();
-            Console.WriteLine("Бот запущен и подключен к Discord.");
+                    if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
+                    {
+                        _client?.Dispose();
+                        _client = CreateDiscordClient();
+                    }
 
-            _commandHandler = new CommandHandler(_client);
-            await Task.Delay(-1);
+                    _commandHandler = new CommandHandler(_client);
+
+                    var readyTcs = new TaskCompletionSource<bool>();
+                    _client.Ready += OnReady;
+                    _client.Log += Log;
+                    _client.Disconnected += OnDisconnected;
+                    _client.UserJoined += UserJoined;
+                    _client.MessageReceived += HandleCommandAsync;
+                    _client.SlashCommandExecuted += OnSlashCommandExecuted;
+                    _client.GuildScheduledEventStarted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
+                    _client.GuildScheduledEventCompleted += (guildEvent) => GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client);
+                    _client.ModalSubmitted += HandleModalSubmitted;
+                    _client.ButtonExecuted += HandleButtonExecuted;
+
+                    try
+                    {
+                        await _client.LoginAsync(TokenType.Bot, GetBotToken());
+                        await _client.StartAsync();
+                        await LogStartup("Вход выполнен успешно.");
+
+                        await readyTcs.Task;
+                        await LogStartup("Бот успешно запущен");
+
+                        while (!_shouldExit)
+                        {
+                            await Task.Delay(1000);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogStartup($"Ошибка запуска: {ex.Message}");
+                        if (!_shouldExit)
+                        {
+                            await LogStartup("Повторная попытка через 10 секунд...");
+                            await Task.Delay(10000);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await LogStartup($"Критическая ошибка: {ex.Message}");
+                    if (!_shouldExit)
+                    {
+                        await LogStartup("Повторная попытка через 10 секунд...");
+                        await Task.Delay(10000);
+                    }
+                }
+                finally
+                {
+                    _restartLock.Release();
+                }
+            }
+        }
+
+        private string GetBotToken()
+        {
+            return "MTMzMTYyODkxMDE1MjEyMjM4OA.GJutjl.wTDw8Tp1wI8ZNehE4TnFNkNKTFRJQ2Q0DPG4JI";
         }
 
         private async Task OnReady()
         {
-            await _commandHandler.InitializeAsync();
-            Console.WriteLine("Команды инициализированы.");
-            LogToFile($"Команды инициализированы в {DateTime.Now}.");
-
-            await _commandHandler.ListSlashCommandsAsync();
-            Console.WriteLine($"Bot is connected as {_client.CurrentUser}");
-
-            // Получаем конфигурацию для каждого сервера, где находится бот
-            foreach (var guild in _client.Guilds)
+            try
             {
-                if (ServerConfigs.TryGetValue(guild.Id, out var config))
+                await _commandHandler.InitializeAsync();
+                await LogStartup($"Команды инициализированы в {DateTime.Now}.");
+
+                await _commandHandler.ListSlashCommandsAsync();
+                await LogStartup($"Bot is connected as {_client.CurrentUser}");
+
+                foreach (var guild in _client.Guilds)
                 {
-                    var channel = _client.GetChannel(config.ModerateChannelId) as ITextChannel;
-                    if (channel != null)
+                    if (ServerConfigs.TryGetValue(guild.Id, out var config))
                     {
-                        await channel.SendMessageAsync("Все системы активны. Ожидаю сообщение от пользователя...");
-                        LogToFile($"Запуск всех систем на сервере {guild.Name} в {DateTime.Now}.");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Канал с ID {config.ModerateChannelId} не найден или это не текстовый канал на сервере {guild.Name}.");
-                        LogToFile($"Канал с ID {config.ModerateChannelId} не найден или это не текстовый канал на сервере {guild.Name}.");
+                        var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
+                        if (channel != null)
+                        {
+                            await channel.SendMessageAsync("Все системы активны. Ожидаю сообщение от пользователя...");
+                            await LogStartup($"Запуск всех систем на сервере {guild.Name} в {DateTime.Now}.");
+                        }
+                        else
+                        {
+                            await LogStartup($"Канал с ID {config.ModerateChannelID} не найден на сервере {guild.Name}.");
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"Ошибка в обработчике Ready: {ex.Message}");
+            }
+        }
+
+        private async Task OnDisconnected(Exception exception)
+        {
+            // Пропускаем плановые переподключения
+            if (exception is GatewayReconnectException)
+            {
+                await LogStartup("Плановый реконнект - обработка не требуется");
+                return;
+            }
+
+            // Запускаем безопасную обработку в фоне
+            _ = SafeReconnectAsync(exception);
+        }
+
+        private async Task SafeReconnectAsync(Exception exception)
+        {
+            try
+            {
+                await LogStartup($"Обработка отключения: {exception.Message}");
+
+                // Проверяем текущее состояние
+                if (_client.ConnectionState != ConnectionState.Disconnected)
+                {
+                    await LogStartup($"Текущее состояние: {_client.ConnectionState} - переподключение не требуется");
+                    return;
+                }
+
+                // Задержка перед повторной попыткой
+                await Task.Delay(5000);
+
+                // Повторная проверка состояния
+                if (_client.ConnectionState != ConnectionState.Disconnected)
+                {
+                    await LogStartup("Состояние изменилось - отмена переподключения");
+                    return;
+                }
+
+                await LogStartup("Попытка переподключения...");
+
+                // Безопасный StartAsync с таймаутом
+                var connectTask = _client.StartAsync();
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(15));
+
+                var completedTask = await Task.WhenAny(connectTask, timeoutTask);
+
+                if (completedTask == timeoutTask)
+                {
+                    await LogStartup("Таймаут переподключения");
+                    return;
+                }
+
+                // Проверяем результат подключения
+                await connectTask;
+                await LogStartup("Переподключение успешно");
+            }
+            catch (OperationCanceledException)
+            {
+                await LogStartup("Операция переподключения отменена");
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("already running"))
+            {
+                await LogStartup("Клиент уже запущен - состояние синхронизировано");
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"Ошибка при переподключении: {ex.Message}");
+            }
+        }
+
+        private async Task SafeShutdown()
+        {
+            try
+            {
+                if (_client?.ConnectionState == ConnectionState.Connected)
+                {
+                    await _client.StopAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"Ошибка при остановке клиента: {ex.Message}");
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_isDisposed) return;
+            _isDisposed = true;
+
+            await SafeShutdown();
+            _client?.Dispose();
+            _restartLock?.Dispose();
+        }
+
+        public void Dispose()
+        {
+            DisposeAsync().GetAwaiter().GetResult();
+        }
+
+        private async Task HandleModalSubmitted(SocketModal modal)
+        {
+            // Разбираем ID сессии из CustomId модального окна
+            var parts = modal.Data.CustomId.Split(':');
+            if (parts.Length >= 2 && parts[0] == "edit_modal")
+            {
+                await new GameSessionCommands(_client).HandleEditModal(modal);
+            }
+        }
+
+        public async Task HandleButtonExecuted(SocketMessageComponent component)
+        {
+            await Task.Yield(); // Сразу освобождаем поток шлюза
+
+            try
+            {
+                await ProcessButtonAsync(component).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка обработки кнопки: {ex.Message}");
+                _ = component.RespondAsync("Ошибка обработки", ephemeral: true)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        private async Task ProcessButtonAsync(SocketMessageComponent component)
+        {
+            var parts = component.Data.CustomId.Split(':');
+            var buttonType = parts.Length > 0 ? parts[0] : component.Data.CustomId;
+
+            switch (buttonType)
+            {
+                case "pause_session":
+                case "resume_session":
+                case "edit_session":
+                case "stop_session":
+                case "confirm_stop":
+                case "cancel_stop":
+                case "toggle_rolls":
+                    await new GameSessionCommands(_client).HandleControlButton(component);
+                    break;
+
+                case "no_stats":
+                case "general_stats":
+                case "detailed_stats":
+                    await new GameSessionCommands(_client).HandleStatsButton(component);
+                    break;
             }
         }
 
@@ -132,12 +350,39 @@ namespace DiscordBot
             var context = new SocketCommandContext(_client, message);
             var user = message.Author as SocketGuildUser;
 
-            // Обработка команды "!команды"
+            var (fludChannelId, rollChannelId, generalRGChannelID, responseMessage, emoji, lineMessages, emoteKappa, emoteAga) = GetResponseData(message);
+
+            // Определяем, является ли канал голосовым
+            bool isVoiceChannel = message.Channel is SocketVoiceChannel;
+
+            // Определяем разрешённые текстовые каналы для команд
+            var allowedTextChannels = new ulong[] { fludChannelId, generalRGChannelID };
+            bool isAllowedTextChannel = allowedTextChannels.Contains(message.Channel.Id);
+
+            // Приветствие
+            var lowerContent = message.Content.ToLower();
+            var greetings = new[] { "привет", "приветствую", "здравствуйте", "здравствуй", "hello", "hi", "хай", "ку", "здрасте" };
+
+            // Разбиваем сообщение на отдельные слова
+            var messageWords = lowerContent.Split(new[] { ' ', ',', '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Проверяем, содержит ли сообщение приветствие как отдельное слово
+            if (messageWords.Any(word => greetings.Contains(word)))
+            {
+                await message.AddReactionAsync(new Emoji("👋"));
+                return;
+            }
+
+            // Обработка команды "!команды" (доступна везде)
             if (message.Content.ToLower() == "!команды")
             {
                 var commandsList = new StringBuilder();
                 commandsList.AppendLine("Доступные команды:");
-                commandsList.AppendLine("**--Пасты--**");
+                commandsList.AppendLine("\n**--Для (двух) текстовых чатов--**");
+                commandsList.AppendLine("`!правила` - правила сервера");
+                commandsList.AppendLine("`!ссылки` - полезные ссылки");
+                commandsList.AppendLine("`!запись` - документ для записи игр");
+                commandsList.AppendLine("\n**--Для голосовых каналов--**");
                 commandsList.AppendLine("`!бегу` - бегу с сыном");
                 commandsList.AppendLine("`!гусь` - паста гуся");
                 commandsList.AppendLine("`!гусь-гидра` - паста гидры гуся");
@@ -146,29 +391,59 @@ namespace DiscordBot
                 commandsList.AppendLine("`!перекур` - перерыв");
                 commandsList.AppendLine("`!подсказка` - Чят, пляшем!");
                 commandsList.AppendLine("`!страх` - атата");
-                commandsList.AppendLine("`!убери` - ненавижу модеров\n");
-                commandsList.AppendLine("**--Полезное--**");
-                commandsList.AppendLine("`!запись` - документ для записи игр");
-                commandsList.AppendLine("`!правила` - правила сервера");
-                commandsList.AppendLine("`!ссылки` - полезные ссылки");
+                commandsList.AppendLine("`!убери` - ненавижу модеров");
 
                 await message.Channel.SendMessageAsync(commandsList.ToString());
-                return; // Прерываем выполнение, чтобы не обрабатывать другие команды
+                return;
             }
 
             // Обработка сообщений, начинающихся с "!"
             if (message.Content.StartsWith("!"))
             {
-                var key = message.Content.Split(' ')[0]; // Берём первое слово (например, "!пример")
-                if (_textBlocks.ContainsKey(key))
+                var key = message.Content.Split(' ')[0].ToLower();
+
+                // Разделение команд по каналам
+                if (isVoiceChannel)
                 {
-                    await message.Channel.SendMessageAsync(_textBlocks[key]);
-                    return; // Прерываем выполнение, чтобы не обрабатывать другие команды
+                    var voiceCommands = new Dictionary<string, string>
+                    {
+                        {"!бегу", "бегу с сыном"},
+                        {"!гусь", "паста гуся"},
+                        {"!гусь-гидра", "паста гидры гуся"},
+                        {"!гусь-связь", "паста с гусём-связистом"},
+                        {"!начинается", "AFK"},
+                        {"!перекур", "перерыв"},
+                        {"!подсказка", "Чят, пляшем!"},
+                        {"!страх", "атата"},
+                        {"!убери", "ненавижу модеров"}
+                    };
+
+                    if (voiceCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
+                    {
+                        await message.Channel.SendMessageAsync(_textBlocks[key]);
+                        return;
+                    }
                 }
+                else if (isAllowedTextChannel)
+                {
+                    var textCommands = new Dictionary<string, string>
+                    {
+                        {"!правила", "правила сервера"},
+                        {"!ссылки", "полезные ссылки"},
+                        {"!запись", "документ для записи игр"}
+                    };
+
+                    if (textCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
+                    {
+                        await message.Channel.SendMessageAsync(_textBlocks[key]);
+                        return;
+                    }
+                }
+
+                await message.Channel.SendMessageAsync("Неизвестная команда или неправильный канал для этой команды.");
+                return;
             }
 
-            var (fludChannelId, specificChannelId, responseMessage, emoji, lineMessages, emoteKappa, emoteAga) = GetResponseData(message);
-            
             if (message.Content.ToLower() == "👏")
             {
                 if (user != null)
@@ -176,7 +451,7 @@ namespace DiscordBot
                     await message.DeleteAsync();
                     await message.Channel.SendMessageAsync("КРАСИВО 🔥 ВЕЛИКОЛЕПНО 🔥 ЗАМЕЧАТЕЛЬНО 🔥 ПРЕКРАСНО 🔥 СУПЕР 🔥 УМОПОМРАЧИТЕЛЬНО 🔥 СНОГШИБАТЕЛЬНО 🔥 ПРЕВОСХОДНО 🔥 ШИКАРНО");
                 }
-                Console.WriteLine("Хлопание");
+                await LogInfo("Хлопание");
             }
 
             if (message.Content.ToLower().Contains("диктатор"))
@@ -189,56 +464,57 @@ namespace DiscordBot
                 await HandleMasteryArbitrarinessCommand(user, message, emoteKappa, emoteAga);
             }
 
-            if (message.Content.ToLower().Contains("бот, спокойной ночи") && user.Username == "perekrestok_mirov")
-            {
-                await message.Channel.SendMessageAsync("Отключение всех систем...");
-                Console.WriteLine($"Бот отключен пользователем {message.Author.Username} в {DateTime.Now}.");
-                LogToFile($"Бот отключен пользователем {message.Author.Username} в {DateTime.Now}.");
-                await _client.StopAsync();
-                Environment.Exit(0);
-            }
-
-            if (message.Content.ToLower().Contains("бот, перезагрузка") && user.Username == "perekrestok_mirov")
-            {
-                await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
-                Console.WriteLine($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
-                LogToFile($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
-
-                var scriptPath = "C:/Favorites/Bot Discord/RPBot/RPBot/restart_bot.ps1";
-
-                // Запуск скрипта для перекомпиляции и перезапуска
-                var processStartInfo = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe", // Для Windows
-                    Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"",
-                    RedirectStandardOutput = false, // Отключаем перенаправление вывода
-                    RedirectStandardError = false,  // Отключаем перенаправление ошибок
-                    UseShellExecute = true,        // Запуск через оболочку (показывает окно)
-                    CreateNoWindow = false         // Показывать окно
-                };
-
-                try
-                {
-                    using (var process = new Process { StartInfo = processStartInfo })
-                    {
-                        process.Start();
-                        await process.WaitForExitAsync(); // Асинхронное ожидание завершения процесса
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("Ошибка при запуске скрипта: " + ex.Message);
-                }
-            }
-
             if (message.Content.ToLower().Contains("привет, ролевой бот") && message.Channel.Id == fludChannelId)
             {
                 await HandleGreetingCommand(user, message, responseMessage, emoji);
             }
 
-            if ((message.Content.ToLower() == "line" || message.Content.ToLower() == "ход") && message.Channel.Id == specificChannelId)
+            if ((message.Content.ToLower() == "line" || message.Content.ToLower() == "ход") && message.Channel.Id == rollChannelId)
             {
                 await HandleLineCommand(user, message, lineMessages);
+            }
+
+            if (user.Username == "perekrestok_mirov")
+            {
+                if (message.Content.ToLower().Contains("бот, спокойной ночи"))
+                {
+                    await message.Channel.SendMessageAsync("Отключение всех систем...");
+                    await LogStartup($"Бот отключен пользователем {message.Author.Username} в {DateTime.Now}.");
+                    _shouldExit = true;
+                    await _client.StopAsync();
+                    Environment.Exit(0);
+                }
+
+                if (message.Content.ToLower().Contains("бот, перезагрузка"))
+                {
+                    await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
+                    await LogStartup($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
+
+                    var scriptPath = "C:/Favorites/Bot Discord/RPBot/RPBot/restart_bot.ps1";
+
+                    var processStartInfo = new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                        RedirectStandardOutput = false,
+                        RedirectStandardError = false,
+                        UseShellExecute = true,
+                        CreateNoWindow = false
+                    };
+
+                    try
+                    {
+                        using (var process = new Process { StartInfo = processStartInfo })
+                        {
+                            process.Start();
+                            await process.WaitForExitAsync();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogStartup("Ошибка при запуске скрипта: " + ex.Message);
+                    }
+                }
             }
         }
 
@@ -248,54 +524,58 @@ namespace DiscordBot
                 1288192593137635359, // ID тестового сервера
                 new ServerConfig
                 {
-                    GuildId = 1288192593137635359,
-                    ModerateChannelId = 1288192593137635362,
-                    WelcomeChannelId = 1288192593137635362, 
-                    LineChannelId = 1333559817045807176,
-                    StatsChannelId = 1333559817045807176,
-                    RecordChannelID = 1333559817045807176,
+                    GuildID = 1288192593137635359,
+                    ModerateChannelID = 1433623049147514981, // спам-от-бота
+                    WelcomeChannelID = 1288192593137635362, // основной
+                    RollChannelID = 1400042149470539837, // броски-кубов
+                    StatsChannelID = 1400042149470539837, // броски-кубов
+                    RecordChannelID = 1333559817045807176, // 1(архив)
+                    GeneralRGChannelID = 1333559817045807176, // 1(архив)
                     WelcomeMessage = "Приветствую тебя, {user.Mention}! О всех проблемах, которые могут со мной возникнуть, передай, пожалуйста, администратору, или воспользуйся командой `/bug_report`. Хорошо? \nСоветую первой командой использовать `/help`",
-                    LineMessage = "<:begin:1333879098488918098><:middle1:1333879112510472254><:middle2:1333879114440118334><:middle3:1333879116281151550><:end1:1333879106747633735>"
+                    LineMessage = "<:begin:1333879098488918098><:middle1:1333879112510472254><:middle2:1333879114440118334><:middle3:1333879116281151550><:end1:1333879106747633735>",
+                    DefaultRoleID = 776013522370560031
                 }
             },
             {
                 295189463376855040, // ID основного сервера (КнР)
                 new ServerConfig
                 {
-                    GuildId = 295189463376855040,
-                    ModerateChannelId = 434701184486473729,
-                    WelcomeChannelId = 373788351246893056,
-                    LineChannelId = 710471746108784691,
-                    StatsChannelId = 710471746108784691,
-                    RecordChannelID = 1345036014519058464,
+                    GuildID = 295189463376855040,
+                    ModerateChannelID = 1433622718926028820, // спам-от-бота
+                    WelcomeChannelID = 373788351246893056, // флудилка
+                    RollChannelID = 710471746108784691, // броски-кубов
+                    StatsChannelID = 710471746108784691, // броски-кубов
+                    RecordChannelID = 1345036014519058464, // запись-времени
+                    GeneralRGChannelID = 890295184577937418, // общий-ролевой-чат
                     WelcomeMessage = "Приветствую тебя, {user.Mention}! О всех проблемах, которые могут со мной возникнуть, передай, пожалуйста, администратору, или воспользуйся командой `/bug_report`. Хорошо? \nСоветую первой командой использовать `/help`",
-                    LineMessage = "<:1begin:1151822634250686504><:2middle1:1151822618677219328><:3middle2:1151822625216155649><:4middle3:1151822621198000169><:5end:1151822629381087292>"
+                    LineMessage = "<:1begin:1151822634250686504><:2middle1:1151822618677219328><:3middle2:1151822625216155649><:4middle3:1151822621198000169><:5end:1151822629381087292>",
+                    DefaultRoleID = 776013522370560031
                 }
             }
         };
 
-        private (ulong welcomeChannelId, ulong specificChannelId, string responseMessage, string emoji, string lineMessages, string emoteKappa, string emoteAga) GetResponseData(SocketMessage message)
+        private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string? responseMessage, string? emoji, string? lineMessages, string? emoteKappa, string? emoteAga) GetResponseData(SocketMessage message)
         {
             var channel = message.Channel as SocketGuildChannel;
             if (channel == null || !ServerConfigs.TryGetValue(channel.Guild.Id, out var config))
             {
-                return (0, 0, null, null, null, null, null);
+                return (0, 0, 0, null, null, null, null, null);
             }
 
             // Для тестового сервера
             if (channel.Guild.Id == 1288192593137635359)
             {
-                return (config.WelcomeChannelId, config.LineChannelId, config.WelcomeMessage, "👋", config.LineMessage,
+                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.WelcomeMessage, "👋", config.LineMessage,
                     "<:kappa:1333879110602326046>", "<:agakakskagesh:1333878999977431174>");
             }
             // Для основного сервера
             else if (channel.Guild.Id == 295189463376855040)
             {
-                return (config.WelcomeChannelId, config.LineChannelId, config.WelcomeMessage, "👋", config.LineMessage,
+                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.WelcomeMessage, "👋", config.LineMessage,
                     "<:kappa:1100150992428871720>", "<:Agakakskagesh:1316461730569916557>");
             }
 
-            return (0, 0, null, null, null, null, null);
+            return (0, 0, 0, null, null, null, null, null);
         }
 
         private async Task HandleGreetingCommand(SocketGuildUser user, SocketMessage message, string responseMessage, string emoji)
@@ -314,7 +594,7 @@ namespace DiscordBot
                 var responseMessageObj = await message.Channel.SendMessageAsync(formattedMessage);
                 await responseMessageObj.AddReactionAsync(new Emoji("✅"));
             }
-            Console.WriteLine("Приветствие с ботом");
+            await LogInfo("Приветствие с ботом");
         }
 
         private async Task HandleDictatorCommand(SocketGuildUser user, SocketMessage message)
@@ -356,10 +636,10 @@ namespace DiscordBot
                 var responseMessage = await message.Channel.SendMessageAsync($"Ууу, сука! Скажи, да?!",
                     messageReference: messageReference);
 
-                emote = Emote.Parse(emoteKappa); 
+                emote = Emote.Parse(emoteKappa);
                 await responseMessage.AddReactionAsync(emote);
             }
-            Console.WriteLine("Произволит");
+            await LogInfo("Произволит");
         }
 
         private async Task HandleLineCommand(SocketGuildUser user, SocketMessage message, string lineMessages)
@@ -372,10 +652,10 @@ namespace DiscordBot
 
                 await message.Channel.SendMessageAsync(lineMessages);
             }
-            Console.WriteLine("Линия отправлена");
+            await LogInfo("Линия отправлена");
         }
 
-        private int GetBugReportCounter()
+        private int GetBugReportCounter() // Укажите путь к вашему файлу
         {
             string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
 
@@ -427,18 +707,18 @@ namespace DiscordBot
                 case "start":
                     await StartGameSession(command);
                     break;
-                case "pause":
-                    await PauseGameSession(command);
-                    break;
-                case "resume":
-                    await ResumeGameSession(command);
-                    break;
-                case "stop":
-                    await StopGameSession(command);
-                    break;
-                case "edit_session":
-                    await EditGameSession(command);
-                    break;
+                //case "pause":
+                //    await PauseGameSession(command);
+                //    break;
+                //case "resume":
+                //    await ResumeGameSession(command);
+                //    break;
+                //case "stop":
+                //    await StopGameSession(command);
+                //    break;
+                //case "edit_session":
+                //    await EditGameSession(command);
+                //    break;
                 case "close_chat":
                     await CloseChatCommand(command);
                     break;
@@ -455,7 +735,7 @@ namespace DiscordBot
         {
             var queueModule = _services.GetService<QueueModule>();
             await queueModule.StopQueue(command);
-            Console.WriteLine("Очередь остановлена.");
+            await LogInfo("Очередь остановлена.");
         }
 
         private async Task QueueCommand(SocketSlashCommand command)
@@ -469,7 +749,7 @@ namespace DiscordBot
             else
             {
                 await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
-                Console.WriteLine("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
+                await LogError("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
             }
         }
 
@@ -486,14 +766,14 @@ namespace DiscordBot
         {
             var moderationModule = _services.GetService<ModerationCommands>();
             await moderationModule.CloseChat(command);
-            Console.WriteLine("Чат или ветка закрыты.");
+            await LogInfo("Чат или ветка закрыты.");
         }
 
         private async Task OpenChatCommand(SocketSlashCommand command)
         {
             var moderationModule = _services.GetService<ModerationCommands>();
             await moderationModule.OpenChat(command);
-            Console.WriteLine("Чат открыт и перемещён в указанную категорию.");
+            await LogInfo("Чат открыт и перемещён в указанную категорию.");
         }
 
         private async Task ClearMessage(SocketSlashCommand command)
@@ -506,7 +786,7 @@ namespace DiscordBot
             }
             else
             {
-                Console.WriteLine("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
+                await LogInfo("Ошибка: неверный формат ввода при удалении сообщения. Пожалуйста, введите целое число.");
                 await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.", ephemeral: true);
             }
         }
@@ -530,28 +810,28 @@ namespace DiscordBot
         {
             var infoModule = _services.GetService<InfoCommands>();
             await infoModule.ServerInfo(command);
-            Console.WriteLine("Выведена информация о сервере.");
+            await LogInfo("Выведена информация о сервере.");
         }
 
         private async Task HelpCommand(SocketSlashCommand command)
         {
             var infoModule = _services.GetService<InfoCommands>();
             await infoModule.Help(command);
-            Console.WriteLine("Выведена подсказка о командах.");
+            await LogInfo("Выведена подсказка о командах.");
         }
 
         private async Task Help_RollCommand(SocketSlashCommand command)
         {
             var infoModule = _services.GetService<InfoCommands>();
             await infoModule.Help_R(command);
-            Console.WriteLine("Выведена подсказка о командах для бросков кубов.");
+            await LogInfo("Выведена подсказка о командах для бросков кубов.");
         }
 
         private async Task Help_GameSessionCommand(SocketSlashCommand command)
         {
             var infoModule = _services.GetService<InfoCommands>();
             await infoModule.Help_GS(command);
-            Console.WriteLine("Выведена подсказка о командах для статистики.");
+            await LogInfo("Выведена подсказка о командах для статистики.");
         }
 
         private async Task Bug_ReportCommand(SocketSlashCommand command)
@@ -561,7 +841,7 @@ namespace DiscordBot
 
             var infoModule = _services.GetService<InfoCommands>();
             await infoModule.Bug_Report(command, input);
-            Console.WriteLine("Использовано уведомление администратора о баге.");            
+            await LogInfo("Использовано уведомление администратора о баге.");
         }
 
         private async Task StartGameSession(SocketSlashCommand command)
@@ -578,96 +858,237 @@ namespace DiscordBot
             var gameSessionModule = _services.GetService<GameSessionCommands>();
             await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
         }
-        
-        private async Task EditGameSession(SocketSlashCommand command)
-        {
-            var newGameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_game_name");
-            var newGameName = newGameNameOption?.Value?.ToString();
 
-            var newMasterOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_master");
-            var newMaster = newMasterOption?.Value as SocketUser;
+        //private async Task EditGameSession(SocketSlashCommand command)
+        //{
+        //    var newGameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_game_name");
+        //    var newGameName = newGameNameOption?.Value?.ToString();
 
-            var newCommentOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_comment");
-            var newComment = newCommentOption?.Value?.ToString();
+        //    var newMasterOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_master");
+        //    var newMaster = newMasterOption?.Value as SocketUser;
 
-            var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.EditGameSession(command, newGameName, newMaster, newComment);
-        }
+        //    var newCommentOption = command.Data.Options.FirstOrDefault(o => o.Name == "new_comment");
+        //    var newComment = newCommentOption?.Value?.ToString();
 
-        private async Task PauseGameSession(SocketSlashCommand command)
-        {
-            var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.PauseGameSession(command);
-        }
+        //    var gameSessionModule = _services.GetService<GameSessionCommands>();
+        //    //await gameSessionModule.EditGameSession(command, newGameName, newMaster, newComment);
+        //}
 
-        private async Task ResumeGameSession(SocketSlashCommand command)
-        {
-            var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.ResumeGameSession(command);
-        }
+        //private async Task PauseGameSession(SocketSlashCommand command)
+        //{
+        //    var gameSessionModule = _services.GetService<GameSessionCommands>();
+        //    //await gameSessionModule.PauseGameSession(command);
+        //}
 
-        private async Task StopGameSession(SocketSlashCommand command)
-        {
-            var gameSessionModule = _services.GetService<GameSessionCommands>();
-            await gameSessionModule.StopGameSession(command);
-        }
+        //private async Task ResumeGameSession(SocketSlashCommand command)
+        //{
+        //    var gameSessionModule = _services.GetService<GameSessionCommands>();
+        //    //await gameSessionModule.ResumeGameSession(command);
+        //}
+
+        //private async Task StopGameSession(SocketSlashCommand command)
+        //{
+        //    var gameSessionModule = _services.GetService<GameSessionCommands>();
+        //    //await gameSessionModule.StopGameSession(command);
+        //}
 
         private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
-        private async Task Log(LogMessage arg)
+        private async Task Log(LogMessage arg) // Укажите путь к вашему файлу
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt";
+            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string path = Path.Combine(logDir, "StartupLog.txt");
+
+            // Ротация логов - если файл больше 5MB, создаем новый
+            if (File.Exists(path) && new FileInfo(path).Length > 5 * 1024 * 1024)
+            {
+                string archivedPath = Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                File.Move(path, archivedPath);
+            }
             Console.WriteLine(arg);
 
-            await _logSemaphore.WaitAsync(); // Асинхронная блокировка
+            await _logSemaphore.WaitAsync();
             try
             {
                 await File.AppendAllTextAsync(path, arg + Environment.NewLine);
             }
             finally
             {
-                _logSemaphore.Release(); // Освобождение семафора
+                _logSemaphore.Release();
             }
         }
 
-        private void LogToFile(string message)
+        // Удаляем старый метод Log и оставляем только LogToFile, переименовав его
+        private async Task LogStartup(string message)
         {
-            string path = @"C:\Favorites\Desktop\НРИ\Discord_BR\LogFile.txt"; // Укажите путь к вашему файлу
-            if (!File.Exists(path))
-            {
-                using (File.Create(path)) { } // Создаем файл, если он не существует
-            }
+            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string path = Path.Combine(logDir, "StartupLog.txt");
 
-            // Записываем сообщение в файл
-            using (StreamWriter writer = new StreamWriter(path, true)) // true для добавления в конец файла
+            await _logSemaphore.WaitAsync();
+            try
             {
-                writer.WriteLine(DateTime.Now.ToString("\ndd-MM-yyyy"));
-                writer.WriteLine(message);
+                // Ротация логов - если файл больше 5MB, создаем новый
+                if (File.Exists(path))
+                {
+                    var fileInfo = new FileInfo(path);
+                    if (fileInfo.Length > 5 * 1024 * 1024)
+                    {
+                        string archivedPath = Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                        File.Move(path, archivedPath);
+                    }
+                }
+
+                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}\n");
+                Console.WriteLine(message);
+            }
+            finally
+            {
+                _logSemaphore.Release();
+            }
+        }
+
+        private async Task LogError(string errorMessage)
+        {
+            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string path = Path.Combine(logDir, "ErrorLog.txt");
+
+            await _logSemaphore.WaitAsync();
+            try
+            {
+                // Ротация логов
+                if (File.Exists(path))
+                {
+                    var fileInfo = new FileInfo(path);
+                    if (fileInfo.Length > 5 * 1024 * 1024)
+                    {
+                        string archivedPath = Path.Combine(logDir, $"ErrorLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                        File.Move(path, archivedPath);
+                    }
+                }
+
+                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {errorMessage}\n");
+                Console.WriteLine(errorMessage);
+            }
+            finally
+            {
+                _logSemaphore.Release();
+            }
+        }
+
+        private async Task LogInfo(string infoMessage)
+        {
+            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string path = Path.Combine(logDir, "InfoLog.txt"); // Исправлено имя файла
+
+            await _logSemaphore.WaitAsync();
+            try
+            {
+                // Ротация логов
+                if (File.Exists(path))
+                {
+                    var fileInfo = new FileInfo(path);
+                    if (fileInfo.Length > 5 * 1024 * 1024)
+                    {
+                        string archivedPath = Path.Combine(logDir, $"InfoLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                        File.Move(path, archivedPath);
+                    }
+                }
+
+                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {infoMessage}\n");
+                Console.WriteLine(infoMessage);
+            }
+            finally
+            {
+                _logSemaphore.Release();
             }
         }
 
         private async Task UserJoined(SocketGuildUser user)
         {
-            Console.WriteLine($"{user.Username} joined the server.");
+            await LogInfo($"{user.Username} присоединился к серверу {user.Guild.Name}.");
             try
             {
-                if (ServerConfigs.TryGetValue(user.Guild.Id, out var config))
+                // Получаем конфигурацию сервера
+                if (!ServerConfigs.TryGetValue(user.Guild.Id, out var config) || config.DefaultRoleID == 0)
                 {
-                    var welcomeChannel = _client.GetChannel(config.WelcomeChannelId) as IMessageChannel;
+                    await LogInfo($"Для сервера {user.Guild.Name} не настроена роль по умолчанию");
+                    return;
+                }
+
+                // Получаем роль
+                var defaultRole = user.Guild.GetRole(config.DefaultRoleID);
+                if (defaultRole == null)
+                {
+                    await LogInfo($"Роль с ID {config.DefaultRoleID} не найдена на сервере {user.Guild.Name}");
+                    return;
+                }
+
+                // Пытаемся выдать роль
+                try
+                {
+                    await user.AddRoleAsync(defaultRole);
+                    await LogInfo($"Пользователю {user.Mention} выдана роль {defaultRole.Name}");
+
+                    var welcomeChannel = _client.GetChannel(config.WelcomeChannelID) as IMessageChannel;
                     if (welcomeChannel != null)
                     {
-                        Console.WriteLine($"Sending message to channel: {welcomeChannel.Name}");
-                        //await welcomeChannel.SendMessageAsync($"Привет, {user.Mention}!");
+                        await LogInfo($"Отправка приветственного сообщения в {welcomeChannel.Name}");
+
+                        // Создаем EmbedBuilder
+                        var embed = new EmbedBuilder()
+                            .WithAuthor(new EmbedAuthorBuilder()
+                                .WithName("Смотрящий за костром")
+                                .WithIconUrl("https://media.discordapp.net/attachments/710469293996769405/1241391979477205192/1.png?ex=664a07df&is=6648b65f&hm=b8a054e85315f85feb24a756fed87bfffd8a004e6e32bf1eb77db58f41f9b62e&=&format=webp&quality=lossless"))
+                            /*.WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
+                                             "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                             "На сервере также действует несколько команд через `!`, которые работают только в следующих чатах: **флудилка** и **общий-ролевой-чат**, с важной информацией:\n" +
+                                             "1. `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                             "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                             "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")*/
+                            .WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
+                                            "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                            "На сервере помимо команд через `/` в соответствующих чатах, также действует несколько команд через `!`:\n" +
+                                            "1. В двух чатах (**флудилка** и **общий-ролевой-чат**) они с важной информацией:\n" +
+                                            "   • `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                            "   • `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                            "   • `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.\n" +
+                                            "2. А также есть `!команды` — здесь указаны все пасты, которые можно использовать в голосовых каналах.\n\n" +
+                                            "*При возникновении вопросов по серверу обратитесь к @domen_ или @perekrestok_mirov *")
+                            .WithColor(new Color(0xE67E22)) // Оранжевый цвет, как у огня
+                            .WithImageUrl("https://media.discordapp.net/attachments/710469293996769405/1241392720883482674/fe5ff45b6397f151c147b890c29eaa26af6741f60a592d7baf3594ff7b424f24.gif?ex=664a0890&is=6648b710&hm=4b766b8801c0ad863731c4f3")
+                            .WithFooter(new EmbedFooterBuilder()
+                                .WithText("Приятного времяпрепровождения у костра!")
+                            )
+                            .WithCurrentTimestamp();
+
+                        await welcomeChannel.SendMessageAsync(embed: embed.Build());
                     }
                     else
                     {
-                        Console.WriteLine("Welcome channel not found.");
+                        await LogError("Канал для приветствий не был найден.");
                     }
+                }
+                catch (Discord.Net.HttpException ex) when (((int?)ex.DiscordCode) == 50013)
+                {
+                    await LogError($"Ошибка: Недостаточно прав для выдачи роли {defaultRole.Name}");
+
+                    // Уведомляем в канал модерации
+                    var modChannel = user.Guild.GetTextChannel(config.ModerateChannelID);
+                    if (modChannel != null)
+                    {
+                        await modChannel.SendMessageAsync(
+                            $"⚠️ Боту не хватает прав для выдачи роли {defaultRole.Mention}. " +
+                            $"Пожалуйста, переместите роль {defaultRole.Mention} выше роли бота.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await LogError($"Ошибка при выдаче роли: {ex.Message}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error: {ex.Message}");
+                await LogError($"Ошибка! Текст ошибки: {ex.Message}");
             }
         }
 
@@ -678,43 +1099,63 @@ namespace DiscordBot
 
             if (!File.Exists(filePath))
             {
-                Console.WriteLine("Файл с текстом не найден.");
+                // Синхронная обработка ошибки, так как метод не async
+                try
+                {
+                    // Используем .GetAwaiter().GetResult() для синхронного вызова асинхронного метода
+                    LogError("Файл с текстом не найден.").GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка при логировании: {ex.Message}");
+                }
                 return textBlocks;
             }
 
-            var lines = File.ReadAllLines(filePath);
-            string currentKey = null;
-            var currentText = new StringBuilder();
-
-            foreach (var line in lines)
+            try
             {
-                if (line.StartsWith("---"))
-                {
-                    continue;
-                }
+                var lines = File.ReadAllLines(filePath);
+                string currentKey = null;
+                var currentText = new StringBuilder();
 
-                if (line.StartsWith("!"))
+                foreach (var line in lines)
                 {
-                    // Если найден новый ключ, сохраняем предыдущий блок
-                    if (currentKey != null)
+                    if (line.StartsWith("---"))
                     {
-                        textBlocks[currentKey] = currentText.ToString().Trim();
-                        currentText.Clear();
+                        continue;
                     }
 
-                    currentKey = line;
+                    if (line.StartsWith("!"))
+                    {
+                        if (currentKey != null)
+                        {
+                            textBlocks[currentKey] = currentText.ToString().Trim();
+                            currentText.Clear();
+                        }
+
+                        currentKey = line;
+                    }
+                    else
+                    {
+                        currentText.AppendLine(line);
+                    }
                 }
-                else
+
+                if (currentKey != null)
                 {
-                    // Добавляем строку к текущему тексту
-                    currentText.AppendLine(line);
+                    textBlocks[currentKey] = currentText.ToString().Trim();
                 }
             }
-
-            // Сохраняем последний блок
-            if (currentKey != null)
+            catch (Exception ex)
             {
-                textBlocks[currentKey] = currentText.ToString().Trim();
+                try
+                {
+                    LogError($"Ошибка при загрузке файла: {ex.Message}").GetAwaiter().GetResult();
+                }
+                catch (Exception logEx)
+                {
+                    Console.WriteLine($"Ошибка при логировании: {logEx.Message}");
+                }
             }
 
             return textBlocks;
@@ -723,7 +1164,7 @@ namespace DiscordBot
 
     public class RollDiceCommands : ModuleBase<SocketCommandContext>
     {
-        private static readonly Dictionary<ulong, int> _lastUserRolls = new Dictionary<ulong, int>();
+        private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private string ValidateRollInput(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -761,23 +1202,16 @@ namespace DiscordBot
         public async Task RollDice(SocketSlashCommand command, string input)
         {
             await command.DeferAsync();
-            // Получаем ID текущего сервера
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
+            var channelId = command.Channel.Id;
 
-            // Проверяем активную сессию только на текущем сервере
-            if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var session))
-            {
-                if (session.IsPaused)
-                {
-                    await command.FollowupAsync("Игра на паузе. Броски не учитываются.", ephemeral: true);
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(5000);
-                        await command.DeleteOriginalResponseAsync();
-                    });
-                    return;
-                }
-            }
+            // Получаем ID канала статистики из конфига
+            var statsChannelId = Program.ServerConfigs.TryGetValue(guildId.Value, out var config)
+                ? config.StatsChannelID
+                : 0;
+
+            // Проверяем, сделан ли бросок в канале статистики
+            bool isStatsChannel = channelId == statsChannelId;
 
             Console.WriteLine($"\nБыло введено условие: {input}");
             var user = command.User as SocketGuildUser;
@@ -798,74 +1232,29 @@ namespace DiscordBot
                 return;
             }
 
-            // Если ввод корректен, продолжаем обработку
-            var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?|(?:(\d+)\[(\d+),(\d+)\])([+-]\d+)?|(?:(\d*)d\[(\d+),(\d+)\])([+-]\d+)?)$", RegexOptions.IgnoreCase);
+            var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?$)", RegexOptions.IgnoreCase);
 
             if (!match.Success)
             {
-                await command.FollowupAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z`, `XdY-Z`, `Xd[min,max]+Z` или `d[min,max]-Z`, где `X`, `Y`, `Z` — строго больше 0.");
+                await command.FollowupAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z` или `XdY-Z`, где `X`, `Y`, `Z` — строго больше 0.");
                 Console.WriteLine("Предупреждение: Был введён неверный формат.");
                 return;
             }
 
             int count = 1;
-            int min = 1;
             int max = 1;
             int modifier = 0;
 
-            if (match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value)) // Обрабатываем формат XdY
+            if (match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value))
             {
                 count = int.Parse(match.Groups[1].Value);
                 max = int.Parse(match.Groups[2].Value);
-                if (match.Groups[4].Success)
-                {
-                    modifier = int.Parse(match.Groups[4].Value);
-                }
+                if (match.Groups[4].Success) modifier = int.Parse(match.Groups[4].Value);
             }
-            else if (match.Groups[2].Success) // Обрабатываем формат dY
+            else if (match.Groups[2].Success)
             {
                 max = int.Parse(match.Groups[2].Value);
-                count = 1;
-                if (match.Groups[4].Success)
-                {
-                    modifier = int.Parse(match.Groups[4].Value);
-                }
-            }
-            else if (match.Groups[4].Success) // Обрабатываем формат d[min,max]
-            {
-                max = int.Parse(match.Groups[4].Value);
-                count = 1;
-                if (match.Groups[5].Success)
-                {
-                    modifier = int.Parse(match.Groups[5].Value);
-                }
-            }
-            else if (match.Groups[6].Success) // Обрабатываем формат Xd[min,max]
-            {
-                count = int.Parse(match.Groups[6].Value);
-                min = int.Parse(match.Groups[7].Value);
-                max = int.Parse(match.Groups[8].Value);
-                if (min >= max)
-                {
-                    await command.FollowupAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
-                    return;
-                }
-            }
-            else if (match.Groups[9].Success) // Обрабатываем формат Xd[min,max]+Z или Xd[min,max]-Z
-            {
-                if (!string.IsNullOrWhiteSpace(match.Groups[9].Value))
-                    count = int.Parse(match.Groups[9].Value);
-                min = int.Parse(match.Groups[10].Value);
-                max = int.Parse(match.Groups[11].Value);
-                if (min >= max)
-                {
-                    await command.FollowupAsync("Минимальное значение должно быть меньше максимального.", ephemeral: true);
-                    return;
-                }
-                if (match.Groups[12].Success)
-                {
-                    modifier = int.Parse(match.Groups[12].Value);
-                }
+                if (match.Groups[4].Success) modifier = int.Parse(match.Groups[4].Value);
             }
 
             if (count <= 0 || max <= 0)
@@ -873,34 +1262,86 @@ namespace DiscordBot
                 await command.FollowupAsync("Количество бросков и верхняя граница должны быть больше нуля.", ephemeral: true);
                 return;
             }
-            if (count > 20)
+            if (count > 10)
             {
-                await command.FollowupAsync("Давайте сильно не наглеть? 20 бросков - это максимум.", ephemeral: false);
+                await command.FollowupAsync("Давайте сильно не наглеть? 10 бросков - это максимум.", ephemeral: false);
                 return;
             }
 
-            Random random = new Random();
-            List<int> results;
+            // Если бросок в канале статистики, проверяем активные сессии
+            if (isStatsChannel)
+            {
+                await _sessionSemaphore.WaitAsync();
+                try
+                {
+                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
+                    {
+                        // Находим все сессии с включенной записью бросков
+                        var activeSessions = sessions.Where(s =>
+                            !s.Value.IsStopped &&
+                            s.Value.TrackRolls).ToList();
 
-            // Обработка случая d20 отдельно
+                        if (activeSessions.Any())
+                        {
+                            // Проверяем, есть ли сессии на паузе
+                            var pausedSessions = activeSessions.Where(s => s.Value.IsPaused).ToList();
+                            if (pausedSessions.Any())
+                            {
+                                await command.FollowupAsync(
+                                    $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
+                                    ephemeral: false);
+                                _ = Task.Delay(5000).ContinueWith(async _ => await command.DeleteOriginalResponseAsync());
+                                return;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    _sessionSemaphore.Release();
+                }
+            }
+
+            Random random = new Random();
+            List<int> results = Enumerable.Range(0, count)
+                .Select(_ => random.Next(1, max + 1))
+                .ToList();
+
+            // Обработка бросков d20 без модификатора
             if (max == 20 && modifier == 0)
             {
-                results = Enumerable.Range(0, count).Select(_ => random.Next(1, max + 1)).ToList();
-
-                // Для каждого броска d20 выводим отдельное изображение и сохраняем в статистику
-                if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var activeSession))
+                // Если бросок в канале статистики и есть активные сессии - записываем результаты
+                if (isStatsChannel)
                 {
-                    foreach (var result in results)
+                    await _sessionSemaphore.WaitAsync();
+                    try
                     {
-                        activeSession.Rolls.Add(new RollStatistic
+                        if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
                         {
-                            PlayerName = command.User.GlobalName,
-                            RollValue = result
-                        });
+                            var activeSessions = sessions.Where(s =>
+                                !s.Value.IsStopped &&
+                                !s.Value.IsPaused &&
+                                s.Value.TrackRolls).ToList();
+
+                            foreach (var session in activeSessions)
+                            {
+                                foreach (var result in results)
+                                {
+                                    session.Value.Rolls.Add(new RollStatistic
+                                    {
+                                        PlayerName = command.User.GlobalName,
+                                        RollValue = result
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        _sessionSemaphore.Release();
                     }
                 }
 
-                // Если только один бросок d20 - выводим одно изображение
                 if (count == 1)
                 {
                     var result = results[0];
@@ -915,37 +1356,25 @@ namespace DiscordBot
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                             .WithColor(embedColor)
                             .Build();
-                        await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                        await command.FollowupWithFileAsync(filePath, embed: embed);
                     }
                     else
                     {
-                        Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
-                        await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                        await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено)");
                     }
                     return;
                 }
-                // Если несколько бросков d20 - выводим все изображения
                 else
                 {
                     var embeds = new List<Embed>();
                     var files = new List<FileAttachment>();
-                    int count_rols = 1;
 
-                    // Логируем результаты в консоль
                     foreach (var result in results)
                     {
-                        Console.WriteLine($"Результат броска {count_rols}: {result}");
-                        count_rols++;
-                    }
-
-                    // Подготавливаем файлы и embed'ы
-                    count_rols = 1;
-                    foreach (var result in results)
-                    {
+                        Console.WriteLine($"Результат броска: {result}");
                         var filePath = Path.Combine("Numbers", $"{result}.png");
                         if (File.Exists(filePath))
                         {
-                            // Для embed'ов не нужно менять имена файлов, даже если результаты одинаковые
                             files.Add(new FileAttachment(filePath, Path.GetFileName(filePath)));
                             embeds.Add(new EmbedBuilder()
                                 .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
@@ -956,63 +1385,31 @@ namespace DiscordBot
                         {
                             Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
                         }
-                        count_rols++;
                     }
 
                     if (files.Count > 0)
                     {
-                        //1.Первое сообщение с текстом
-                        //string responseText = files.Count switch
-                        //{
-                        //    2 => "Результаты броска с помехой/преимуществом:",
-                        //    _ => $"Результаты {files.Count} бросков:"
-                        //};
-
-                        //await command.FollowupAsync(responseText);
-
-                        //2.Затем отправляем embed'ы с задержкой
-                        //for (int i = 0; i < files.Count; i++)
-                        //{
-                        //    if (i > 0)
-                        //    {
-                        //        await Task.Delay(500); // Задержка между бросками (0.5 сек)
-                        //    }
-
-                        //    await command.FollowupWithFileAsync(
-                        //        files[i],
-                        //        embed: embeds[i]);
-                        //}
-
-                        // 3. Комбинированное сообщение с текстом и всеми embed'ами
                         var combinedMessage = files.Count switch
                         {
                             2 => "Результаты броска с помехой/преимуществом:",
                             _ => $"Результаты {files.Count} бросков:"
                         };
 
-                        // Создаем новый список файловых вложений
-                        var fileAttachments = files.Select(f => new FileAttachment(f.Stream, f.FileName)).ToList();
-
-                        // Отправляем комбинированное сообщение
                         await command.FollowupWithFilesAsync(
-                            attachments: fileAttachments,
+                            attachments: files,
                             text: combinedMessage,
                             embeds: embeds.ToArray());
                     }
                     else
                     {
-                        await command.FollowupAsync("Не удалось загрузить изображения для результатов.");
+                        var resultsText = string.Join(", ", results);
+                        await command.FollowupAsync($"Результаты бросков: {resultsText}");
                     }
                     return;
                 }
             }
 
-            results = Enumerable.Range(0, count).Select(_ => {
-                int result = random.Next(min, max + 1);
-                return result;
-            }).ToList();
-
-            // Формируем сообщение для вывода
+            // Обработка всех остальных бросков (не d20 или с модификатором)
             var resultMessage = new StringBuilder();
             var consoleMessage = new StringBuilder();
 
@@ -1023,21 +1420,15 @@ namespace DiscordBot
 
                 resultMessage.AppendLine("__**Результат броска**__");
                 resultMessage.AppendLine("```plaintext");
-
                 if (modifier != 0)
                 {
                     resultMessage.AppendLine($"Выпавшее значение: {rolledValue}");
                     resultMessage.AppendLine($"Модификатор: {modifier}");
                     resultMessage.AppendLine($"Полученное значение: {finalValue}\n");
-
-                    consoleMessage.AppendLine($"Выпавшее значение: {rolledValue}");
-                    consoleMessage.AppendLine($"Модификатор: {modifier}");
-                    consoleMessage.AppendLine($"Полученное значение: {finalValue}\n");
                 }
                 else
                 {
                     resultMessage.AppendLine($"Полученное значение: {rolledValue}\n");
-                    consoleMessage.AppendLine($"Полученное значение: {rolledValue}\n");
                 }
                 resultMessage.Append("```");
             }
@@ -1045,113 +1436,112 @@ namespace DiscordBot
             {
                 resultMessage.AppendLine("__**Результаты бросков**__");
                 resultMessage.AppendLine("```plaintext");
-
                 for (int i = 0; i < results.Count; i++)
                 {
                     var rolledValue = results[i];
                     int finalValue = rolledValue + modifier;
-
                     if (modifier != 0)
                     {
                         resultMessage.AppendLine($"Бросок {i + 1}: Выпавшее значение: {rolledValue}");
                         resultMessage.AppendLine($"Модификатор: {modifier}");
                         resultMessage.AppendLine($"Полученное значение: {finalValue} \n");
-
-                        consoleMessage.AppendLine($"Бросок {i + 1}: Выпавшее значение: {rolledValue}");
-                        consoleMessage.AppendLine($"Модификатор: {modifier}");
-                        consoleMessage.AppendLine($"Полученное значение: {finalValue} \n");
                     }
                     else
                     {
                         resultMessage.AppendLine($"Бросок {i + 1}: Полученное значение: {rolledValue}\n");
-                        consoleMessage.AppendLine($"Бросок {i + 1}: Полученное значение: {rolledValue}\n");
                     }
                 }
                 resultMessage.Append("```");
             }
 
             await command.FollowupAsync(resultMessage.ToString());
-            Console.WriteLine(consoleMessage.ToString());
+            Console.WriteLine(resultMessage.ToString());
         }
 
         [Command("roll20")]
         public async Task Roll20(SocketSlashCommand command)
         {
             await command.DeferAsync();
-
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
+            var channelId = command.Channel.Id;
 
-            // Проверка активной сессии только на текущем сервере
-            if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var session))
+            if (guildId == null)
             {
-                if (session.IsPaused)
-                {
-                    await command.FollowupAsync("Игра на паузе. Броски не учитываются.", ephemeral: false);
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(5000);
-                        await command.DeleteOriginalResponseAsync();
-                    });
-                    return;
-                }
-            }
-
-            var user = command.User as SocketGuildUser;
-            if (user == null)
-            {
-                await command.FollowupAsync("Не удалось получить информацию о пользователе.");
+                await command.FollowupAsync("Команда доступна только на сервере.");
                 return;
             }
 
+            // Получаем ID канала статистики из конфига
+            var statsChannelId = Program.ServerConfigs.TryGetValue(guildId.Value, out var config)
+                ? config.StatsChannelID
+                : 0;
+
+            // Если бросок сделан в канале статистики
+            bool isStatsChannel = channelId == statsChannelId;
+
             Random random = new Random();
             int result = random.Next(1, 21);
-            Console.WriteLine($"Полученное значение (d20): {result}\n");
 
-            // Проверка на повторный результат
-            bool rerollOnDuplicate = false; // Переменная для управления повторной рандомизацией
-            if (rerollOnDuplicate)
+            // Если это канал статистики, проверяем сессии
+            if (isStatsChannel)
             {
-                // Проверяем, есть ли запись для пользователя в словаре
-                if (_lastUserRolls.ContainsKey(user.Id))
+                await _sessionSemaphore.WaitAsync();
+                try
                 {
-                    // Если запись есть, получаем последний результат и сравниваем
-                    if (_lastUserRolls[user.Id] == result)
+                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
                     {
-                        result = random.Next(1, 21); // Повторная рандомизация
-                        Console.WriteLine($"Повторный бросок: {result}");
+                        // Находим ВСЕ сессии с включённой записью бросков (TrackRolls = true)
+                        var sessionsWithRolls = sessions.Where(s =>
+                            s.Value.TrackRolls &&
+                            !s.Value.IsStopped).ToList();
+
+                        if (sessionsWithRolls.Any())
+                        {
+                            // Проверяем, есть ли сессии на паузе
+                            var pausedSessions = sessionsWithRolls.Where(s => s.Value.IsPaused).ToList();
+                            if (pausedSessions.Any())
+                            {
+                                // Выводим уведомление о паузе с названием первой найденной сессии
+                                await command.FollowupAsync(
+                                    $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
+                                    ephemeral: false
+                                );
+                                _ = Task.Delay(5000).ContinueWith(async _ => await command.DeleteOriginalResponseAsync());
+                                return;
+                            }
+
+                            foreach (var session in sessionsWithRolls.Where(s => !s.Value.IsPaused))
+                            {
+                                session.Value.Rolls.Add(new RollStatistic
+                                {
+                                    PlayerName = command.User.GlobalName,
+                                    RollValue = result
+                                });
+                            }
+                        }
                     }
                 }
-
-                // Обновляем последний результат пользователя
-                _lastUserRolls[user.Id] = result;
-            }
-
-            // Добавляем в статистику только если есть активная сессия
-            if (guildId != null && GameSessionCommands._sessions.TryGetValue(guildId.Value, out var activeSession))
-            {
-                activeSession.Rolls.Add(new RollStatistic
+                finally
                 {
-                    PlayerName = command.User.GlobalName,
-                    RollValue = result
-                });
+                    _sessionSemaphore.Release();
+                }
             }
 
+            // Показываем результат броска (в любом случае)
             var filePath = Path.Combine("Numbers", $"{result}.png");
-            Color embedColor = GetGradientColor(result, 1, 20);
-
             if (File.Exists(filePath))
             {
                 var embed = new EmbedBuilder()
                     .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
-                    .WithColor(embedColor)
+                    .WithColor(GetGradientColor(result, 1, 20))
                     .Build();
-                await command.FollowupWithFileAsync(filePath, embed: embed, isTTS: false, allowedMentions: null);
+                await command.FollowupWithFileAsync(filePath, embed: embed);
             }
             else
             {
-                Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
-                await command.FollowupAsync("Изображение не найдено. Пожалуйста, сообщите об этом через команду `/bug_report`.", ephemeral: true);
+                await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено)");
             }
+            Console.WriteLine($"Результат броска (d20): {result}");
         }
 
         private Color GetGradientColor(int value, int minValue, int maxValue)
@@ -1162,15 +1552,13 @@ namespace DiscordBot
 
             if (normalizedValue < 0.5f) // от 1 до 10
             {
-                // Красный к желтому
                 r = 255;
-                g = (int)(255 * (normalizedValue * 2)); // Увеличиваем зеленый
+                g = (int)(255 * (normalizedValue * 2));
                 b = 0;
             }
             else // от 10 до 20
             {
-                // Желтый к зеленому
-                r = (int)(255 * (1 - (normalizedValue - 0.5f) * 2)); // Уменьшаем красный
+                r = (int)(255 * (1 - (normalizedValue - 0.5f) * 2));
                 g = 255;
                 b = 0;
             }
@@ -1184,34 +1572,36 @@ namespace DiscordBot
         [Command("help")]
         public async Task Help(SocketSlashCommand command)
         {
-            var helpMessage = new StringBuilder();
+            var helpMessage = new EmbedBuilder()
+                .WithTitle("ℹ️ Список доступных команд")
+                .WithColor(Color.DarkBlue)
+                .WithDescription("Основные команды бота для управления сервером и игровыми процессами")
+                .AddField("📚 Основные команды",
+                    "> `/help` - Показывает это сообщение\n" +
+                    "> `/help_r` - Помощь по системе бросков кубиков\n" +
+                    "> `/help_gs` - Помощь по управлению игровыми сессиями\n" +
+                    "> `/bug_report [сообщение]` - Отправка отчета об ошибке или предложения")
+                .AddField("🛠 Модерация",
+                    "> `/open_chat [категория]` - Открывает доступ писать и перемещает в указанную категорию *(только для мастеров)*\n" +
+                    "> `/close_chat [причина]` - Архивирует чат и закрывает доступ писать *(только для мастеров)*\n" +
+                    "> `/clr X` - Удаляет X сообщений (1-100) *(для модераторов)*")
+                .AddField("📊 Информация",
+                    "> `/serverinfo` - Показывает информацию о сервере\n" +
+                    "> *(команда в разработке)*")
+                .AddField("⚠️ Ограничения доступа",
+                    "• Команды модерации доступны только уполномоченным пользователям\n" +
+                    "• Некоторые команды работают только в определенных каналах\n" +
+                    "• Бот находится в активной разработке")
+                .WithFooter("*Некоторые пасхалки скрыты в коде. При проблемах используйте /bug_report*")
+                .Build();
 
-            helpMessage.AppendLine("**Список доступных команд:**");
-            helpMessage.AppendLine("> `/help` - Вы находитесь здесь.");
-            helpMessage.AppendLine("> `/help_r` - Выводит список команд, где указаны все вариации для бросков кубов.");
-            helpMessage.AppendLine("> `/help_gs` - Выводит список команд, которые используются для подсчёта времени игры.");
-            helpMessage.AppendLine("> `/bug_report` - Позволяет отправить администратору сообщение об ошибке, " +
-                "которая связана с ботом, или любое ваше предложение по его улучшению.");
-            helpMessage.AppendLine("> `/serverinfo` - Показывает очень краткую информацию о сервере.");
-            helpMessage.AppendLine("> `/roll XdY` - Выполняет заданное количество `Х` бросков кубика заданного номинала `Y`. " +
-                "Если оставить аргумент `X` пустым, то будет совершён один бросок.");
-            helpMessage.AppendLine("> `/queue Z` - Запускает очередь с необходимым `Z` количеством персонажей в сцене. __Доступ ограничен__");
-            helpMessage.AppendLine("> `/q dY` - **Только при активной очереди!** Совершается бросок кубика выбранного номинала `Y`. " +
-                "Добавляет вас в очередь на выполнение действия. Может быть использована несколько раз одним человеком.");
-            helpMessage.AppendLine("> `/stop_q` - Останавливает текущую очередь, если она активна. __Доступ ограничен__");
-            helpMessage.AppendLine("> `/clr X` - Удаляет выбранное количество сообщений `X`. __Доступ ограничен__");
-            helpMessage.AppendLine("-# *Некоторые пасхалки скрыты в коде. Количество команд будет добавляться. Данный бот всё ещё в разработке.*");
-            helpMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(helpMessage.ToString());
+            await command.RespondAsync(embed: helpMessage);
         }
 
         [Command("serverinfo")]
         public async Task ServerInfo(SocketSlashCommand command)
         {
-            // Сообщаем Discord, что команда обрабатывается
             await command.DeferAsync();
-
             var server = (command.Channel as SocketGuildChannel)?.Guild;
 
             if (server == null)
@@ -1222,36 +1612,45 @@ namespace DiscordBot
 
             try
             {
-                // Загружаем всех пользователей сервера в кэш (асинхронно) Не работает
-                //await Task.Run(async () => await server.DownloadUsersAsync());
+                // Получаем актуальные данные о пользователях
+                await server.DownloadUsersAsync();
 
-                // Получаем информацию о участниках
                 int totalMembers = server.MemberCount;
-                int onlineMembers = server.Users.Count(u => u.Status == UserStatus.Online);
+                int onlineMembers = server.Users.Count(u => u.Status != UserStatus.Offline);
                 int botCount = server.Users.Count(u => u.IsBot);
                 int humanCount = totalMembers - botCount;
 
+                // Получаем информацию о каналах
+                int textChannels = server.TextChannels.Count;
+                int voiceChannels = server.VoiceChannels.Count;
+                int categories = server.CategoryChannels.Count;
+
                 var embed = new EmbedBuilder()
-                    .WithTitle("Информация о сервере")
-                    .AddField("Название", server.Name)
-                    .AddField("Создан", server.CreatedAt)
-                    .AddField("Участники",
-                    $"Всего участников: {totalMembers}\n" +
-                    $"Участников в сети: Не работает\n" +
-                    $"Ботов: Не работает\n" +
-                    $"Людей: Не работает")
-                    .AddField("Важная дата", "*20.11.2020*")
-                    .AddField("Первое включение бота на сервере", "*01.02.2025*")
+                    .WithTitle($"ℹ️ Информация о сервере {server.Name}")
+                    .WithThumbnailUrl(server.IconUrl)
+                    .AddField("📅 Создан", server.CreatedAt.ToString("dd.MM.yyyy"), true)
+                    .AddField("👑 Владелец", server.Owner?.Mention ?? "Неизвестно", true)
+                    .AddField("📊 Участники",
+                        $"👥 Всего: {totalMembers}\n" +
+                        $"🟢 Онлайн: {onlineMembers}\n" +
+                        $"🤖 Ботов: {botCount}\n" +
+                        $"👤 Людей: {humanCount}", true)
+                    .AddField("🌐 Каналы",
+                        $"📝 Текстовые: {textChannels}\n" +
+                        $"🎤 Голосовые: {voiceChannels}\n" +
+                        $"📂 Категории: {categories}", true)
+                    .AddField("📌 Важные даты",
+                        "• 20.11.2020 - Основание КнР\n" +
+                        "• 01.02.2025 - Первый запуск бота на сервере")
                     .WithColor(Color.Blue)
+                    //.WithFooter("Статистика участников временно недоступна")
                     .Build();
 
-                // Отправляем результат с помощью FollowupAsync
                 await command.FollowupAsync(embed: embed);
             }
             catch (Exception ex)
             {
-                // Логируем ошибку
-                Console.WriteLine($"Ошибка при выполнении команды serverinfo: {ex.Message}");
+                Console.WriteLine($"Ошибка в serverinfo: {ex.Message}");
                 await command.FollowupAsync("Произошла ошибка при обработке команды.");
             }
         }
@@ -1259,35 +1658,71 @@ namespace DiscordBot
         [Command("help_r")]
         public async Task Help_R(SocketSlashCommand command)
         {
-            var help_RMessage = new StringBuilder();
+            var helpMessage = new EmbedBuilder()
+                .WithTitle("🎲 Помощь по системе бросков")
+                .WithColor(Color.DarkPurple)
+                .WithDescription("Система позволяет совершать броски кубиков с различными параметрами и модификаторами.")
+                .AddField("🔹 Основные команды бросков",
+                    "> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с номиналом `Y`.\n" +
+                    "> `/roll XdY+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
+                    "с номиналом `Y`. Также будет добавлен модификатор в +/-`Z`.\n" +
+                    "> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
+                    "с границами от`min` до `max`.\n" +
+                    "> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами от`min` до `max`. " +
+                    "Также будет добавлен модификатор в +/-`Z`.\n" +
+                    "> `/roll20` - Быстрый бросок d20 (аналогично 1d20)")
+                .AddField("🚪 Команды очереди действий",
+                    "> `/queue Z` - Запуск очереди с `Z` персонажами в сцене *(только для мастеров)*\n" +
+                    "> `/q dY` - Совершается бросок кубика выбранного номинала `Y`. Добавляет вас в очередь на выполнение действия. " +
+                    "Может быть использована несколько раз одним человеком. **(только при активной очереди)**\n" +
+                    "> `/stop_q` - Остановка текущей очереди, если она активна *(только для мастеров)*")
+                .AddField("📊 Особенности системы",
+                    "• Автоматическая запись бросков d20 в активных сессиях\n" +
+                    "• Визуализация результатов d20 (изображения кубиков)\n" +
+                    "• Градиентная цветовая индикация результатов\n" +
+                    "• Ограничение на 10 бросков за раз")
+                .AddField("⚠ Ограничения",
+                    "• Броски в канале статистики учитываются только в активных сессиях\n" +
+                    "• Броски не записываются, если сессия на паузе\n" +
+                    "• Только мастера могут управлять очередями")
+                .WithFooter("*При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*")
+                .Build();
 
-            help_RMessage.AppendLine("**Команды поддерживаются следующего вида:**");
-            help_RMessage.AppendLine("> `/roll XdY` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с верхней границей с номиналом `Y`.");
-            help_RMessage.AppendLine("> `/roll XdY+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, " +
-                "с верхней границей с номиналом `Y`. Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`.");
-            help_RMessage.AppendLine("> `/roll Xd[min,max]+Z` - Будет совершён бросок кубика, или кубиков _(если_ `X`_ > 1)_, с границами `min <= Y <= max`." +
-                " Также будет добавлен модификатор в `Z` _(может принимать и отрицательные значения)_.");
-            help_RMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(help_RMessage.ToString());
+            await command.RespondAsync(embed: helpMessage);
         }
 
         [Command("help_gs")]
         public async Task Help_GS(SocketSlashCommand command)
         {
-            var help_GSMessage = new StringBuilder();
+            var helpMessage = new EmbedBuilder()
+                .WithTitle("📚 Помощь по управлению игровыми сессиями")
+                .WithColor(Color.Blue)
+                .WithDescription("Система позволяет отслеживать время игровых сессий, делать паузы и собирать статистику бросков.")
+                .AddField("🔹 Основные команды",
+                    "> `/start [название игры]` - Начинает новую сессию\n" +
+                    "> `/help_gs` - Показывает это сообщение\n")
+                .AddField("🕹 Управление сессией (через кнопки)",
+                    "> `⏸ Пауза` - Приостановить отсчёт времени\n" +
+                    "> `▶ Продолжить` - Возобновить сессию после паузы\n" +
+                    "> `✏ Изменить` - Редактировать параметры сессии\n" +
+                    "> `🎲 Броски` - Вкл/выкл сбор статистики бросков\n" +
+                    "> `⏹ Завершить` - Остановить сессию и показать статистику")
+                .AddField("📊 Статистика бросков",
+                    "После завершения сессии вы можете:\n" +
+                    "• Просмотреть общую статистику по значениям\n" +
+                    "• Получить детальную статистику по игрокам\n" +
+                    "• Отказаться от просмотра статистики")
+                .AddField("ℹ Особенности",
+                    "• Сессии автоматически создаются при старте ивентов\n" +
+                    "• Напоминания о паузе каждые 10 минут\n" +
+                    "• Время пауз не учитывается в общей статистике\n" +
+                    "• Только мастера могут управлять сессиями")
+                .WithFooter("*При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*")
+                .Build();
 
-            help_GSMessage.AppendLine("**Последовательнсть команд:**");
-            help_GSMessage.AppendLine("> 1) `/start *game_name*` - Это команда запускает секундомер и оповещает о начале игры. В `game_name` необходимо указать название " +
-                "текущей игры.");
-            help_GSMessage.AppendLine("> 2) `/pause` и `/resume` - Данные команды создают начало и конец перерыва, чтобы его время не учитывать в итоговой статистике.");
-            help_GSMessage.AppendLine("> 3) `/stop` - Остановка секундомера и вывод статистики.");
-            help_GSMessage.AppendLine("-# *При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*");
-
-            await command.RespondAsync(help_GSMessage.ToString());
+            await command.RespondAsync(embed: helpMessage);
         }
-        
+
         [Command("bug_report")]
         public async Task Bug_Report(SocketSlashCommand command, string input)
         {
@@ -1305,7 +1740,7 @@ namespace DiscordBot
                 return;
             }
 
-            string directoryPath = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            string directoryPath = @"E:\НРИ\RoleplayerBotDiscord\Logs";
             Directory.CreateDirectory(directoryPath);
 
             string filePath = Path.Combine(directoryPath, $"{user.Username}.txt");
@@ -1318,12 +1753,12 @@ namespace DiscordBot
 
             IncrementBugReportCounter();
 
-            await command.RespondAsync("Ваш отчет об ошибке был успешно отправлен!",ephemeral:true);
+            await command.RespondAsync("Ваш отчет об ошибке был успешно отправлен!", ephemeral: true);
         }
 
         private void IncrementBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
 
             if (!File.Exists(counterFilePath))
             {
@@ -1410,7 +1845,7 @@ namespace DiscordBot
             if (!isQueueActive)
             {
                 Console.WriteLine($"Предупреждение: Очередь не активна.");
-                await command.RespondAsync("Пожалуйста, запустите очередь перед выполнением этой команды.", ephemeral:true);
+                await command.RespondAsync("Пожалуйста, запустите очередь перед выполнением этой команды.", ephemeral: true);
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(2000);
@@ -1538,7 +1973,7 @@ namespace DiscordBot
             maxRolls = 0;
             rollCount = 0;
             userRolls.Clear();
-            messagesToDelete.Clear();        
+            messagesToDelete.Clear();
         }
 
         private async void ResetQueue(object state)
@@ -1626,552 +2061,754 @@ namespace DiscordBot
 
     public class GameSession
     {
+        public ulong SessionId { get; set; }
         public ulong GuildId { get; set; }
         public string GameName { get; set; }
         public string GameComment { get; set; }
         public string MasterName { get; set; }
+        public ulong MasterId { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime? EndTime { get; set; }
         public List<(DateTime Start, DateTime? End)> PausePeriods { get; set; } = new();
         public bool IsPaused { get; set; }
-        public bool IsStopped { get; set; }
+        public bool IsStopped => EndTime.HasValue;
         public List<RollStatistic> Rolls { get; set; } = new();
         public string EventDescription { get; set; }
-        public int MessagesToDeleteCount { get; set; } = 0;
+        public ulong ControlMessageId { get; set; }
         public ulong StatsMessageId { get; set; }
+        public CancellationTokenSource PauseReminderCTS { get; set; }
+        public bool TrackRolls { get; set; }
+        public ulong? EventId { get; set; }
+        public ulong ChannelId { get; set; }
+        public ulong? PauseReminderMessageId { get; set; }
+        public ulong? ConfirmationMessageId { get; set; }
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
     {
         private readonly DiscordSocketClient _client;
-        public static readonly ConcurrentDictionary<ulong, GameSession> _sessions = new();
+        public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
 
-        public GameSessionCommands(DiscordSocketClient client)
+        public GameSessionCommands(DiscordSocketClient client) => _client = client;
+
+        private async void Log(string message)
         {
-            _client = client;
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+        }
+
+        private async Task<GameSession> StartSessionInternal(
+        ulong guildId,
+        string gameName,
+        SocketGuildUser master,
+        string gameComment = null,
+        string eventDescription = null,
+        ulong? eventId = null,
+        ulong channelId = 0)
+        {
+            await _sessionSemaphore.WaitAsync();
+            try
+            {
+                Log($"Попытка создать сессию для гильдии {guildId}, игра: {gameName}");
+
+                if (eventId.HasValue && _sessions.TryGetValue(guildId, out var guildSessions))
+                {
+                    var existingSession = guildSessions.Values.FirstOrDefault(s => s.EventId == eventId && !s.IsStopped);
+                    if (existingSession != null)
+                    {
+                        Log($"Найдена существующая активная сессия для события {eventId}: ID {existingSession.SessionId}");
+                        return existingSession;
+                    }
+                }
+
+                var newSession = new GameSession
+                {
+                    SessionId = (ulong)DateTime.Now.Ticks,
+                    GuildId = guildId,
+                    ChannelId = channelId,
+                    GameName = gameName,
+                    MasterName = master?.DisplayName ?? "Неопознанный мастер",
+                    MasterId = master?.Id ?? 0,
+                    GameComment = gameComment,
+                    EventDescription = eventDescription,
+                    StartTime = DateTime.Now,
+                    EventId = eventId,
+                    TrackRolls = false
+                };
+
+                if (!_sessions.TryGetValue(guildId, out var sessions))
+                {
+                    sessions = new ConcurrentDictionary<ulong, GameSession>();
+                    _sessions[guildId] = sessions;
+                    Log($"Создан новый словарь сессий для гильдии {guildId}");
+                }
+
+                if (sessions.TryAdd(newSession.SessionId, newSession))
+                {
+                    Log($"Успешно создана новая сессия: ID {newSession.SessionId}, игра: {gameName}");
+                }
+                else
+                {
+                    Log($"Ошибка при создании сессии для игры {gameName}");
+                }
+
+                return newSession;
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при создании сессии: {ex.Message}");
+                throw;
+            }
+            finally
+            {
+                _sessionSemaphore.Release();
+            }
+        }
+
+        private ComponentBuilder CreateControlButtons(GameSession session)
+        {
+            var builder = new ComponentBuilder()
+                .WithButton(session.IsPaused ? "▶️ Продолжить" : "⏸ Пауза",
+                    session.IsPaused ? $"resume_session:{session.SessionId}" : $"pause_session:{session.SessionId}",
+                    ButtonStyle.Secondary)
+                .WithButton("✏️ Изменить", $"edit_session:{session.SessionId}", ButtonStyle.Primary)
+                .WithButton("⏹ Завершить", $"stop_session:{session.SessionId}", ButtonStyle.Danger)
+                .WithButton(session.TrackRolls ? "🎲 Броски: ✅" : "🎲 Броски: ❌",
+                    $"toggle_rolls:{session.SessionId}",
+                    ButtonStyle.Success);
+
+            return builder;
+        }
+
+        private async Task UpdateControlMessage(GameSession session, IMessageChannel channel)
+        {
+            try
+            {
+                Log($"Попытка обновить сообщение управления для сессии {session.SessionId}");
+
+                if (session.ControlMessageId == 0)
+                {
+                    Log($"ControlMessageId = 0 для сессии {session.SessionId}");
+                    return;
+                }
+
+                var message = await channel.GetMessageAsync(session.ControlMessageId) as IUserMessage;
+                if (message == null)
+                {
+                    Log($"Сообщение {session.ControlMessageId} не найдено, попытка найти по содержимому...");
+                    var messages = await channel.GetMessagesAsync(10).FlattenAsync();
+                    message = messages.FirstOrDefault(m =>
+                        m.Embeds.FirstOrDefault()?.Title?.Contains(session.GameName) == true) as IUserMessage;
+
+                    if (message == null)
+                    {
+                        Log($"Сообщение для сессии {session.SessionId} не найдено");
+                        return;
+                    }
+                    session.ControlMessageId = message.Id;
+                    Log($"Найдено сообщение по содержимому: ID {message.Id}");
+                }
+
+                // Получаем последний период паузы (текущий)
+                var currentPause = session.PausePeriods.LastOrDefault();
+                var pauseTimeInfo = currentPause.Start != DateTime.MinValue ?
+                    $"\nНа паузе с: {currentPause.Start:HH:mm}" : "";
+
+                var embed = new EmbedBuilder()
+                    .WithTitle($"Сессия: {session.GameName}")
+                    .WithDescription($"Мастер: {session.MasterName}\n" +
+                                   $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                                   $"Статус: {(session.IsPaused ? $"⏸ На паузе{pauseTimeInfo}" : "▶ В процессе")}\n" +
+                                   $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}\n" +
+                                   $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
+                    .WithColor(session.IsPaused ? Color.Orange : Color.Green)
+                    .Build();
+
+                await message.ModifyAsync(m =>
+                {
+                    m.Embed = embed;
+                    m.Components = CreateControlButtons(session).Build();
+                });
+
+                Log($"Сообщение управления для сессии {session.SessionId} успешно обновлено");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при обновлении сообщения управления: {ex.Message}");
+            }
         }
 
         public static async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent, DiscordSocketClient client)
         {
             var guildId = guildEvent.Guild.Id;
+            var creator = guildEvent.Creator as SocketGuildUser;
 
-            await _sessionSemaphore.WaitAsync();
-            try
+            var commands = new GameSessionCommands(client);
+            var session = await commands.StartSessionInternal(
+                guildId,
+                guildEvent.Name,
+                creator,
+                eventDescription: guildEvent.Description,
+                eventId: guildEvent.Id);
+
+            if (session == null)
             {
-                if (_sessions.ContainsKey(guildId))
-                {
-                    Console.WriteLine($"Игровая сессия '{_sessions[guildId].GameName}' уже активна на сервере {guildEvent.Guild.Name}. " +
-                        $"Событие '{guildEvent.Name}' не будет запускать новую сессию.\n");
-                    return;
-                }
-                var gameName = guildEvent.Name;
-                var creator = guildEvent.Creator as SocketGuildUser;
-
-                var newSession = new GameSession
-                {
-                    GuildId = guildId,
-                    GameName = gameName,
-                    MasterName = creator?.DisplayName ?? "Неопознанный мастер",
-                    StartTime = DateTime.Now,
-                    IsStopped = false,
-                    EventDescription = guildEvent.Description
-                };
-
-                _sessions.TryAdd(guildId, newSession);
-
-                ulong channelId = Program.ServerConfigs.TryGetValue(guildId, out var config)
-                    ? config.RecordChannelID
-                    : 0;
-
-                if (client.GetChannel(channelId) is ITextChannel channel)
-                {
-                    await channel.SendMessageAsync($"Игра **{newSession.GameName}** начата мастером **{newSession.MasterName}**." +
-                        $"\nВремя начала: {newSession.StartTime:HH:mm:ss}" +
-                        $"\nОписание игры: *{newSession.EventDescription}*");
-                    Console.WriteLine($"Оповещение: Игра '{gameName}' начата на сервере {guildEvent.Guild.Name}.");
-                    newSession.MessagesToDeleteCount++;
-                }
+                commands.Log("Не удалось создать сессию для события");
+                return;
             }
-            finally
+
+            ulong channelId = Program.ServerConfigs.TryGetValue(guildId, out var config)
+                ? config.RecordChannelID
+                : guildEvent.Guild.SystemChannel.Id;
+
+            if (client.GetChannel(channelId) is ITextChannel channel)
             {
-                _sessionSemaphore.Release();
+                var embed = new EmbedBuilder()
+                    .WithTitle($"Сессия: {session.GameName}")
+                    .WithDescription($"Мастер: {session.MasterName}\n" +
+                                   $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                                   $"Статус: ▶ В процессе\n" +
+                                   $"Сбор бросков: ❌ Выключен\n" +
+                                   $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
+                    .WithColor(Color.Green)
+                    .Build();
+
+                var buttons = commands.CreateControlButtons(session);
+                var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
+                session.ControlMessageId = message.Id;
+
+                commands.Log($"Создано сообщение управления для сессии {session.SessionId} (ID сообщения: {message.Id})");
+            }
+            else
+            {
+                commands.Log($"Не удалось найти канал {channelId} для создания сообщения управления");
             }
         }
 
         [Command("start")]
-        public async Task StartGameSession(SocketSlashCommand command, string gameName, SocketUser masterUser = null, string gameComment = null)
+        public async Task StartGameSession(
+            SocketSlashCommand command,
+            string gameName,
+            SocketUser? masterUser = null,
+            string? gameComment = null)
         {
             await command.DeferAsync();
-
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null) return;
 
             var user = command.User as SocketGuildUser;
-            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+            if (!user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
             {
-                await command.FollowupAsync("Только мастера могут запускать игру.", ephemeral: true);
+                await SendTemporaryEphemeralResponse(command, "Только мастера могут запускать игру.");
                 return;
             }
 
-            await _sessionSemaphore.WaitAsync();
-            try
+            var master = masterUser as SocketGuildUser ?? user;
+            var session = await StartSessionInternal(
+                guildId.Value,
+                gameName,
+                master,
+                gameComment,
+                channelId: command.Channel.Id);
+
+            if (session == null)
             {
-                if (_sessions.TryGetValue(guildId.Value, out var activeSession) && !activeSession.IsStopped)
-                {
-                    await command.FollowupAsync($"На сервере уже есть запущенная игра - '{activeSession.GameName}'. Сначала остановите текущую сессию.", ephemeral: true);
-                    Console.WriteLine($"Оповещение: Произведена поытка запуска ещё одной игры на сервере {guildId.Value}");
-                    return;
-                }
-
-                var master = masterUser as SocketGuildUser ?? user;
-                if (!master.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-                {
-                    await command.FollowupAsync("Выбранный пользователь не является мастером.", ephemeral: true);
-                    return;
-                }
-
-                var newSession = new GameSession
-                {
-                    GuildId = guildId.Value,
-                    GameName = gameName,
-                    MasterName = master.DisplayName,
-                    GameComment = gameComment,
-                    StartTime = DateTime.Now,
-                    IsStopped = false
-                };
-
-                _sessions[guildId.Value] = newSession;
-
-                string response = gameComment == null
-                    ? $"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}"
-                    : $"Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nДополнительная информация: *{gameComment}*\nВремя начала: {newSession.StartTime:HH:mm:ss}";
-
-                await command.FollowupAsync(response);
-                newSession.MessagesToDeleteCount++;
-                Console.WriteLine($"Оповещение: Игра **{gameName}** запущена мастером **{master.DisplayName}**.\nВремя начала: {newSession.StartTime:HH:mm:ss}.\nНа сервере {guildId.Value}");
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-        }
-
-        [Command("edit_session")]
-        public async Task EditGameSession(SocketSlashCommand command, string newGameName = null, SocketUser newMaster = null, string newComment = null)
-        {
-            await command.DeferAsync();
-
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null) return;
-
-            var user = command.User as SocketGuildUser;
-            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-            {
-                await command.FollowupAsync("Только мастера могут изменять параметры игры.", ephemeral: true);
+                await SendTemporaryEphemeralResponse(command, "Не удалось создать сессию.");
                 return;
             }
 
-            await _sessionSemaphore.WaitAsync();
-            try
-            {
-                if (!_sessions.TryGetValue(guildId.Value, out var session) || session.IsStopped)
-                {
-                    await command.FollowupAsync("Нет активной игры для изменения.", ephemeral: true);
-                    return;
-                }
+            var embed = new EmbedBuilder()
+                .WithTitle($"Сессия: {gameName}")
+                .WithDescription($"Мастер: {master.DisplayName}\n" +
+                               $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                               $"Статус: ▶ В процессе\n" +
+                               $"Сбор бросков: ❌ Выключен\n" +
+                               $"{(string.IsNullOrEmpty(gameComment) ? "" : $"Комментарий: {gameComment}")}")
+                .WithColor(Color.Green)
+                .Build();
 
-                var changes = new List<string>();
-
-                if (!string.IsNullOrEmpty(newGameName) && session.GameName != newGameName)
-                {
-                    changes.Add($"Название: {session.GameName} → {newGameName}");
-                    session.GameName = newGameName;
-                }
-
-                if (newMaster != null && newMaster is SocketGuildUser masterGuildUser &&
-                    masterGuildUser.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-                {
-                    changes.Add($"Мастер: {session.MasterName} → {masterGuildUser.DisplayName}");
-                    session.MasterName = masterGuildUser.DisplayName;
-                }
-
-                if (newComment != null && session.GameComment != newComment)
-                {
-                    changes.Add($"Комментарий: {session.GameComment ?? "нет"} → {newComment}");
-                    session.GameComment = newComment;
-                }
-
-                if (changes.Count == 0)
-                {
-                    await command.FollowupAsync("Не указаны параметры для изменения.", ephemeral: true);
-                    return;
-                }
-
-                await command.FollowupAsync($"Изменения сохранены:\n{string.Join("\n", changes)}");
-                Console.WriteLine($"Оповещение: Были выполнены изменения:\n{string.Join("\n", changes)}");
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
+            var buttons = CreateControlButtons(session);
+            var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
+            session.ControlMessageId = message.Id;
         }
 
-        [Command("pause")]
-        public async Task PauseGameSession(SocketSlashCommand command)
-        {
-            await command.DeferAsync();
-
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null) return;
-
-            var user = command.User as SocketGuildUser;
-            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-            {
-                await command.FollowupAsync("Только мастера могут приостанавливать игру.", ephemeral: true);
-                return;
-            }
-
-            await _sessionSemaphore.WaitAsync();
-            try
-            {
-                if (!_sessions.TryGetValue(guildId.Value, out var session) || session.IsStopped)
-                {
-                    await command.FollowupAsync("Нет активной игры для приостановки.", ephemeral: true);
-                    return;
-                }
-
-                if (session.IsPaused)
-                {
-                    await command.FollowupAsync("Игра уже на паузе.", ephemeral: true);
-                    return;
-                }
-
-                session.PausePeriods.Add((DateTime.Now, null));
-                session.IsPaused = true;
-                session.MessagesToDeleteCount++;
-
-                await command.FollowupAsync("Игра приостановлена.");
-                Console.WriteLine($"Оповещение: Игра {session.GameName} приостановлена.");
-
-                // Запуск напоминаний в фоне
-                _ = Task.Run(async () =>
-                {
-                    var pauseStart = DateTime.Now;
-                    while (true)
-                    {
-                        await Task.Delay(TimeSpan.FromMinutes(10));
-
-                        await _sessionSemaphore.WaitAsync();
-                        try
-                        {
-                            if (!_sessions.TryGetValue(guildId.Value, out var currentSession) ||
-                                !currentSession.IsPaused ||
-                                currentSession.IsStopped)
-                            {
-                                break;
-                            }
-
-                            var duration = DateTime.Now - pauseStart;
-                            await command.Channel.SendMessageAsync(
-                                $"{user.Mention}, перерыв длится уже {(int)duration.TotalMinutes} минут.");
-                            currentSession.MessagesToDeleteCount++;
-                        }
-                        finally
-                        {
-                            _sessionSemaphore.Release();
-                        }
-                    }
-                });
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-        }
-
-        [Command("resume")]
-        public async Task ResumeGameSession(SocketSlashCommand command)
-        {
-            await command.DeferAsync();
-
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null) return;
-
-            var user = command.User as SocketGuildUser;
-            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-            {
-                await command.FollowupAsync("Только мастера могут продолжать игру.", ephemeral: true);
-                return;
-            }
-
-            await _sessionSemaphore.WaitAsync();
-            try
-            {
-                if (!_sessions.TryGetValue(guildId.Value, out var session) || session.IsStopped)
-                {
-                    await command.FollowupAsync("Нет активной игры для продолжения.", ephemeral: true);
-                    return;
-                }
-
-                if (!session.IsPaused)
-                {
-                    await command.FollowupAsync("Игра не на паузе.", ephemeral: true);
-                    return;
-                }
-
-                var lastPause = session.PausePeriods.Last();
-                session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-                session.IsPaused = false;
-                session.MessagesToDeleteCount++;
-
-                await command.FollowupAsync("Игра продолжена.");
-                Console.WriteLine($"Оповещение: Игра {session.GameName} продолжена.");
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-        }
-
-        [Command("stop")]
-        public async Task StopGameSession(SocketSlashCommand command)
-        {
-            await command.DeferAsync();
-
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null) return;
-
-            // Проверка прав мастера
-            var user = command.User as SocketGuildUser;
-            if (user == null || !user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
-            {
-                await command.FollowupAsync("Только мастера могут останавливать игру.", ephemeral: true);
-                return;
-            }
-
-            GameSession session;
-            await _sessionSemaphore.WaitAsync();
-            try
-            {
-                if (!_sessions.TryGetValue(guildId.Value, out session) || session.IsStopped)
-                {
-                    await command.FollowupAsync("Нет активной игры для остановки.", ephemeral: true);
-                    return;
-                }
-
-                // Завершаем сессию
-                if (session.IsPaused)
-                {
-                    var lastPause = session.PausePeriods.Last();
-                    session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-                    session.IsPaused = false;
-                }
-
-                session.EndTime = DateTime.Now;
-                session.IsStopped = true;
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-            Console.WriteLine($"Оповещение: Игра {session.GameName} остановлена. Запущены дальнейшие процедуры.");
-
-            // Очищаем сообщения бота между /start и /stop
-            await CleanupSessionMessages(command.Channel, session.MessagesToDeleteCount);
-
-            // Формируем и отправляем статистику
-            await SendSessionResults(command, session);
-        }
-
-        public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client)
-        {
-            var guildId = guildEvent.Guild.Id;
-
-            await _sessionSemaphore.WaitAsync();
-            try
-            {
-                if (!_sessions.TryGetValue(guildId, out var session))
-                {
-                    Console.WriteLine($"Не найдена активная сессия для события '{guildEvent.Name}'");
-                    return;
-                }
-
-                // Копируем логику из команды stop
-                if (session.IsPaused)
-                {
-                    var lastPause = session.PausePeriods.Last();
-                    session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-                    session.IsPaused = false;
-                }
-
-                session.EndTime = DateTime.Now;
-                session.IsStopped = true;
-
-                Console.WriteLine($"Оповещение: Игра {session.GameName} завершена по событию. Запущены дальнейшие процедуры.");
-
-                // Получаем канал для уведомлений
-                var channel = client.GetChannel(Program.ServerConfigs[guildId].RecordChannelID) as SocketTextChannel;
-                if (channel == null) return;
-
-                // Создаем экземпляр GameSessionCommands для доступа к нестатическим методам
-                var commands = new GameSessionCommands(client);
-
-                // Очищаем сообщения бота
-                await commands.CleanupSessionMessages(channel, session.MessagesToDeleteCount);
-
-                // Отправляем статистику через новый метод
-                await SendSessionResultsForEvent(client, session, channel, commands);
-
-                // Удаляем сессию
-                //_sessions.TryRemove(guildId, out _);
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-        }
-
-        // Есть повтор в SendSessionResults --- Обратить внимание!
-        private static async Task SendSessionResultsForEvent(DiscordSocketClient client, GameSession session,
-            ISocketMessageChannel channel, GameSessionCommands commands)
-        {
-            var statsMessage = commands.BuildSessionStats(session);
-
-            var notification = await channel.SendMessageAsync("Игра остановлена по событию. Статистика отправлена в личные сообщения админу.");
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                await notification.DeleteAsync();
-            });
-
-            // Отправка админу
-            var targetUser = client.GetUser(263758178091532288);
-            if (targetUser == null)
-            {
-                await channel.SendMessageAsync("Пользователь *Админ* не найден.");
-            }
-            else
-            {
-                try
-                {
-                    var dmChannel = await targetUser.CreateDMChannelAsync();
-                    await dmChannel.SendMessageAsync(statsMessage);
-                }
-                catch (Exception ex)
-                {
-                    await channel.SendMessageAsync($"Ошибка: Не удалось отправить результаты пользователю {targetUser.Mention}.");
-                    Console.WriteLine($"Ошибка отправки статистики: {ex.Message}");
-                }
-            }
-
-            // Отправка статистики в канал
-            var statsMsg = await channel.SendMessageAsync(statsMessage);
-
-            // Проверяем, были ли броски
-            if (session.Rolls.Count == 0)
-            {
-                var noRollsMessage = await channel.SendMessageAsync(
-                    "Не совершено ни одного броска. Сессия будет удалена через 10 секунд.");
-
-                // Удаляем сообщение и сессию через 10 секунд
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(10000);
-                    await noRollsMessage.DeleteAsync();
-
-                    await _sessionSemaphore.WaitAsync();
-                    try
-                    {
-                        _sessions.TryRemove(session.GuildId, out _);
-                    }
-                    finally
-                    {
-                        _sessionSemaphore.Release();
-                    }
-                });
-                return;
-            }
-
-            // Отправка кнопок в statsChannel
-            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) &&
-                client.GetChannel(config.StatsChannelId) is ITextChannel statsChannel)
-            {
-                var buttons = new ComponentBuilder()
-                    .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
-                    .WithButton("Общая", "general_stats", ButtonStyle.Primary)
-                    .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
-                    .Build();
-
-                var buttonsMsg = await statsChannel.SendMessageAsync(
-                    $"Статистика для игры `{session.GameName}`. Какую вывести?",
-                    components: buttons);
-
-                session.StatsMessageId = buttonsMsg.Id;
-            }
-        }
-
-        private async Task CleanupSessionMessages(ISocketMessageChannel channel, int count)
-        {
-            if (count <= 0 || channel is not ITextChannel textChannel) return;
-
-            var guildId = textChannel.Guild.Id;
-            if (!_sessions.ContainsKey(guildId)) return;
-
-            try
-            {
-                var messages = (await textChannel.GetMessagesAsync(count).FlattenAsync())
-                    .Where(m => m.Author.Id == _client.CurrentUser.Id)
-                    .Take(count)
-                    .ToList();
-
-                foreach (var batch in messages.Chunk(100))
-                {
-                    await textChannel.DeleteMessagesAsync(batch);
-                Console.WriteLine($"Оповещение: Удалено {count} сообщений.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при очистке сообщений: {ex.Message}");
-            }
-        }
-
-        public async Task HandleStatsButton(SocketMessageComponent component)
+        public async Task HandleControlButton(SocketMessageComponent component)
         {
             var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null) return;
 
-            await _sessionSemaphore.WaitAsync();
+            var channelId = component.Channel.Id;
+
+            var parts = component.Data.CustomId.Split(':');
+            if (parts.Length < 2 || !ulong.TryParse(parts[1], out var sessionId))
+            {
+                await SendTemporaryEphemeralResponse(component, "Не удалось определить сессию.");
+                return;
+            }
+
             try
             {
-                var buttonsMessageId = component.Message.Id;
-                var session = _sessions.Values.FirstOrDefault(s =>
-                    s.GuildId == guildId && s.StatsMessageId == buttonsMessageId);
-
-                if (session == null)
+                if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
                 {
-                    await component.RespondAsync("Данная сессия была удалена.", ephemeral: true);
+                    await SendTemporaryEphemeralResponse(component, "Активные сессии не найдены.");
                     return;
                 }
 
-                switch (component.Data.CustomId.Split('_')[0])
+                if (!guildSessions.TryGetValue(sessionId, out var session))
                 {
-                    case "no":
-                        await component.Message.DeleteAsync();
-                        _sessions.TryRemove(session.GuildId, out _);
-                        break;
-                    case "general":
-                        await ShowGeneralStats(component, session);
-                        break;
-                    case "detailed":
-                        await ShowDetailedStats(component, session);
+                    await SendTemporaryEphemeralResponse(component, "Сессия не найдена.");
+                    return;
+                }
+
+                switch (parts[0])
+                {
+                    case "pause_session":
+                    case "resume_session":
+                    case "stop_session":
+                    case "confirm_stop":
+                    case "cancel_stop":
+                    case "toggle_rolls":
+                        await component.DeferAsync();
                         break;
                 }
+
+                switch (parts[0])
+                {
+                    case "pause_session":
+                        await HandlePauseSession(component, session);
+                        break;
+                    case "resume_session":
+                        await HandleResumeSession(component, session);
+                        break;
+                    case "edit_session":
+                        await HandleEditSession(component, session);
+                        break;
+                    case "stop_session":
+                        await HandleStopSession(component, session);
+                        break;
+                    case "confirm_stop":
+                        await HandleConfirmStop(component, session);
+                        break;
+                    case "cancel_stop":
+                        await HandleCancelStop(component, session);
+                        break;
+                    case "toggle_rolls":
+                        await HandleToggleRolls(component, session);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка обработки кнопки: {ex.Message}");
+            }
+        }
+
+        private async Task HandlePauseSession(SocketMessageComponent component, GameSession session)
+        {
+            if (session.IsPaused)
+            {
+                Log($"Сессия {session.SessionId} уже на паузе");
+                await SendTemporaryEphemeralResponse(component, "Игра уже на паузе.");
+                return;
+            }
+
+            var pauseStartTime = DateTime.Now;
+            session.PausePeriods.Add((pauseStartTime, null));
+            session.IsPaused = true;
+
+            Log($"Сессия {session.SessionId} поставлена на паузу в {pauseStartTime:HH:mm:ss}");
+
+            await UpdateControlMessage(session, component.Channel);
+            await SendTemporaryEphemeralResponse(component, $"Игра приостановлена в {pauseStartTime:HH:mm}");
+
+            var channel = component.Channel;
+            var userId = component.User.Id;
+
+            session.PauseReminderCTS = new CancellationTokenSource();
+            _ = Task.Run(async () =>
+            {
+                // Первое напоминание через 10 минут от начала паузы
+                var nextReminder = TimeSpan.FromMinutes(10);
+
+                while (!session.PauseReminderCTS.IsCancellationRequested)
+                {
+                    // Ждем до следующего напоминания
+                    var delay = nextReminder - (DateTime.Now - pauseStartTime);
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay, session.PauseReminderCTS.Token);
+                    }
+
+                    try
+                    {
+                        var duration = DateTime.Now - pauseStartTime;
+                        var totalMinutes = (int)duration.TotalMinutes;
+
+                        // Проверяем, что прошло ровное количество 10-минутных интервалов
+                        if (totalMinutes % 10 == 0)
+                        {
+                            Log($"Напоминание о паузе для сессии {session.SessionId} (длительность: {totalMinutes} мин)");
+
+                            var user = await channel.GetUserAsync(userId) as IUser;
+                            if (user != null)
+                            {
+                                var reminderMessage = await channel.SendMessageAsync(
+                                    $"{user.Mention}, игра на паузе с {pauseStartTime:HH:mm} (уже {totalMinutes} мин)");
+
+                                session.PauseReminderMessageId = reminderMessage.Id;
+
+                                await Task.Delay(TimeSpan.FromMinutes(2));
+                                try
+                                {
+                                    await reminderMessage.DeleteAsync();
+                                }
+                                catch { }
+                            }
+                        }
+
+                        nextReminder += TimeSpan.FromMinutes(10);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка в напоминании о паузе: {ex.Message}");
+                        nextReminder += TimeSpan.FromMinutes(10);
+                    }
+                }
+            }, session.PauseReminderCTS.Token);
+        }
+
+        private async Task HandleResumeSession(SocketMessageComponent component, GameSession session)
+        {
+            if (!session.IsPaused)
+            {
+                Log($"Попытка возобновить сессию {session.SessionId}, которая не на паузе");
+                await SendTemporaryEphemeralResponse(component, "Игра не на паузе.");
+                return;
+            }
+
+            session.PauseReminderCTS?.Cancel();
+            var lastPause = session.PausePeriods.Last();
+            session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+            session.IsPaused = false;
+
+            Log($"Сессия {session.SessionId} возобновлена после паузы");
+
+            await UpdateControlMessage(session, component.Channel);
+            await SendTemporaryEphemeralResponse(component, "Игра продолжена.");
+        }
+
+        private async Task HandleEditSession(SocketMessageComponent component, GameSession session)
+        {
+            var modal = new ModalBuilder()
+                .WithTitle("Изменение параметров игры")
+                .WithCustomId($"edit_modal:{session.SessionId}")
+                .AddTextInput("Название игры", "game_name", TextInputStyle.Short, value: session.GameName)
+                .AddTextInput("Мастер", "game_master", TextInputStyle.Short, value: session.MasterName)
+                .AddTextInput("Комментарий", "game_comment", TextInputStyle.Paragraph, value: session.GameComment ?? "", required: false)
+                .Build();
+
+            await component.RespondWithModalAsync(modal);
+        }
+
+        public async Task HandleEditModal(SocketModal modal)
+        {
+            await modal.DeferAsync();
+            var guildId = (modal.Channel as SocketGuildChannel)?.Guild.Id;
+            if (guildId == null) return;
+
+            var parts = modal.Data.CustomId.Split(':');
+            if (parts.Length < 2 || !ulong.TryParse(parts[1], out var sessionId))
+            {
+                await SendTemporaryEphemeralResponse(modal, "Не удалось определить сессию.");
+                return;
+            }
+
+            await _sessionSemaphore.WaitAsync();
+            try
+            {
+                if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
+                {
+                    await SendTemporaryEphemeralResponse(modal, "Активные сессии не найдены.");
+                    return;
+                }
+
+                if (!guildSessions.TryGetValue(sessionId, out var session))
+                {
+                    await SendTemporaryEphemeralResponse(modal, "Сессия не найдена.");
+                    return;
+                }
+
+                var newName = modal.Data.Components.First(x => x.CustomId == "game_name").Value;
+                var newMaster = modal.Data.Components.First(x => x.CustomId == "game_master").Value;
+                var newComment = modal.Data.Components.First(x => x.CustomId == "game_comment").Value;
+
+                var changes = new List<string>();
+                if (session.GameName != newName) changes.Add($"Название: {session.GameName} → {newName}");
+                if (session.MasterName != newMaster) changes.Add($"Мастер: {session.MasterName} → {newMaster}");
+                if (session.GameComment != newComment) changes.Add($"Комментарий: {session.GameComment} → {newComment}");
+
+                if (changes.Count == 0)
+                {
+                    await modal.FollowupAsync("Изменений не внесено.", ephemeral: true);
+                    return;
+                }
+
+                session.GameName = newName;
+                session.MasterName = newMaster;
+                session.GameComment = newComment;
+
+                await UpdateControlMessage(session, modal.Channel);
+                await SendTemporaryEphemeralResponse(modal, $"Изменения сохранены:\n{string.Join("\n", changes)}");
             }
             finally
             {
                 _sessionSemaphore.Release();
+            }
+        }
+
+        private async Task HandleStopSession(SocketMessageComponent component, GameSession session)
+        {
+            Log($"Пользователь {component.User.Id} запросил остановку сессии {session.SessionId} ({session.GameName})");
+
+            var confirmBuilder = new ComponentBuilder()
+                .WithButton("✅ Да", $"confirm_stop:{session.SessionId}", ButtonStyle.Danger)
+                .WithButton("❌ Нет", $"cancel_stop:{session.SessionId}", ButtonStyle.Secondary);
+
+            try
+            {
+                await component.Message.ModifyAsync(m =>
+                {
+                    m.Components = confirmBuilder.Build();
+                });
+                Log($"Кнопки подтверждения остановки для сессии {session.SessionId} успешно обновлены");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при обновлении кнопок подтверждения остановки: {ex.Message}");
+            }
+
+            var confirmMessage = await component.FollowupAsync("Вы уверены, что хотите завершить игру?", ephemeral: true);
+            session.ConfirmationMessageId = confirmMessage.Id;
+
+            // Удаляем через 10 секунд
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10));
+                try
+                {
+                    await confirmMessage.DeleteAsync();
+                }
+                catch { }
+            });
+        }
+
+        private async Task HandleConfirmStop(SocketMessageComponent component, GameSession session)
+        {
+            Log($"Попытка подтверждения остановки сессии {session.SessionId}. Текущий счётчик семафора: {_sessionSemaphore.CurrentCount}");
+
+            /*// Добавляем timeout для семафора
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try
+            {
+                await _sessionSemaphore.WaitAsync(cts.Token);
+                Log($"Семафор захвачен для сессии {session.SessionId}. Текущий счётчик: {_sessionSemaphore.CurrentCount}");
+            }
+            catch (OperationCanceledException)
+            {
+                Log($"Таймаут при ожидании семафора для сессии {session.SessionId}! Возможен дедлок");
+                await SendTemporaryEphemeralResponse(component, "Ошибка: система занята. Попробуйте позже.");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Log($"Критическая ошибка при захвате семафора: {ex.Message}");
+                await SendTemporaryEphemeralResponse(component, "Критическая ошибка системы.");
+                return;
+            }*/
+
+            try
+            {
+                // Убедитесь, что сессия существует
+                if (session == null)
+                {
+                    await SendTemporaryEphemeralResponse(component, "Сессия не найдена.");
+                    return;
+                }
+
+                Log($"Начало обработки остановки сессии {session.SessionId}...");
+
+                if (session.IsPaused)
+                {
+                    Log($"Снятие паузы для сессии {session.SessionId}...");
+                    session.PauseReminderCTS?.Cancel();
+                    var lastPause = session.PausePeriods.Last();
+                    session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                    session.IsPaused = false;
+                }
+
+                session.EndTime = DateTime.Now;
+                Log($"Время окончания установлено: {session.EndTime}");
+
+                try
+                {
+                    await component.Message.DeleteAsync();
+                    Log($"Сообщение управления удалено");
+                }
+                catch (Exception ex)
+                {
+                    Log($"Ошибка удаления сообщения: {ex.Message}");
+                }
+
+                await SendSessionStats(session, component.Channel);
+
+                /*if (session.Rolls.Count == 0)
+                {
+                    Log($"Сессия без бросков - удаление");
+                    RemoveSession(session);
+                }
+                else
+                {
+                    Log($"Сессия содержит броски - отложенное удаление");
+                }*/
+
+                if (session.EventId.HasValue)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var guild = _client.GetGuild(session.GuildId);
+                            var guildEvent = await guild.GetEventAsync(session.EventId.Value);
+                            if (guildEvent?.Status == GuildScheduledEventStatus.Active)
+                            {
+                                await guildEvent.DeleteAsync();
+                                Log($"Связанное событие {session.EventId} завершено");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Ошибка завершения события: {ex.Message}");
+                        }
+                    });
+                }
+            }
+            finally
+            {
+                //_sessionSemaphore.Release();
+                //Log($"Семафор освобожден. Текущий счётчик: {_sessionSemaphore.CurrentCount}");
+            }
+        }
+
+        private async Task HandleCancelStop(SocketMessageComponent component, GameSession session)
+        {
+            Log($"Пользователь {component.User.Id} отменил остановку сессии {session.SessionId}");
+
+            try
+            {
+                await UpdateControlMessage(session, component.Channel);
+                Log($"Сообщение управления сессии {session.SessionId} успешно восстановлено");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при восстановлении сообщения управления: {ex.Message}");
+            }
+
+            await SendTemporaryEphemeralResponse(component, "Отмена завершения игры.");
+        }
+
+        private async Task HandleToggleRolls(SocketMessageComponent component, GameSession session)
+        {
+            session.TrackRolls = !session.TrackRolls;
+            await UpdateControlMessage(session, component.Channel);
+            await SendTemporaryEphemeralResponse(component, $"Сбор статистики бросков {(session.TrackRolls ? "включен" : "выключен")}.");
+        }
+
+        public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client)
+        {
+            var commands = new GameSessionCommands(client);
+            commands.Log($"Событие {guildEvent.Id} завершено - обработка связанной сессии...");
+
+            try
+            {
+                var guildId = guildEvent.Guild.Id;
+
+                await _sessionSemaphore.WaitAsync();
+                try
+                {
+                    commands.Log($"Поиск сессий для гильдии {guildId} и события {guildEvent.Id}...");
+
+                    if (_sessions.TryGetValue(guildId, out var guildSessions))
+                    {
+                        var session = guildSessions.Values.FirstOrDefault(s => s.EventId == guildEvent.Id);
+                        if (session != null)
+                        {
+                            commands.Log($"Найдена сессия {session.SessionId} для завершения");
+
+                            if (session.IsPaused)
+                            {
+                                commands.Log($"Снятие паузы для сессии {session.SessionId}...");
+                                session.PauseReminderCTS?.Cancel();
+                                var lastPause = session.PausePeriods.Last();
+                                session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                                session.IsPaused = false;
+                            }
+
+                            session.EndTime = DateTime.Now;
+                            commands.Log($"Установлено время окончания для сессии {session.SessionId}");
+
+                            if (session.ControlMessageId != 0)
+                            {
+                                try
+                                {
+                                    var channelId = Program.ServerConfigs.TryGetValue(guildId, out var config)
+                                        ? config.RecordChannelID
+                                        : 0;
+
+                                    if (channelId != 0 && client.GetChannel(channelId) is ITextChannel controlChannel)
+                                    {
+                                        await controlChannel.DeleteMessageAsync(session.ControlMessageId);
+                                        commands.Log($"Сообщение управления {session.ControlMessageId} удалено");
+                                    }
+                                    else
+                                    {
+                                        commands.Log($"Не удалось найти канал для удаления сообщения управления");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    commands.Log($"Ошибка при удалении сообщения управления: {ex.Message}");
+                                }
+                            }
+
+                            var channel = client.GetChannel(Program.ServerConfigs[guildId].RecordChannelID) as SocketTextChannel;
+                            if (channel != null)
+                            {
+                                commands.Log($"Отправка статистики для сессии {session.SessionId}...");
+                                await commands.SendSessionStats(session, channel);
+                            }
+                            else
+                            {
+                                commands.Log($"Канал для статистики не найден");
+                            }
+                        }
+                        else
+                        {
+                            commands.Log($"Активная сессия для события {guildEvent.Id} не найдена");
+                        }
+                    }
+                    else
+                    {
+                        commands.Log($"Активные сессии для гильдии {guildId} не найдены");
+                    }
+                }
+                finally
+                {
+                    _sessionSemaphore.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                commands.Log($"Критическая ошибка при обработке завершения события: {ex}");
             }
         }
 
@@ -2189,7 +2826,22 @@ namespace DiscordBot
             message.AppendLine($"- **Начало:** {session.StartTime:dd.MM.yyyy HH:mm}");
             message.AppendLine($"- **Конец:** {session.EndTime:dd.MM.yyyy HH:mm}");
             message.AppendLine($"- **Общее время:** {FormatTimeSpan(totalDuration)}");
-            message.AppendLine($"- **Активное время:** {FormatTimeSpan(TimeSpan.FromSeconds(activeDuration))}");
+            if (session.PausePeriods.Any())
+            {
+                message.AppendLine($"- **Активное время:** {FormatTimeSpan(TimeSpan.FromSeconds(activeDuration))}");
+
+                var totalPauseDuration = TimeSpan.FromSeconds(pauseDuration);
+                var pauseCount = session.PausePeriods.Count(p => p.End.HasValue);
+
+                if (pauseCount == 1)
+                {
+                    message.AppendLine($"- **Продолжительность перерыва:** {FormatTimeSpan(totalPauseDuration)}");
+                }
+                else if (pauseCount > 1)
+                {
+                    message.AppendLine($"- **Продолжительность перерывов:** {FormatTimeSpan(totalPauseDuration)}");
+                }
+            }
 
             if (!string.IsNullOrEmpty(session.EventDescription))
                 message.AppendLine($"- **Описание события:** {session.EventDescription}");
@@ -2211,120 +2863,244 @@ namespace DiscordBot
         {
             var hours = (int)timeSpan.TotalHours;
             var minutes = timeSpan.Minutes;
-            var seconds = timeSpan.Seconds;
+            //var seconds = timeSpan.Seconds;
 
-            var hoursText = hours > 0 ? $"{hours} {hours switch { 1 => "час", >= 2 and <= 4 => "часа", _ => "часов" }}" : "";
-            var minutesText = minutes > 0 ? $"{minutes} {minutes switch { 1 => "минута", >= 2 and <= 4 => "минуты", _ => "минут" }}" : "";
-            var secondsText = seconds > 0 ? $"{seconds} {seconds switch { 1 => "секунда", >= 2 and <= 4 => "секунды", _ => "секунд" }}" : "";
+            var hoursText = hours > 0 ? $"{hours} час{(hours == 1 ? "" : hours < 5 ? "а" : "ов")}" : "";
+            var minutesText = minutes > 0 ? $"{minutes} минут{(minutes == 1 ? "а" : minutes < 5 ? "ы" : "")}" : "";
+            //var secondsText = seconds > 0 ? $"{seconds} секунд{(seconds == 1 ? "а" : seconds < 5 ? "ы" : "")}" : "";
 
-            return string.Join(" ", new[] { hoursText, minutesText, secondsText }.Where(s => !string.IsNullOrEmpty(s)));
+            if (string.IsNullOrEmpty(hoursText) && string.IsNullOrEmpty(minutesText))
+                return "0 минут";
+            
+            return string.Join(" ", new[] { hoursText, minutesText }.Where(s => !string.IsNullOrEmpty(s)));
+            //return string.Join(" ", new[] { hoursText, minutesText, secondsText }.Where(s => !string.IsNullOrEmpty(s)));
         }
 
-        private async Task SendSessionResults(SocketSlashCommand command, GameSession session)
+        private async Task SendSessionStats(GameSession session, ISocketMessageChannel channel)
         {
-            var statsMessage = BuildSessionStats(session);
+            Log($"Формирование статистики для сессии {session.SessionId}...");
 
-            await command.FollowupAsync("Игра остановлена. Статистика отправлена в личные сообщения админу.", ephemeral: true);
-            _ = Task.Run(async () =>
+            try
             {
-                await Task.Delay(5000);
-                await command.DeleteOriginalResponseAsync();
-            });
+                var statsMessage = BuildSessionStats(session);
+                await channel.SendMessageAsync(statsMessage);
+                Log($"Статистика по времени для сессии {session.SessionId} отправлена");
 
-            var targetUser = _client.GetUser(263758178091532288);
-            if (targetUser == null)
-            {
-                await command.Channel.SendMessageAsync("Пользователь *Админ* не найден.");
+                if (session.Rolls.Count > 0)
+                {
+                    Log($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
+
+                    if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config))
+                    {
+                        Log($"Конфигурация сервера {session.GuildId} найдена");
+
+                        if (_client.GetChannel(config.StatsChannelID) is ITextChannel statsChannel)
+                        {
+                            var buttons = new ComponentBuilder()
+                                .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
+                                .WithButton("Общая", "general_stats", ButtonStyle.Primary)
+                                .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
+                                .Build();
+
+                            var buttonsMsg = await statsChannel.SendMessageAsync(
+                                $"Статистика для игры `{session.GameName}`. Какую вывести?",
+                                components: buttons);
+
+                            session.StatsMessageId = buttonsMsg.Id;
+                            Log($"Кнопки статистики отправлены в канал {statsChannel.Id}, ID сообщения: {buttonsMsg.Id}");
+                        }
+                        else
+                        {
+                            Log($"Канал статистики {config.StatsChannelID} не найден");
+                        }
+                    }
+                    else
+                    {
+                        Log($"Конфигурация сервера {session.GuildId} не найдена");
+                    }
+                }
+                else
+                {
+                    Log($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
+                    RemoveSession(session);
+                }
             }
-            else
+            catch (Exception ex)
             {
+                Log($"Ошибка при отправке статистики: {ex.Message}");
+            }
+        }
+
+        private void RemoveSession(GameSession session)
+        {
+            try
+            {
+                // Отменяем все pending операции
+                session.PauseReminderCTS?.Cancel();
+                session.PauseReminderCTS?.Dispose();
+
+                if (_sessions.TryGetValue(session.GuildId, out var guildSessions))
+                {
+                    if (guildSessions.TryRemove(session.SessionId, out _))
+                    {
+                        Log($"Сессия {session.SessionId} успешно удалена из словаря");
+                    }
+                    else
+                    {
+                        Log($"Не удалось удалить сессию {session.SessionId} из словаря");
+                    }
+
+                    if (guildSessions.IsEmpty)
+                    {
+                        if (_sessions.TryRemove(session.GuildId, out _))
+                        {
+                            Log($"Словарь сессий для гильдии {session.GuildId} удален (пуст)");
+                        }
+                    }
+                }
+                else
+                {
+                    Log($"Не найден словарь сессий для гильдии {session.GuildId} при удалении");
+                }
+
                 try
                 {
-                    var dmChannel = await targetUser.CreateDMChannelAsync();
-                    await dmChannel.SendMessageAsync(statsMessage.ToString());
+                    var guild = _client.GetGuild(session.GuildId);
+                    if (guild == null) return;
+
+                    var channelId = Program.ServerConfigs[session.GuildId].RecordChannelID;
+                    var channel = guild.GetTextChannel(channelId);
+                    if (channel == null) return;
+
+                    // Удаляем последнее напоминание о паузе
+                    if (session.PauseReminderMessageId.HasValue)
+                    {
+                        try
+                        {
+                            channel.DeleteMessageAsync(session.PauseReminderMessageId.Value);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Ошибка при удалении сообщения напоминания о паузе: {ex.Message}");
+                        }
+                    }
+
+                    // Удаляем сообщение подтверждения остановки
+                    if (session.ConfirmationMessageId.HasValue)
+                    {
+                        try
+                        {
+                            channel.DeleteMessageAsync(session.ConfirmationMessageId.Value);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Ошибка при удалении сообщения подтверждения остановки: {ex.Message}");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    await command.Channel.SendMessageAsync($"Ошибка: Не удалось отправить результаты пользователю {targetUser.Mention}. Убедитесь, что у него открыты личные сообщения для бота.");
-                    Console.WriteLine($"Ошибка отправки статистики: {ex.Message}");
+                    Log($"Ошибка при очистке сообщений сессии: {ex.Message}");
                 }
-            }                
-
-            // Отправляем статистику в игровой канал
-            var statsMsg = await command.Channel.SendMessageAsync(statsMessage);
-
-            // Проверяем, были ли броски
-            if (session.Rolls.Count == 0)
+            }
+            catch (Exception ex)
             {
-                var noRollsMessage = await command.FollowupAsync(
-                    "Не совершено ни одного броска. Сессия будет удалена через 10 секунд.",
-                    ephemeral: true);
+                Log($"Ошибка при очистке ресурсов сессии: {ex.Message}");
+            }
+        }
 
-                // Удаляем сообщение и сессию через 10 секунд
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(10000);
-                    await noRollsMessage.DeleteAsync();
-
-                    await _sessionSemaphore.WaitAsync();
-                    try
-                    {
-                        _sessions.TryRemove(session.GuildId, out _);
-                    }
-                    finally
-                    {
-                        _sessionSemaphore.Release();
-                    }
-                });
-
+        public async Task HandleStatsButton(SocketMessageComponent component)
+        {
+            var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
+            if (guildId == null)
+            {
+                Log("Не удалось получить ID гильдии при обработке кнопки статистики");
                 return;
             }
 
-            // Отправляем кнопки в statsChannel
-            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) &&
-                _client.GetChannel(config.StatsChannelId) is ITextChannel statsChannel)
+            await _sessionSemaphore.WaitAsync();
+            try
             {
-                var buttons = new ComponentBuilder()
-                    .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
-                    .WithButton("Общая", "general_stats", ButtonStyle.Primary)
-                    .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
-                    .Build();
+                Log($"Обработка кнопки статистики для гильдии {guildId}");
 
-                var buttonsMsg = await statsChannel.SendMessageAsync(
-                    $"Статистика для игры `{session.GameName}`. Какую вывести?",
-                    components: buttons);
+                if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
+                {
+                    Log($"Активные сессии для гильдии {guildId} не найдены");
+                    await component.RespondAsync("Активные сессии не найдены.", ephemeral: true);
+                    return;
+                }
 
-                session.StatsMessageId = buttonsMsg.Id;
+                var session = guildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
+                if (session == null)
+                {
+                    Log($"Сессия для сообщения статистики {component.Message.Id} не найдена");
+                    await component.RespondAsync("Сессия не найдена.", ephemeral: true);
+                    return;
+                }
+
+                Log($"Найдена сессия {session.SessionId} для обработки статистики");
+
+                switch (component.Data.CustomId)
+                {
+                    case "no_stats":
+                        await component.Message.DeleteAsync();
+                        RemoveSession(session);
+                        Log($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
+                        break;
+
+                    case "general_stats":
+                        await ShowGeneralStats(component, session);
+                        RemoveSession(session);
+                        Log($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
+                        break;
+
+                    case "detailed_stats":
+                        await ShowDetailedStats(component, session);
+                        RemoveSession(session);
+                        Log($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
+                        break;
+                }
+            }
+            finally
+            {
+                _sessionSemaphore.Release();
             }
         }
 
         private async Task ShowGeneralStats(SocketMessageComponent component, GameSession session)
         {
+            Log($"Формирование общей статистики для сессии {session.SessionId}");
+
             var rolls = session.Rolls
                 .GroupBy(r => r.RollValue)
                 .Select(g => new { Value = g.Key, Count = g.Count() })
                 .OrderBy(g => g.Value);
+
+            var averageValue = session.Rolls.Any() ? session.Rolls.Average(r => r.RollValue) : 0;
 
             var message = new StringBuilder("**Общая статистика бросков:**\n");
             foreach (var roll in rolls)
             {
                 message.AppendLine($"- {roll.Value}: {roll.Count} раз");
             }
+            message.AppendLine($"**Среднее значение:** {averageValue:F2}"); // Форматируем до 2 знаков после запятой
 
-            _sessions.TryRemove(session.GuildId, out _);
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
         }
 
         private async Task ShowDetailedStats(SocketMessageComponent component, GameSession session)
         {
+            Log($"Формирование детальной статистики для сессии {session.SessionId}");
+
             var players = session.Rolls
                 .GroupBy(r => r.PlayerName)
                 .Select(g => new {
                     Player = g.Key,
                     Rolls = g.GroupBy(r => r.RollValue)
                         .Select(r => new { Value = r.Key, Count = r.Count() })
-                        .ToList()
+                        .ToList(),
+                    Average = g.Average(r => r.RollValue)
                 });
 
             var message = new StringBuilder("**Подробная статистика бросков:**\n");
@@ -2335,11 +3111,21 @@ namespace DiscordBot
                 {
                     message.AppendLine($"- {roll.Value}: {roll.Count} раз");
                 }
+                message.AppendLine($"**Среднее значение:** {player.Average:F2}");
             }
 
-            _sessions.TryRemove(session.GuildId, out _);
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
+        }
+
+        private async Task SendTemporaryEphemeralResponse(SocketInteraction interaction, string message)
+        {
+            var response = await interaction.FollowupAsync(message, ephemeral: true);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(10000);
+                try { await response.DeleteAsync(); } catch { }
+            });
         }
     }
 
