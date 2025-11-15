@@ -31,7 +31,14 @@ namespace DiscordBot
         public ulong DefaultRoleID { get; set; }
     }
 
-    class Program : IDisposable
+    public interface IBotController
+    {
+        bool ShouldExit { get; }
+        Task RestartAsync();
+        Task StopAsync();
+    }
+
+    class Program : IDisposable, IBotController
     {
         private DiscordSocketClient _client;
         private CommandService _commandService;
@@ -43,6 +50,24 @@ namespace DiscordBot
         private bool _shouldExit = false;
         private bool _isReconnecting = false;
         private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);
+        private ConsoleCommandHandler _consoleHandler;
+        public bool ShouldExit => _shouldExit;
+        public async Task RestartAsync()
+        {
+            await LogStartup("Перезапуск из консоли...");
+            _shouldExit = true;
+            await _client.StopAsync();
+            // Перезапуск будет обработан внешним скриптом
+            Environment.Exit(0);
+        }
+
+        public async Task StopAsync()
+        {
+            await LogStartup("Остановка из консоли...");
+            _shouldExit = true;
+            await _client.StopAsync();
+            Environment.Exit(0);
+        }
 
         static async Task Main(string[] args)
         {
@@ -64,6 +89,8 @@ namespace DiscordBot
                 .AddSingleton<GameSessionCommands>()
                 .AddSingleton<ModerationCommands>()
                 .BuildServiceProvider();
+
+            _consoleHandler = new ConsoleCommandHandler(_client, this);
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -85,8 +112,18 @@ namespace DiscordBot
             return new DiscordSocketClient(config);
         }
 
+        private void ShowConsoleWelcome()
+        {
+            Console.WriteLine("=========================================");
+            Console.WriteLine("    Discord Bot Console Interface");
+            Console.WriteLine("=========================================");
+            Console.WriteLine("Бот запущен. Введите 'help' для списка команд");
+            Console.WriteLine("=========================================");
+        }
+
         public async Task RunBotAsync()
         {
+            ShowConsoleWelcome();
             _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt"); // Сохраняем текстовые блоки в поле класса
 
             while (!_isDisposed && !_shouldExit)
@@ -94,7 +131,7 @@ namespace DiscordBot
                 await _restartLock.WaitAsync();
                 try
                 {
-                    await LogStartup("Инициализация бота... Версия 0.5.3.4.9 (тест скрипта 3)");
+                    await LogStartup("Инициализация бота... Версия 0.5.3.6.0");
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
@@ -103,6 +140,7 @@ namespace DiscordBot
                     }
 
                     _commandHandler = new CommandHandler(_client);
+                    _consoleHandler = new ConsoleCommandHandler(_client, this);
 
                     var readyTcs = new TaskCompletionSource<bool>();
                     _client.Ready += OnReady;
@@ -121,6 +159,9 @@ namespace DiscordBot
                         await _client.LoginAsync(TokenType.Bot, GetBotToken());
                         await _client.StartAsync();
                         await LogStartup("Вход выполнен успешно.");
+
+                        // Запускаем обработчик консольных команд после успешного подключения
+                        await _consoleHandler.StartListening();
 
                         await readyTcs.Task;
                         await LogStartup("Бот успешно запущен");
@@ -3453,6 +3494,7 @@ namespace DiscordBot
                 return $"{count} сообщений удалено.";
         }
     }
+
 }
 
 /*
