@@ -14,28 +14,160 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly IBotController _botController;
+        private readonly ReconnectionService _reconnectionService;
+        private readonly ConnectionPredictor _connectionPredictor;
+        private readonly StatusNotifier _statusNotifier;
 
+        private bool _isListening = false;
+        private bool _consoleInputEnabled = false;
+        private bool _commandsEnabled = false;
+        private bool _specialInputActive = false;
+        private readonly object _lock = new object();
 
-        public ConsoleCommandHandler(DiscordSocketClient client, IBotController botController)
+        private readonly ManualResetEventSlim _inputAvailableEvent = new ManualResetEventSlim(false);
+        private Thread _inputThread;
+        private string _pendingInput = null;
+
+        public event Action<string> OnSpecialInput;
+
+        public ConsoleCommandHandler(
+            DiscordSocketClient client,
+            IBotController botController,
+            ReconnectionService reconnectionService,
+            ConnectionPredictor connectionPredictor,
+            StatusNotifier statusNotifier)
         {
             _client = client;
             _botController = botController;
+            _reconnectionService = reconnectionService;
+            _connectionPredictor = connectionPredictor;
+            _statusNotifier = statusNotifier;
+        }
+        
+        public void EnableCommands()
+        {
+            lock (_lock)
+            {
+                _commandsEnabled = true;
+                _consoleInputEnabled = true;
+                _specialInputActive = false;
+            }
+            _inputAvailableEvent.Set();
+            Console.WriteLine("[CONSOLE] Команды консоли активированы");
+        }
+
+        public void EnableSpecialInput()
+        {
+            lock (_lock)
+            {
+                _consoleInputEnabled = true;
+                _commandsEnabled = false;
+                _specialInputActive = true;
+            }
+            _inputAvailableEvent.Set();
+            Console.WriteLine("Специальный режим ввода активирован");
+        }
+
+        public void DisableInput()
+        {
+            lock (_lock)
+            {
+                _consoleInputEnabled = false;
+                _commandsEnabled = false;
+                _specialInputActive = false;
+            }
+            _inputAvailableEvent.Reset();
+            Console.WriteLine("Ввод заблокирован");
         }
 
         public async Task StartListening()
         {
-            _ = Task.Run(async () =>
+            if (_isListening) return;
+            _isListening = true;
+
+            Console.WriteLine("[CONSOLE] Ожидание полной инициализации бота...");
+            Console.WriteLine("[CONSOLE] Команды будут доступны после статуса 'ВСЕ СИСТЕМЫ АКТИВНЫ'");
+
+            _inputThread = new Thread(ProcessInputLoop)
             {
-                while (true)
+                IsBackground = true,
+                Name = "ConsoleInputThread"
+            };
+            _inputThread.Start();
+
+            await Task.CompletedTask;
+        }
+
+        /*var command = input.ToLower().Trim();
+        Task.Run(async () => await ProcessCommand(command));*/
+        private bool _waitingForInput = false;
+
+        private void ProcessInputLoop()
+        {
+            while (!_botController.ShouldExit)
+            {
+                try
                 {
-                    var input = Console.ReadLine();
-                    if (!string.IsNullOrWhiteSpace(input))
+                    _inputAvailableEvent.Wait(100);
+
+                    bool commandsEnabled;
+                    bool specialActive;
+                    bool inputEnabled;
+
+                    lock (_lock)
                     {
-                        await ProcessCommand(input.Trim());
+                        inputEnabled = _consoleInputEnabled;
+                        commandsEnabled = _commandsEnabled;
+                        specialActive = _specialInputActive;
                     }
-                    await Task.Delay(100);
+
+                    if (!inputEnabled)
+                    {
+                        _waitingForInput = false;
+                        Thread.Sleep(100);
+                        continue;
+                    }
+
+                    // Если не ждем ввод и есть команды, показываем приглашение
+                    if (!_waitingForInput && commandsEnabled && !specialActive)
+                    {
+                        Console.Write("> ");
+                        _waitingForInput = true;
+                    }
+
+                    if (!Console.KeyAvailable)
+                    {
+                        Thread.Sleep(50);
+                        continue;
+                    }
+
+                    string input = Console.ReadLine();
+
+                    // Сбрасываем флаг, ждем следующего приглашения
+                    _waitingForInput = false;
+
+                    if (string.IsNullOrEmpty(input))
+                    {
+                        continue;  // Enter просто переводит строку
+                    }
+
+                    if (specialActive)
+                    {
+                        OnSpecialInput?.Invoke(input);
+                    }
+                    else if (commandsEnabled)
+                    {
+                        // Обычная команда
+                        var command = input.ToLower().Trim();
+                        Task.Run(async () => await ProcessCommand(command));
+                    }
                 }
-            });
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка: {ex.Message}");
+                    Thread.Sleep(1000);
+                }
+            }
         }
 
         private async Task ProcessCommand(string command)
@@ -50,11 +182,65 @@ namespace RPBot
 
                 switch (cmd)
                 {
+                    case "exit":
+                    case "stop":
+                        Console.WriteLine("[CONSOLE] Остановка бота...");
+                        await _botController.StopAsync();
+                        break;
+
+                    case "restart":
+                    case "reboot":
+                        Console.WriteLine("[CONSOLE] Перезапуск бота...");
+                        await _botController.RestartAsync();
+                        break;
+
+                    case "status":
+                        ShowDetailedStatus();
+                        break;
+
+                    case "announce":
+                    case "systems":
+                        Console.WriteLine("[CONSOLE] Отправка статуса в Discord...");
+                        await _statusNotifier.SendAllSystemsActive("📢 Ручная проверка систем");
+                        Console.WriteLine("[CONSOLE] Статус отправлен!");
+                        break;
+
+                    case "test":
+                        Console.WriteLine("[CONSOLE] Тестовое сообщение...");
+                        await _statusNotifier.SendAllSystemsActive("🧪 Тестовое уведомление");
+                        break;
+
+                    case "reconnect":
+                    case "force reconnect":
+                        Console.WriteLine("[CONSOLE] Принудительный реконнект...");
+                        await _reconnectionService.HandleDisconnect(new Exception("Manual reconnect"));
+                        break;
+
+                    case "predict":
+                    case "forecast":
+                        var prediction = await _connectionPredictor.AnalyzeAndPredict();
+                        if (prediction != null)
+                        {
+                            Console.WriteLine($"[ПРОГНОЗ] {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss} (уверенность: {prediction.Confidence}%)");
+                        }
+                        else
+                        {
+                            Console.WriteLine("[ПРОГНОЗ] Прогнозов нет, соединение стабильно");
+                        }
+                        break;
+
+                    case "stats":
+                    case "history":
+                        ShowConnectionStats();
+                        break;
+
+                    case "clear":
+                        Console.Clear();
+                        ShowWelcome();
+                        break;
+
                     case "help":
                         ShowHelp();
-                        break;
-                    case "status":
-                        await ShowStatus();
                         break;
                     case "servers":
                         await ListServers();
@@ -65,12 +251,6 @@ namespace RPBot
                     case "send":
                         await SendMessage(args);
                         break;
-                    case "restart":
-                        await RestartBot();
-                        break;
-                    case "stop":
-                        await StopBot();
-                        break;
                     case "sessions":
                         await ListSessions();
                         break;
@@ -78,7 +258,13 @@ namespace RPBot
                         await BroadcastMessage(args);
                         break;
                     default:
-                        Console.WriteLine($"Неизвестная команда: {cmd}. Введите 'help' для списка команд.");
+                        lock (_lock)
+                        {
+                            if (_commandsEnabled)
+                            {
+                                Console.WriteLine($"Неизвестная команда: {cmd}. Введите 'help' для списка команд.");
+                            }
+                        }
                         break;
                 }
             }
@@ -91,28 +277,87 @@ namespace RPBot
         private void ShowHelp()
         {
             Console.WriteLine("=== Доступные команды ===");
-            Console.WriteLine("help - Показать эту справку");
-            Console.WriteLine("status - Статус бота");
-            Console.WriteLine("servers - Список серверов");
-            Console.WriteLine("channels [server_id] - Список каналов на сервере");
-            Console.WriteLine("send [channel_id] [message] - Отправить сообщение в канал");
-            Console.WriteLine("broadcast [server_id] [message] - Отправить сообщение во все каналы сервера");
-            Console.WriteLine("sessions - Список активных игровых сессий");
-            Console.WriteLine("restart - Перезапустить бота");
-            Console.WriteLine("stop - Остановить бота");
+            Console.WriteLine("  help                            - Показать эту справку");
+            Console.WriteLine("  status                          - Статус бота");
+            Console.WriteLine("  servers                         - Список серверов");
+            Console.WriteLine("  announce                        - Ручная проверка систем");
+            Console.WriteLine("  channels [server_id]            - Список каналов на сервере");
+            Console.WriteLine("  send [channel_id] [message]     - Отправить сообщение в канал");
+            Console.WriteLine("  broadcast [server_id] [message] - Отправить сообщение во все каналы сервера");
+            Console.WriteLine("  sessions                        - Список активных игровых сессий");
+            Console.WriteLine("  stats                           - История отключений");
+            Console.WriteLine("  predict                         - Сделать прогноз");
+            Console.WriteLine("  reconnect                       - Принудительный реконнект");
+            Console.WriteLine("  restart                         - Перезапуск бота");
+            Console.WriteLine("  stop/exit                       - Остановка бота");
+            Console.WriteLine("  clear                           - Очистить консоль");
             Console.WriteLine("=========================");
         }
 
-        private async Task ShowStatus()
+        private void ShowDetailedStatus()
         {
-            Console.WriteLine($"=== Статус бота ===");
+            Console.WriteLine("\n========== СТАТУС БОТА ==========");
             Console.WriteLine($"Состояние: {_client.ConnectionState}");
-            Console.WriteLine($"Логин: {_client.CurrentUser?.Username}");
-            Console.WriteLine($"ID: {_client.CurrentUser?.Id}");
+            Console.WriteLine($"Пользователь: {_client.CurrentUser?.Username ?? "N/A"}");
             Console.WriteLine($"Серверов: {_client.Guilds.Count}");
-            Console.WriteLine($"Пинг: {_client.Latency}ms");
-            Console.WriteLine($"Uptime: {DateTime.Now - Process.GetCurrentProcess().StartTime:hh\\:mm\\:ss}");
-            Console.WriteLine($"===================");
+            Console.WriteLine($"Задержка: {_client.Latency} мс");
+
+            var info = _reconnectionService.ConnectionInfo;
+            Console.WriteLine($"\nСТАТИСТИКА ПОДКЛЮЧЕНИЙ:");
+            Console.WriteLine($"  Успешных реконнектов: {info.SuccessfulReconnects}");
+            Console.WriteLine($"  Неудачных попыток: {info.FailedReconnects}");
+            Console.WriteLine($"  Стабильность: {info.ConnectionStabilityScore:F1}%");
+            Console.WriteLine($"  Здоровье: {_connectionPredictor.GetConnectionHealthStatus()}");
+
+            Console.WriteLine($"\nПОСЛЕДНЕЕ ОТКЛЮЧЕНИЕ:");
+            Console.WriteLine($"  Время: {info.LastDisconnectTime:HH:mm:ss}");
+            Console.WriteLine($"  Причина: {info.LastDisconnectReason}");
+
+            if (info.DisconnectStats.Count > 0)
+            {
+                Console.WriteLine($"\nСТАТИСТИКА ОШИБОК:");
+                foreach (var stat in info.DisconnectStats.OrderByDescending(kv => kv.Value).Take(5))
+                {
+                    Console.WriteLine($"  {stat.Key}: {stat.Value} раз");
+                }
+            }
+
+            if (info.PredictedDisconnectTime.HasValue)
+            {
+                Console.WriteLine($"\nПРОГНОЗ:");
+                Console.WriteLine($"  Возможное отключение: {info.PredictedDisconnectTime:HH:mm:ss}");
+                Console.WriteLine($"  Причина: {info.PredictedReason}");
+            }
+
+            Console.WriteLine("======================================\n");
+        }
+
+        private void ShowConnectionStats()
+        {
+            var info = _reconnectionService.ConnectionInfo;
+
+            Console.WriteLine("\n========== ИСТОРИЯ ==========");
+            Console.WriteLine("ПОСЛЕДНИЕ 10 ОТКЛЮЧЕНИЙ:");
+
+            if (info.RecentDisconnectReasons.Count == 0)
+            {
+                Console.WriteLine("  Нет записей");
+            }
+            else
+            {
+                foreach (var reason in info.RecentDisconnectReasons)
+                {
+                    Console.WriteLine($"  • {reason}");
+                }
+            }
+            Console.WriteLine("================================\n");
+        }
+
+        private void ShowWelcome()
+        {
+            Console.WriteLine("================================================");
+            Console.WriteLine("    Discord Bot - Продвинутая система");
+            Console.WriteLine("================================================");
         }
 
         private async Task ListServers()
