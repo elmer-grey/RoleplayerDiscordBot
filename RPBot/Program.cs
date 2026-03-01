@@ -15,7 +15,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-namespace DiscordBot
+namespace RPBot
 {
     public class ServerConfig
     {
@@ -58,19 +58,72 @@ namespace DiscordBot
         private bool _shouldExit = false;
         private bool _shouldRestart = false;
 
-        /*private bool _isReconnecting = false;
-        private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);*/
-
         private ReconnectionService _reconnectionService;
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
-        private ConsoleCommandHandler _consoleHandler;
 
-        public enum StartupType
+        private BotConfig _config;
+        private Dictionary<ulong, ServerConfig> _serverConfigs = new();
+
+        public Program()
         {
-            FirstStart,
-            Restart,
-            Reconnect
+            _config = BotConfig.Load("config.json");
+
+            _client = CreateDiscordClient();
+            _commandService = new CommandService();
+
+            // ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
+            _reconnectionService = new ReconnectionService(_client);
+            _connectionPredictor = new ConnectionPredictor(_reconnectionService);
+            _statusNotifier = new StatusNotifier(_client, ServerConfigs);
+
+            // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
+            _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
+            _reconnectionService.OnReconnectStarted += OnReconnectStarted;
+            _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
+            _connectionPredictor.OnPredictionMade += OnPredictionMade;
+
+            _services = new ServiceCollection()
+                .AddSingleton(_client)
+                .AddSingleton(_commandService)
+                .AddSingleton(_reconnectionService)
+                .AddSingleton(_connectionPredictor)
+                .AddSingleton(_statusNotifier)
+                .AddSingleton<QueueModule>()
+                .AddSingleton<InfoCommands>()
+                .AddSingleton<RollDiceCommands>()
+                .AddSingleton<GameSessionCommands>()
+                .AddSingleton<ModerationCommands>()
+                .BuildServiceProvider();
+        }
+
+        private DiscordSocketClient CreateDiscordClient()
+        {
+            var config = new DiscordSocketConfig
+            {
+                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
+                               GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
+                               GatewayIntents.GuildScheduledEvents,
+                ConnectionTimeout = _config.Connection.ConnectionTimeout,
+                MessageCacheSize = _config.Connection.MessageCacheSize,
+                LogLevel = LogSeverity.Info,
+                AlwaysDownloadUsers = _config.Connection.AlwaysDownloadUsers,
+                HandlerTimeout = _config.Connection.HandlerTimeout,
+                TotalShards = 1,
+                LargeThreshold = _config.Connection.LargeThreshold,
+                UseSystemClock = false,
+                DefaultRetryMode = _config.Connection.DefaultRetryMode
+                //ConnectionTimeout = 30000,
+                //MessageCacheSize = 50,
+                //LogLevel = LogSeverity.Info,
+                //AlwaysDownloadUsers = true,
+                //HandlerTimeout = 15000,
+                //TotalShards = 1,
+                //LargeThreshold = 250,
+                //UseSystemClock = false,
+                //DefaultRetryMode = RetryMode.AlwaysRetry
+            };
+            return new DiscordSocketClient(config);
         }
 
         private StartupType _currentStartupType = StartupType.FirstStart;
@@ -81,23 +134,27 @@ namespace DiscordBot
 
         public async Task RestartAsync()
         {
-            Console.Clear(); // Очищаем консоль
-            Console.WriteLine(" ПЕРЕЗАПУСК БОТА");
-            Console.WriteLine($"Команда введена: {DateTime.Now:HH:mm:ss}");
-            Console.WriteLine("================================================");
-            Console.WriteLine();
+            // Убираем дублирование - оставляем только одно сообщение
+            if (_ui != null && _uiStarted)
+            {
+                _ui.AddLog("Перезапуск из консоли...");
+                _ui.ClearForRestart();
+                _ui.Dispose();
+                _ui = null;
+                _uiStarted = false;
+            }
 
-            await LogStartup(" Перезапуск из консоли...");
             _shouldRestart = true;
             _shouldExit = true;
-            _currentStartupType = StartupType.Restart; // Устанавливаем тип перезапуска
+            _currentStartupType = StartupType.Restart;
+            _statusNotifier?.SetStartupType(StartupType.Restart);
             _reconnectionService?.Shutdown();
             await _client.StopAsync();
         }
 
         public async Task StopAsync()
         {
-            await LogStartup("⏹️ Остановка из консоли...");
+            await LogStartup("Остановка из консоли...");
             _shouldExit = true;
             _reconnectionService?.Shutdown();
             await _client.StopAsync();
@@ -107,9 +164,9 @@ namespace DiscordBot
         public void SetStartupType(StartupType type)
         {
             _currentStartupType = type;
+            _statusNotifier?.SetStartupType(type);
         }
 
-        // Main с поддержкой перезапуска
         static async Task Main(string[] args)
         {
             bool restart;
@@ -132,7 +189,6 @@ namespace DiscordBot
                 {
                     if (restartCount > 0)
                     {
-                        // Устанавливаем тип запуска через свойство
                         program.SetStartupType(StartupType.Restart);
                     }
 
@@ -143,7 +199,7 @@ namespace DiscordBot
 
                 if (restart)
                 {
-                    Console.WriteLine("\n⏱️  Подготовка к перезапуску...");
+                    Console.WriteLine("\n Подготовка к перезапуску...");
                     await Task.Delay(2000); // Небольшая пауза перед перезапуском
                 }
 
@@ -152,92 +208,54 @@ namespace DiscordBot
             Console.WriteLine("Бот остановлен.");
         }
 
-        public Program()
-        {
-            _client = CreateDiscordClient();
-            _commandService = new CommandService();
-
-            // ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
-            _reconnectionService = new ReconnectionService(_client);
-            _connectionPredictor = new ConnectionPredictor(_reconnectionService);
-            _statusNotifier = new StatusNotifier(_client, ServerConfigs);
-
-            // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
-            _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
-            _reconnectionService.OnReconnectStarted += OnReconnectStarted;
-            _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
-            _connectionPredictor.OnPredictionMade += OnPredictionMade;
-
-            _services = new ServiceCollection()
-                .AddSingleton(_client)
-                .AddSingleton(_commandService)
-                .AddSingleton(_reconnectionService)
-                .AddSingleton(_connectionPredictor) 
-                .AddSingleton(_statusNotifier)
-                .AddSingleton<QueueModule>()
-                .AddSingleton<InfoCommands>()
-                .AddSingleton<RollDiceCommands>()
-                .AddSingleton<GameSessionCommands>()
-                .AddSingleton<ModerationCommands>()
-                .BuildServiceProvider();
-
-            _consoleHandler = new ConsoleCommandHandler(_client, this, _reconnectionService, _connectionPredictor, _statusNotifier);
-        }
-
-        private DiscordSocketClient CreateDiscordClient()
-        {
-            var config = new DiscordSocketConfig
-            {
-                GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
-                               GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
-                               GatewayIntents.GuildScheduledEvents,
-                ConnectionTimeout = 30000,
-                MessageCacheSize = 50,
-                LogLevel = LogSeverity.Info,
-                AlwaysDownloadUsers = true,
-                HandlerTimeout = 15000,
-                TotalShards = 1,
-                LargeThreshold = 250,
-                UseSystemClock = false,
-                DefaultRetryMode = RetryMode.AlwaysRetry
-            };
-            return new DiscordSocketClient(config);
-        }
-
-        private void ShowConsoleWelcome()
-        {
-            Console.WriteLine("================================================");
-            Console.WriteLine("     Discord Bot - Продвинутая система");
-            Console.WriteLine("================================================");
-            Console.WriteLine(" Бот запущен. Команды: help, status, reconnect");
-            Console.WriteLine(" Мониторинг: прогнозы, статистика, здоровье");
-            Console.WriteLine("================================================");
-        }
-
-        private void ShowRestartWelcome()
-        {
-            Console.WriteLine("================================================");
-            Console.WriteLine("     Discord Bot - ПЕРЕЗАПУСК");
-            Console.WriteLine("================================================");
-            Console.WriteLine($" Перезапуск выполнен в {DateTime.Now:HH:mm:ss}");
-            Console.WriteLine($" Предыдущий запуск: {_startupTime:HH:mm:ss}");
-            Console.WriteLine("================================================");
-        }
+        private BotUI _ui;
+        private bool _uiStarted = false;
 
         public async Task RunBotAsync()
         {
-            _startupTime = DateTime.Now;
+            _startupTime = DateTime.UtcNow;
 
-            if (_currentStartupType == StartupType.FirstStart)
+            if (_ui == null)
             {
-                ShowConsoleWelcome();
+                _ui = new BotUI(
+                    _client,
+                    this,
+                    _reconnectionService,
+                    _connectionPredictor,
+                    _statusNotifier
+                );
+
+                // Запускаем UI в отдельном потоке
+                var uiThread = new Thread(() =>
+                {
+                    try
+                    {
+                        _ui.Start();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Критическая ошибка UI: {ex.Message}");
+                        Environment.Exit(1);
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "BotUI"
+                };
+                uiThread.Start();
+
+                // Даем UI время на инициализацию
+                await Task.Delay(2000);
+                _uiStarted = true;
             }
-            else if (_currentStartupType == StartupType.Restart)
+            else
             {
-                ShowRestartWelcome();
+                // При рестарте просто обновляем сервисы
+                _ui.UpdateServices(_client, _reconnectionService, _connectionPredictor, _statusNotifier);
+                _ui.AddLog("Перезапуск бота...");
             }
 
-            _textBlocks = LoadTextFromFile("C:/Favorites/Desktop/НРИ/Пасты.txt");
+            _textBlocks = LoadTextFromFile(_config.TextBlocksPath);
 
             while (!_isDisposed && !_shouldExit)
             {
@@ -253,29 +271,34 @@ namespace DiscordBot
 
                         // ПЕРЕСОЗДАЕМ СЕРВИСЫ С НОВЫМ КЛИЕНТОМ
                         _reconnectionService = new ReconnectionService(_client);
-                        _connectionPredictor = new ConnectionPredictor(_reconnectionService);
+                        _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config.Prediction);
                         _statusNotifier = new StatusNotifier(_client, ServerConfigs);
+                        _statusNotifier.SetStartupType(_currentStartupType);
 
                         // ПЕРЕПОДПИСЫВАЕМСЯ
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
                         _connectionPredictor.OnPredictionMade += OnPredictionMade;
+
+                        // ОБНОВЛЯЕМ UI С НОВЫМ КЛИЕНТОМ
+                        _ui?.UpdateServices(
+                            _client,
+                            _reconnectionService,
+                            _connectionPredictor,
+                            _statusNotifier
+                        );
                     }
 
-                    _commandHandler = new CommandHandler(_client);
-                    _consoleHandler = new ConsoleCommandHandler(_client, this, _reconnectionService, _connectionPredictor, _statusNotifier);
+                    _commandHandler = new CommandHandler(_client, _config.GuildIDs);
+                    CommandHandler.SetUI(_ui);
 
-                    await SetupDiscordEvents();
-
+                    //await SetupDiscordEvents();
                     try
                     {
                         await _client.LoginAsync(TokenType.Bot, GetBotToken());
                         await _client.StartAsync();
                         await LogStartup(" Вход выполнен успешно.");
-
-                        // Запускаем консоль
-                        _ = Task.Run(() => _consoleHandler.StartListening());
 
                         // Ждем готовности
                         await WaitForReadyAsync();
@@ -294,7 +317,6 @@ namespace DiscordBot
                     catch (Exception ex) when (ex.Message.Contains("FULL_RESTART_REQUIRED"))
                     {
                         await LogStartup(" Требуется полная перезагрузка клиента...");
-                        // Просто перезапускаем цикл
                     }
                     catch (Exception ex)
                     {
@@ -321,87 +343,10 @@ namespace DiscordBot
             }
         }
 
-        // Метод опроса с таймером (Первый пункт)
-        private async Task<bool?> AskForCommandRegistration()
-        {
-            _consoleHandler.DisableInput();
-            Thread.Sleep(100); // Даем время на сброс
-
-            // Блокируем обычные команды, разрешаем только специальный ввод
-            _consoleHandler.EnableSpecialInput();
-
-            bool? result = null;
-            var completionSource = new TaskCompletionSource<bool?>();
-
-            // Обработчик специального ввода
-            void OnSpecialInputHandler(string input)
-            {
-                input = input.Trim().ToUpper();
-
-                if (input == "Y" || input == "ДА" || input == "YES")
-                {
-                    Console.WriteLine("Выбрано: регистрация команд");
-                    completionSource.TrySetResult(true);
-                }
-                else if (input == "N" || input == "НЕТ" || input == "NO")
-                {
-                    Console.WriteLine("Выбрано: пропуск регистрации");
-                    completionSource.TrySetResult(false);
-                }
-                else
-                {
-                    Console.WriteLine($"Неверный ввод: '{input}'. Ожидается Y или N");
-                    Console.Write("> ");
-                }
-            }
-
-            _consoleHandler.OnSpecialInput += OnSpecialInputHandler;
-
-            Console.WriteLine();
-            Console.WriteLine("==================================================");
-            Console.WriteLine("Нужно ли перерегистрировать команды?");
-            Console.WriteLine("[Y] - Да, зарегистрировать заново");
-            Console.WriteLine("[N] - Нет, использовать существующие");
-            Console.WriteLine("Таймаут: 60 секунд (по умолчанию: НЕТ)");
-            Console.WriteLine("==================================================");
-            Console.Write("> ");
-
-            // Таймер на 60 секунд
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            try
-            {
-                // Ждем либо ответа, либо таймаута
-                var completedTask = await Task.WhenAny(completionSource.Task, Task.Delay(60000, cts.Token));
-
-                if (completedTask == completionSource.Task)
-                {
-                    result = await completionSource.Task;
-                }
-                else
-                {
-                    Console.WriteLine("\nТаймаут ожидания. Регистрация пропущена.");
-                    result = false;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                Console.WriteLine("\nТаймаут ожидания. Регистрация пропущена.");
-                result = false;
-            }
-            finally
-            {
-                _consoleHandler.OnSpecialInput -= OnSpecialInputHandler;
-                _consoleHandler.DisableInput();
-            }
-
-            return result;
-        }
-
         private async Task SetupDiscordEvents()
         {
             // Отписываемся от всего
             _client.Ready -= OnReady;
-            _client.Log -= Log;
             _client.Disconnected -= OnDisconnected;
             _client.UserJoined -= UserJoined;
             _client.MessageReceived -= HandleCommandAsync;
@@ -413,7 +358,6 @@ namespace DiscordBot
 
             // Подписываемся заново
             _client.Ready += OnReady;
-            _client.Log += Log;
             _client.Disconnected += OnDisconnected;
             _client.UserJoined += UserJoined;
             _client.MessageReceived += HandleCommandAsync;
@@ -423,7 +367,7 @@ namespace DiscordBot
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
 
-            await LogStartup("✅ События Discord настроены");
+            await LogStartup($"│   События Discord настроены    │");
         }
 
         // Отдельные обработчики для событий
@@ -493,14 +437,11 @@ namespace DiscordBot
             }
         }
 
-        // ============= ОБРАБОТЧИКИ СОБЫТИЙ RECONNECTION SERVICE =============
-
         private async Task OnDisconnectDetected(Exception exception)
         {
             var reason = _reconnectionService.ConnectionInfo.LastDisconnectReason;
-            await LogStartup($"📡 Отключение: {reason}");
+            await LogStartup($"Отключение: {reason}");
 
-            // Отправляем уведомление о проблеме
             await _statusNotifier.SendConnectionIssue(
                 reason,
                 _reconnectionService.ConnectionInfo.ReconnectAttempts + 1
@@ -509,7 +450,7 @@ namespace DiscordBot
 
         private async Task OnReconnectStarted(string message)
         {
-            await LogStartup($"🔄 {message}");
+            await LogStartup($"{message}");
         }
 
         private async Task OnReconnectCompleted(bool success)
@@ -526,68 +467,15 @@ namespace DiscordBot
 
                 // И ВАЖНОЕ СООБЩЕНИЕ "ВСЕ СИСТЕМЫ АКТИВНЫ"
                 await _statusNotifier.SendAllSystemsActive(
-                    $"✅ Переподключение после: {info.LastDisconnectReason}"
+                    $"Переподключение после: {info.LastDisconnectReason}"
                 );
             }
         }
 
         private async Task OnPredictionMade(ConnectionPredictor.PredictionResult prediction)
         {
-            await LogStartup($"🔮 Прогноз: {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss}");
+            await LogStartup($"Прогноз: {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss}");
             await SendPredictionMessage(prediction);
-        }
-
-        // ============= ОТПРАВКА СООБЩЕНИЙ В DISCORD =============
-
-        private async Task SendDisconnectNotification()
-        {
-            try
-            {
-                var info = _reconnectionService.ConnectionInfo;
-
-                foreach (var guild in _client.Guilds)
-                {
-                    if (ServerConfigs.TryGetValue(guild.Id, out var config))
-                    {
-                        var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
-                        if (channel != null)
-                        {
-                            var embed = StatusMessageBuilder.BuildDisconnectEmbed(info);
-                            await channel.SendMessageAsync(embed: embed);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                await LogStartup($"❌ Ошибка отправки уведомления: {ex.Message}");
-            }
-        }
-
-        private async Task SendConnectionStatusMessage(bool isReconnect = false)
-        {
-            try
-            {
-                var info = _reconnectionService.ConnectionInfo;
-
-                foreach (var guild in _client.Guilds)
-                {
-                    if (ServerConfigs.TryGetValue(guild.Id, out var config))
-                    {
-                        var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
-                        if (channel != null)
-                        {
-                            var embed = StatusMessageBuilder.BuildConnectionSuccessEmbed(
-                                info, isReconnect, _connectionPredictor);
-                            await channel.SendMessageAsync(embed: embed);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                await LogStartup($"❌ Ошибка отправки статуса: {ex.Message}");
-            }
         }
 
         private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult prediction)
@@ -609,7 +497,7 @@ namespace DiscordBot
             }
             catch (Exception ex)
             {
-                await LogStartup($"❌ Ошибка отправки прогноза: {ex.Message}");
+                await LogStartup($"Ошибка отправки прогноза: {ex.Message}");
             }
         }
 
@@ -621,7 +509,7 @@ namespace DiscordBot
         private bool _readyCompleted = false;
         private bool _initializationStarted = false;
         private bool _initializationCompleted = false;
-        private DateTime _readyTime;
+        private DateTime _readyTime = DateTime.MinValue; // Инициализируем MinValue
         private DateTime _fullReadyTime;
 
         private async Task OnReady()
@@ -629,58 +517,43 @@ namespace DiscordBot
             _readyTime = DateTime.UtcNow;
             _readyCompleted = true;
 
-            // КРАТКИЙ СТАТУС - МГНОВЕННО!
-            Console.WriteLine();
-            Console.WriteLine($"┌─────────────────────────────────────────────────┐");
-            Console.WriteLine($"│   БОТ ПОДКЛЮЧЕН К DISCORD                       │");
-            Console.WriteLine($"│   {_client.CurrentUser.Username,-30}            │");
-            Console.WriteLine($"│    {DateTime.Now:HH:mm:ss}                      │");
-            Console.WriteLine($"└─────────────────────────────────────────────────┘");
-            Console.WriteLine();
-
-            // ЗАПУСКАЕМ ИНИЦИАЛИЗАЦИЮ В ФОНЕ
-            /*if (!_initializationStarted)
-            {
-                _initializationStarted = true;
-                _ = Task.Run(InitializeBotWithProgress);
-            }*/
+            // ОТПРАВЛЯЕМ В UI
+            _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+            await Task.CompletedTask;
         }
-
 
         private async Task InitializeBotWithProgress()
         {
             try
             {
                 // ЭТАП 1: Регистрация команд
-                await LogStartup($"┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ────────────┐");
+                await LogStartup($"┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ─────────────┐");
 
-                if ((bool)await AskForCommandRegistration())
+
+                if (await _ui.AskYesNoQuestion(
+                        "Нужно ли перерегистрировать команды?",
+                        "Y - Да, N - Нет, таймаут 60 секунд",
+                        60
+                    ) == true)
                 {
-
-                    var progress = new Progress<string>(msg =>
-                    {
-                        Console.WriteLine($"│  {msg,-52} │");
-                    });
-
                     await _commandHandler.InitializeAsync();
                     await _commandHandler.ListSlashCommandsAsync();
+
+                    // УВЕДОМЛЕНИЕ В UI
+                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
+                    _ui?.AddLog($"│      Команды зарегистрированы                         │");
+                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
                 }
                 else
                 {
-                    Console.WriteLine("│    Регистрация команд пропущена");
-                    // Но всё равно нужно получить список существующих команд
+                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
+                    _ui?.AddLog($"│      Регистрация команд пропущена                     │");
+                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
                     await _commandHandler.ListSlashCommandsAsync();
                 }
 
-                await LogStartup($"├───────────────────────────────────────────────────────┤");
-                await LogStartup($"│      Команды зарегистрированы                         │");
-                await LogStartup($"└───────────────────────────────────────────────────────┘");
-
                 // ЭТАП 2: Активация обработчиков
                 await LogStartup($"┌──────────── ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ ─────────┐");
-
-
-                // ПОДПИСКА НА СОБЫТИЯ DISCORD
                 await SetupDiscordEvents();
                 await LogStartup($"└───────────────────────────────────────────────────────┘");
 
@@ -695,9 +568,9 @@ namespace DiscordBot
                     {
                         await _statusNotifier.SendSystemsActiveToGuild(guild, config,
                             $" Первичный запуск. Версия: 0.6.0.0");
-                        await LogStartup($"│   Статус отправлен на {guild.Name,-32} │");
+                        await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
                     }
-                    await Task.Delay(200); // Небольшая задержка между отправками
+                    await Task.Delay(200);
                 }
 
                 await LogStartup($"└───────────────────────────────────────────────────────┘");
@@ -707,21 +580,16 @@ namespace DiscordBot
                 var initTime = (_fullReadyTime - _readyTime).TotalSeconds;
                 _initializationCompleted = true;
 
-                Console.WriteLine();
-                Console.WriteLine($"╔══════════════════════════════════════════════════════╗");
-                Console.WriteLine($"║  ВСЕ СИСТЕМЫ АКТИВНЫ!                            ║");
-                Console.WriteLine($"╠══════════════════════════════════════════════════════╣");
-                Console.WriteLine($"║   Бот:         {_client.CurrentUser.Username,-30} ║");
-                Console.WriteLine($"║   Серверов:    {_client.Guilds.Count,-30} ║");
-                Console.WriteLine($"║   Время:       {DateTime.Now:HH:mm:ss,-30} ║");
-                Console.WriteLine($"║   Инициализация: {initTime:F1} сек{-30 - initTime.ToString("F1").Length,3} ║");
-                Console.WriteLine($"╚══════════════════════════════════════════════════════╝");
-                Console.WriteLine();
-                Console.WriteLine($"💡 Консоль готова к приёму команд. Введите 'help'");
-                Console.WriteLine();
+                _ui?.EnableInput();
 
-                // ВАЖНО: ТОЛЬКО ТЕПЕРЬ КОНСОЛЬ НАЧИНАЕТ ПРИНИМАТЬ КОМАНДЫ!
-                _consoleHandler.EnableCommands();
+                // УВЕДОМЛЕНИЕ В UI
+                _ui?.ShowSystemReady(
+                    _client.CurrentUser.Username,
+                    _client.Guilds.Count,
+                    initTime
+                );
+
+                // LogStartup теперь отправляет в UI
             }
             catch (Exception ex)
             {
@@ -1114,7 +982,7 @@ namespace DiscordBot
             await LogInfo("Линия отправлена");
         }
 
-        private int GetBugReportCounter() // Укажите путь к вашему файлу
+        private int GetBugReportCounter()
         {
             string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
 
@@ -1308,31 +1176,6 @@ namespace DiscordBot
 
         private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
-        private async Task Log(LogMessage arg) // Укажите путь к вашему файлу
-        {
-            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
-            string path = Path.Combine(logDir, "StartupLog.txt");
-
-            // Ротация логов - если файл больше 5MB, создаем новый
-            if (File.Exists(path) && new FileInfo(path).Length > 5 * 1024 * 1024)
-            {
-                string archivedPath = Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                File.Move(path, archivedPath);
-            }
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{arg.Severity}] {arg.Source}: {arg.Message}");
-
-            await _logSemaphore.WaitAsync();
-            try
-            {
-                await File.AppendAllTextAsync(path, arg + Environment.NewLine);
-            }
-            finally
-            {
-                _logSemaphore.Release();
-            }
-        }
-
-        // Удаляем старый метод Log и оставляем только LogToFile, переименовав его
         private async Task LogStartup(string message)
         {
             string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
@@ -1341,7 +1184,7 @@ namespace DiscordBot
             await _logSemaphore.WaitAsync();
             try
             {
-                // Ротация логов - если файл больше 5MB, создаем новый
+                // Ротация логов
                 if (File.Exists(path))
                 {
                     var fileInfo = new FileInfo(path);
@@ -1353,7 +1196,12 @@ namespace DiscordBot
                 }
 
                 await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}\n");
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PROGRAM] {message}");
+
+                // ТОЛЬКО В UI, не в консоль
+                if (_uiStarted && _ui != null)
+                {
+                    _ui.AddLog(message);
+                }
             }
             finally
             {
@@ -1369,7 +1217,6 @@ namespace DiscordBot
             await _logSemaphore.WaitAsync();
             try
             {
-                // Ротация логов
                 if (File.Exists(path))
                 {
                     var fileInfo = new FileInfo(path);
@@ -1381,7 +1228,11 @@ namespace DiscordBot
                 }
 
                 await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {errorMessage}\n");
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [ERROR] {errorMessage}");
+
+                if (_uiStarted && _ui != null)
+                {
+                    _ui.AddLog($"❌ {errorMessage}");
+                }
             }
             finally
             {
@@ -1392,12 +1243,11 @@ namespace DiscordBot
         private async Task LogInfo(string infoMessage)
         {
             string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
-            string path = Path.Combine(logDir, "InfoLog.txt"); // Исправлено имя файла
+            string path = Path.Combine(logDir, "InfoLog.txt");
 
             await _logSemaphore.WaitAsync();
             try
             {
-                // Ротация логов
                 if (File.Exists(path))
                 {
                     var fileInfo = new FileInfo(path);
@@ -1409,7 +1259,11 @@ namespace DiscordBot
                 }
 
                 await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {infoMessage}\n");
-                Console.WriteLine(infoMessage);
+
+                if (_uiStarted && _ui != null)
+                {
+                    _ui.AddLog(infoMessage);
+                }
             }
             finally
             {
@@ -1506,7 +1360,6 @@ namespace DiscordBot
             }
         }
 
-        //Метод для загрузки текста из файла
         private Dictionary<string, string> LoadTextFromFile(string filePath)
         {
             var textBlocks = new Dictionary<string, string>();

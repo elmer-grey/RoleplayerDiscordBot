@@ -12,7 +12,9 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly CommandService _commandService;
-        private readonly List<ulong> GuildIDs;
+        private readonly List<ulong> _guildIDs;
+
+        private static BotUI _ui;
 
         // 👇 ДОБАВЛЯЕМ СОБЫТИЕ ДЛЯ ОТСЛЕЖИВАНИЯ ПРОГРЕССА
         public event Func<int, int, string, Task> OnCommandProgress;
@@ -20,16 +22,17 @@ namespace RPBot
         // 👇 ДЛЯ РАСЧЕТА ВРЕМЕНИ
         private DateTime _registrationStartTime;
 
-        public CommandHandler(DiscordSocketClient client)
+        public CommandHandler(DiscordSocketClient client, List<ulong> guildIDs)
         {
-            GuildIDs = new List<ulong>
-            {
-                295189463376855040, // Канал "КнР"
-                1288192593137635359  // Канал "Тест"
-            };
-
+            _guildIDs = guildIDs;
             _client = client;
             _commandService = new CommandService();
+        }
+
+        // Метод для установки UI (вызывать из Program.cs после создания UI)
+        public static void SetUI(BotUI ui)
+        {
+            _ui = ui;
         }
 
         public async Task InitializeAsync()
@@ -42,13 +45,13 @@ namespace RPBot
             int totalCommands = 0;
             int processedGuilds = 0;
 
-            foreach (var guildId in GuildIDs)
+            foreach (var guildId in _guildIDs)
             {
                 var guild = _client.GetGuild(guildId);
 
                 if (guild == null)
                 {
-                    Console.WriteLine($"Не удалось получить гильдию с ID: {guildId}. Пропускаем вывод команд для этой гильдии.");
+                    _ui?.AddLog($"Не удалось получить гильдию с ID: {guildId}. Пропускаем вывод команд для этой гильдии.");
                     continue;
                 }
 
@@ -61,13 +64,7 @@ namespace RPBot
                 }
 
                 processedGuilds++;
-
-                // 👇 ОТПРАВЛЯЕМ ПРОГРЕСС ПРОСМОТРА КОМАНД
-                OnCommandProgress?.Invoke(
-                    processedGuilds,
-                    GuildIDs.Count,
-                    $"📋 Просмотр команд: гильдия {processedGuilds}/{GuildIDs.Count}"
-                );
+                _ui?.AddLog($"Просмотр команд: гильдия {processedGuilds}/{_guildIDs.Count}");
             }
         }
 
@@ -77,22 +74,22 @@ namespace RPBot
 
             // 👇 СОБИРАЕМ ВСЕ КОМАНДЫ ДЛЯ ПОДСЧЕТА
             var allCommands = GetAllCommands();
-            int totalCommands = allCommands.Count * GuildIDs.Count; // команд * серверов
+            int totalCommands = allCommands.Count * _guildIDs.Count;
             int completedCommands = 0;
 
             Console.WriteLine($"\n┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ({totalCommands} операций) ────────────┐");
 
-            foreach (var guildId in GuildIDs)
+            foreach (var guildId in _guildIDs)
             {
                 var guild = _client.GetGuild(guildId);
 
                 if (guild == null)
                 {
-                    Console.WriteLine($"│  ❌ Гильдия {guildId} не найдена, пропускаем...            │");
+                    _ui?.AddLog($"│  Гильдия {guildId} не найдена, пропускаем...            │");
                     continue;
                 }
 
-                Console.WriteLine($"│  🌐 Регистрация на сервере: {guild.Name} ({guildId})       │");
+                _ui?.AddLog($"│  Регистрация на сервере: {guild.Name} ({guildId})       │");
 
                 int guildCommandIndex = 0;
                 foreach (var command in allCommands)
@@ -110,41 +107,23 @@ namespace RPBot
                         var estimatedTotal = TimeSpan.FromTicks((long)(elapsed.Ticks * (totalCommands / (double)completedCommands)));
                         var remaining = estimatedTotal - elapsed;
 
-                        var progressMessage = $"│  [{percent,3}%] Команда: {command.Name,-15} | Выполнено: {completedCommands}/{totalCommands} | Время: {elapsed:mm\\:ss}";
+                        _ui?.AddLog($"│  [{percent,3}%] Команда: {command.Name,-20} | Выполнено: {completedCommands}/{totalCommands} | Время: {elapsed:mm\\:ss}");
 
-                        // 👇 ВЫЗЫВАЕМ СОБЫТИЕ
-                        OnCommandProgress?.Invoke(completedCommands, totalCommands, progressMessage);
-
-                        // 👇 ПОКАЗЫВАЕМ В КОНСОЛИ КРАСИВЫЙ ПРОГРЕСС
-                        if (guildCommandIndex % 3 == 0 || guildCommandIndex == allCommands.Count)
-                        {
-                            Console.WriteLine($"│  {progressMessage,-58} │");
-                        }
-
-                        // МАЛЕНЬКАЯ ЗАДЕРЖКА, ЧТОБЫ НЕ ЗАБИТЬ RATE LIMIT
                         await Task.Delay(200);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"│   Ошибка регистрации {command.Name}: {ex.Message}     │");
+                        _ui?.AddLog($"│   Ошибка регистрации {command.Name}: {ex.Message}     │");
                     }
                 }
 
-                Console.WriteLine($"│   Завершено: {guild.Name} ({guildCommandIndex} команд)             │");
+                _ui?.AddLog($"│   Завершено: {guild.Name} ({guildCommandIndex} команд)             │");
             }
 
             var totalTime = DateTime.UtcNow - _registrationStartTime;
-            Console.WriteLine($"└─────────────────────────────────── ({totalTime:mm\\:ss} сек) ────────────────────┘\n");
-
-            // 👇 ФИНАЛЬНОЕ СООБЩЕНИЕ
-            OnCommandProgress?.Invoke(
-                totalCommands,
-                totalCommands,
-                $"✅ РЕГИСТРАЦИЯ ЗАВЕРШЕНА! ({totalTime:mm\\:ss} сек)"
-            );
+            _ui?.AddLog($"└─────────────────────────────────── ({totalTime:mm\\:ss} сек) ────────────────────┘\n");
         }
 
-        // 👇 МЕТОД ДЛЯ ПОЛУЧЕНИЯ ВСЕХ КОМАНД
         private List<SlashCommandBuilder> GetAllCommands()
         {
             return new List<SlashCommandBuilder>

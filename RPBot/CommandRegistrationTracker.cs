@@ -50,7 +50,7 @@ namespace RPBot
                 OnProgressUpdated?.Invoke(
                     _registeredCommands.Count,
                     _allCommands.Count,
-                    $"📝 {percent}% | +{commandName} | Осталось: {eta:F1}с"
+                    $"{percent}% | +{commandName} | Осталось: {eta:F1}с"
                 );
             }
         }

@@ -21,33 +21,33 @@ namespace RPBot
 
             // Сетевые проблемы
             if (msg.Contains("host unknown") || fullMsg.Contains("gateway-us"))
-                return "🌐 DNS ошибка - хост Discord не найден";
+                return "DNS ошибка - хост Discord не найден";
             if (msg.Contains("connection refused"))
-                return "🔌 Соединение отклонено (возможно блокировка)";
+                return "Соединение отклонено (возможно блокировка)";
             if (msg.Contains("timed out"))
-                return "⏱️ Таймаут соединения";
+                return "Таймаут соединения";
             if (msg.Contains("reset"))
-                return "🔄 Соединение сброшено";
+                return "Соединение сброшено";
             if (msg.Contains("aborted"))
-                return "⛔ Соединение прервано";
+                return "Соединение прервано";
             if (msg.Contains("websocket") || msg.Contains("web socket"))
-                return "🔌 WebSocket ошибка";
+                return " WebSocket ошибка";
 
             // Discord специфичные
             if (ex is GatewayReconnectException)
-                return "🔄 Плановый реконнект Discord";
+                return "Плановый реконнект Discord";
             if (msg.Contains("rate limit"))
-                return "⚠️ Rate limit достигнут";
+                return "Rate limit достигнут";
             if (msg.Contains("authentication"))
-                return "🔑 Ошибка аутентификации";
+                return "Ошибка аутентификации";
 
             // Системные
             if (msg.Contains("object disposed"))
-                return "♻️ Клиент был пересоздан";
+                return "Клиент был пересоздан";
             if (msg.Contains("canceled"))
-                return "⏹️ Операция отменена";
+                return "Операция отменена";
 
-            return $"❌ {ex.GetType().Name}";
+            return $" {ex.GetType().Name}";
         }
 
         public static string GetEmojiForReason(string reason)

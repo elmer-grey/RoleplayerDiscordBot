@@ -13,6 +13,12 @@ namespace RPBot
     {
         private readonly ConnectionStateInfo _connectionInfo;
         private readonly ReconnectionService _reconnectionService;
+        private readonly PredictionConfig _config;
+
+        // Защита от спама
+        private DateTime _lastPredictionTime = DateTime.MinValue;
+        private int _predictionsThisHour = 0;
+        private int _currentHour = DateTime.Now.Hour;
 
         public event Func<PredictionResult, Task> OnPredictionMade;
 
@@ -22,12 +28,14 @@ namespace RPBot
             public string Reason { get; set; }
             public int Confidence { get; set; } // 0-100%
             public string Recommendation { get; set; }
+            public bool IsCooldown { get; set; }
         }
 
-        public ConnectionPredictor(ReconnectionService reconnectionService)
+        public ConnectionPredictor(ReconnectionService reconnectionService, PredictionConfig config = null)
         {
             _reconnectionService = reconnectionService;
             _connectionInfo = reconnectionService.ConnectionInfo;
+            _config = config ?? new PredictionConfig();
         }
 
         /// <summary>
@@ -35,93 +43,106 @@ namespace RPBot
         /// </summary>
         public async Task<PredictionResult> AnalyzeAndPredict()
         {
-            _connectionInfo.CalculateStabilityScore();
+            // Проверяем, включены ли прогнозы
+            if (!_config.EnablePredictions)
+                return null;
 
+            // Проверяем защиту от спама
+            if (!CanMakePrediction())
+                return null;
+
+            _connectionInfo.CalculateStabilityScore();
             var now = DateTime.UtcNow;
             var recentCount = _connectionInfo.RecentDisconnectReasons.Count;
 
+            // Не делаем прогнозы, если мало данных
+            if (recentCount < _config.MinDisconnectsForPrediction)
+                return null;
+
+            PredictionResult result = null;
+
             // ФАКТОР 1: Частота отключений
-            if (recentCount >= 3)
+            if (recentCount >= _config.MinDisconnectsForPrediction)
             {
                 var lastHour = _connectionInfo.RecentDisconnectReasons
                     .Count(r => r.Contains(now.AddHours(-1).ToString("HH")));
 
                 if (lastHour >= 3)
                 {
-                    var result = new PredictionResult
+                    result = new PredictionResult
                     {
                         PredictedTime = now.AddMinutes(15),
                         Reason = "Высокая частота отключений",
                         Confidence = 65,
                         Recommendation = "Проверьте интернет-соединение"
                     };
-
-                    await OnPredictionMade?.Invoke(result);
-                    return result;
                 }
             }
 
             // ФАКТОР 2: Пропущенные heartbeat
-            if (_connectionInfo.HeartbeatMisses > 2)
+            if (result == null && _connectionInfo.HeartbeatMisses > 2)
             {
-                var result = new PredictionResult
+                result = new PredictionResult
                 {
                     PredictedTime = now.AddSeconds(30),
                     Reason = "Пропущены heartbeat пакеты",
                     Confidence = 85,
                     Recommendation = "Скоро будет разрыв соединения"
                 };
-
-                await OnPredictionMade?.Invoke(result);
-                return result;
             }
 
             // ФАКТОР 3: Стабильность соединения
-            if (_connectionInfo.ConnectionStabilityScore < 50)
+            if (result == null && _connectionInfo.ConnectionStabilityScore < 50)
             {
-                var result = new PredictionResult
+                result = new PredictionResult
                 {
                     PredictedTime = now.AddMinutes(10),
                     Reason = "Низкая стабильность соединения",
                     Confidence = 70,
                     Recommendation = "Рекомендуется перезагрузка бота"
                 };
+            }
 
+            // Если прогноз сделан и он достаточно уверенный
+            if (result != null && result.Confidence >= _config.PredictionConfidenceThreshold)
+            {
+                // Обновляем счетчики для защиты от спама
+                UpdatePredictionCounters();
+
+                // Оповещаем подписчиков
                 await OnPredictionMade?.Invoke(result);
                 return result;
             }
 
-            // ФАКТОР 4: Время жизни соединения
-            if (_connectionInfo.DisconnectStats.Count > 0)
-            {
-                var avgLifetime = EstimateAverageLifetime();
-                var currentUptime = _connectionInfo.CurrentUptime.TotalMinutes;
-
-                if (avgLifetime > 0 && currentUptime > avgLifetime * 0.8)
-                {
-                    var result = new PredictionResult
-                    {
-                        PredictedTime = now.AddMinutes(5),
-                        Reason = "Приближение к среднему времени отключения",
-                        Confidence = 60,
-                        Recommendation = "Ожидайте возможного реконнекта"
-                    };
-
-                    await OnPredictionMade?.Invoke(result);
-                    return result;
-                }
-            }
-
-            return null; // Прогнозов нет
+            return null;
         }
 
-        /// <summary>
-        /// Оценивает среднее время жизни соединения
-        /// </summary>
-        private double EstimateAverageLifetime()
+        private bool CanMakePrediction()
         {
-            // Упрощенная оценка - в реальности нужно хранить историю времен жизни
-            return 45; // 45 минут
+            var now = DateTime.Now;
+
+            // Сброс счетчика в начале нового часа
+            if (now.Hour != _currentHour)
+            {
+                _currentHour = now.Hour;
+                _predictionsThisHour = 0;
+            }
+
+            // Проверка на cooldown
+            if ((now - _lastPredictionTime).TotalMinutes < _config.CooldownMinutes)
+                return false;
+
+            // Проверка лимита в час
+            if (_predictionsThisHour >= _config.MaxPredictionsPerHour)
+                return false;
+
+            return true;
+        }
+
+        private void UpdatePredictionCounters()
+        {
+            _lastPredictionTime = DateTime.Now;
+            _predictionsThisHour++;
         }
 
         /// <summary>
@@ -131,11 +152,11 @@ namespace RPBot
         {
             var score = _connectionInfo.ConnectionStabilityScore;
 
-            if (score >= 90) return "🟢 Отличное";
-            if (score >= 70) return "🟡 Хорошее";
-            if (score >= 50) return "🟠 Среднее";
-            if (score >= 30) return "🔴 Плохое";
-            return "⚫ Критическое";
+            if (score >= 90) return "Отличное";
+            if (score >= 70) return "Хорошее";
+            if (score >= 50) return "Среднее";
+            if (score >= 30) return "Плохое";
+            return "Критическое";
         }
     }
 }

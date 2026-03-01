@@ -1,6 +1,5 @@
 ﻿using Discord;
 using Discord.WebSocket;
-using DiscordBot;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,10 +16,7 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly Dictionary<ulong, ServerConfig> _serverConfigs;
-
-        // Флаг, чтобы не спамить при множественных реконнектах
-        private DateTime _lastStatusMessageTime = DateTime.MinValue;
-        private readonly TimeSpan _statusCooldown = TimeSpan.FromSeconds(30);
+        private StartupType _lastStartupType = StartupType.FirstStart;
 
         public StatusNotifier(DiscordSocketClient client, Dictionary<ulong, ServerConfig> serverConfigs)
         {
@@ -28,25 +24,18 @@ namespace RPBot
             _serverConfigs = serverConfigs;
         }
 
-        /// <summary>
-        /// Отправляет сообщение "Все системы активны" во все настроенные каналы
-        /// </summary>
-        public async Task SendAllSystemsActive(string additionalInfo = "")
+        public void SetStartupType(StartupType type)
         {
-            // Защита от спама
-            if ((DateTime.UtcNow - _lastStatusMessageTime) < _statusCooldown)
-            {
-                Console.WriteLine($"[NOTIFIER] Пропускаем статус (кулдаун)");
-                return;
-            }
+            _lastStartupType = type;
+        }
 
-            _lastStatusMessageTime = DateTime.UtcNow;
-
+        public async Task SendAllSystemsActive(string reason)
+        {
             foreach (var guild in _client.Guilds)
             {
                 if (_serverConfigs.TryGetValue(guild.Id, out var config))
                 {
-                    await SendSystemsActiveToGuild(guild, config, additionalInfo);
+                    await SendSystemsActiveToGuild(guild, config, reason);
                 }
             }
         }
@@ -54,55 +43,40 @@ namespace RPBot
         /// <summary>
         /// Отправляет сообщение о запуске систем на конкретный сервер
         /// </summary>
-        public async Task SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string additionalInfo)
+        public async Task SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string reason)
         {
             try
             {
                 var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
-                if (channel == null)
-                {
-                    Console.WriteLine($"[NOTIFIER] Канал {config.ModerateChannelID} не найден на сервере {guild.Name}");
-                    return;
-                }
+                if (channel == null) return;
+
+                var isReconnect = _lastStartupType == StartupType.Reconnect ||
+                                 (_lastStartupType == StartupType.Restart && reason.Contains("переподключение"));
 
                 var embed = new EmbedBuilder()
-                    .WithTitle("🟢 СИСТЕМЫ АКТИВНЫ")
+                    .WithTitle("🟢 ВСЕ СИСТЕМЫ АКТИВНЫ")
                     .WithColor(Color.Green)
-                    .WithDescription("Бот работает в штатном режиме и ожидает команд")
-                    .AddField("🤖 Бот", _client.CurrentUser?.Username ?? "N/A", true)
+                    .WithDescription($"Бот {_client.CurrentUser.Username} успешно запущен и работает в штатном режиме.")
+                    .AddField("📊 Статус", "✅ Онлайн", true)
                     .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
-                    .AddField("📊 Статус", "🟢 Онлайн", true)
-                    .AddField("🔌 Соединение", "✅ Стабильное", true);
-
-                if (!string.IsNullOrEmpty(additionalInfo))
-                {
-                    embed.AddField("📋 Информация", additionalInfo, false);
-                }
-
-                // Добавляем статистику если доступна
-                if (_client.Latency > 0)
-                {
-                    var latencyColor = _client.Latency < 200 ? "🟢" : _client.Latency < 500 ? "🟡" : "🔴";
-                    embed.AddField("📶 Задержка", $"{latencyColor} {_client.Latency} мс", true);
-                }
-
-                embed.WithFooter(f => f.Text = $"ID: {_client.CurrentUser?.Id}")
-                     .WithCurrentTimestamp();
+                    .AddField("🔧 Тип запуска", isReconnect ? "Переподключение" : "Первичный запуск", true)
+                    .AddField("📋 Причина", reason, true)
+                    .AddField("🔄 Версия", "0.6.0.0", true)
+                    .WithFooter(f => f.Text = "Система мониторинга")
+                    .WithCurrentTimestamp();
 
                 await channel.SendMessageAsync(embed: embed.Build());
-
-                Console.WriteLine($"[NOTIFIER] Статус отправлен на {guild.Name}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[NOTIFIER] Ошибка отправки на {guild.Name}: {ex.Message}");
+                Console.WriteLine($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
             }
         }
 
         /// <summary>
         /// Отправляет сообщение о проблемах с подключением
         /// </summary>
-        public async Task SendConnectionIssue(string reason, int attempt = 0)
+        public async Task SendConnectionIssue(string reason, int attempt)
         {
             foreach (var guild in _client.Guilds)
             {
@@ -116,9 +90,9 @@ namespace RPBot
                         var embed = new EmbedBuilder()
                             .WithTitle("⚠️ ПРОБЛЕМЫ С ПОДКЛЮЧЕНИЕМ")
                             .WithColor(Color.Orange)
-                            .WithDescription("Бот испытывает трудности с подключением к Discord")
+                            .WithDescription("Бот испытывает проблемы с подключением к Discord")
                             .AddField("📋 Причина", reason, true)
-                            .AddField("🔄 Попытка", attempt > 0 ? attempt.ToString() : "N/A", true)
+                            .AddField("🔄 Попытка", attempt.ToString(), true)
                             .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
                             .WithFooter(f => f.Text = "Пытаюсь переподключиться...")
                             .WithCurrentTimestamp();
@@ -163,7 +137,7 @@ namespace RPBot
         /// <summary>
         /// Отправляет сообщение об успешном переподключении
         /// </summary>
-        public async Task SendReconnectSuccess(int attempts, string previousReason)
+        public async Task SendReconnectSuccess(int attempts, string lastReason)
         {
             foreach (var guild in _client.Guilds)
             {
@@ -175,14 +149,14 @@ namespace RPBot
                         if (channel == null) continue;
 
                         var embed = new EmbedBuilder()
-                            .WithTitle("✅ ПЕРЕПОДКЛЮЧЕНИЕ УСПЕШНО")
-                            .WithColor(Color.Green)
-                            .WithDescription("Бот восстановил соединение с Discord")
+                            .WithTitle("🔄 ПЕРЕПОДКЛЮЧЕНИЕ УСПЕШНО")
+                            .WithColor(Color.Blue)
+                            .WithDescription("Бот успешно переподключился к Discord")
+                            .AddField("📊 Статус", "✅ Онлайн", true)
                             .AddField("🔄 Попыток", attempts.ToString(), true)
-                            .AddField("⚠️ Причина отключения", previousReason, true)
+                            .AddField("⚠️ Последняя причина", lastReason, true)
                             .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
-                            .AddField("📊 Статус", "🟢 Системы активны", true)
-                            .WithFooter(f => f.Text = "Реконнект выполнен автоматически")
+                            .WithFooter(f => f.Text = "Соединение восстановлено")
                             .WithCurrentTimestamp();
 
                         await channel.SendMessageAsync(embed: embed.Build());

@@ -53,7 +53,7 @@ namespace RPBot
             // Плановый реконнект Discord - не вмешиваемся
             if (exception is GatewayReconnectException)
             {
-                await Log("🔄 Плановый реконнект Discord - пропускаем");
+                await Log("Плановый реконнект Discord - пропускаем");
                 return;
             }
 
@@ -157,12 +157,12 @@ namespace RPBot
 
                 try
                 {
-                    await Log($"🔌 Попытка подключения {attempt}/{maxAttempts}...");
+                    await Log($" Попытка подключения {attempt}/{maxAttempts}...");
 
                     // Убеждаемся, что клиент остановлен
                     if (_client.ConnectionState != ConnectionState.Disconnected)
                     {
-                        await Log("⏹ Останавливаем клиент перед попыткой...");
+                        await Log(" Останавливаем клиент перед попыткой...");
                         await _client.StopAsync();
                         await Task.Delay(1000, cancellationToken);
                     }
@@ -231,7 +231,7 @@ namespace RPBot
 
             if (delaySeconds > 0)
             {
-                await Log($"⏳ Ожидание {delaySeconds} сек перед попыткой...");
+                await Log($"Ожидание {delaySeconds} сек перед попыткой...");
                 await Task.Delay(delaySeconds * 1000, cancellationToken);
             }
         }
@@ -241,7 +241,7 @@ namespace RPBot
         /// </summary>
         public async Task FullRestartAsync()
         {
-            await Log("🔄 ПОЛНАЯ ПЕРЕЗАГРУЗКА КЛИЕНТА");
+            await Log("ПОЛНАЯ ПЕРЕЗАГРУЗКА КЛИЕНТА");
 
             try
             {
@@ -253,14 +253,14 @@ namespace RPBot
                 await Task.Delay(3000);
 
                 // Сигнал для Program.cs на пересоздание клиента
-                _connectionInfo.AddDisconnectReason("♻️ Полная перезагрузка", "Требуется пересоздание клиента");
+                _connectionInfo.AddDisconnectReason("Полная перезагрузка", "Требуется пересоздание клиента");
 
                 // Program.cs должен поймать это и пересоздать клиент
                 throw new InvalidOperationException("FULL_RESTART_REQUIRED");
             }
             catch (Exception ex)
             {
-                await Log($"❌ Ошибка полной перезагрузки: {ex.Message}");
+                await Log($"Ошибка полной перезагрузки: {ex.Message}");
                 throw;
             }
         }

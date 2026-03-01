@@ -26,7 +26,7 @@ namespace RPBot
                 .WithDescription(isReconnect
                     ? "Соединение с Discord восстановлено"
                     : "Бот успешно подключен к Discord")
-                .AddField("📋 Статус", "🟢 Онлайн", true)
+                .AddField("📋 Статус", "Онлайн", true)
                 .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
                 .AddField("🔌 Причина", info.LastConnectReason, true);
 
