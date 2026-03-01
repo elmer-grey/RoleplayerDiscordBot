@@ -62,6 +62,44 @@ namespace RPBot
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
 
+        // Centralized cleanup for services to avoid leaks when recreating
+        private void CleanupServices()
+        {
+            try
+            {
+                if (_reconnectionService != null)
+                {
+                    try
+                    {
+                        _reconnectionService.OnDisconnectDetected -= OnDisconnectDetected;
+                        _reconnectionService.OnReconnectStarted -= OnReconnectStarted;
+                        _reconnectionService.OnReconnectCompleted -= OnReconnectCompleted;
+                    }
+                    catch { }
+
+                    try { _reconnectionService.Shutdown(); } catch { }
+                    try { (_reconnectionService as IDisposable)?.Dispose(); } catch { }
+                    _reconnectionService = null;
+                }
+
+                if (_connectionPredictor != null)
+                {
+                    try { _connectionPredictor.OnPredictionMade -= OnPredictionMade; } catch { }
+                    _connectionPredictor = null;
+                }
+
+                if (_statusNotifier != null)
+                {
+                    try { (_statusNotifier as IDisposable)?.Dispose(); } catch { }
+                    _statusNotifier = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"CleanupServices error: {ex.Message}");
+            }
+        }
+
         private BotConfig _config;
         private Dictionary<ulong, ServerConfig> _serverConfigs = new();
 
@@ -268,6 +306,9 @@ namespace RPBot
                     {
                         _client?.Dispose();
                         _client = CreateDiscordClient();
+
+                        // Корректно очистим старые сервисы (отпишем, shutdown, dispose)
+                        CleanupServices();
 
                         // ПЕРЕСОЗДАЕМ СЕРВИСЫ С НОВЫМ КЛИЕНТОМ
                         _reconnectionService = new ReconnectionService(_client);
@@ -608,10 +649,58 @@ namespace RPBot
             if (_isDisposed) return;
             _isDisposed = true;
 
-            _reconnectionService?.Shutdown();
-            await _client.StopAsync();
-            _client?.Dispose();
-            _restartLock?.Dispose();
+            _shouldExit = true;
+
+            try
+            {
+                // Останавливаем реконнект-сервис корректно и затем очищаем
+                try { _reconnectionService?.Shutdown(); } catch { }
+                CleanupServices();
+
+                // Остановим UI корректно
+                try
+                {
+                    _ui?.Dispose();
+                    _ui = null;
+                    _uiStarted = false;
+                }
+                catch { }
+
+                // Останавливаем клиента
+                try
+                {
+                    if (_client != null)
+                    {
+                        try { _client.Ready -= OnReady; } catch { }
+                        try { _client.Disconnected -= OnDisconnected; } catch { }
+                        try { _client.UserJoined -= UserJoined; } catch { }
+                        try { _client.MessageReceived -= HandleCommandAsync; } catch { }
+                        try { _client.SlashCommandExecuted -= OnSlashCommandExecuted; } catch { }
+                        try { _client.ModalSubmitted -= HandleModalSubmitted; } catch { }
+                        try { _client.ButtonExecuted -= HandleButtonExecuted; } catch { }
+                        try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch { }
+                        try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch { }
+
+                        try { await _client.StopAsync(); } catch { }
+                        try { _client.Dispose(); } catch { }
+                        _client = null;
+                    }
+                }
+                catch { }
+
+                // Очистка модулей (таймеры/статические данные)
+                try { QueueModule.ShutdownQueue(); } catch { }
+
+                // Освобождение лог-семафора
+                try { _logSemaphore?.Dispose(); } catch { }
+
+                // Освобождение локального семафора рестарта
+                try { _restartLock?.Dispose(); } catch { }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"DisposeAsync error: {ex.Message}");
+            }
         }
 
         public void Dispose()
@@ -2318,6 +2407,32 @@ namespace RPBot
                 await command.DeleteOriginalResponseAsync();
             });
         }
+
+        // Graceful shutdown for static resources used by QueueModule
+        public static void ShutdownQueue()
+        {
+            try
+            {
+                lock (typeof(QueueModule))
+                {
+                    try { rollTimer?.Dispose(); } catch { }
+                    rollTimer = null;
+
+                    try { messagesToDelete?.Clear(); } catch { }
+                    try { userRolls?.Clear(); } catch { }
+
+                    isQueueActive = false;
+                    queueStartMessage = null;
+                    channel = null;
+                    maxRolls = 0;
+                    rollCount = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ShutdownQueue error: {ex.Message}");
+            }
+        }
     }
 
     public class RollStatistic
@@ -2691,6 +2806,12 @@ namespace RPBot
             var channel = component.Channel;
             var userId = component.User.Id;
 
+            if (session.PauseReminderCTS != null)
+            {
+                try { session.PauseReminderCTS.Cancel(); } catch { }
+                try { session.PauseReminderCTS.Dispose(); } catch { }
+                session.PauseReminderCTS = null;
+            }
             session.PauseReminderCTS = new CancellationTokenSource();
             _ = Task.Run(async () =>
             {
@@ -2754,6 +2875,8 @@ namespace RPBot
             }
 
             session.PauseReminderCTS?.Cancel();
+            try { session.PauseReminderCTS?.Dispose(); } catch { }
+            session.PauseReminderCTS = null;
             var lastPause = session.PausePeriods.Last();
             session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
             session.IsPaused = false;
@@ -3011,14 +3134,16 @@ namespace RPBot
                         {
                             commands.Log($"Найдена сессия {session.SessionId} для завершения");
 
-                            if (session.IsPaused)
-                            {
-                                commands.Log($"Снятие паузы для сессии {session.SessionId}...");
-                                session.PauseReminderCTS?.Cancel();
-                                var lastPause = session.PausePeriods.Last();
-                                session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-                                session.IsPaused = false;
-                            }
+                    if (session.IsPaused)
+                    {
+                        commands.Log($"Снятие паузы для сессии {session.SessionId}...");
+                        try { session.PauseReminderCTS?.Cancel(); } catch { }
+                        try { session.PauseReminderCTS?.Dispose(); } catch { }
+                        session.PauseReminderCTS = null;
+                        var lastPause = session.PausePeriods.Last();
+                        session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                        session.IsPaused = false;
+                    }
 
                             session.EndTime = DateTime.Now;
                             commands.Log($"Установлено время окончания для сессии {session.SessionId}");

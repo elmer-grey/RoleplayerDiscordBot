@@ -12,7 +12,7 @@ namespace RPBot
     /// <summary>
     /// Отвечает за ВСЁ, что связано с переподключением бота
     /// </summary>
-    public class ReconnectionService
+    public class ReconnectionService : IDisposable
     {
         private readonly DiscordSocketClient _client;
         private readonly ConnectionStateInfo _connectionInfo;
@@ -308,13 +308,26 @@ namespace RPBot
         public void Shutdown()
         {
             _isShuttingDown = true;
-            _reconnectCts.Cancel();
+            try { _reconnectCts.Cancel(); } catch { }
         }
 
         private Task Log(string message)
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RECONNECT] {message}");
             return Task.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            _isShuttingDown = true;
+            try { _reconnectCts?.Cancel(); } catch { }
+            try { _reconnectCts?.Dispose(); } catch { }
+            try { _reconnectLock?.Dispose(); } catch { }
+
+            // Clear event subscribers to avoid keeping references
+            OnReconnectStarted = null;
+            OnReconnectCompleted = null;
+            OnDisconnectDetected = null;
         }
     }
 }

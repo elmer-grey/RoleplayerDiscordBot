@@ -713,9 +713,12 @@ namespace RPBot
                     };
 
                     var timeoutTimer = new System.Timers.Timer(timeoutSeconds * 1000);
+                    timeoutTimer.AutoReset = false;
                     timeoutTimer.Elapsed += (s, e) =>
                     {
-                        timeoutTimer.Stop();
+                        try { timeoutTimer.Stop(); } catch { }
+                        try { timeoutTimer.Dispose(); } catch { }
+
                         if (!tcs.Task.IsCompleted)
                         {
                             Application.MainLoop.Invoke(() =>
@@ -729,7 +732,6 @@ namespace RPBot
                             });
                         }
                     };
-                    timeoutTimer.AutoReset = false;
                     timeoutTimer.Start();
 
                     Application.Run(dialog);
@@ -847,6 +849,11 @@ namespace RPBot
 
             try
             {
+                // Отписываемся от UI-событий, чтобы убрать делегаты
+                try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
+                try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
+                try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
+
                 Application.MainLoop.Invoke(() =>
                 {
                     try
