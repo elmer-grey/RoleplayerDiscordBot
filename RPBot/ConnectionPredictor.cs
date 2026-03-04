@@ -14,15 +14,17 @@ namespace RPBot
         private readonly ConnectionStateInfo _connectionInfo;
         private readonly ReconnectionService _reconnectionService;
         private readonly PredictionConfig _config;
+        private readonly object _analyzeLock = new();
+
+        // Для подтверждения предсказаний требуем несколько последовательных срабатываний
+        private ConnectionPredictor.PredictionResult? _lastCandidate;
+        private int _consecutiveMatches = 0;
+        private DateTime _firstCandidateTime = DateTime.MinValue;
 
         // Защита от спама
         private DateTime _lastPredictionTime = DateTime.MinValue;
         private int _predictionsThisHour = 0;
-        private int _currentHour = DateTime.UtcNow.Hour;
-
-        // Внутреннее состояние для сглаживания и подтверждения сигналов
-        private double _smoothedHeartbeatMisses = 0.0;
-        private readonly Dictionary<string, int> _factorConfirmCounts = new();
+        private int _currentHour = DateTime.Now.Hour;
 
         public event Func<PredictionResult, Task> OnPredictionMade;
 
@@ -33,6 +35,7 @@ namespace RPBot
             public int Confidence { get; set; } // 0-100%
             public string Recommendation { get; set; }
             public bool IsCooldown { get; set; }
+            public bool IsSuppressed { get; set; } // was suppressed awaiting confirmation
         }
 
         public ConnectionPredictor(ReconnectionService reconnectionService, PredictionConfig config = null)
@@ -40,7 +43,6 @@ namespace RPBot
             _reconnectionService = reconnectionService;
             _connectionInfo = reconnectionService.ConnectionInfo;
             _config = config ?? new PredictionConfig();
-            _smoothedHeartbeatMisses = _connectionInfo.HeartbeatMisses;
         }
 
         /// <summary>
@@ -48,149 +50,126 @@ namespace RPBot
         /// </summary>
         public async Task<PredictionResult?> AnalyzeAndPredict()
         {
+            lock (_analyzeLock)
+            {
+                // ensure single analyzer at a time
+            }
             // Проверяем, включены ли прогнозы
             if (!_config.EnablePredictions)
                 return null;
 
-            // Проверяем защиту от спама
-            if (!CanMakePrediction())
-                return null;
+            // Проверяем защиту от спама (но не блокируем подтверждение кандидата)
+            var canSendNow = CanMakePrediction();
 
             _connectionInfo.CalculateStabilityScore();
             var now = DateTime.UtcNow;
 
-            // Сглаживаем heartbeat, чтобы учесть кратковременные выбросы
-            var alpha = Math.Clamp(_config.HeartbeatSmoothingAlpha, 0.05, 0.95);
-            _smoothedHeartbeatMisses = alpha * _connectionInfo.HeartbeatMisses + (1 - alpha) * _smoothedHeartbeatMisses;
+            // Собираем факторы и их оценки
+            int recentDisconnects = _connectionInfo.GetDisconnectsInLastMinutes(_config.TrendWindowMinutes);
 
-            // Подсчёт отключений за окно
-            var disconnectsLastHour = _connectionInfo.RecentDisconnects.Count(e => (now - e.Time).TotalMinutes <= 60);
-            var disconnectsTotal = _connectionInfo.RecentDisconnects.Count;
+            bool freqActive = recentDisconnects >= _config.MinDisconnectsForPrediction;
+            double freqScore = 0;
+            if (freqActive)
+            {
+                // линейная шкала уверенности от порога
+                freqScore = Math.Min(90, 40 + (recentDisconnects - _config.MinDisconnectsForPrediction) * 10);
+            }
 
-            // Если данных совсем мало — не предсказываем
-            if (disconnectsTotal < _config.MinDisconnectsForPrediction && _smoothedHeartbeatMisses < 1)
+            bool hbActive = _connectionInfo.HeartbeatMisses >= _config.HeartbeatMissesForPrediction;
+            double hbScore = hbActive ? 85 : 0;
+
+            bool stabilityActive = _connectionInfo.ConnectionStabilityScore < 50;
+            double stabilityScore = stabilityActive ? (int)(100 - _connectionInfo.ConnectionStabilityScore) : 0;
+
+            // Взвешивание
+            double weighted = (freqScore * _config.FrequencyWeight) + (hbScore * _config.HeartbeatWeight) + (stabilityScore * _config.StabilityWeight);
+            double maxPossible = (100 * (_config.FrequencyWeight + _config.HeartbeatWeight + _config.StabilityWeight));
+            int combinedConfidence = maxPossible > 0 ? (int)Math.Round((weighted / maxPossible) * 100) : 0;
+
+            int activeFactors = 0;
+            if (freqActive) activeFactors++;
+            if (hbActive) activeFactors++;
+            if (stabilityActive) activeFactors++;
+
+            // Требуем либо несколько факторов, либо достаточную комбинированную уверенность
+            if (activeFactors < _config.MinFactorsForPrediction && combinedConfidence < _config.PredictionConfidenceThreshold)
+            {
+                // Слишком мало сигналов — не делаем прогноз
+                ResetCandidate();
                 return null;
-
-            // Оцениваем факторы, но требуем подтверждений (не флапать)
-            PredictionResult? candidate = null;
-
-            // Фактор: высокая частота отключений
-            if (disconnectsLastHour >= 3)
-            {
-                var key = "freq";
-                _factorConfirmCounts.TryGetValue(key, out var cnt);
-                cnt++;
-                _factorConfirmCounts[key] = cnt;
-
-                if (cnt >= _config.ConfirmationsRequired)
-                {
-                    candidate = new PredictionResult
-                    {
-                        PredictedTime = now.AddMinutes(15),
-                        Reason = "Высокая частота отключений",
-                        Confidence = 60,
-                        Recommendation = "Проверьте интернет-соединение",
-                        IsCooldown = false
-                    };
-                }
-            }
-            else
-            {
-                _factorConfirmCounts["freq"] = 0;
             }
 
-            // Фактор: пропущенные heartbeat (используем сглаженное значение)
-            if (_smoothedHeartbeatMisses >= 3)
+            // Формируем кандидат-прогноз (консервативные времена)
+            var candidate = new PredictionResult
             {
-                var key = "heartbeat";
-                _factorConfirmCounts.TryGetValue(key, out var cnt);
-                cnt++;
-                _factorConfirmCounts[key] = cnt;
+                PredictedTime = hbActive ? now.AddSeconds(30) : (freqActive ? now.AddMinutes(15) : now.AddMinutes(10)),
+                Reason = hbActive ? "Пропущены heartbeat пакеты" : (freqActive ? "Высокая частота отключений" : "Низкая стабильность соединения"),
+                Confidence = Math.Max(combinedConfidence, Math.Max((int)freqScore, Math.Max((int)hbScore, (int)stabilityScore))),
+                Recommendation = hbActive ? "Проверьте связь / ожидается разрыв" : "Проверьте соединение или перезапустите бота",
+                IsSuppressed = false
+            };
 
-                if (cnt >= _config.ConfirmationsRequired)
-                {
-                    var pr = new PredictionResult
-                    {
-                        PredictedTime = now.AddSeconds(30),
-                        Reason = "Пропущены heartbeat пакеты",
-                        Confidence = 85,
-                        Recommendation = "Скоро будет разрыв соединения",
-                        IsCooldown = false
-                    };
-
-                    // Если уже есть кандидат — усиливаем уверенность
-                    if (candidate != null)
-                    {
-                        candidate.Confidence = Math.Min(100, (candidate.Confidence + pr.Confidence) / 2 + 5);
-                        candidate.Reason += "; + Пропущенные heartbeat";
-                    }
-                    else
-                    {
-                        candidate = pr;
-                    }
-                }
-            }
-            else
+            // Подтверждение кандидата — требуется несколько последовательных срабатываний
+            if (_lastCandidate == null || _lastCandidate.Reason != candidate.Reason || Math.Abs((_lastCandidate.PredictedTime - candidate.PredictedTime).TotalSeconds) > _config.ConfirmationWindowSeconds)
             {
-                _factorConfirmCounts["heartbeat"] = 0;
+                // новый кандидат
+                _lastCandidate = candidate;
+                _consecutiveMatches = 1;
+                _firstCandidateTime = now;
+                // не отправляем сообщение первым срабатыванием
+                _lastCandidate.IsSuppressed = true;
+                return null;
             }
 
-            // Фактор: общая стабильность
-            if (_connectionInfo.ConnectionStabilityScore < 50)
-            {
-                var key = "stability";
-                _factorConfirmCounts.TryGetValue(key, out var cnt);
-                cnt++;
-                _factorConfirmCounts[key] = cnt;
+            // Совпадение с предыдущим кандидатом
+            _consecutiveMatches++;
 
-                if (cnt >= _config.ConfirmationsRequired)
-                {
-                    var pr = new PredictionResult
-                    {
-                        PredictedTime = now.AddMinutes(10),
-                        Reason = "Низкая стабильность соединения",
-                        Confidence = 70,
-                        Recommendation = "Рекомендуется перезагрузка бота",
-                        IsCooldown = false
-                    };
-
-                    if (candidate != null)
-                    {
-                        candidate.Confidence = Math.Min(100, (candidate.Confidence + pr.Confidence) / 2);
-                        candidate.Reason += "; + Низкая стабильность";
-                    }
-                    else
-                    {
-                        candidate = pr;
-                    }
-                }
-            }
-            else
+            // Если прошло слишком много времени с первого кандидата — сбрасываем
+            if ((now - _firstCandidateTime).TotalSeconds > _config.ConfirmationWindowSeconds)
             {
-                _factorConfirmCounts["stability"] = 0;
+                _lastCandidate = candidate;
+                _consecutiveMatches = 1;
+                _firstCandidateTime = now;
+                _lastCandidate.IsSuppressed = true;
+                return null;
             }
 
-            // Итог: если есть кандидат и уверенность выше порога — уведомляем
-            if (candidate != null && candidate.Confidence >= _config.PredictionConfidenceThreshold)
+            if (_consecutiveMatches < Math.Max(1, _config.RequireConsecutiveEvaluations))
             {
-                // Обновляем счетчики для защиты от спама
-                UpdatePredictionCounters();
-
-                // Сбрасываем счётчики подтверждений, чтобы не спамить повторно
-                _factorConfirmCounts.Clear();
-
-                await OnPredictionMade?.Invoke(candidate);
-                return candidate;
+                // ждём подтверждения
+                _lastCandidate.IsSuppressed = true;
+                return null;
             }
 
-            return null;
+            // Кандидат подтверждён — можно отправлять, но проверяем cooldown/лимиты
+            if (!canSendNow)
+            {
+                // отмечаем, что прогноз был готов, но подавлён из-за cooldown
+                candidate.IsCooldown = true;
+                candidate.IsSuppressed = true;
+                ResetCandidate();
+                return candidate; // возвращаем как информация, но не шлём событие
+            }
+
+            // Отправляем прогноз
+            UpdatePredictionCounters();
+            ResetCandidate();
+            await OnPredictionMade?.Invoke(candidate);
+            return candidate;
+        }
+
+        private void ResetCandidate()
+        {
+            _lastCandidate = null;
+            _consecutiveMatches = 0;
+            _firstCandidateTime = DateTime.MinValue;
         }
 
         private bool CanMakePrediction()
         {
-            var now = DateTime.UtcNow;
+            var now = DateTime.Now;
 
-            // Сброс счетчика в начале нового часа (UTC)
+            // Сброс счетчика в начале нового часа
             if (now.Hour != _currentHour)
             {
                 _currentHour = now.Hour;
@@ -198,7 +177,7 @@ namespace RPBot
             }
 
             // Проверка на cooldown
-            if ((_lastPredictionTime != DateTime.MinValue) && (now - _lastPredictionTime).TotalMinutes < _config.CooldownMinutes)
+            if ((now - _lastPredictionTime).TotalMinutes < _config.CooldownMinutes)
                 return false;
 
             // Проверка лимита в час
@@ -210,7 +189,7 @@ namespace RPBot
 
         private void UpdatePredictionCounters()
         {
-            _lastPredictionTime = DateTime.UtcNow;
+            _lastPredictionTime = DateTime.Now;
             _predictionsThisHour++;
         }
 

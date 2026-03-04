@@ -142,9 +142,15 @@ namespace RPBot
         public bool EnablePredictions { get; set; } = true;
         public int MaxPredictionsPerHour { get; set; } = 2; // Ограничение на количество прогнозов
         public int CooldownMinutes { get; set; } = 30; // Задержка между прогнозами
-        // Количество последовательных срабатываний фактора, требуемое для подтверждения прогнозa
-        public int ConfirmationsRequired { get; set; } = 2;
-        // Параметр экспоненциального сглаживания для heartbeat (0..1). Больше -> быстрее реагирует
-        public double HeartbeatSmoothingAlpha { get; set; } = 0.4;
+        // Новые настройки для более стабильной и консервативной работы предсказателя
+        public int HeartbeatMissesForPrediction { get; set; } = 3;
+        public int RequireConsecutiveEvaluations { get; set; } = 2; // сколько последовательных подтверждений нужно
+        public int ConfirmationWindowSeconds { get; set; } = 45; // окно подтверждения
+        public int TrendWindowMinutes { get; set; } = 60; // окно для подсчёта частоты отключений
+        public int MinFactorsForPrediction { get; set; } = 2; // сколько факторов должно совпасть
+        // Весовые коэффициенты для факторов (можно тонко настраивать)
+        public double FrequencyWeight { get; set; } = 1.0;
+        public double HeartbeatWeight { get; set; } = 1.5;
+        public double StabilityWeight { get; set; } = 1.0;
     }
 }
