@@ -853,7 +853,10 @@ namespace RPBot
 
                 // ЭТАП 4: ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
-                var initTime = (_fullReadyTime - _readyTime).TotalSeconds;
+                // Защита: если событие Ready не сработало и _readyTime остался MinValue,
+                // используем время старта инициализации как начало, чтобы не получить отрицательное время.
+                var startTime = _readyTime == DateTime.MinValue ? _startupTime : _readyTime;
+                var initTime = (_fullReadyTime - startTime).TotalSeconds;
                 _initializationCompleted = true;
 
                 _ui?.EnableInput();
