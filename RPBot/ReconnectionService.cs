@@ -99,7 +99,7 @@ namespace RPBot
                 if (_client.ConnectionState != ConnectionState.Disconnected)
                 {
                     await Log(" Останавливаем клиент перед перезапуском...");
-                    try { await _client.StopAsync(); } catch { }
+                    try { await _client.StopAsync(); } catch (Exception ex) { await Log($"Error stopping client before restart: {ex.Message}"); }
                     await Task.Delay(2000, cancellationToken);
                 }
 
@@ -249,7 +249,7 @@ namespace RPBot
                 _isShuttingDown = true;
 
                 // Полная остановка
-                try { await _client.StopAsync(); } catch { }
+                try { await _client.StopAsync(); } catch (Exception ex) { await Log($"Error stopping client during FullRestart: {ex.Message}"); }
                 await Task.Delay(3000);
 
                 // Сигнал для Program.cs на пересоздание клиента
@@ -308,7 +308,7 @@ namespace RPBot
         public void Shutdown()
         {
             _isShuttingDown = true;
-            try { _reconnectCts.Cancel(); } catch { }
+            try { _reconnectCts.Cancel(); } catch (Exception ex) { Console.WriteLine($"Error cancelling reconnect token: {ex.Message}"); }
         }
 
         private Task Log(string message)
@@ -320,9 +320,9 @@ namespace RPBot
         public void Dispose()
         {
             _isShuttingDown = true;
-            try { _reconnectCts?.Cancel(); } catch { }
-            try { _reconnectCts?.Dispose(); } catch { }
-            try { _reconnectLock?.Dispose(); } catch { }
+            try { _reconnectCts?.Cancel(); } catch (Exception ex) { Console.WriteLine($"Error cancelling reconnect token during dispose: {ex.Message}"); }
+            try { _reconnectCts?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing reconnect token: {ex.Message}"); }
+            try { _reconnectLock?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing reconnect lock: {ex.Message}"); }
 
             // Clear event subscribers to avoid keeping references
             OnReconnectStarted = null;

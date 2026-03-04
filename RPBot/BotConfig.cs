@@ -11,6 +11,18 @@ namespace RPBot
 {
     public class BotConfig
     {
+        // Текущая загруженная конфигурация (удобство для доступа из других классов)
+        public static BotConfig? Current { get; private set; }
+
+        // Утилита: если путь относительный — трактуем его относительно каталога приложения
+        public static string ResolvePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return AppContext.BaseDirectory;
+
+            return Path.IsPathRooted(path) ? path : Path.Combine(AppContext.BaseDirectory, path);
+        }
+
         // Токен бота — хранится в config.json или в переменной окружения DISCORD_BOT_TOKEN
         public string? BotToken { get; set; } = null;
 
@@ -36,25 +48,54 @@ namespace RPBot
         // Директория для логов
         public string LogDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Logs");
 
+        // Директория с картинками для бросков (например Numbers)
+        public string NumbersDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Numbers");
+
+        // Путь до скрипта перезапуска (может быть относительным к каталогу приложения)
+        public string RestartScriptPath { get; set; } = "restart_bot.ps1";
+
+        // Директория для отчетов об ошибках (bug reports)
+        public string BugReportDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Logs");
+
+        // Версия бота (отображается в логах/статусах)
+        public string BotVersion { get; set; } = "0.6.0.0";
+
+        // Список слов, используемых по умолчанию в фильтре мата (нижний регистр лучше)
+        public List<string> DefaultSwearWords { get; set; } = new List<string>
+        {
+            "badword1",
+            "badword2",
+            "бляд",
+            "сука"
+        };
+
         // Загрузить конфигурацию из файла
         public static BotConfig Load(string path = "config.json")
         {
-            if (File.Exists(path))
+            var resolvedPath = ResolvePath(path);
+
+            if (File.Exists(resolvedPath))
             {
                 try
                 {
-                    string json = File.ReadAllText(path);
-                    return JsonSerializer.Deserialize<BotConfig>(json) ?? new BotConfig();
+                    string json = File.ReadAllText(resolvedPath);
+                    var cfg = JsonSerializer.Deserialize<BotConfig>(json) ?? new BotConfig();
+                    Current = cfg;
+                    return cfg;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    return new BotConfig();
+                    Console.WriteLine($"BotConfig.Load error reading '{resolvedPath}': {ex}");
+                    var cfg = new BotConfig();
+                    Current = cfg;
+                    return cfg;
                 }
             }
 
             // Создать конфиг по умолчанию и сохранить
             var config = new BotConfig();
-            config.Save(path);
+            Current = config;
+            config.Save(resolvedPath);
             return config;
         }
 
@@ -63,10 +104,16 @@ namespace RPBot
         {
             try
             {
+                var resolvedPath = ResolvePath(path);
+                var dir = Path.GetDirectoryName(resolvedPath) ?? AppContext.BaseDirectory;
+                Directory.CreateDirectory(dir);
                 string json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(path, json);
+                File.WriteAllText(resolvedPath, json);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"BotConfig.Save error writing '{path}': {ex}");
+            }
         }
     }
 
@@ -95,5 +142,9 @@ namespace RPBot
         public bool EnablePredictions { get; set; } = true;
         public int MaxPredictionsPerHour { get; set; } = 2; // Ограничение на количество прогнозов
         public int CooldownMinutes { get; set; } = 30; // Задержка между прогнозами
+        // Количество последовательных срабатываний фактора, требуемое для подтверждения прогнозa
+        public int ConfirmationsRequired { get; set; } = 2;
+        // Параметр экспоненциального сглаживания для heartbeat (0..1). Больше -> быстрее реагирует
+        public double HeartbeatSmoothingAlpha { get; set; } = 0.4;
     }
 }

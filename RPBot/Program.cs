@@ -12,6 +12,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
@@ -29,6 +30,12 @@ namespace RPBot
         public string WelcomeMessage { get; set; }
         public string LineMessage { get; set; }
         public ulong DefaultRoleID { get; set; }
+        // Включить фильтр мата для этого сервера
+        public bool SwearFilterEnabled { get; set; } = false;
+        // Доп. список слов для фильтрации на уровне сервера (если пуст — используются BotConfig.DefaultSwearWords)
+        public List<string> SwearWords { get; set; } = new List<string>();
+        // Включены ли прогнозы для этого сервера (если false — прогнозы не будут отправляться в каналы этого сервера)
+        public bool PredictionsEnabled { get; set; } = true;
     }
 
     public enum StartupType
@@ -44,6 +51,12 @@ namespace RPBot
         bool ShouldRestart { get; }
         Task RestartAsync();
         Task StopAsync();
+
+        // Управление конфигурациями серверов (доступно из UI)
+        Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync();
+        Task<ServerConfig?> GetServerConfigAsync(ulong guildId);
+        Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null);
+        Task ResetServerConfigAsync(ulong guildId);
     }
 
     class Program : IDisposable, IBotController
@@ -61,6 +74,7 @@ namespace RPBot
         private ReconnectionService _reconnectionService;
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
+        private Task? _backgroundMonitoringTask;
 
         // Centralized cleanup for services to avoid leaks when recreating
         private void CleanupServices()
@@ -102,10 +116,67 @@ namespace RPBot
 
         private BotConfig _config;
         private Dictionary<ulong, ServerConfig> _serverConfigs = new();
+        private string _serverConfigsPath;
+
+        // Сохранение/загрузка конфигураций серверов
+        private void SaveServerConfigs()
+        {
+            try
+            {
+                var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
+                var resolved = BotConfig.ResolvePath(path);
+                var dir = Path.GetDirectoryName(resolved) ?? AppContext.BaseDirectory;
+                Directory.CreateDirectory(dir);
+
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                var json = JsonSerializer.Serialize(_serverConfigs, options);
+                File.WriteAllText(resolved, json);
+
+                // Синхронизируем статический словарь
+                foreach (var kv in _serverConfigs)
+                {
+                    ServerConfigs[kv.Key] = kv.Value;
+                }
+            }
+            catch (Exception ex)
+            {
+                _ = LogError($"Ошибка сохранения serverconfigs: {ex.Message}");
+            }
+        }
+
+        private void LoadServerConfigs()
+        {
+            try
+            {
+                var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
+                var resolved = BotConfig.ResolvePath(path);
+
+                if (!File.Exists(resolved))
+                    return;
+
+                var json = File.ReadAllText(resolved);
+                var options = new JsonSerializerOptions();
+                var dict = JsonSerializer.Deserialize<Dictionary<ulong, ServerConfig>>(json, options);
+                if (dict != null)
+                {
+                    _serverConfigs = dict;
+                    foreach (var kv in dict)
+                    {
+                        ServerConfigs[kv.Key] = kv.Value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _ = LogError($"Ошибка загрузки serverconfigs: {ex.Message}");
+            }
+        }
 
         public Program()
         {
             _config = BotConfig.Load("config.json");
+            _serverConfigsPath = BotConfig.ResolvePath("serverconfigs.json");
+            LoadServerConfigs();
 
             _client = CreateDiscordClient();
             _commandService = new CommandService();
@@ -197,6 +268,139 @@ namespace RPBot
             _reconnectionService?.Shutdown();
             await _client.StopAsync();
             Environment.Exit(0);
+        }
+
+        // Методы для доступа из UI (реализация IBotController)
+        public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
+        {
+            return Task.FromResult(new Dictionary<ulong, ServerConfig>(_serverConfigs));
+        }
+
+        public Task<ServerConfig?> GetServerConfigAsync(ulong guildId)
+        {
+            if (_serverConfigs.TryGetValue(guildId, out var cfg))
+                return Task.FromResult<ServerConfig?>(cfg);
+            return Task.FromResult<ServerConfig?>(null);
+        }
+
+        public Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null)
+        {
+            if (!_serverConfigs.TryGetValue(guildId, out var sconfig))
+            {
+                sconfig = new ServerConfig { GuildID = guildId };
+                _serverConfigs[guildId] = sconfig;
+            }
+
+            switch (key.ToLowerInvariant())
+            {
+                case "moderation_channel":
+                    if (channelId.HasValue) sconfig.ModerateChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var mc)) sconfig.ModerateChannelID = mc;
+                    break;
+                case "roll_channel":
+                    if (channelId.HasValue) sconfig.RollChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var rc)) sconfig.RollChannelID = rc;
+                    break;
+                case "stats_channel":
+                    if (channelId.HasValue) sconfig.StatsChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var sc)) sconfig.StatsChannelID = sc;
+                    break;
+                case "record_channel":
+                    if (channelId.HasValue) sconfig.RecordChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var rec)) sconfig.RecordChannelID = rec;
+                    break;
+                case "welcome_channel":
+                    if (channelId.HasValue) sconfig.WelcomeChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var wc)) sconfig.WelcomeChannelID = wc;
+                    break;
+                case "welcome_message":
+                    sconfig.WelcomeMessage = value ?? "";
+                    break;
+                case "line_message":
+                    sconfig.LineMessage = value ?? "";
+                    break;
+                case "default_role":
+                    if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var dr)) sconfig.DefaultRoleID = dr;
+                    break;
+                case "swear_filter":
+                    if (toggle.HasValue) sconfig.SwearFilterEnabled = toggle.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var b)) sconfig.SwearFilterEnabled = b;
+                    break;
+                case "swear_words":
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        sconfig.SwearWords = value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                    }
+                    break;
+                case "predictions":
+                    if (toggle.HasValue) sconfig.PredictionsEnabled = toggle.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var p)) sconfig.PredictionsEnabled = p;
+                    break;
+                default:
+                    break;
+            }
+
+            // Валидация: если указаны channel/role - проверим, что они есть на сервере и залогируем предупреждения
+            try
+            {
+                var guild = _client.GetGuild(guildId);
+                if (guild != null)
+                {
+                    if (sconfig.ModerateChannelID != 0)
+                    {
+                        var ch = guild.GetTextChannel(sconfig.ModerateChannelID);
+                        if (ch == null)
+                            _ = LogInfo($"Предупреждение: moderation_channel {sconfig.ModerateChannelID} не найден на сервере {guildId}.");
+                    }
+
+                    if (sconfig.RollChannelID != 0)
+                    {
+                        var ch = guild.GetTextChannel(sconfig.RollChannelID);
+                        if (ch == null)
+                            _ = LogInfo($"Предупреждение: roll_channel {sconfig.RollChannelID} не найден на сервере {guildId}.");
+                    }
+
+                    if (sconfig.StatsChannelID != 0)
+                    {
+                        var ch = guild.GetTextChannel(sconfig.StatsChannelID);
+                        if (ch == null)
+                            _ = LogInfo($"Предупреждение: stats_channel {sconfig.StatsChannelID} не найден на сервере {guildId}.");
+                    }
+
+                    if (sconfig.WelcomeChannelID != 0)
+                    {
+                        var ch = guild.GetTextChannel(sconfig.WelcomeChannelID);
+                        if (ch == null)
+                            _ = LogInfo($"Предупреждение: welcome_channel {sconfig.WelcomeChannelID} не найден на сервере {guildId}.");
+                    }
+
+                    if (sconfig.DefaultRoleID != 0)
+                    {
+                        var role = guild.Roles.FirstOrDefault(r => r.Id == sconfig.DefaultRoleID);
+                        if (role == null)
+                            _ = LogInfo($"Предупреждение: роль {sconfig.DefaultRoleID} не найдена на сервере {guildId}.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _ = LogError($"Ошибка валидации конфигурации при установке: {ex.Message}");
+            }
+
+            SaveServerConfigs();
+            return Task.CompletedTask;
+        }
+
+        public Task ResetServerConfigAsync(ulong guildId)
+        {
+            if (_serverConfigs.ContainsKey(guildId))
+                _serverConfigs.Remove(guildId);
+
+            if (ServerConfigs.ContainsKey(guildId))
+                ServerConfigs.Remove(guildId);
+
+            SaveServerConfigs();
+            return Task.CompletedTask;
         }
 
         public void SetStartupType(StartupType type)
@@ -300,7 +504,7 @@ namespace RPBot
                 await _restartLock.WaitAsync();
                 try
                 {
-                    await LogStartup(" Инициализация бота... Версия 0.6.0.0 (с системой прогнозов)");
+                    await LogStartup($" Инициализация бота... Версия {_config?.BotVersion ?? "0.6.0.0"}");
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
@@ -347,8 +551,8 @@ namespace RPBot
                         // Запускаем инициализацию с опросом
                         await InitializeBotWithProgress();
 
-                        // Запускаем фоновый мониторинг
-                        _ = Task.Run(BackgroundMonitoringLoop);
+                        // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
+                        _backgroundMonitoringTask = Task.Run(BackgroundMonitoringLoopWrapper);
 
                         while (!_shouldExit)
                         {
@@ -369,6 +573,7 @@ namespace RPBot
                         }
                     }
                 }
+
                 catch (Exception ex)
                 {
                     await LogStartup($" Критическая ошибка: {ex.Message}");
@@ -382,6 +587,7 @@ namespace RPBot
                     _restartLock.Release();
                 }
             }
+// No-op patch to ensure file updated
         }
 
         private async Task SetupDiscordEvents()
@@ -478,6 +684,18 @@ namespace RPBot
             }
         }
 
+        private async Task BackgroundMonitoringLoopWrapper()
+        {
+            try
+            {
+                await BackgroundMonitoringLoop();
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"⚠️ BackgroundMonitoringLoop failed: {ex}");
+            }
+        }
+
         private async Task OnDisconnectDetected(Exception exception)
         {
             var reason = _reconnectionService.ConnectionInfo.LastDisconnectReason;
@@ -523,10 +741,17 @@ namespace RPBot
         {
             try
             {
+                // Глобальная проверка: если в конфиге отключены прогнозы — не отправляем сообщения
+                if (_config?.Prediction != null && !_config.Prediction.EnablePredictions)
+                    return;
+
                 foreach (var guild in _client.Guilds)
                 {
                     if (ServerConfigs.TryGetValue(guild.Id, out var config))
                     {
+                        // Если для конкретного сервера прогнозы отключены — пропускаем
+                        if (!config.PredictionsEnabled)
+                            continue;
                         var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                         if (channel != null)
                         {
@@ -544,7 +769,17 @@ namespace RPBot
 
         private string GetBotToken()
         {
-            return "MTMzMTYyODkxMDE1MjEyMjM4OA.GJutjl.wTDw8Tp1wI8ZNehE4TnFNkNKTFRJQ2Q0DPG4JI";
+            // Сначала пробуем переменную окружения (безопаснее для деплоя)
+            var env = Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN");
+            if (!string.IsNullOrWhiteSpace(env))
+                return env.Trim();
+
+            // Затем конфиг
+            if (!string.IsNullOrWhiteSpace(_config?.BotToken))
+                return _config.BotToken.Trim();
+
+            // Если токен не найден — бросаем, чтобы не пытаться залогиниться пустым токеном
+            throw new InvalidOperationException("Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in config.json.");
         }
 
         private bool _readyCompleted = false;
@@ -608,7 +843,7 @@ namespace RPBot
                     if (ServerConfigs.TryGetValue(guild.Id, out var config))
                     {
                         await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                            $" Первичный запуск. Версия: 0.6.0.0");
+                            $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
                         await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
                     }
                     await Task.Delay(200);
@@ -654,7 +889,7 @@ namespace RPBot
             try
             {
                 // Останавливаем реконнект-сервис корректно и затем очищаем
-                try { _reconnectionService?.Shutdown(); } catch { }
+                try { _reconnectionService?.Shutdown(); } catch (Exception ex) { Console.WriteLine($"Error shutting reconnection service: {ex}"); }
                 CleanupServices();
 
                 // Остановим UI корректно
@@ -664,38 +899,38 @@ namespace RPBot
                     _ui = null;
                     _uiStarted = false;
                 }
-                catch { }
+                catch (Exception ex) { Console.WriteLine($"Error disposing UI: {ex}"); }
 
                 // Останавливаем клиента
                 try
                 {
                     if (_client != null)
                     {
-                        try { _client.Ready -= OnReady; } catch { }
-                        try { _client.Disconnected -= OnDisconnected; } catch { }
-                        try { _client.UserJoined -= UserJoined; } catch { }
-                        try { _client.MessageReceived -= HandleCommandAsync; } catch { }
-                        try { _client.SlashCommandExecuted -= OnSlashCommandExecuted; } catch { }
-                        try { _client.ModalSubmitted -= HandleModalSubmitted; } catch { }
-                        try { _client.ButtonExecuted -= HandleButtonExecuted; } catch { }
-                        try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch { }
-                        try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch { }
+                        try { _client.Ready -= OnReady; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing Ready: {ex}"); }
+                        try { _client.Disconnected -= OnDisconnected; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing Disconnected: {ex}"); }
+                        try { _client.UserJoined -= UserJoined; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing UserJoined: {ex}"); }
+                        try { _client.MessageReceived -= HandleCommandAsync; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing MessageReceived: {ex}"); }
+                        try { _client.SlashCommandExecuted -= OnSlashCommandExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing SlashCommandExecuted: {ex}"); }
+                        try { _client.ModalSubmitted -= HandleModalSubmitted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ModalSubmitted: {ex}"); }
+                        try { _client.ButtonExecuted -= HandleButtonExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ButtonExecuted: {ex}"); }
+                        try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
+                        try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCompleted: {ex}"); }
 
-                        try { await _client.StopAsync(); } catch { }
-                        try { _client.Dispose(); } catch { }
+                        try { await _client.StopAsync(); } catch (Exception ex) { Console.WriteLine($"Error stopping client: {ex}"); }
+                        try { _client.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing client: {ex}"); }
                         _client = null;
                     }
                 }
-                catch { }
+                catch (Exception ex) { Console.WriteLine($"Error during client shutdown: {ex}"); }
 
                 // Очистка модулей (таймеры/статические данные)
-                try { QueueModule.ShutdownQueue(); } catch { }
+                try { QueueModule.ShutdownQueue(); } catch (Exception ex) { Console.WriteLine($"Error shutting down QueueModule: {ex}"); }
 
                 // Освобождение лог-семафора
-                try { _logSemaphore?.Dispose(); } catch { }
+                try { _logSemaphore?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing log semaphore: {ex}"); }
 
                 // Освобождение локального семафора рестарта
-                try { _restartLock?.Dispose(); } catch { }
+                try { _restartLock?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing restart lock: {ex}"); }
             }
             catch (Exception ex)
             {
@@ -766,6 +1001,45 @@ namespace RPBot
             var context = new SocketCommandContext(_client, message);
             var user = message.Author as SocketGuildUser;
 
+            // Простая фильтрация мата: если включена для сервера — удаляем сообщение и логируем
+            try
+            {
+                if (message.Channel is SocketTextChannel textChannel)
+                {
+                    var guildId = textChannel.Guild.Id;
+                    if (_serverConfigs.TryGetValue(guildId, out var sconfig) && sconfig.SwearFilterEnabled)
+                    {
+                        var swearWords = (sconfig.SwearWords != null && sconfig.SwearWords.Count > 0)
+                            ? sconfig.SwearWords
+                            : (_config != null ? (BotConfig.Current?.DefaultSwearWords ?? new List<string>()) : new List<string>());
+
+                        var lower = message.Content.ToLowerInvariant();
+                        if (swearWords.Any(sw => !string.IsNullOrWhiteSpace(sw) && lower.Contains(sw.ToLowerInvariant())))
+                        {
+                            try { await message.DeleteAsync(); } catch { }
+                            // логируем в модерационный канал
+                            if (sconfig.ModerateChannelID != 0)
+                            {
+                                var modChan = await _client.GetChannelAsync(sconfig.ModerateChannelID) as ITextChannel;
+                                if (modChan != null)
+                                {
+                                    await modChan.SendMessageAsync($"Сообщение пользователя {message.Author.Username} удалено — найдено запрещённое слово.");
+                                }
+                            }
+                            else
+                            {
+                                await LogInfo($"Удалено сообщение пользователя {message.Author.Username} (сработал фильтр мата)");
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка в фильтре мата: {ex.Message}");
+            }
+
             var (fludChannelId, rollChannelId, generalRGChannelID, responseMessage, emoji, lineMessages, emoteKappa, emoteAga) = GetResponseData(message);
 
             // Определяем, является ли канал голосовым
@@ -776,7 +1050,7 @@ namespace RPBot
             bool isAllowedTextChannel = allowedTextChannels.Contains(message.Channel.Id);
 
             // Приветствие
-            var lowerContent = message.Content.ToLower();
+            var lowerContent = message.Content.ToLowerInvariant();
             var greetings = new[] { "привет", "приветствую", "здравствуйте", "здравствуй", "hello", "hi", "хай", "ку", "здрасте" };
 
             // Разбиваем сообщение на отдельные слова
@@ -790,7 +1064,7 @@ namespace RPBot
             }
 
             // Обработка команды "!команды" (доступна везде)
-            if (message.Content.ToLower() == "!команды")
+            if (message.Content.ToLowerInvariant() == "!команды")
             {
                 var commandsList = new StringBuilder();
                 commandsList.AppendLine("Доступные команды:");
@@ -906,7 +1180,7 @@ namespace RPBot
                     await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
                     await LogStartup($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
 
-                    var scriptPath = "C:/Favorites/Bot Discord/RPBot/RPBot/restart_bot.ps1";
+                    var scriptPath = BotConfig.ResolvePath(BotConfig.Current?.RestartScriptPath ?? "restart_bot.ps1");
 
                     var processStartInfo = new ProcessStartInfo
                     {
@@ -1073,11 +1347,14 @@ namespace RPBot
 
         private int GetBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            Directory.CreateDirectory(logDir);
+            string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
             if (File.Exists(counterFilePath))
             {
-                return int.Parse(File.ReadAllText(counterFilePath));
+                if (int.TryParse(File.ReadAllText(counterFilePath), out var value))
+                    return value;
             }
 
             return 0;
@@ -1122,6 +1399,9 @@ namespace RPBot
                     break;
                 case "start":
                     await StartGameSession(command);
+                    break;
+                case "settings":
+                    await SettingsCommand(command);
                     break;
                 case "close_chat":
                     await CloseChatCommand(command);
@@ -1263,11 +1543,306 @@ namespace RPBot
             await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
         }
 
+        private async Task SettingsCommand(SocketSlashCommand command)
+        {
+            // Проверяем, что команда запущена в гильдии
+            if (command.GuildId == null)
+            {
+                await command.RespondAsync("Эта команда должна выполняться в контексте сервера (guild).", ephemeral: true);
+                return;
+            }
+
+            var guildId = command.GuildId.Value;
+            var user = command.User as SocketGuildUser;
+            if (user == null)
+            {
+                await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                return;
+            }
+
+            // Только администраторы/менеджеры сервера
+            if (!user.GuildPermissions.Administrator && !user.GuildPermissions.ManageGuild)
+            {
+                await command.RespondAsync("У вас нет прав для управления настройками (требуется право Manage Guild или Admin).", ephemeral: true);
+                return;
+            }
+
+            var actionOpt = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString()?.ToLowerInvariant();
+            var keyOpt = command.Data.Options.FirstOrDefault(o => o.Name == "key")?.Value?.ToString()?.ToLowerInvariant();
+            var valueOpt = command.Data.Options.FirstOrDefault(o => o.Name == "value")?.Value?.ToString();
+            var channelOpt = command.Data.Options.FirstOrDefault(o => o.Name == "channel")?.Value;
+            var toggleOpt = command.Data.Options.FirstOrDefault(o => o.Name == "toggle")?.Value;
+
+            if (string.IsNullOrWhiteSpace(actionOpt))
+            {
+                await command.RespondAsync("Укажите действие: get/set/list/reset", ephemeral: true);
+                return;
+            }
+
+            if (!_serverConfigs.TryGetValue(guildId, out var sconfig))
+            {
+                sconfig = new ServerConfig { GuildID = guildId };
+                _serverConfigs[guildId] = sconfig;
+            }
+
+            switch (actionOpt)
+            {
+                case "list":
+                    {
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"Настройки для сервера {guildId}:");
+                        sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
+                        sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
+                        sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
+                        sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
+                        sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
+                        sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
+                        sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
+                        sb.AppendLine($"line_message: {sconfig.LineMessage}");
+                        sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+                        sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
+                        await command.RespondAsync(sb.ToString(), ephemeral: true);
+                    }
+                    break;
+
+                case "get":
+                    {
+                        if (string.IsNullOrWhiteSpace(keyOpt))
+                        {
+                            await command.RespondAsync("Укажите ключ настройки (например: moderation_channel).", ephemeral: true);
+                            return;
+                        }
+
+                        string result = keyOpt switch
+                        {
+                            "moderation_channel" => sconfig.ModerateChannelID.ToString(),
+                            "welcome_channel" => sconfig.WelcomeChannelID.ToString(),
+                            "roll_channel" => sconfig.RollChannelID.ToString(),
+                            "stats_channel" => sconfig.StatsChannelID.ToString(),
+                            "record_channel" => sconfig.RecordChannelID.ToString(),
+                            "welcome_message" => sconfig.WelcomeMessage ?? "",
+                            "line_message" => sconfig.LineMessage ?? "",
+                            "general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
+                            "default_role" => sconfig.DefaultRoleID.ToString(),
+                            "swear_filter" => sconfig.SwearFilterEnabled.ToString(),
+                            _ => "Неизвестный ключ"
+                        };
+
+                        await command.RespondAsync(result, ephemeral: true);
+                    }
+                    break;
+
+                case "set":
+                    {
+                        if (string.IsNullOrWhiteSpace(keyOpt))
+                        {
+                            await command.RespondAsync("Укажите ключ настройки для установки.", ephemeral: true);
+                            return;
+                        }
+
+                        switch (keyOpt)
+                        {
+                            case "moderation_channel":
+                                {
+                                    ulong id = 0;
+                                    if (channelOpt != null)
+                                        id = Convert.ToUInt64(channelOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                        id = v;
+
+                                    // Валидация: канал существует и принадлежит данной гильдии
+                                    var guild = _client.GetGuild(guildId);
+                                    if (id != 0)
+                                    {
+                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                                        if (chan == null || chan.Guild.Id != guildId)
+                                        {
+                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
+                                            return;
+                                        }
+                                    }
+
+                                    sconfig.ModerateChannelID = id;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"moderation_channel установлен: {id}", ephemeral: true);
+                                }
+                                break;
+                            case "roll_channel":
+                                {
+                                    ulong id = 0;
+                                    if (channelOpt != null)
+                                        id = Convert.ToUInt64(channelOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                        id = v;
+                                    var guild = _client.GetGuild(guildId);
+                                    if (id != 0)
+                                    {
+                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                                        if (chan == null || chan.Guild.Id != guildId)
+                                        {
+                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
+                                            return;
+                                        }
+                                    }
+
+                                    sconfig.RollChannelID = id;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"roll_channel установлен: {id}", ephemeral: true);
+                                }
+                                break;
+                            case "stats_channel":
+                                {
+                                    ulong id = 0;
+                                    if (channelOpt != null)
+                                        id = Convert.ToUInt64(channelOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                        id = v;
+                                    var guild = _client.GetGuild(guildId);
+                                    if (id != 0)
+                                    {
+                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                                        if (chan == null || chan.Guild.Id != guildId)
+                                        {
+                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
+                                            return;
+                                        }
+                                    }
+
+                                    sconfig.StatsChannelID = id;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"stats_channel установлен: {id}", ephemeral: true);
+                                }
+                                break;
+                            case "welcome_channel":
+                                {
+                                    ulong id = 0;
+                                    if (channelOpt != null)
+                                        id = Convert.ToUInt64(channelOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                        id = v;
+                                    var guild = _client.GetGuild(guildId);
+                                    if (id != 0)
+                                    {
+                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                                        if (chan == null || chan.Guild.Id != guildId)
+                                        {
+                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
+                                            return;
+                                        }
+                                    }
+
+                                    sconfig.WelcomeChannelID = id;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"welcome_channel установлен: {id}", ephemeral: true);
+                                }
+                                break;
+                            case "welcome_message":
+                                {
+                                    sconfig.WelcomeMessage = valueOpt ?? "";
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"welcome_message установлен.", ephemeral: true);
+                                }
+                                break;
+                            case "line_message":
+                                {
+                                    sconfig.LineMessage = valueOpt ?? "";
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"line_message установлен.", ephemeral: true);
+                                }
+                                break;
+                            case "general_rg_channel":
+                                {
+                                    ulong id = 0;
+                                    if (channelOpt != null)
+                                        id = Convert.ToUInt64(channelOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                        id = v;
+
+                                    var guild = _client.GetGuild(guildId);
+                                    if (id != 0)
+                                    {
+                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                                        if (chan == null || chan.Guild.Id != guildId)
+                                        {
+                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
+                                            return;
+                                        }
+                                    }
+
+                                    sconfig.GeneralRGChannelID = id;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"general_rg_channel установлен: {id}", ephemeral: true);
+                                }
+                                break;
+                            case "default_role":
+                                {
+                                    if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+                                    {
+                                        var guild = _client.GetGuild(guildId);
+                                        var role = guild?.Roles.FirstOrDefault(r => r.Id == v);
+                                        if (role == null)
+                                        {
+                                            await command.RespondAsync($"Ошибка: роль с ID {v} не найдена на этом сервере.", ephemeral: true);
+                                            return;
+                                        }
+
+                                        sconfig.DefaultRoleID = v;
+                                        SaveServerConfigs();
+                                        await command.RespondAsync($"default_role установлен: {v}", ephemeral: true);
+                                    }
+                                    else
+                                    {
+                                        await command.RespondAsync("Ошибка: укажите ID роли числом.", ephemeral: true);
+                                    }
+                                }
+                                break;
+                            case "swear_filter":
+                                {
+                                    bool state = false;
+                                    if (toggleOpt != null)
+                                        state = Convert.ToBoolean(toggleOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && bool.TryParse(valueOpt, out var b))
+                                        state = b;
+
+                                    sconfig.SwearFilterEnabled = state;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"swear_filter установлен: {state}", ephemeral: true);
+                                }
+                                break;
+                            default:
+                                await command.RespondAsync("Неизвестный ключ для установки.", ephemeral: true);
+                                break;
+                        }
+                    }
+                    break;
+
+                case "reset":
+                    {
+                        if (_serverConfigs.ContainsKey(guildId))
+                        {
+                            _serverConfigs.Remove(guildId);
+                            SaveServerConfigs();
+                            await command.RespondAsync("Настройки сервера сброшены до значений по умолчанию.", ephemeral: true);
+                        }
+                        else
+                        {
+                            await command.RespondAsync("Настройки для этого сервера не найдены.", ephemeral: true);
+                        }
+                    }
+                    break;
+
+                default:
+                    await command.RespondAsync("Неизвестное действие.", ephemeral: true);
+                    break;
+            }
+        }
+
         private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
         private async Task LogStartup(string message)
         {
-            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "StartupLog.txt");
 
             await _logSemaphore.WaitAsync();
@@ -1300,7 +1875,8 @@ namespace RPBot
 
         private async Task LogError(string errorMessage)
         {
-            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "ErrorLog.txt");
 
             await _logSemaphore.WaitAsync();
@@ -1331,7 +1907,8 @@ namespace RPBot
 
         private async Task LogInfo(string infoMessage)
         {
-            string logDir = @"C:\Favorites\Desktop\НРИ\Discord_BR";
+            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "InfoLog.txt");
 
             await _logSemaphore.WaitAsync();
@@ -1701,7 +2278,8 @@ namespace RPBot
                 if (count == 1)
                 {
                     var result = results[0];
-                    var filePath = Path.Combine("Numbers", $"{result}.png");
+                    var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
+                    var filePath = Path.Combine(numbersDir, $"{result}.png");
                     Color embedColor = GetGradientColor(result, 1, max);
 
                     Console.WriteLine($"Результат броска: {result}");
@@ -1728,7 +2306,8 @@ namespace RPBot
                     foreach (var result in results)
                     {
                         Console.WriteLine($"Результат броска: {result}");
-                        var filePath = Path.Combine("Numbers", $"{result}.png");
+                        var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
+                        var filePath = Path.Combine(numbersDir, $"{result}.png");
                         if (File.Exists(filePath))
                         {
                             files.Add(new FileAttachment(filePath, Path.GetFileName(filePath)));
@@ -2096,7 +2675,7 @@ namespace RPBot
                 return;
             }
 
-            string directoryPath = @"E:\НРИ\RoleplayerBotDiscord\Logs";
+            string directoryPath = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? Path.Combine("Logs"));
             Directory.CreateDirectory(directoryPath);
 
             string filePath = Path.Combine(directoryPath, $"{user.Username}.txt");
@@ -2114,7 +2693,9 @@ namespace RPBot
 
         private void IncrementBugReportCounter()
         {
-            string counterFilePath = @"E:\НРИ\RoleplayerBotDiscord\Logs\bug_report_counter.txt";
+            var logDir = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? Path.Combine("Logs"));
+            Directory.CreateDirectory(logDir);
+            string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
             if (!File.Exists(counterFilePath))
             {
@@ -2122,9 +2703,15 @@ namespace RPBot
             }
             else
             {
-                int currentCount = int.Parse(File.ReadAllText(counterFilePath));
-                currentCount++;
-                File.WriteAllText(counterFilePath, currentCount.ToString());
+                if (int.TryParse(File.ReadAllText(counterFilePath), out var currentCount))
+                {
+                    currentCount++;
+                    File.WriteAllText(counterFilePath, currentCount.ToString());
+                }
+                else
+                {
+                    File.WriteAllText(counterFilePath, "1");
+                }
             }
         }
     }

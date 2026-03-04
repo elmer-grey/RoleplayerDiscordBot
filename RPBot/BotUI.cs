@@ -1,6 +1,8 @@
 ﻿using Discord.WebSocket;
 using Terminal.Gui;
 using static Terminal.Gui.View;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace RPBot
 {
@@ -43,6 +45,277 @@ namespace RPBot
             _statusNotifier = statusNotifier;
         }
 
+        private async Task ShowSettingsInteractive()
+        {
+            try
+            {
+                var guilds = _client.Guilds.ToList();
+                if (guilds.Count == 0)
+                {
+                    AddCommandOutput("Нет доступных серверов для выбора.");
+                    return;
+                }
+
+                int selectedGuildIndex = -1;
+                var tcsGuild = new TaskCompletionSource<int>();
+
+                Application.MainLoop.Invoke(() =>
+                {
+                    var dlg = new Dialog("Выберите сервер", 60, 20);
+                    var items = guilds.Select(g => $"{g.Name} ({g.Id})").ToList();
+                    var list = new ListView(items)
+                    {
+                        X = 0,
+                        Y = 0,
+                        Width = Dim.Fill(),
+                        Height = Dim.Fill() - 3
+                    };
+
+                    var ok = new Button("OK") { X = Pos.Percent(20), Y = Pos.Bottom(list) };
+                    var cancel = new Button("Cancel") { X = Pos.Percent(65), Y = Pos.Bottom(list) };
+
+                    ok.Clicked += () =>
+                    {
+                        selectedGuildIndex = list.SelectedItem;
+                        Application.RequestStop(dlg);
+                        tcsGuild.TrySetResult(selectedGuildIndex);
+                    };
+                    cancel.Clicked += () =>
+                    {
+                        Application.RequestStop(dlg);
+                        tcsGuild.TrySetResult(-1);
+                    };
+
+                    dlg.Add(list, ok, cancel);
+                    Application.Run(dlg);
+                });
+
+                selectedGuildIndex = await tcsGuild.Task;
+                if (selectedGuildIndex < 0)
+                {
+                    AddCommandOutput("Операция отменена.");
+                    return;
+                }
+
+                var selectedGuild = guilds[selectedGuildIndex];
+                var guildId = selectedGuild.Id;
+
+                // Выбор действия
+                string[] actions = new[] { "get", "set", "list", "reset" };
+                int actionIndex = await ShowSelectionDialog("Выберите действие", actions);
+                if (actionIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                var action = actions[actionIndex];
+
+                if (action == "list")
+                {
+                    var cfg = await _botController.GetServerConfigAsync(guildId);
+                    if (cfg == null)
+                    {
+                        AddCommandOutput($"Настройки для {guildId} не найдены.");
+                    }
+                    else
+                    {
+                        AddCommandOutput($"Настройки для {guildId}:");
+                        AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
+                        AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
+                        AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
+                        AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
+                        AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
+                        AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
+                        AddCommandOutput($"line_message: {cfg.LineMessage}");
+                        AddCommandOutput($"general_rg_channel: {cfg.GeneralRGChannelID}");
+                        AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
+                        AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
+                        AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
+                    }
+                    return;
+                }
+
+                if (action == "reset")
+                {
+                    await _botController.ResetServerConfigAsync(guildId);
+                    AddCommandOutput($"Настройки для {guildId} сброшены.");
+                    return;
+                }
+
+                // Действия get/set требуют выбора ключа
+                string[] keys = new[] {
+                    "moderation_channel","welcome_channel","roll_channel","stats_channel","record_channel","general_rg_channel",
+                    "welcome_message","line_message","default_role","swear_filter","swear_words"
+                };
+
+                int keyIndex = await ShowSelectionDialog("Выберите ключ", keys);
+                if (keyIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                var key = keys[keyIndex];
+
+                if (action == "get")
+                {
+                    var cfg = await _botController.GetServerConfigAsync(guildId);
+                    if (cfg == null) { AddCommandOutput($"Настройки для {guildId} не найдены."); return; }
+                    string res = key switch
+                    {
+                        "moderation_channel" => cfg.ModerateChannelID.ToString(),
+                        "welcome_channel" => cfg.WelcomeChannelID.ToString(),
+                        "roll_channel" => cfg.RollChannelID.ToString(),
+                        "stats_channel" => cfg.StatsChannelID.ToString(),
+                        "record_channel" => cfg.RecordChannelID.ToString(),
+                        "welcome_message" => cfg.WelcomeMessage ?? "",
+                        "line_message" => cfg.LineMessage ?? "",
+                        "default_role" => cfg.DefaultRoleID.ToString(),
+                        "swear_filter" => cfg.SwearFilterEnabled.ToString(),
+                        "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+                        _ => "Неизвестный ключ"
+                    };
+                    AddCommandOutput(res);
+                    return;
+                }
+
+                // action == set
+                ulong? channelId = null;
+                bool? toggle = null;
+                string value = null;
+
+                if (key.EndsWith("_channel") )
+                {
+                    // Покажем список текстовых каналов сервера
+                    var textChannels = selectedGuild.TextChannels.OrderBy(c => c.Position).ToList();
+                    if (textChannels.Count > 0)
+                    {
+                        var items = textChannels.Select(c => $"{c.Name} ({c.Id})").ToArray();
+                        int chIndex = await ShowSelectionDialog("Выберите канал", items);
+                        if (chIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                        channelId = textChannels[chIndex].Id;
+                    }
+                    else
+                    {
+                        AddCommandOutput("На сервере нет текстовых каналов для выбора.");
+                        return;
+                    }
+                }
+                else if (key == "default_role")
+                {
+                    var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
+                    var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
+                    int rIndex = await ShowSelectionDialog("Выберите роль", items);
+                    if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                    value = roles[rIndex].Id.ToString();
+                }
+                else if (key == "swear_filter")
+                {
+                    var opts = new[] { "true", "false" };
+                    int idx = await ShowSelectionDialog("Включить фильтр мата?", opts);
+                    if (idx < 0) { AddCommandOutput("Операция отменена."); return; }
+                    toggle = opts[idx] == "true";
+                }
+                else
+                {
+                    // Запросим текстовое значение
+                    var input = await ShowInputDialog($"Введите значение для {key}");
+                    if (input == null) { AddCommandOutput("Операция отменена."); return; }
+                    value = input;
+                }
+
+                // Валидация перед отправкой
+                if (channelId.HasValue)
+                {
+                    // проверим, что канал существует
+                    var ch = selectedGuild.GetTextChannel(channelId.Value);
+                    if (ch == null)
+                    {
+                        AddCommandOutput("Выбранный канал не найден на сервере.");
+                        return;
+                    }
+                }
+
+                await _botController.SetServerConfigValueAsync(guildId, key, value, channelId, toggle);
+                AddCommandOutput($"Настройка {key} для {guildId} обновлена.");
+            }
+            catch (Exception ex)
+            {
+                AddCommandOutput($"Ошибка интерактивной настройки: {ex.Message}");
+            }
+        }
+
+        private Task<int> ShowSelectionDialog(string title, IEnumerable<string> items)
+        {
+            var list = items.ToArray();
+            var tcs = new TaskCompletionSource<int>();
+            Application.MainLoop.Invoke(() =>
+            {
+                var dlg = new Dialog(title, 60, 20);
+                var lv = new ListView(list)
+                {
+                    X = 0,
+                    Y = 0,
+                    Width = Dim.Fill(),
+                    Height = Dim.Fill() - 3
+                };
+                var ok = new Button("OK") { X = Pos.Percent(20), Y = Pos.Bottom(lv) };
+                var cancel = new Button("Cancel") { X = Pos.Percent(65), Y = Pos.Bottom(lv) };
+                ok.Clicked += () => { tcs.TrySetResult(lv.SelectedItem); Application.RequestStop(dlg); };
+                cancel.Clicked += () => { tcs.TrySetResult(-1); Application.RequestStop(dlg); };
+                // Allow Enter to accept selection
+                dlg.KeyPress += (e) =>
+                {
+                    try
+                    {
+                        if (e.KeyEvent.Key == Key.Enter)
+                        {
+                            tcs.TrySetResult(lv.SelectedItem);
+                            Application.RequestStop(dlg);
+                            e.Handled = true;
+                        }
+                        else if (e.KeyEvent.Key == Key.Esc)
+                        {
+                            tcs.TrySetResult(-1);
+                            Application.RequestStop(dlg);
+                            e.Handled = true;
+                        }
+                    }
+                    catch { }
+                };
+                dlg.Add(lv, ok, cancel);
+                Application.Run(dlg);
+            });
+            return tcs.Task;
+        }
+
+        private Task<string> ShowInputDialog(string title)
+        {
+            var tcs = new TaskCompletionSource<string>();
+            Application.MainLoop.Invoke(() =>
+            {
+                var dlg = new Dialog(title, 60, 8);
+                var tf = new TextField("") { X = 0, Y = 0, Width = Dim.Fill() };
+                var ok = new Button("OK") { X = Pos.Percent(30), Y = 2 };
+                var cancel = new Button("Cancel") { X = Pos.Percent(60), Y = 2 };
+                ok.Clicked += () => { tcs.TrySetResult(tf.Text.ToString()); Application.RequestStop(dlg); };
+                cancel.Clicked += () => { tcs.TrySetResult(null); Application.RequestStop(dlg); };
+                dlg.KeyPress += (e) =>
+                {
+                    try
+                    {
+                        if (e.KeyEvent.Key == Key.Enter)
+                        {
+                            tcs.TrySetResult(tf.Text.ToString());
+                            Application.RequestStop(dlg);
+                            e.Handled = true;
+                        }
+                        else if (e.KeyEvent.Key == Key.Esc)
+                        {
+                            tcs.TrySetResult(null);
+                            Application.RequestStop(dlg);
+                            e.Handled = true;
+                        }
+                    }
+                    catch { }
+                };
+                dlg.Add(tf, ok, cancel);
+                Application.Run(dlg);
+            });
+            return tcs.Task;
+        }
+
         public void Start()
         {
             try
@@ -60,7 +333,10 @@ namespace RPBot
                         Console.SetBufferSize(120, 1000);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: unable to resize console: {ex.Message}");
+                }
 
                 if (!_isInitialized)
                 {
@@ -263,7 +539,8 @@ namespace RPBot
                     // Прокрутка вверх
                     if (mouseEvent.Flags == MouseFlags.WheeledUp)
                     {
-                        // Прокручиваем вверх, уменьшая позицию курсора
+                        // Устанавливаем фокус на панель логов, затем прокручиваем вверх
+                        try { _logPanel.SetFocus(); } catch { }
                         var newY = Math.Max(0, _logPanel.CursorPosition.Y - 3);
                         _logPanel.CursorPosition = new Point(_logPanel.CursorPosition.X, newY);
                         _logPanel.SetNeedsDisplay();
@@ -272,7 +549,8 @@ namespace RPBot
                     // Прокрутка вниз
                     else if (mouseEvent.Flags == MouseFlags.WheeledDown)
                     {
-                        // Просто перемещаем курсор вниз - TextView сам обновится
+                        // Устанавливаем фокус на панель логов, затем прокручиваем вниз
+                        try { _logPanel.SetFocus(); } catch { }
                         var newY = _logPanel.CursorPosition.Y + 3;
                         _logPanel.CursorPosition = new Point(_logPanel.CursorPosition.X, newY);
                         _logPanel.SetNeedsDisplay();
@@ -285,7 +563,7 @@ namespace RPBot
                     // Прокрутка вверх
                     if (mouseEvent.Flags == MouseFlags.WheeledUp)
                     {
-                        // Прокручиваем вверх, уменьшая позицию курсора
+                        try { _commandPanel.SetFocus(); } catch { }
                         var newY = Math.Max(0, _commandPanel.CursorPosition.Y - 3);
                         _commandPanel.CursorPosition = new Point(_commandPanel.CursorPosition.X, newY);
                         _commandPanel.SetNeedsDisplay();
@@ -294,7 +572,7 @@ namespace RPBot
                     // Прокрутка вниз
                     else if (mouseEvent.Flags == MouseFlags.WheeledDown)
                     {
-                        // Просто перемещаем курсор вниз
+                        try { _commandPanel.SetFocus(); } catch { }
                         var newY = _commandPanel.CursorPosition.Y + 3;
                         _commandPanel.CursorPosition = new Point(_commandPanel.CursorPosition.X, newY);
                         _commandPanel.SetNeedsDisplay();
@@ -303,7 +581,8 @@ namespace RPBot
                 }
             }
             catch (Exception ex)
-            {                
+            {
+                Console.WriteLine($"OnRootMouseEvent error: {ex.Message}");
             }
         }
 
@@ -319,7 +598,9 @@ namespace RPBot
                 _logPanel.Text = currentText;
 
                 var lines = _logPanel.Text.ToString().Split('\n').Length;
-                _logPanel.CursorPosition = new Point(0, lines - 1);
+                var height = Math.Max(1, _logPanel.Bounds.Height);
+                var newTop = Math.Max(0, lines - height);
+                _logPanel.CursorPosition = new Point(0, newTop);
 
                 _logPanel.SetNeedsDisplay();
                 _pendingLogs.Clear();
@@ -429,7 +710,17 @@ namespace RPBot
                     _commandPanel.CursorPosition = new Point(0, _commandPanel.Text.Length);
                 }
 
-                Task.Run(() => ExecuteCommand(command));
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ExecuteCommand(command);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"ExecuteCommand error: {ex}");
+                    }
+                });
 
                 args.Handled = true;
             }
@@ -465,7 +756,7 @@ namespace RPBot
                 var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length == 0) return;
 
-                var cmd = parts[0].ToLower();
+                var cmd = parts[0].ToLowerInvariant();
                 var args = parts.Skip(1).ToArray();
 
                 switch (cmd)
@@ -494,6 +785,117 @@ namespace RPBot
 
                     case "servers":
                         await ListServers();
+                        break;
+
+                    case "settings":
+                        {
+                    if (args.Length == 0)
+                    {
+                        await ShowSettingsInteractive();
+                        break;
+                    }
+
+                            var sub = args[0].ToLowerInvariant();
+                            switch (sub)
+                            {
+                                case "list":
+                                    {
+                                        if (args.Length == 2 && ulong.TryParse(args[1], out var gid))
+                                        {
+                                            var cfg = await _botController.GetServerConfigAsync(gid);
+                                            if (cfg == null)
+                                            {
+                                                AddCommandOutput($"Настройки для {gid} не найдены.");
+                                            }
+                                            else
+                                            {
+                                                AddCommandOutput($"Настройки для {gid}:");
+                                                AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
+                                                AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
+                                                AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
+                                                AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
+                                                AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
+                                                AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
+                                                AddCommandOutput($"line_message: {cfg.LineMessage}");
+                                                AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
+                                                AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
+                                                AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            var all = await _botController.GetAllServerConfigsAsync();
+                                            AddCommandOutput($"Всего конфигов: {all.Count}");
+                                            foreach (var kv in all)
+                                            {
+                                                AddCommandOutput($"- {kv.Key} (moderation={kv.Value.ModerateChannelID}, roll={kv.Value.RollChannelID})");
+                                            }
+                                        }
+                                        break;
+                                    }
+                                case "get":
+                                    {
+                                        if (args.Length < 3 || !ulong.TryParse(args[1], out var gid))
+                                        {
+                                            AddCommandOutput("Использование: settings get <guildId> <key>");
+                                        }
+                                        else
+                                        {
+                                            var key = args[2].ToLowerInvariant();
+                                            var cfg = await _botController.GetServerConfigAsync(gid);
+                                            if (cfg == null) { AddCommandOutput($"Настройки для {gid} не найдены."); break; }
+                                            string res = key switch
+                                            {
+                                                "moderation_channel" => cfg.ModerateChannelID.ToString(),
+                                                "welcome_channel" => cfg.WelcomeChannelID.ToString(),
+                                                "roll_channel" => cfg.RollChannelID.ToString(),
+                                                "stats_channel" => cfg.StatsChannelID.ToString(),
+                                                "record_channel" => cfg.RecordChannelID.ToString(),
+                                                "welcome_message" => cfg.WelcomeMessage ?? "",
+                                                "line_message" => cfg.LineMessage ?? "",
+                                                "default_role" => cfg.DefaultRoleID.ToString(),
+                                                "swear_filter" => cfg.SwearFilterEnabled.ToString(),
+                                                "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+                                                _ => "Неизвестный ключ"
+                                            };
+                                            AddCommandOutput(res);
+                                        }
+                                        break;
+                                    }
+                                case "set":
+                                    {
+                                        if (args.Length < 4 || !ulong.TryParse(args[1], out var gid))
+                                        {
+                                            AddCommandOutput("Использование: settings set <guildId> <key> <value|channelId|toggle>");
+                                            break;
+                                        }
+                                        var key = args[2].ToLowerInvariant();
+                                        var val = string.Join(' ', args.Skip(3));
+                                        ulong? channelId = null;
+                                        bool? toggle = null;
+                                        if (ulong.TryParse(val, out var cid)) channelId = cid;
+                                        else if (bool.TryParse(val, out var b)) toggle = b;
+
+                                        await _botController.SetServerConfigValueAsync(gid, key, val, channelId, toggle);
+                                        AddCommandOutput($"OK: set {key} for {gid}");
+                                        break;
+                                    }
+                                case "reset":
+                                    {
+                                        if (args.Length < 2 || !ulong.TryParse(args[1], out var gid))
+                                        {
+                                            AddCommandOutput("Использование: settings reset <guildId>");
+                                            break;
+                                        }
+                                        await _botController.ResetServerConfigAsync(gid);
+                                        AddCommandOutput($"Настройки для {gid} сброшены.");
+                                        break;
+                                    }
+                                default:
+                                    AddCommandOutput($"Неизвестная подкоманда settings: {sub}");
+                                    break;
+                            }
+                        }
                         break;
 
                     case "predict":
@@ -537,9 +939,11 @@ namespace RPBot
                         string currentText = _logPanel.Text.ToString();
                         _logPanel.Text = currentText + logMessage;
 
-                        // Прокручиваем вниз к новым сообщениям - устанавливаем курсор в конец
+                        // Прокручиваем вниз к новым сообщениям учитывать высоту панели
                         var lines = _logPanel.Text.ToString().Split('\n').Length;
-                        _logPanel.CursorPosition = new Point(0, lines - 1);
+                        var height = Math.Max(1, _logPanel.Bounds.Height);
+                        var newTop = Math.Max(0, lines - height);
+                        _logPanel.CursorPosition = new Point(0, newTop);
 
                         _logPanel.SetNeedsDisplay();
                         Application.Refresh();
@@ -569,7 +973,9 @@ namespace RPBot
                         _commandPanel.Text = currentText + text + "\n";
 
                         var lines = _commandPanel.Text.ToString().Split('\n').Length;
-                        _commandPanel.CursorPosition = new Point(0, lines - 1);
+                        var height = Math.Max(1, _commandPanel.Bounds.Height);
+                        var newTop = Math.Max(0, lines - height);
+                        _commandPanel.CursorPosition = new Point(0, newTop);
 
                         _commandPanel.SetNeedsDisplay();
                         Application.Refresh();

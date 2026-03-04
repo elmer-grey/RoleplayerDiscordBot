@@ -11,6 +11,16 @@ namespace RPBot
     /// </summary>
     public class ConnectionStateInfo
     {
+        public class DisconnectEntry
+        {
+            public DateTime Time { get; set; }
+            public string Reason { get; set; } = "";
+            public string Details { get; set; } = "";
+        }
+
+        // Структурированная история отключений (в порядке от нового к старому)
+        public List<DisconnectEntry> RecentDisconnects { get; set; } = new();
+
         // Текущее состояние
         public DateTime LastConnectionTime { get; set; } = DateTime.UtcNow;
         public DateTime LastDisconnectTime { get; set; }
@@ -51,7 +61,13 @@ namespace RPBot
             LastDisconnectReason = reason;
             LastDisconnectDetails = details;
 
-            // Добавляем в историю
+            // Добавляем в структурированную историю
+            var entry = new DisconnectEntry { Time = DateTime.UtcNow, Reason = reason, Details = details };
+            RecentDisconnects.Insert(0, entry);
+            while (RecentDisconnects.Count > 50)
+                RecentDisconnects.RemoveAt(RecentDisconnects.Count - 1);
+
+            // Также поддерживаем совместимую строковую историю (короткий формат)
             RecentDisconnectReasons.Insert(0, $"{reason} - {DateTime.UtcNow:HH:mm:ss}");
             while (RecentDisconnectReasons.Count > 10)
                 RecentDisconnectReasons.RemoveAt(RecentDisconnectReasons.Count - 1);
@@ -78,14 +94,28 @@ namespace RPBot
         /// </summary>
         public void CalculateStabilityScore()
         {
-            var totalDisconnects = DisconnectStats.Values.Sum();
-            var uptimeMinutes = CurrentUptime.TotalMinutes;
-
-            if (uptimeMinutes > 0)
+            // Рассчитываем стабильность на основе числа отключений за последний час и за весь период
+            try
             {
-                var disconnectsPerHour = totalDisconnects / (uptimeMinutes / 60);
-                ConnectionStabilityScore = Math.Max(0, 100 - (disconnectsPerHour * 10));
-                ConnectionStabilityScore = Math.Min(100, ConnectionStabilityScore);
+                var now = DateTime.UtcNow;
+                var lastHourCount = RecentDisconnects.Count(e => (now - e.Time).TotalHours <= 1);
+                var last24hCount = RecentDisconnects.Count(e => (now - e.Time).TotalHours <= 24);
+
+                // Базовый скор: 100 - штрафы
+                double score = 100.0;
+
+                // Штраф за отключения в последнем часе (сильнее влияет)
+                score -= Math.Min(60, lastHourCount * 20);
+
+                // Доп. штраф за накопленные отключения за 24 часа
+                score -= Math.Min(30, last24hCount * 2);
+
+                // Нормируем
+                ConnectionStabilityScore = Math.Max(0, Math.Min(100, score));
+            }
+            catch
+            {
+                // в случае ошибок оставляем прежнее значение
             }
         }
 

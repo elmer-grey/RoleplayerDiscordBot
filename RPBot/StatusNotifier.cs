@@ -99,7 +99,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}");
+                    }
                 }
             }
         }
@@ -129,7 +132,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}");
+                    }
                 }
             }
         }
@@ -161,7 +167,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex}");
+                    }
                 }
             }
         }

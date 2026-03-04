@@ -24,12 +24,19 @@ namespace RPBot
             _ = Task.Run(async () =>
             {
                 // Имитация прогресса - в реальности вызывайте CommandRegistered()
-                for (int i = 0; i <= _allCommands.Count; i++)
+                if (_allCommands.Count == 0)
                 {
-                    await Task.Delay(50); // Симуляция
-                    var percent = (int)((double)i / _allCommands.Count * 100);
-                    await OnProgressUpdated?.Invoke(i, _allCommands.Count,
-                        $"Регистрация команд: {percent}% ({i}/{_allCommands.Count})");
+                    await OnProgressUpdated?.Invoke(0, 0, "Нет команд для регистрации");
+                }
+                else
+                {
+                    for (int i = 0; i < _allCommands.Count; i++)
+                    {
+                        await Task.Delay(50); // Симуляция
+                        var percent = (int)((double)(i + 1) / _allCommands.Count * 100);
+                        await OnProgressUpdated?.Invoke(i + 1, _allCommands.Count,
+                            $"Регистрация команд: {percent}% ({i + 1}/{_allCommands.Count})");
+                    }
                 }
 
                 await OnRegistrationCompleted?.Invoke();
@@ -41,11 +48,14 @@ namespace RPBot
             if (!_registeredCommands.Contains(commandName))
             {
                 _registeredCommands.Add(commandName);
-                var percent = (int)((double)_registeredCommands.Count / _allCommands.Count * 100);
+                int percent = 0;
+                if (_allCommands.Count > 0)
+                    percent = (int)((double)_registeredCommands.Count / _allCommands.Count * 100);
 
                 var timeElapsed = DateTime.UtcNow - _startTime;
-                var eta = timeElapsed.TotalSeconds / _registeredCommands.Count *
-                         (_allCommands.Count - _registeredCommands.Count);
+                var eta = _registeredCommands.Count > 0
+                    ? timeElapsed.TotalSeconds / _registeredCommands.Count * (_allCommands.Count - _registeredCommands.Count)
+                    : 0;
 
                 OnProgressUpdated?.Invoke(
                     _registeredCommands.Count,
