@@ -707,7 +707,12 @@ namespace RPBot
                 if (_commandPanel != null)
                 {
                     _commandPanel.Text += $"> {command}\n";
-                    _commandPanel.CursorPosition = new Point(0, _commandPanel.Text.Length);
+
+                    // Правильно прокручиваем к концу по строкам (не по символам)
+                    var cmdLines = _commandPanel.Text.ToString().Split('\n').Length;
+                    var cmdHeight = Math.Max(1, _commandPanel.Bounds.Height);
+                    var cmdTop = Math.Max(0, cmdLines - cmdHeight);
+                    _commandPanel.CursorPosition = new Point(0, cmdTop);
                 }
 
                 _ = Task.Run(async () =>
