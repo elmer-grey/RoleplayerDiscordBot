@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace RPBot
 {
@@ -22,10 +23,15 @@ namespace RPBot
         private bool _isReconnecting = false;
         private bool _isShuttingDown = false;
 
+        // Порог по числу последовательных попыток реконнекта, после которого требуется полный рестарт
+        private const int MaxReconnectAttemptsBeforeFullRestart = 8;
+
         // События для оповещения других частей бота
         public event Func<string, Task> OnReconnectStarted;
         public event Func<bool, Task> OnReconnectCompleted;
         public event Func<Exception, Task> OnDisconnectDetected;
+        // Событие запроса полной перезагрузки клиента (после многократных неудачных попыток)
+        public event Func<Task> OnFullRestartRequested;
 
         public ConnectionStateInfo ConnectionInfo => _connectionInfo;
 
@@ -58,7 +64,7 @@ namespace RPBot
             }
 
             // Отменяем старый реконнект
-            _reconnectCts.Cancel();
+            try { _reconnectCts.Cancel(); } catch { }
             _reconnectCts = new CancellationTokenSource();
 
             // Ждем 2 секунды перед началом
@@ -84,16 +90,32 @@ namespace RPBot
                 _isReconnecting = true;
                 _connectionInfo.ReconnectAttempts++;
 
+                // Если превысили порог последовательных попыток — жалуемся и просим полный рестарт
+                if (_connectionInfo.ReconnectAttempts >= MaxReconnectAttemptsBeforeFullRestart)
+                {
+                    await Log($"Превышен лимит попыток реконнекта ({_connectionInfo.ReconnectAttempts}). Запрос полного перезапуска клиента.");
+                    try
+                    {
+                        if (OnFullRestartRequested != null)
+                            await OnFullRestartRequested.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        await Log($"Ошибка при запросе полного перезапуска: {ex.Message}");
+                    }
+                    return;
+                }
+
                 if (_client.ConnectionState == ConnectionState.Connected)
                 {
                     await Log(" Клиент уже подключен, реконнект не требуется");
                     _connectionInfo.ResetAttempts();
-                    await OnReconnectCompleted?.Invoke(true);
+                    if (OnReconnectCompleted != null) await OnReconnectCompleted.Invoke(true);
                     return;
                 }
 
                 await Log($"=== НАЧАЛО РЕКОННЕКТА #{_connectionInfo.ReconnectAttempts} ===");
-                await OnReconnectStarted?.Invoke($"Попытка #{_connectionInfo.ReconnectAttempts}");
+                if (OnReconnectStarted != null) await OnReconnectStarted.Invoke($"Попытка #{_connectionInfo.ReconnectAttempts}");
 
                 // ВАЖНО: Сначала убеждаемся, что клиент полностью остановлен
                 if (_client.ConnectionState != ConnectionState.Disconnected)
@@ -108,7 +130,7 @@ namespace RPBot
                 // Пытаемся подключиться
                 bool success = await TryConnectWithRetries(cancellationToken);
 
-                await OnReconnectCompleted?.Invoke(success);
+                if (OnReconnectCompleted != null) await OnReconnectCompleted.Invoke(success);
 
                 if (success)
                 {
@@ -119,6 +141,21 @@ namespace RPBot
                 {
                     await Log(" РЕКОННЕКТ НЕ УДАЛСЯ");
                     _connectionInfo.IncrementFailedAttempts();
+
+                    // Если превысили порог в процессе попыток — также инициируем полный рестарт
+                    if (_connectionInfo.ReconnectAttempts >= MaxReconnectAttemptsBeforeFullRestart)
+                    {
+                        await Log($"Превышен лимит попыток реконнекта после неудачи ({_connectionInfo.ReconnectAttempts}). Запрос полного перезапуска клиента.");
+                        try
+                        {
+                            if (OnFullRestartRequested != null)
+                                await OnFullRestartRequested.Invoke();
+                        }
+                        catch (Exception ex)
+                        {
+                            await Log($"Ошибка при запросе полного перезапуска: {ex.Message}");
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -132,7 +169,7 @@ namespace RPBot
             finally
             {
                 _isReconnecting = false;
-                _reconnectLock.Release();
+                try { _reconnectLock.Release(); } catch { }
             }
         }
 
@@ -328,6 +365,7 @@ namespace RPBot
             OnReconnectStarted = null;
             OnReconnectCompleted = null;
             OnDisconnectDetected = null;
+            OnFullRestartRequested = null;
         }
     }
 }

@@ -338,10 +338,21 @@ namespace RPBot
                     Console.WriteLine($"Warning: unable to resize console: {ex.Message}");
                 }
 
-                if (!_isInitialized)
+                // Инициализация Terminal.Gui. Иногда MainLoop может быть null после Shutdown(),
+                // поэтому проверяем и инициализируем повторно при необходимости.
+                if (!_isInitialized || Application.MainLoop == null)
                 {
-                    Application.Init();
-                    _isInitialized = true;
+                    try
+                    {
+                        Application.Init();
+                        _isInitialized = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка инициализации UI: {ex.Message}");
+                        _isInitialized = false;
+                        throw;
+                    }
                 }
 
                 CreateMainWindow();
@@ -999,52 +1010,72 @@ namespace RPBot
 
         public void ShowSystemReady(string botName, int serverCount, double initTime)
         {
+            // Подготовка сообщения вне UI-потока
+            string initTimeStr;
+            if (initTime < 1)
+                initTimeStr = $"{(initTime * 1000):F0} мс";
+            else if (initTime < 60)
+                initTimeStr = $"{initTime:F1} сек";
+            else
+            {
+                int minutes = (int)initTime / 60;
+                double seconds = initTime % 60;
+                initTimeStr = $"{minutes} мин {seconds:F0} сек";
+            }
+
+            string currentTime = DateTime.Now.ToString("HH:mm:ss");
+            var readyMessage = $"╔══════════════════════════════════════════════════════╗\n" +
+                              $"║             ВСЕ СИСТЕМЫ АКТИВНЫ!                 ║\n" +
+                              $"╠══════════════════════════════════════════════════════╣\n" +
+                              $"║  Бот:         {botName,-30} ║\n" +
+                              $"║  Серверов:    {serverCount,-30} ║\n" +
+                              $"║  Время:       {currentTime,-30} ║\n" +
+                              $"║  Инициализация: {initTimeStr,-29} ║\n" +
+                              $"╚══════════════════════════════════════════════════════╝\n";
+
+            // Если UI не готов или уже уничтожен — сохраним сообщение в pending и выйдем
+            if (Application.MainLoop == null || _isDisposed || _logPanel == null || _commandPanel == null)
+            {
+                // Добавим с меткой времени
+                _pendingLogs.Add($"[{DateTime.Now:HH:mm:ss}] {readyMessage}");
+                // Также добавим краткое уведомление для командной панели (если она есть later)
+                try
+                {
+                    if (_commandPanel != null)
+                    {
+                        var shortMsg = "Консоль готова к приёму команд. Введите 'help'\n";
+                        _pendingLogs.Add($"[{DateTime.Now:HH:mm:ss}] {shortMsg}");
+                    }
+                }
+                catch { }
+
+                return;
+            }
+
             Application.MainLoop.Invoke(() =>
             {
-                // Форматируем время в зависимости от величины
-                string initTimeStr;
-                if (initTime < 1)
+                try
                 {
-                    // Меньше секунды - показываем в миллисекундах
-                    initTimeStr = $"{(initTime * 1000):F0} мс";
+                    string currentLogText = _logPanel?.Text.ToString() ?? "";
+                    _logPanel.Text = currentLogText + readyMessage;
+
+                    var logLines = _logPanel.Text.ToString().Split('\n').Length;
+                    _logPanel.CursorPosition = new Point(0, Math.Max(0, logLines - 1));
+
+                    string currentCommandText = _commandPanel?.Text.ToString() ?? "";
+                    _commandPanel.Text = currentCommandText + "Консоль готова к приёму команд. Введите 'help'\n";
+
+                    var cmdLines = _commandPanel.Text.ToString().Split('\n').Length;
+                    _commandPanel.CursorPosition = new Point(0, Math.Max(0, cmdLines - 1));
+
+                    _logPanel?.SetNeedsDisplay();
+                    _commandPanel?.SetNeedsDisplay();
+                    Application.Refresh();
                 }
-                else if (initTime < 60)
+                catch (Exception ex)
                 {
-                    // Меньше минуты - показываем в секундах с одним знаком после запятой
-                    initTimeStr = $"{initTime:F1} сек";
+                    Console.WriteLine($"Ошибка ShowSystemReady: {ex.Message}");
                 }
-                else
-                {
-                    // Больше минуты - показываем в минутах и секундах
-                    int minutes = (int)initTime / 60;
-                    double seconds = initTime % 60;
-                    initTimeStr = $"{minutes} мин {seconds:F0} сек";
-                }
-                string currentTime = DateTime.Now.ToString("HH:mm:ss");
-                var readyMessage = $"╔══════════════════════════════════════════════════════╗\n" +
-                                  $"║             ВСЕ СИСТЕМЫ АКТИВНЫ!                 ║\n" +
-                                  $"╠══════════════════════════════════════════════════════╣\n" +
-                                  $"║  Бот:         {botName,-30} ║\n" +
-                                  $"║  Серверов:    {serverCount,-30} ║\n" +
-                                  $"║  Время:       {currentTime,-30} ║\n" +
-                                  $"║  Инициализация: {initTimeStr,-29} ║\n" + // -29 для выравнивания
-                                  $"╚══════════════════════════════════════════════════════╝\n";
-
-                string currentLogText = _logPanel.Text.ToString();
-                _logPanel.Text = currentLogText + readyMessage;
-
-                var logLines = _logPanel.Text.ToString().Split('\n').Length;
-                _logPanel.CursorPosition = new Point(0, logLines - 1);
-
-                string currentCommandText = _commandPanel.Text.ToString();
-                _commandPanel.Text = currentCommandText + "Консоль готова к приёму команд. Введите 'help'\n";
-
-                var cmdLines = _commandPanel.Text.ToString().Split('\n').Length;
-                _commandPanel.CursorPosition = new Point(0, cmdLines - 1);
-
-                _logPanel.SetNeedsDisplay();
-                _commandPanel.SetNeedsDisplay();
-                Application.Refresh();
             });
         }
 
@@ -1265,19 +1296,37 @@ namespace RPBot
                 try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
                 try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
 
-                Application.MainLoop.Invoke(() =>
+                if (Application.MainLoop != null)
                 {
                     try
                     {
-                        Application.RequestStop();
-                        Application.Shutdown();
+                        Application.MainLoop.Invoke(() =>
+                        {
+                            try
+                            {
+                                Application.RequestStop();
+                                Application.Shutdown();
+                            }
+                            catch { }
+                        });
                     }
-                    catch { }
-                });
+                    catch
+                    {
+                        // Иногда MainLoop уже завершается — пробуем прямой Shutdown
+                        try { Application.Shutdown(); } catch { }
+                    }
+                }
+                else
+                {
+                    // Если MainLoop уже null — попытаемся корректно вызвать Shutdown() на всякий случай
+                    try { Application.Shutdown(); } catch { }
+                }
             }
             catch { }
 
             // Даем время на завершение
+            // Сбрасываем состояние и даём время на завершение
+            _isInitialized = false;
             Thread.Sleep(500);
         }
     }

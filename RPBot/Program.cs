@@ -190,6 +190,8 @@ namespace RPBot
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
             _reconnectionService.OnReconnectStarted += OnReconnectStarted;
             _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
+            // Подписываемся на запрос полного перезапуска, когда реконнекты зашкаливают
+            _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
             _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
             _services = new ServiceCollection()
@@ -253,12 +255,20 @@ namespace RPBot
                 _uiStarted = false;
             }
 
+            // Отправляем уведомление в Discord о перезапуске
+            try
+            {
+                if (_statusNotifier != null)
+                    await _statusNotifier.SendRestartNotification("Перезапуск по команде из консоли");
+            }
+            catch { }
+
             _shouldRestart = true;
             _shouldExit = true;
             _currentStartupType = StartupType.Restart;
             _statusNotifier?.SetStartupType(StartupType.Restart);
             _reconnectionService?.Shutdown();
-            await _client.StopAsync();
+            try { await _client.StopAsync(); } catch { }
         }
 
         public async Task StopAsync()
@@ -728,6 +738,45 @@ namespace RPBot
                 await _statusNotifier.SendAllSystemsActive(
                     $"Переподключение после: {info.LastDisconnectReason}"
                 );
+            }
+        }
+
+        /// <summary>
+        /// Обработчик запроса полного перезапуска от ReconnectionService
+        /// </summary>
+        private async Task OnFullRestartRequested()
+        {
+            try
+            {
+                await LogStartup("Авто-перезапуск: превышено число попыток реконнекта, инициируем полный перезапуск клиента...");
+
+                // Отправляем уведомление в Discord (если клиент ещё доступен)
+                try { if (_statusNotifier != null) await _statusNotifier.SendRestartNotification("Авто-перезапуск из-за множества попыток переподключения"); } catch { }
+
+                // Обновляем UI и явно закрываем его, чтобы избежать утечек
+                if (_ui != null)
+                {
+                    try
+                    {
+                        _ui.AddLog("Авто-перезапуск клиента из-за длительных ошибок подключения...");
+                        _ui.ClearForRestart();
+                        _ui.Dispose();
+                        _ui = null;
+                        _uiStarted = false;
+                    }
+                    catch { }
+                }
+
+                _shouldRestart = true;
+                _shouldExit = true;
+
+                _reconnectionService?.Shutdown();
+
+                try { await _client.StopAsync(); } catch { }
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"Ошибка при обработке OnFullRestartRequested: {ex.Message}");
             }
         }
 
