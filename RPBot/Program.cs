@@ -133,6 +133,11 @@ namespace DiscordBot
                 await HandleMasteryArbitrarinessCommand(user, message, emoteKappa, emoteAga);
             }
 
+            if (message.Content.ToLower().Contains("что ты можешь"))
+            {
+                await HandleWhatCanYouDoCommand(user, message);
+            }
+
             if (message.Content.ToLower().Contains("бот, спокойной ночи") && user.Username == "perekrestok_mirov")
             {
                 await message.Channel.SendMessageAsync("Отключение всех систем...");
@@ -258,6 +263,26 @@ namespace DiscordBot
                 await responseMessage.AddReactionAsync(emote);
             }
             Console.WriteLine("Произволит");
+        }
+
+        private async Task HandleWhatCanYouDoCommand(SocketGuildUser user, SocketMessage message)
+        {
+            if (user != null)
+            {
+                var helpMessage = new StringBuilder();
+                helpMessage.AppendLine("Вот что я умею:");
+                helpMessage.AppendLine("> 🎲 **Броски кубов** — команда `/roll XdY`. Подробнее: `/help_r`");
+                helpMessage.AppendLine("> 📋 **Очередь ходов** — команды `/queue`, `/q`, `/stop_q`");
+                helpMessage.AppendLine("> ⏱️ **Учёт времени игры** — команды `/start`, `/pause`, `/resume`, `/stop`. Подробнее: `/help_gs`");
+                helpMessage.AppendLine("> 🗑️ **Удаление сообщений** — команда `/clr X`");
+                helpMessage.AppendLine("> ℹ️ **Информация о сервере** — команда `/serverinfo`");
+                helpMessage.AppendLine("> 🐛 **Сообщить об ошибке** — команда `/bug_report`");
+                helpMessage.AppendLine("-# *Полный список команд доступен по `/help`*");
+
+                var messageReference = new MessageReference(message.Id);
+                await message.Channel.SendMessageAsync(helpMessage.ToString(), messageReference: messageReference);
+            }
+            Console.WriteLine("Выведена информация о возможностях бота.");
         }
 
         private async Task HandleLineCommand(SocketGuildUser user, SocketMessage message, string lineMessages)
