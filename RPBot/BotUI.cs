@@ -99,14 +99,8 @@ namespace RPBot
             var start = rows.Count - maxLines;
             display.Clear();
             for (int i = start; i < rows.Count; i++) display.Add(rows[i].text);
-
-            // Remove older logical lines that are no longer represented in display to free memory
-            var firstLogicalKept = rows[start].logicalIndex;
-            if (firstLogicalKept > 0)
-            {
-                // remove range [0, firstLogicalKept-1]
-                logical.RemoveRange(0, Math.Min(firstLogicalKept, logical.Count));
-            }
+            // NOTE: do not remove logical lines here — keep full logical buffer so that
+            // when the window is expanded the text can reflow back to fewer wrapped lines.
         }
 
         private bool ResizeWatcher(MainLoop main)
