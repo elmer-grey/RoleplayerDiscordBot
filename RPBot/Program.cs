@@ -253,9 +253,10 @@ namespace RPBot
         public async Task RestartAsync()
         {
             // Signal UI and background tasks to prepare for restart
+            _restartInitiator = "console";
             if (_ui != null && _uiStarted)
             {
-                _ui.AddLog("Перезапуск из консоли...");
+                _ui.AddLog($"Перезапуск... Инициатор: {_restartInitiator}");
                 _ui.ClearForRestart();
                 // Do not dispose UI here — the persistent UI thread will remain active
             }
@@ -887,18 +888,17 @@ namespace RPBot
                 try { if (_statusNotifier != null) await _statusNotifier.SendRestartNotification("Авто-перезапуск из-за множества попыток переподключения"); } catch { }
 
                 // Обновляем UI и явно закрываем его, чтобы избежать утечек
+                _restartInitiator = "discord";
                 if (_ui != null)
                 {
                     try
                     {
-                        _ui.AddLog("Авто-перезапуск клиента из-за длительных ошибок подключения...");
+                        _ui.AddLog($"Авто-перезапуск... Инициатор: {_restartInitiator}");
                         _ui.ClearForRestart();
                         // Do not dispose persistent UI here; keep UI thread alive
                     }
                     catch { }
                 }
-
-                _restartInitiator = "discord";
                 _shouldRestart = true;
                 _shouldExit = true;
 
