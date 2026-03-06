@@ -929,10 +929,25 @@ namespace RPBot
                 catch { }
             }
 
-            // Add periodic resize watcher to rewrap buffers when panel widths change
+            // Subscribe to window resize to rewrap immediately when user resizes
             try
             {
-                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(250), ResizeWatcher);
+                _mainWindow.Resized += (_) => { try { RewrapIfNeeded(); } catch { } };
+            }
+            catch { }
+
+            // Start a short-lived retry timer to attempt initial rewrap until sizes stabilize
+            try
+            {
+                int attempts = 0;
+                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(200), (MainLoop ml) =>
+                {
+                    attempts++;
+                    var ok = RewrapIfNeeded();
+                    // stop if rewrap succeeded or after ~5 seconds (25 attempts)
+                    if (ok || attempts > 25) return false;
+                    return true;
+                });
             }
             catch { }
 
