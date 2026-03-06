@@ -68,6 +68,42 @@ namespace RPBot
             _statusNotifier = statusNotifier;
         }
 
+        private static IEnumerable<string> WrapLineForWidth(string line, int width)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                yield return string.Empty;
+                yield break;
+            }
+
+            var remaining = line;
+            while (remaining.Length > 0)
+            {
+                if (remaining.Length <= width)
+                {
+                    yield return remaining;
+                    yield break;
+                }
+
+                // Try to break at last space within width
+                var segment = remaining.Substring(0, width);
+                var lastSpace = segment.LastIndexOf(' ');
+                if (lastSpace > Math.Max(0, width / 2))
+                {
+                    // break at space
+                    var part = remaining.Substring(0, lastSpace).TrimEnd();
+                    yield return part;
+                    remaining = remaining.Substring(lastSpace + 1);
+                }
+                else
+                {
+                    // hard break
+                    yield return segment;
+                    remaining = remaining.Substring(width);
+                }
+            }
+        }
+
         // Ensure Terminal.Gui is initialized in a threadsafe manner
         private void EnsureUiInitialized()
         {
@@ -1564,9 +1600,22 @@ namespace RPBot
             if (lines == null)
                 return;
 
-            foreach (var line in lines)
+            // If panel supports word wrap, split logical lines into display rows
+            if (panel != null && panel.WordWrap)
             {
-                buffer.Add(line);
+                var availWidth = Math.Max(1, panel.Bounds.Width);
+                foreach (var line in lines)
+                {
+                    foreach (var part in WrapLineForWidth(line ?? string.Empty, availWidth))
+                        buffer.Add(part);
+                }
+            }
+            else
+            {
+                foreach (var line in lines)
+                {
+                    buffer.Add(line);
+                }
             }
 
             if (buffer.Count > maxLines)
