@@ -1059,7 +1059,20 @@ namespace RPBot
 
         private async Task OnDisconnected(Exception exception)
         {
-            await _reconnectionService.HandleDisconnect(exception);
+            if (_reconnectionService == null)
+            {
+                await LogStartup("Предупреждение: _reconnectionService == null в OnDisconnected — пропускаем обработку отключения.");
+                return;
+            }
+
+            try
+            {
+                await _reconnectionService.HandleDisconnect(exception);
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"Ошибка в OnDisconnected при вызове HandleDisconnect: {ex.Message}");
+            }
         }
 
         public async ValueTask DisposeAsync()
