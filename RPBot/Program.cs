@@ -569,7 +569,16 @@ namespace RPBot
                 await _restartLock.WaitAsync();
                 try
                 {
-                    await LogStartup($" Инициализация бота... Версия {_config?.BotVersion ?? "0.6.0.0"}");
+                    // Показываем специальное сообщение при рестарте
+                    var version = _config?.BotVersion ?? "0.6.0.0";
+                    if (_currentStartupType == StartupType.Restart)
+                    {
+                        await LogStartup($"Инициализация бота после перезапуска... Версия {version}");
+                    }
+                    else
+                    {
+                        await LogStartup($"Инициализация бота... Версия {version}");
+                    }
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
@@ -901,6 +910,7 @@ namespace RPBot
                 }
                 _shouldRestart = true;
                 _shouldExit = true;
+                _currentStartupType = StartupType.Restart;
 
                 _reconnectionService?.Shutdown();
 
