@@ -79,6 +79,12 @@ namespace RPBot
             catch (Exception ex)
             {
                 LogSink?.Invoke($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
+                try
+                {
+                    var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                    System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex}\n");
+                }
+                catch { }
                 return false;
             }
         }
@@ -114,6 +120,12 @@ namespace RPBot
                     catch (Exception ex)
                     {
                         LogSink?.Invoke($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
+                        try
+                        {
+                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}\n");
+                        }
+                        catch { }
                     }
                 }
             }
@@ -148,6 +160,12 @@ namespace RPBot
                     catch (Exception ex)
                     {
                         LogSink?.Invoke($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
+                        try
+                        {
+                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
+                        }
+                        catch { }
                     }
                 }
             }
@@ -184,6 +202,12 @@ namespace RPBot
                     catch (Exception ex)
                     {
                         LogSink?.Invoke($"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex.Message}");
+                        try
+                        {
+                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex}\n");
+                        }
+                        catch { }
                     }
                 }
             }
