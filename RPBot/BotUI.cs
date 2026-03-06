@@ -720,7 +720,7 @@ namespace RPBot
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ReadOnly = true,
-                WordWrap = false,
+                WordWrap = true,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
@@ -745,7 +745,7 @@ namespace RPBot
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ReadOnly = true,
-                WordWrap = false,
+                WordWrap = true,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)

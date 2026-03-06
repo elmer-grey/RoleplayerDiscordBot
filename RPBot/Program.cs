@@ -1023,12 +1023,19 @@ namespace RPBot
                     var guild = guildsList[i];
                     if (ServerConfigs.TryGetValue(guild.Id, out var config))
                     {
-                        var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                            $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
-                        if (ok)
-                            await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
+                        if (config.ModerateChannelID == 0)
+                        {
+                            await LogStartup($"│   Пропущено: канал уведомлений не задан для {guild.Name,-32}│");
+                        }
                         else
-                            await LogStartup($"│   Ошибка отправки статуса на {guild.Name,-32}│");
+                        {
+                            var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
+                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
+                            if (ok)
+                                await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
+                            else
+                                await LogStartup($"│   Ошибка отправки статуса на {guild.Name,-32}│");
+                        }
                     }
                     await Task.Delay(200);
                 }
