@@ -911,8 +911,6 @@ namespace RPBot
                             try { _mainWindow?.FocusFirst(); } catch { try { _mainWindow?.SetFocus(); } catch { } }
                             _inputField.SetFocus();
 
-                            AddLog("Ввод команд разблокирован");
-
                             Application.Refresh();
                         }
                     }
