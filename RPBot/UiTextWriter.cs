@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace RPBot
 {
@@ -17,8 +18,24 @@ namespace RPBot
         public override void Write(string? value)
         {
             if (string.IsNullOrEmpty(value)) return;
-            var ui = _uiProvider?.Invoke();
-            ui?.AddLog(value);
+
+            // Удаляем ANSI/ESC последовательности и непечатаемые символы (кроме перевода строки)
+            try
+            {
+                var cleaned = Regex.Replace(value, "\u001B\\[[0-9;?]*[ -/]*[@-~]", string.Empty);
+                // Удаляем управляющие символы, кроме CR/LF
+                cleaned = Regex.Replace(cleaned, "[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]", string.Empty);
+                if (string.IsNullOrWhiteSpace(cleaned)) return;
+
+                var ui = _uiProvider?.Invoke();
+                ui?.AddLog(cleaned);
+            }
+            catch
+            {
+                // В случае проблем с очисткой просто отправим оригинал
+                var ui = _uiProvider?.Invoke();
+                ui?.AddLog(value);
+            }
         }
 
         public override void WriteLine(string? value)
