@@ -45,27 +45,38 @@ namespace RPBot
             int totalCommands = 0;
             int processedGuilds = 0;
 
+            _ui?.AddLog("┌──────────── СПИСОК ЗАРЕГИСТРИРОВАННЫХ КОМАНД ────────────┐");
+
             foreach (var guildId in _guildIDs)
             {
                 var guild = _client.GetGuild(guildId);
 
                 if (guild == null)
                 {
-                    _ui?.AddLog($"Не удалось получить гильдию с ID: {guildId}. Пропускаем вывод команд для этой гильдии.");
+                    _ui?.AddLog($"│ Гильдия {guildId} недоступна, команды пропущены");
                     continue;
                 }
 
                 var commands = await _client.GetGuild(guildId).GetApplicationCommandsAsync();
                 totalCommands += commands.Count;
 
-                foreach (var command in commands)
-                {
-                    Console.WriteLine($"Гильдия: {guildId}, Команда: {command.Name}, ID: {command.Id}");
-                }
-
                 processedGuilds++;
-                _ui?.AddLog($"Просмотр команд: гильдия {processedGuilds}/{_guildIDs.Count}");
+                _ui?.AddLog($"│ {guild.Name} ({guildId}) — {commands.Count} команд");
+
+                if (commands.Count > 0)
+                {
+                    foreach (var cmd in commands)
+                    {
+                        _ui?.AddLog($"│   • /{cmd.Name}");
+                    }
+                }
+                else
+                {
+                    _ui?.AddLog("│   • Нет команд");
+                }
             }
+
+            _ui?.AddLog("└──────────────────────────────────────────────────────────┘");
         }
 
         private async Task RegisterCommandsAsync()

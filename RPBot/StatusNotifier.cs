@@ -18,6 +18,8 @@ namespace RPBot
         private readonly Dictionary<ulong, ServerConfig> _serverConfigs;
         private StartupType _lastStartupType = StartupType.FirstStart;
 
+        public Action<string>? LogSink { get; set; }
+
         public StatusNotifier(DiscordSocketClient client, Dictionary<ulong, ServerConfig> serverConfigs)
         {
             _client = client;
@@ -29,26 +31,32 @@ namespace RPBot
             _lastStartupType = type;
         }
 
-        public async Task SendAllSystemsActive(string reason)
+        public async Task<bool> SendAllSystemsActive(string reason)
         {
+            var anyFailure = false;
             foreach (var guild in _client.Guilds)
             {
                 if (_serverConfigs.TryGetValue(guild.Id, out var config))
                 {
-                    await SendSystemsActiveToGuild(guild, config, reason);
+                    // Защита: если channel id не задан — пропускаем отправку
+                    if (config.ModerateChannelID == 0) continue;
+                    var ok = await SendSystemsActiveToGuild(guild, config, reason);
+                    if (!ok) anyFailure = true;
                 }
             }
+
+            return !anyFailure;
         }
 
         /// <summary>
         /// Отправляет сообщение о запуске систем на конкретный сервер
         /// </summary>
-        public async Task SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string reason)
+        public async Task<bool> SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string reason)
         {
             try
             {
                 var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
-                if (channel == null) return;
+                if (channel == null) return true; // nothing to do — treat as success
 
                 var isReconnect = _lastStartupType == StartupType.Reconnect ||
                                  (_lastStartupType == StartupType.Restart && reason.Contains("переподключение"));
@@ -66,10 +74,12 @@ namespace RPBot
                     .WithCurrentTimestamp();
 
                 await channel.SendMessageAsync(embed: embed.Build());
+                return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
+                LogSink?.Invoke($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
+                return false;
             }
         }
 
@@ -84,6 +94,8 @@ namespace RPBot
                 {
                     try
                     {
+                        // Защита: если channel id не задан или равен 0 — пропускаем отправку
+                        if (config.ModerateChannelID == 0) continue;
                         var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                         if (channel == null) continue;
 
@@ -101,7 +113,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}");
+                        LogSink?.Invoke($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
                     }
                 }
             }
@@ -118,6 +130,7 @@ namespace RPBot
                 {
                     try
                     {
+                        if (config.ModerateChannelID == 0) continue;
                         var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                         if (channel == null) continue;
 
@@ -134,7 +147,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}");
+                        LogSink?.Invoke($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
                     }
                 }
             }
@@ -151,6 +164,7 @@ namespace RPBot
                 {
                     try
                     {
+                        if (config.ModerateChannelID == 0) continue;
                         var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                         if (channel == null) continue;
 
@@ -169,7 +183,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex}");
+                        LogSink?.Invoke($"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex.Message}");
                     }
                 }
             }

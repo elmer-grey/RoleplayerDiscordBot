@@ -20,6 +20,8 @@ namespace RPBot
         private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);
         private CancellationTokenSource _reconnectCts = new();
 
+        public Action<string>? LogSink { get; set; }
+
         private bool _isReconnecting = false;
         private bool _isShuttingDown = false;
 
@@ -345,21 +347,21 @@ namespace RPBot
         public void Shutdown()
         {
             _isShuttingDown = true;
-            try { _reconnectCts.Cancel(); } catch (Exception ex) { Console.WriteLine($"Error cancelling reconnect token: {ex.Message}"); }
+            try { _reconnectCts.Cancel(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error cancelling reconnect token: {ex.Message}"); }
         }
 
         private Task Log(string message)
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RECONNECT] {message}");
+            LogSink?.Invoke($"[RECONNECT] {message}");
             return Task.CompletedTask;
         }
 
         public void Dispose()
         {
             _isShuttingDown = true;
-            try { _reconnectCts?.Cancel(); } catch (Exception ex) { Console.WriteLine($"Error cancelling reconnect token during dispose: {ex.Message}"); }
-            try { _reconnectCts?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing reconnect token: {ex.Message}"); }
-            try { _reconnectLock?.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing reconnect lock: {ex.Message}"); }
+            try { _reconnectCts?.Cancel(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error cancelling reconnect token during dispose: {ex.Message}"); }
+            try { _reconnectCts?.Dispose(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error disposing reconnect token: {ex.Message}"); }
+            try { _reconnectLock?.Dispose(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error disposing reconnect lock: {ex.Message}"); }
 
             // Clear event subscribers to avoid keeping references
             OnReconnectStarted = null;

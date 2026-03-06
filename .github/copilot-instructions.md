@@ -1,4 +1,4 @@
 # Copilot Instructions
 
 ## Project Guidelines
-- User prefers Russian locale and Terminal.Gui UI interactions; wants persistent configuration settings editable via UI and slash commands. Save as coding preference.
+- Пользователь предпочитает русский язык и Terminal.Gui UI; хочет сохранять конфигурацию, редактируемую через UI и slash команды. Save as coding preference.

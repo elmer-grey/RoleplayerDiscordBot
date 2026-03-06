@@ -75,6 +75,12 @@ namespace RPBot
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
         private Task? _backgroundMonitoringTask;
+        private string _restartInitiator = "console";
+
+        private TextWriter? _originalOut;
+        private TextWriter? _originalErr;
+
+        public static Action<string>? CommandLogSink { get; private set; }
 
         // Centralized cleanup for services to avoid leaks when recreating
         private void CleanupServices()
@@ -107,7 +113,8 @@ namespace RPBot
                     try { (_statusNotifier as IDisposable)?.Dispose(); } catch { }
                     _statusNotifier = null;
                 }
-            }
+
+}
             catch (Exception ex)
             {
                 Console.WriteLine($"CleanupServices error: {ex.Message}");
@@ -245,17 +252,15 @@ namespace RPBot
 
         public async Task RestartAsync()
         {
-            // Убираем дублирование - оставляем только одно сообщение
+            // Signal UI and background tasks to prepare for restart
             if (_ui != null && _uiStarted)
             {
                 _ui.AddLog("Перезапуск из консоли...");
                 _ui.ClearForRestart();
-                _ui.Dispose();
-                _ui = null;
-                _uiStarted = false;
+                // Do not dispose UI here — the persistent UI thread will remain active
             }
 
-            // Отправляем уведомление в Discord о перезапуске
+            // Отправляем уведомление в Discord о перезапуске (best-effort)
             try
             {
                 if (_statusNotifier != null)
@@ -263,20 +268,61 @@ namespace RPBot
             }
             catch { }
 
+            _restartInitiator = "console";
             _shouldRestart = true;
             _shouldExit = true;
             _currentStartupType = StartupType.Restart;
             _statusNotifier?.SetStartupType(StartupType.Restart);
             _reconnectionService?.Shutdown();
+
+            // Stop Discord client (best-effort)
             try { await _client.StopAsync(); } catch { }
+
+            // Await background monitoring task to finish (with timeout)
+            if (_backgroundMonitoringTask != null)
+            {
+                try
+                {
+                    var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
+                    if (t != _backgroundMonitoringTask)
+                    {
+                        await LogStartup("Background tasks did not complete within timeout before restart.");
+                    }
+                }
+                catch { }
+            }
         }
 
         public async Task StopAsync()
         {
             await LogStartup("Остановка из консоли...");
+
+            if (_ui != null && _uiStarted)
+            {
+                _ui.AddLog("Остановка из консоли...");
+                _ui.ClearForRestart();
+            }
+
             _shouldExit = true;
             _reconnectionService?.Shutdown();
-            await _client.StopAsync();
+
+            try { await _client.StopAsync(); } catch { }
+
+            if (_backgroundMonitoringTask != null)
+            {
+                try
+                {
+                    var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
+                    if (t != _backgroundMonitoringTask)
+                    {
+                        await LogStartup("Background tasks did not complete within timeout before stop.");
+                    }
+                }
+                catch { }
+            }
+
+            // Dispose and exit
+            try { await DisposeAsync(); } catch { }
             Environment.Exit(0);
         }
 
@@ -430,11 +476,8 @@ namespace RPBot
 
                 if (restartCount > 0)
                 {
-                    Console.Clear();
-                    Console.WriteLine($" ПЕРЕЗАПУСК #{restartCount}");
-                    Console.WriteLine($"Время: {DateTime.Now:HH:mm:ss}");
-                    Console.WriteLine("================================================");
-                    Console.WriteLine();
+                // Очистка консоли отключена; уведомление через UI
+                _ = Task.Run(() => _ui?.AddLog($"ПЕРЕЗАПУСК #{restartCount} в {DateTime.Now:HH:mm:ss}"));
                 }
 
                 using (var program = new Program())
@@ -451,17 +494,17 @@ namespace RPBot
 
                 if (restart)
                 {
-                    Console.WriteLine("\n Подготовка к перезапуску...");
+                    _ = Task.Run(() => _ui?.AddLog("Подготовка к перезапуску..."));
                     await Task.Delay(2000); // Небольшая пауза перед перезапуском
                 }
 
             } while (restart);
 
-            Console.WriteLine("Бот остановлен.");
+            _ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
         }
 
-        private BotUI _ui;
-        private bool _uiStarted = false;
+        private static BotUI _ui;
+        private static bool _uiStarted = false;
 
         public async Task RunBotAsync()
         {
@@ -499,12 +542,23 @@ namespace RPBot
                 // Даем UI время на инициализацию
                 await Task.Delay(2000);
                 _uiStarted = true;
+
+                CommandLogSink = msg => _ui?.AddLog(msg);
+
+                // Перенаправляем весь Console в UI-панель логов
+                if (_originalOut == null) _originalOut = Console.Out;
+                if (_originalErr == null) _originalErr = Console.Error;
+                var uiWriter = new UiTextWriter(() => _ui);
+                Console.SetOut(uiWriter);
+                Console.SetError(uiWriter);
             }
             else
             {
                 // При рестарте просто обновляем сервисы
                 _ui.UpdateServices(_client, _reconnectionService, _connectionPredictor, _statusNotifier);
                 _ui.AddLog("Перезапуск бота...");
+
+                CommandLogSink = msg => _ui?.AddLog(msg);
             }
 
             _textBlocks = LoadTextFromFile(_config.TextBlocksPath);
@@ -525,9 +579,15 @@ namespace RPBot
                         CleanupServices();
 
                         // ПЕРЕСОЗДАЕМ СЕРВИСЫ С НОВЫМ КЛИЕНТОМ
-                        _reconnectionService = new ReconnectionService(_client);
+                        _reconnectionService = new ReconnectionService(_client)
+                        {
+                            LogSink = msg => _ui?.AddLog(msg)
+                        };
                         _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config.Prediction);
-                        _statusNotifier = new StatusNotifier(_client, ServerConfigs);
+                        _statusNotifier = new StatusNotifier(_client, ServerConfigs)
+                        {
+                            LogSink = msg => _ui?.AddLog(msg)
+                        };
                         _statusNotifier.SetStartupType(_currentStartupType);
 
                         // ПЕРЕПОДПИСЫВАЕМСЯ
@@ -672,24 +732,83 @@ namespace RPBot
         {
             while (!_shouldExit)
             {
+                // Ожидание между итерациями; прерываемся, если приложение завершает работу.
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(30));
-
-                    // Анализируем и делаем прогнозы
-                    var prediction = await _connectionPredictor.AnalyzeAndPredict();
-
-                    // Проверяем, не зависло ли соединение
-                    if (_client.ConnectionState == ConnectionState.Disconnected &&
-                        !_shouldExit)
-                    {
-                        await LogStartup("⚠️ Фоновая проверка: обнаружено отключение");
-                        await _reconnectionService.HandleDisconnect(new Exception("Background check"));
-                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    await LogStartup($"⚠️ Ошибка мониторинга: {ex.Message}");
+                    await LogStartup($"⚠️ BackgroundMonitoring: delay error: {ex.Message}");
+                    await Task.Delay(500);
+                    continue;
+                }
+
+                // Локальные копии ссылок — чтобы избежать гонок с очищением полей в другом потоке
+                var predictor = _connectionPredictor;
+                var client = _client;
+                var recon = _reconnectionService;
+
+                // Анализ/прогноз — только если predictor доступен
+                if (predictor != null)
+                {
+                    try
+                    {
+                        var prediction = await predictor.AnalyzeAndPredict();
+                        // TODO: использовать prediction при необходимости
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogStartup($"⚠️ BackgroundMonitoring: prediction error: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    await LogStartup("⚠️ BackgroundMonitoring: predictor is null, skipping prediction");
+                }
+
+                // Проверка состояния клиента — только если client доступен
+                if (client != null)
+                {
+                    try
+                    {
+                        if (client.ConnectionState == ConnectionState.Disconnected && !_shouldExit)
+                        {
+                            await LogStartup("⚠️ Фоновая проверка: обнаружено отключение");
+
+                            if (recon != null)
+                            {
+                                try
+                                {
+                                    await recon.HandleDisconnect(new Exception("Background check"));
+                                }
+                                catch (Exception ex)
+                                {
+                                    await LogStartup($"⚠️ BackgroundMonitoring: recon.HandleDisconnect failed: {ex.Message}");
+                                }
+                            }
+                            else
+                            {
+                                await LogStartup("⚠️ BackgroundMonitoring: reconnection service is null, cannot handle disconnect");
+                            }
+                        }
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        await LogStartup("⚠️ BackgroundMonitoring: encountered disposed object while checking connection");
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogStartup($"⚠️ BackgroundMonitoring: error checking connection: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    await LogStartup("⚠️ BackgroundMonitoring: client is null, skipping connection check");
                 }
             }
         }
@@ -760,13 +879,12 @@ namespace RPBot
                     {
                         _ui.AddLog("Авто-перезапуск клиента из-за длительных ошибок подключения...");
                         _ui.ClearForRestart();
-                        _ui.Dispose();
-                        _ui = null;
-                        _uiStarted = false;
+                        // Do not dispose persistent UI here; keep UI thread alive
                     }
                     catch { }
                 }
 
+                _restartInitiator = "discord";
                 _shouldRestart = true;
                 _shouldExit = true;
 
@@ -891,9 +1009,12 @@ namespace RPBot
                     var guild = guildsList[i];
                     if (ServerConfigs.TryGetValue(guild.Id, out var config))
                     {
-                        await _statusNotifier.SendSystemsActiveToGuild(guild, config,
+                        var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
                             $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
-                        await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
+                        if (ok)
+                            await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
+                        else
+                            await LogStartup($"│   Ошибка отправки статуса на {guild.Name,-32}│");
                     }
                     await Task.Delay(200);
                 }
@@ -916,6 +1037,16 @@ namespace RPBot
                     _client.Guilds.Count,
                     initTime
                 );
+
+                // If we performed a restart, surface recent ErrorLog lines and notify user in UI
+                try
+                {
+                    if (_currentStartupType == StartupType.Restart)
+                    {
+                        _ui?.NotifyRestartCompleted(_restartInitiator);
+                    }
+                }
+                catch { }
 
                 // LogStartup теперь отправляет в UI
             }
@@ -1889,7 +2020,7 @@ namespace RPBot
             }
         }
 
-        private static readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
         private async Task LogStartup(string message)
         {
@@ -2779,6 +2910,12 @@ namespace RPBot
         private static IUserMessage queueStartMessage;
         private static ITextChannel channel;
 
+        private static Task LogStartup(string message)
+        {
+            Program.CommandLogSink?.Invoke(message);
+            return Task.CompletedTask;
+        }
+
         [Command("queue")]
         public async Task QueueCommand(SocketSlashCommand command, int count)
         {
@@ -2831,7 +2968,7 @@ namespace RPBot
             messagesToDelete.Add(queueStartMessage);
 
             rollTimer = new Timer(ResetQueue, null, TimeSpan.FromMinutes(1), Timeout.InfiniteTimeSpan);
-            Console.WriteLine($"Успех: Очередь создана с заданным числом ({count}) участников! Таймер запущен.");
+            await LogStartup($"Очередь создана с заданным числом ({count}) участников. Таймер запущен.");
         }
 
         [Command("q")]
@@ -2839,7 +2976,7 @@ namespace RPBot
         {
             if (!isQueueActive)
             {
-                Console.WriteLine($"Предупреждение: Очередь не активна.");
+                await LogStartup("Предупреждение: Очередь не активна.");
                 await command.RespondAsync("Пожалуйста, запустите очередь перед выполнением этой команды.", ephemeral: true);
                 _ = Task.Run(async () =>
                 {
@@ -2851,7 +2988,7 @@ namespace RPBot
 
             if (!input.StartsWith("d") || !int.TryParse(input[1..], out int y) || y <= 0)
             {
-                Console.WriteLine($"Ошибка: Введены некорректные данные.");
+                await LogStartup("Ошибка: Введены некорректные данные.");
                 await command.RespondAsync("Пожалуйста, укажите корректные данные.", ephemeral: true);
                 _ = Task.Run(async () =>
                 {
@@ -2888,7 +3025,7 @@ namespace RPBot
             var waitingMessage = await channel.SendMessageAsync($"{user.DisplayName}, ваш бросок d{y}: {result}. Ещё {maxRolls - rollCount} бросков. Ожидание следующего броска...");
             messagesToDelete.Add(waitingMessage);
 
-            Console.WriteLine($"Успех: Совершён бросок пользователем {user.DisplayName}. Его результат - {result}. Таймер обновлён.");
+            await LogStartup($"Успех: Совершён бросок пользователем {user.DisplayName}. Его результат - {result}. Таймер обновлён.");
 
             if (rollCount >= maxRolls)
             {
@@ -2913,7 +3050,7 @@ namespace RPBot
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Ошибка (вывод результатов): При попытке удалить сообщения произошла ошибка. Причина: {ex.Message}");
+                    await LogStartup($"Ошибка (вывод результатов): При попытке удалить сообщения произошла ошибка. Причина: {ex.Message}");
                 }
             }
 
@@ -2923,7 +3060,7 @@ namespace RPBot
 
             if (userRolls == null || userRolls.Count == 0)
             {
-                Console.WriteLine("userRolls is null or empty");
+                await LogStartup("userRolls is null or empty");
                 return;
             }
 
@@ -2954,7 +3091,7 @@ namespace RPBot
                 sequence++;
             }
 
-            Console.WriteLine($"Успех: Произведён вывод результатов. Сообщения удалены. Таймер остановлён.");
+            await LogStartup("Успех: Произведён вывод результатов. Сообщения удалены. Таймер остановлён.");
             embed.AddField("Результаты", resultString.ToString(), false);
             if (embed != null)
             {
@@ -2962,7 +3099,7 @@ namespace RPBot
             }
             else
             {
-                Console.WriteLine("Ошибка: embed не был создан.");
+                await LogStartup("Ошибка: embed не был создан.");
             }
 
             maxRolls = 0;
@@ -2989,11 +3126,11 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка (очистка очереди): При попытке удалить сообщения произошла ошибка. Причина: {ex.Message}");
+                        await LogStartup($"Ошибка (очистка очереди): При попытке удалить сообщения произошла ошибка. Причина: {ex.Message}");
                     }
                 }
             });
-            Console.WriteLine($"Предупреждение: Таймер истёк. Сообщения и очередь удалены.");
+            await LogStartup("Предупреждение: Таймер истёк. Сообщения и очередь удалены.");
         }
 
         [Command("stop_q")]
@@ -3007,9 +3144,9 @@ namespace RPBot
                 if (!hasRole)
                 {
                     await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
-                    Console.WriteLine($"Ошибка: У пользователя {guildUser.DisplayName} недостаточно прав для выполнения команды");
+                    await LogStartup($"Ошибка: У пользователя {guildUser.DisplayName} недостаточно прав для выполнения команды");
                     var userRoles = guildUser.Roles.Select(r => r.Name).ToList();
-                    Console.WriteLine($"Роли пользователя: {string.Join(", ", userRoles)}");
+                    await LogStartup($"Роли пользователя: {string.Join(", ", userRoles)}");
                     return;
                 }
             }
@@ -3069,7 +3206,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ShutdownQueue error: {ex.Message}");
+                try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ShutdownQueue error: {ex.Message}\n"); } catch { }
             }
         }
     }
@@ -3115,7 +3252,7 @@ namespace RPBot
 
         private async void Log(string message)
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+            Program.CommandLogSink?.Invoke(message);
         }
 
         private async Task<GameSession> StartSessionInternal(
@@ -4164,6 +4301,12 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
 
+        private static Task LogStartup(string message)
+        {
+            Program.CommandLogSink?.Invoke(message);
+            return Task.CompletedTask;
+        }
+
         public ModerationCommands(DiscordSocketClient client)
         {
             _client = client;
@@ -4175,7 +4318,7 @@ namespace RPBot
             // Отложим ответ, чтобы Discord не считал команду "зависшей"
             await command.DeferAsync();
 
-            Console.WriteLine($"[{DateTime.UtcNow}] Команда '/close_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
+            await LogStartup($"Команда '/close_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 
             // Проверяем, что команду выполняет "perekrestok_mirov" или "domen_"
             var allowedUsers = new[] { "perekrestok_mirov", "domen_" };
@@ -4183,7 +4326,7 @@ namespace RPBot
 
             if (user == null || !allowedUsers.Contains(user.Username))
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
+                await LogStartup($"Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
                 await command.FollowupAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
                 return;
             }
@@ -4202,7 +4345,7 @@ namespace RPBot
             if (channel is SocketThreadChannel threadChannel)
             {
                 // Если это ветка, выводим информацию
-                Console.WriteLine($"[{DateTime.UtcNow}] Обработка ветки {threadChannel.Name} ({threadChannel.Id}).");
+                await LogStartup($"Обработка ветки {threadChannel.Name} ({threadChannel.Id}).");
 
                 // Отправляем сообщение в ветке перед её закрытием
                 await threadChannel.SendMessageAsync("Тема закрыта. Сбор на игры перешёл в отдельный чат.");
@@ -4301,24 +4444,24 @@ namespace RPBot
 
                             // Обновляем переопределение прав
                             await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
-                            Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
+                            await LogStartup($"Запрещена отправка сообщений для пользователя {guildUser.Username}.");
                         }
                         else
                         {
                             // Если переопределения нет, создаём новое с запретом на отправку сообщений
                             await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Deny));
-                            Console.WriteLine($"[{DateTime.UtcNow}] Запрещена отправка сообщений для пользователя {guildUser.Username}.");
+                            await LogStartup($"Запрещена отправка сообщений для пользователя {guildUser.Username}.");
                         }
                     }
                     await Task.Delay(100);
                 }
 
-                Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} перемещён в архив и закрыт. Причина: {reason}");
+                await LogStartup($"Чат {textChannel.Name} перемещён в архив и закрыт. Причина: {reason}");
                 await command.FollowupAsync($"Чат {textChannel.Mention} был перемещён в архив и закрыт. Причина: {reason}");
             }
             else
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: команда выполнена в неподдерживаемом типе канала.");
+                await LogStartup("Ошибка: команда выполнена в неподдерживаемом типе канала.");
                 await command.FollowupAsync("Эта команда может быть выполнена только в текстовом канале или ветке на форуме.", ephemeral: true);
             }
         }
@@ -4329,7 +4472,7 @@ namespace RPBot
             // Отложим ответ, чтобы Discord не считал команду "зависшей"
             await command.DeferAsync();
 
-            Console.WriteLine($"[{DateTime.UtcNow}] Команда '/open_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
+            await LogStartup($"Команда '/open_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 
             // Проверяем, что команду выполняет "perekrestok_mirov" или "domen_"
             var allowedUsers = new[] { "perekrestok_mirov", "domen_" };
@@ -4337,7 +4480,7 @@ namespace RPBot
 
             if (user == null || !allowedUsers.Contains(user.Username))
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
+                await LogStartup($"Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
                 await command.FollowupAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
                 return;
             }
@@ -4353,7 +4496,7 @@ namespace RPBot
 
             if (channel is not SocketTextChannel textChannel)
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: команда выполнена в неподдерживаемом типе канала.");
+                await LogStartup("Ошибка: команда выполнена в неподдерживаемом типе канала.");
                 await command.FollowupAsync("Эта команда может быть выполнена только в текстовом канале.", ephemeral: true);
                 return;
             }
@@ -4363,7 +4506,7 @@ namespace RPBot
 
             if (string.IsNullOrEmpty(categoryName))
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: не указана категория для перемещения.");
+                await LogStartup("Ошибка: не указана категория для перемещения.");
                 await command.FollowupAsync("Не указана категория для перемещения.", ephemeral: true);
                 return;
             }
@@ -4373,7 +4516,7 @@ namespace RPBot
 
             if (targetCategory == null)
             {
-                Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: категория '{categoryName}' не найдена.");
+                await LogStartup($"Ошибка: категория '{categoryName}' не найдена.");
                 await command.FollowupAsync($"Категория с именем '{categoryName}' не найдена.", ephemeral: true);
                 return;
             }
@@ -4409,26 +4552,26 @@ namespace RPBot
 
                         // Обновляем переопределение прав
                         await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
-                        Console.WriteLine($"[{DateTime.UtcNow}] Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
+                        await LogStartup($"Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
                     }
                     else
                     {
                         // Если переопределения нет, создаём новое с разрешением на отправку сообщений
                         await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Allow));
-                        Console.WriteLine($"[{DateTime.UtcNow}] Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
+                        await LogStartup($"Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
                     }
                 }
                 await Task.Delay(100);
             }
 
             // Перемещаем канал в указанную категорию
-            Console.WriteLine($"[{DateTime.UtcNow}] Перемещение канала {textChannel.Name} в категорию '{targetCategory.Name}'.");
+            await LogStartup($"Перемещение канала {textChannel.Name} в категорию '{targetCategory.Name}'.");
             await textChannel.ModifyAsync(prop =>
             {
                 prop.CategoryId = targetCategory.Id;
             });
 
-            Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} открыт и перемещён в категорию '{targetCategory.Name}'.");
+            await LogStartup($"Чат {textChannel.Name} открыт и перемещён в категорию '{targetCategory.Name}'.");
             await command.FollowupAsync($"Чат {textChannel.Mention} был открыт и перемещён в категорию '{targetCategory.Name}'.");
         }
 
@@ -4443,14 +4586,14 @@ namespace RPBot
             if (user == null || !hasRole)
             {
                 await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
-                Console.WriteLine($"Ошибка: У пользователя {user.DisplayName} недостаточно прав для выполнения команды");
+                await LogStartup($"Ошибка: У пользователя {user.DisplayName} недостаточно прав для выполнения команды");
                 return;
             }
 
             if (count < 1 || count > 100)
             {
                 await command.RespondAsync("Пожалуйста, укажите число от 1 до 100.", ephemeral: true);
-                Console.WriteLine($"Ошибка: Пользователь {user.DisplayName} ввёл некорректное число сообщений - {count}");
+                await LogStartup($"Ошибка: Пользователь {user.DisplayName} ввёл некорректное число сообщений - {count}");
                 return;
             }
 
@@ -4461,7 +4604,7 @@ namespace RPBot
                 await textChannel.DeleteMessagesAsync(messagesToDeleteList);
 
                 await command.RespondAsync(GetMessageCountString(count), ephemeral: true);
-                Console.WriteLine(GetMessageCountString(count));
+                    await LogStartup(GetMessageCountString(count));
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(3000);

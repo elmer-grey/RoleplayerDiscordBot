@@ -1,8 +1,12 @@
-﻿using Discord.WebSocket;
+using Discord.WebSocket;
 using Terminal.Gui;
 using static Terminal.Gui.View;
+using System;
 using System.Linq;
 using System.Threading.Tasks;
+using System.IO;
+using System.Threading;
+using System.Collections.Generic;
 
 namespace RPBot
 {
@@ -16,8 +20,8 @@ namespace RPBot
 
         // Элементы интерфейса
         private Window _mainWindow;
-        private TextView _logPanel;
-        private TextView _commandPanel;
+        private ListView _logPanel;
+        private ListView _commandPanel;
         private TextField _inputField;
         private Label _statusBar;
 
@@ -26,10 +30,29 @@ namespace RPBot
         private int _historyIndex = -1;
         private bool _isInitialized = false;
 
+        // Lock to protect Terminal.Gui Init/Shutdown from concurrent calls
+        private readonly object _uiLock = new object();
+
+        // Permanent UI thread fields
+        private Thread _uiThread;
+        private CancellationTokenSource _uiCts;
+        private ManualResetEventSlim _uiInitialized = new ManualResetEventSlim(false);
+        private bool _statusTimeoutAdded = false;
+
         private bool _inputEnabled = false;
         private bool _isDisposed = false;
 
-        private List<string> _pendingLogs = new List<string>();
+        private const int MaxLogLines = 5000;
+        private const int MaxCommandLines = 2000;
+
+        private readonly List<string> _logLines = new List<string>();
+        private readonly List<string> _commandLines = new List<string>();
+
+        private readonly List<string> _pendingLogLines = new List<string>();
+        private readonly List<string> _pendingCommandLines = new List<string>();
+
+        // Чтобы не показывать старые ошибки после успешного рестарта
+        private long _errorLogLengthAtRestart = -1;
 
         public BotUI(
             DiscordSocketClient client,
@@ -43,6 +66,152 @@ namespace RPBot
             _reconnectionService = reconnectionService;
             _connectionPredictor = connectionPredictor;
             _statusNotifier = statusNotifier;
+        }
+
+        // Ensure Terminal.Gui is initialized in a threadsafe manner
+        private void EnsureUiInitialized()
+        {
+            lock (_uiLock)
+            {
+                if (_isInitialized && _uiInitialized.IsSet) return;
+
+                try
+                {
+                    // Запускаем постоянный UI-поток, если ещё не запущен
+                    if (_uiThread == null || !_uiThread.IsAlive)
+                    {
+                        StartUiThread();
+                    }
+
+                    // Ждём сигнализации Init внутри UI-потока (best-effort)
+                    if (!_uiInitialized.Wait(5000))
+                    {
+                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized: UI thread did not initialize within timeout\n"); } catch { }
+                    }
+
+                    _isInitialized = _uiInitialized.IsSet;
+                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized: Init completed\n"); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized error: {ex}\n"); } catch { }
+                    _isInitialized = false;
+                    throw;
+                }
+            }
+        }
+
+        // Запуск постоянного UI-потока, который держит Application.Run(Application.Top)
+        private void StartUiThread()
+        {
+            lock (_uiLock)
+            {
+                if (_uiThread != null && _uiThread.IsAlive) return;
+
+                _uiCts = new CancellationTokenSource();
+                _uiInitialized = new ManualResetEventSlim(false);
+
+                _uiThread = new Thread(() =>
+                {
+                    try
+                    {
+                        Application.Init();
+                        _uiInitialized.Set();
+                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UI thread: Init completed\n"); } catch { }
+
+                        // Запускаем главный цикл; управление subviews будет выполняться через MainLoop.Invoke
+                        Application.Run(Application.Top);
+                    }
+                    catch (Exception ex)
+                    {
+                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UI thread exception: {ex}\n"); } catch { }
+                    }
+                    finally
+                    {
+                        try { Application.Shutdown(); } catch { }
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "BotUI Thread"
+                };
+
+                _uiThread.Start();
+            }
+        }
+
+        // Safe shutdown of UI elements (do not stop the permanent UI thread here)
+        private void SafeShutdown()
+        {
+            lock (_uiLock)
+            {
+                try
+                {
+                    if (Application.MainLoop != null)
+                    {
+                        try
+                        {
+                            Application.MainLoop.Invoke(() =>
+                            {
+                                try
+                                {
+                                    // Удалим главное окно из Top и отписываемся от событий
+                                    try
+                                    {
+                                        var top = Application.Top;
+                                        if (_mainWindow != null && top != null)
+                                        {
+                                            try { top.Remove(_mainWindow); } catch { }
+                                        }
+                                    }
+                                    catch { }
+
+                                    try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
+                                    try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
+                                    try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
+
+                                    _mainWindow = null;
+                                    _logPanel = null;
+                                    _commandPanel = null;
+                                    _inputField = null;
+                                    _statusBar = null;
+                                    // Allow status timer to be re-registered on next CreateMainWindow
+                                    _statusTimeoutAdded = false;
+                                }
+                                catch (Exception ex)
+                                {
+                                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown inner error: {ex}\n"); } catch { }
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown Invoke error: {ex}\n"); } catch { }
+                        }
+                    }
+                    else
+                    {
+                        // Если MainLoop отсутствует — всё равно очищаем локальные ссылки (best-effort)
+                        try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
+                        try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
+                        try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
+
+                        _mainWindow = null;
+                        _logPanel = null;
+                        _commandPanel = null;
+                        _inputField = null;
+                        _statusBar = null;
+                        // Allow status timer to be re-registered on next CreateMainWindow
+                        _statusTimeoutAdded = false;
+                    }
+
+                    _isInitialized = false;
+                }
+                catch (Exception ex)
+                {
+                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown outer error: {ex}\n"); } catch { }
+                }
+            }
         }
 
         private async Task ShowSettingsInteractive()
@@ -335,56 +504,184 @@ namespace RPBot
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Warning: unable to resize console: {ex.Message}");
+                    AddLog($"Warning: unable to resize console: {ex.Message}");
                 }
 
-                // Инициализация Terminal.Gui. Иногда MainLoop может быть null после Shutdown(),
-                // поэтому проверяем и инициализируем повторно при необходимости.
-                if (!_isInitialized || Application.MainLoop == null)
-                {
-                    try
-                    {
-                        Application.Init();
-                        _isInitialized = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Ошибка инициализации UI: {ex.Message}");
-                        _isInitialized = false;
-                        throw;
-                    }
-                }
+                // Централизованная инициализация Terminal.Gui
+                EnsureUiInitialized();
 
                 CreateMainWindow();
 
-                FlushPendingLogs();
+                FlushPendingOutput();
                 while (_isRunning)
                 {
                     try
                     {
-                        Application.Run();
+                        if (_mainWindow == null)
+                        {
+                            try { CreateMainWindow(); } catch { }
+                        }
+
+                        try
+                        {
+                            bool needReinit = false;
+                            try
+                            {
+                                if (Application.MainLoop == null) needReinit = true;
+                                else
+                                {
+                                    try
+                                    {
+                                        var top = Application.Top;
+                                        var subs = top?.Subviews;
+                                        if (subs == null) needReinit = true;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        needReinit = true;
+                                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] PreRun inner check exception: {ex}\n"); } catch { }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                needReinit = true;
+                                try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] PreRun outer check exception: {ex}\n"); } catch { }
+                            }
+
+                            if (needReinit)
+                            {
+                                try
+                                {
+                                    SafeShutdown();
+                                }
+                                catch { }
+
+                                Thread.Sleep(100);
+                                try
+                                {
+                                    EnsureUiInitialized();
+                                    CreateMainWindow();
+                                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] PreRun: reinitialized Terminal.Gui and recreated main window\n"); } catch { }
+                                }
+                                catch (Exception ex)
+                                {
+                                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] PreRun reinit failed: {ex}\n"); } catch { }
+                                    throw;
+                                }
+                            }
+                        }
+                        catch { }
+
+                        bool guiReady = false;
+                        for (int drvAttempt = 0; drvAttempt < 10; drvAttempt++)
+                        {
+                            try
+                            {
+                                if (Application.Driver != null && Application.Top != null)
+                                {
+                                    guiReady = true;
+                                    break;
+                                }
+                            }
+                            catch { }
+
+                            try { EnsureUiInitialized(); } catch { }
+                            Thread.Sleep(100);
+                        }
+
+                        if (!guiReady)
+                        {
+                            try
+                            {
+                                var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Warning: Application.Driver/Top not ready before Application.Run, retrying loop\n");
+                            }
+                            catch { }
+
+                            continue;
+                        }
+
+                        try
+                        {
+                            Application.MainLoop.Invoke(() =>
+                            {
+                                try
+                                {
+                                    if (_mainWindow != null && _mainWindow.SuperView == null)
+                                    {
+                                        Application.Top?.Add(_mainWindow);
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    try
+                                    {
+                                        var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                                        File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] AddMainWindow error: {ex}\n");
+                                    }
+                                    catch { }
+                                }
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            try { File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] AddMainWindow invoke failed: {ex}\n"); } catch { }
+                        }
+
+                        while (_isRunning && _uiThread != null && _uiThread.IsAlive)
+                        {
+                            Thread.Sleep(500);
+                        }
+
                         break;
                     }
                     catch (Exception ex)
                     {
-                        if (ex.Message.Contains("key values must be beetween 0 and 255"))
+                        AddLog($"Application.Run error: {ex.Message}");
+
+                        try
                         {
-                            continue;
+                            var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            var text = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Application.Run error:\n{ex}\n\n";
+                            File.AppendAllText(logPath, text);
                         }
+                        catch { }
+
+                        try
+                        {
+                            try { Application.RequestStop(); } catch { }
+                            try { Application.Shutdown(); } catch { }
+                        }
+                        catch { }
+
+                        Thread.Sleep(500);
+
+                        try
+                        {
+                            Application.Init();
+                            CreateMainWindow();
+                        }
+                        catch (Exception initEx)
+                        {
+                            AddLog($"Ошибка повторной инициализации UI: {initEx.Message}");
+                        }
+
                         Thread.Sleep(1000);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Критическая ошибка UI: {ex.Message}");
+                AddLog($"Критическая ошибка UI: {ex.Message}");
                 Environment.Exit(1);
             }
         }
 
         private void CreateMainWindow()
         {
-            Console.Clear();
+            if (_isDisposed) return;
 
             _mainWindow = new Window($"Discord Bot Control Panel v0.6.0 - {DateTime.Now:HH:mm:ss}")
             {
@@ -392,11 +689,8 @@ namespace RPBot
                 Y = 0,
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
-                //CanFocus = false,
-                //Enabled = false,
             };
 
-            // ВЕРХНЯЯ ПАНЕЛЬ - СТАТУС БАР
             _statusBar = new Label("")
             {
                 X = 0,
@@ -412,7 +706,6 @@ namespace RPBot
             };
             _mainWindow.Add(_statusBar);
 
-            // ЛЕВАЯ ПАНЕЛЬ - ЛОГИ (70% ширины)
             var logFrame = new FrameView("LOGS PANEL")
             {
                 X = 0,
@@ -422,25 +715,21 @@ namespace RPBot
                 CanFocus = false
             };
 
-            _logPanel = new TextView
+            _logPanel = new ListView(_logLines)
             {
-                ReadOnly = true,
-                WordWrap = true,
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ColorScheme = new ColorScheme
                 {
-                    Normal = new Terminal.Gui.Attribute(Color.White, Color.Green)
+                    Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
                 },                
-                DesiredCursorVisibility = CursorVisibility.Invisible,
                 CanFocus = false,
                 TabStop = false
             };
 
             logFrame.Add(_logPanel);
 
-            // ПРАВАЯ ПАНЕЛЬ - КОМАНДЫ (30% ширины)
-            var commandFrame = new FrameView("COMMANDS OUTPUT")
+            var commandFrame = new FrameView("COMMANDS PANEL")
             {
                 X = Pos.Percent(70),
                 Y = 1,
@@ -449,24 +738,20 @@ namespace RPBot
                 CanFocus = false
             };
 
-            _commandPanel = new TextView
+            _commandPanel = new ListView(_commandLines)
             {
-                ReadOnly = true,
-                WordWrap = true,
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ColorScheme = new ColorScheme
                 {
-                    Normal = new Terminal.Gui.Attribute(Color.Green, Color.Black)
+                    Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
                 },
-                DesiredCursorVisibility = CursorVisibility.Invisible,
                 CanFocus = false,
                 TabStop = false
             };
 
             commandFrame.Add(_commandPanel);
 
-            // НИЖНЯЯ ПАНЕЛЬ - ВВОД
             var inputFrame = new FrameView("INPUT")
             {
                 X = 0,
@@ -482,8 +767,8 @@ namespace RPBot
                 Y = 0,
                 Width = Dim.Fill(),
                 Height = 1,
-                Enabled = false, // Изначально отключен
-                CanFocus = true, // Может получать фокус когда включен
+                Enabled = false,
+                CanFocus = true,
                 DesiredCursorVisibility = CursorVisibility.Default
             };
 
@@ -502,34 +787,38 @@ namespace RPBot
 
             inputFrame.Add(_inputField, hintLabel);
 
-            // Собираем всё вместе
             _mainWindow.Add(logFrame, commandFrame, inputFrame);
-            Application.Top.Add(_mainWindow);
 
-            // ВАЖНО: Устанавливаем фокус на главное окно, а потом на inputFrame
-            Application.Top.FocusFirst();
+            try
+            {
+                try { _mainWindow.TabStop = false; } catch { }
+                try { _mainWindow.FocusFirst(); } catch { try { _mainWindow.SetFocus(); } catch { } }
+            }
+            catch (Exception ex)
+            {
+                try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] CreateMainWindow focus error: {ex}\n"); } catch { }
+            }
 
-            Application.Top.TabStop = false;
-
-            // Подписываемся на события
             _inputField.KeyPress += OnInputKeyPress;
-
-            // Добавляем обработчик для перехвата всех клавиш, чтобы они не уходили в консоль
             Application.RootKeyEvent += OnRootKeyEvent;
 
-            // Запускаем обновление статуса
-            Application.MainLoop.AddTimeout(TimeSpan.FromSeconds(1), UpdateStatusBar);
+            if (!_statusTimeoutAdded && Application.MainLoop != null)
+            {
+                try
+                {
+                    Application.MainLoop.AddTimeout(TimeSpan.FromSeconds(1), UpdateStatusBar);
+                    _statusTimeoutAdded = true;
+                }
+                catch { }
+            }
 
             Application.RootMouseEvent += OnRootMouseEvent;
         }
 
-        // Добавьте этот метод для перехвата мыши
         private bool OnRootKeyEvent(KeyEvent keyEvent)
         {
-            // Блокируем все клавиши, если ввод не разрешен и это не специальные комбинации
             if (!_inputEnabled)
             {
-                // Разрешаем только Ctrl+C для выхода
                 if (keyEvent.Key == (Key.C | Key.CtrlMask))
                 {
                     Environment.Exit(0);
@@ -544,79 +833,63 @@ namespace RPBot
         {
             try
             {
-                // Проверяем, находится ли мышь в области логов
-                if (mouseEvent.X < Console.WindowWidth * 0.7 && mouseEvent.Y < Console.WindowHeight - 3)
+                var cols = Application.Driver?.Cols ?? Console.WindowWidth;
+                var rows = Application.Driver?.Rows ?? Console.WindowHeight;
+                var splitX = (int)(cols * 0.7);
+                var isWheelUp = mouseEvent.Flags.HasFlag(MouseFlags.WheeledUp);
+                var isWheelDown = mouseEvent.Flags.HasFlag(MouseFlags.WheeledDown);
+
+                if (!isWheelUp && !isWheelDown)
+                    return;
+
+                if (mouseEvent.Y >= rows - 3)
+                    return;
+
+                var delta = isWheelUp ? -3 : 3;
+
+                if (mouseEvent.X < splitX)
                 {
-                    // Прокрутка вверх
-                    if (mouseEvent.Flags == MouseFlags.WheeledUp)
-                    {
-                        // Устанавливаем фокус на панель логов, затем прокручиваем вверх
-                        try { _logPanel.SetFocus(); } catch { }
-                        var newY = Math.Max(0, _logPanel.CursorPosition.Y - 3);
-                        _logPanel.CursorPosition = new Point(_logPanel.CursorPosition.X, newY);
-                        _logPanel.SetNeedsDisplay();
-                        mouseEvent.Handled = true;
-                    }
-                    // Прокрутка вниз
-                    else if (mouseEvent.Flags == MouseFlags.WheeledDown)
-                    {
-                        // Устанавливаем фокус на панель логов, затем прокручиваем вниз
-                        try { _logPanel.SetFocus(); } catch { }
-                        var newY = _logPanel.CursorPosition.Y + 3;
-                        _logPanel.CursorPosition = new Point(_logPanel.CursorPosition.X, newY);
-                        _logPanel.SetNeedsDisplay();
-                        mouseEvent.Handled = true;
-                    }
+                    ScrollListBy(_logPanel, _logLines, delta);
+                    mouseEvent.Handled = true;
                 }
-                // Проверяем, находится ли мышь в области команд
-                else if (mouseEvent.X >= Console.WindowWidth * 0.7 && mouseEvent.Y < Console.WindowHeight - 3)
+                else
                 {
-                    // Прокрутка вверх
-                    if (mouseEvent.Flags == MouseFlags.WheeledUp)
-                    {
-                        try { _commandPanel.SetFocus(); } catch { }
-                        var newY = Math.Max(0, _commandPanel.CursorPosition.Y - 3);
-                        _commandPanel.CursorPosition = new Point(_commandPanel.CursorPosition.X, newY);
-                        _commandPanel.SetNeedsDisplay();
-                        mouseEvent.Handled = true;
-                    }
-                    // Прокрутка вниз
-                    else if (mouseEvent.Flags == MouseFlags.WheeledDown)
-                    {
-                        try { _commandPanel.SetFocus(); } catch { }
-                        var newY = _commandPanel.CursorPosition.Y + 3;
-                        _commandPanel.CursorPosition = new Point(_commandPanel.CursorPosition.X, newY);
-                        _commandPanel.SetNeedsDisplay();
-                        mouseEvent.Handled = true;
-                    }
+                    ScrollListBy(_commandPanel, _commandLines, delta);
+                    mouseEvent.Handled = true;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"OnRootMouseEvent error: {ex.Message}");
+                TryAppendErrorToFile($"OnRootMouseEvent error: {ex}");
             }
         }
 
-        private void FlushPendingLogs()
+        private void FlushPendingOutput()
         {
-            if (_pendingLogs.Count > 0 && _logPanel != null)
+            if (Application.MainLoop == null || _isDisposed)
+                return;
+
+            Application.MainLoop.Invoke(() =>
             {
-                string currentText = _logPanel.Text.ToString();
-                foreach (var log in _pendingLogs)
+                try
                 {
-                    currentText += log;
+                    if (_pendingLogLines.Count > 0)
+                    {
+                        AppendLinesUnsafe(_logLines, _logPanel, _pendingLogLines, MaxLogLines);
+                        _pendingLogLines.Clear();
+                    }
+
+                    if (_pendingCommandLines.Count > 0)
+                    {
+                        AppendLinesUnsafe(_commandLines, _commandPanel, _pendingCommandLines, MaxCommandLines);
+                        _pendingCommandLines.Clear();
+                    }
                 }
-                _logPanel.Text = currentText;
-
-                var lines = _logPanel.Text.ToString().Split('\n').Length;
-                var height = Math.Max(1, _logPanel.Bounds.Height);
-                var newTop = Math.Max(0, lines - height);
-                _logPanel.CursorPosition = new Point(0, newTop);
-
-                _logPanel.SetNeedsDisplay();
-                _pendingLogs.Clear();
-                Application.Refresh();
-            }
+                catch (Exception ex)
+                {
+                    TryAppendErrorToFile($"FlushPendingOutput error: {ex}");
+                }
+            });
         }
 
         public void EnableInput()
@@ -629,20 +902,19 @@ namespace RPBot
                     {
                         if (_inputField != null)
                         {
-                            _inputEnabled = true; // Устанавливаем флаг
+                            _inputEnabled = true;
                             _inputField.Enabled = true;
-                            Application.Top.FocusFirst();
+                            try { _mainWindow?.FocusFirst(); } catch { try { _mainWindow?.SetFocus(); } catch { } }
                             _inputField.SetFocus();
 
                             AddLog("Ввод команд разблокирован");
 
-                            // Принудительно обновляем экран
                             Application.Refresh();
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка разблокировки ввода: {ex.Message}");
+                        TryAppendErrorToFile($"Ошибка разблокировки ввода: {ex}");
                     }
                 });
             }
@@ -661,15 +933,14 @@ namespace RPBot
                             _inputEnabled = false;
                             _inputField.Enabled = false;
 
-                            // Убираем фокус с поля ввода
-                            Application.Top.FocusFirst();
+                            try { _mainWindow?.FocusFirst(); } catch { try { _mainWindow?.SetFocus(); } catch { } }
 
                             Application.Refresh();
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка блокировки ввода: {ex.Message}");
+                        TryAppendErrorToFile($"Ошибка блокировки ввода: {ex}");
                     }
                 });
             }
@@ -678,6 +949,8 @@ namespace RPBot
         private bool UpdateStatusBar(MainLoop loop)
         {
             if (_isDisposed) return false;
+
+            if (_statusBar == null) return false;
 
             try
             {
@@ -690,7 +963,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                _statusBar.Text = $" Ошибка обновления статуса: {ex.Message}";
+                try { _statusBar.Text = $" Ошибка обновления статуса: {ex.Message}"; } catch { }
             }
 
             return true;
@@ -698,7 +971,6 @@ namespace RPBot
 
         private void OnInputKeyPress(KeyEventEventArgs args)
         {
-            // Проверяем разрешен ли ввод
             if (!_inputEnabled)
             {
                 args.Handled = true;
@@ -715,16 +987,7 @@ namespace RPBot
 
                 _inputField.Text = "";
 
-                if (_commandPanel != null)
-                {
-                    _commandPanel.Text += $"> {command}\n";
-
-                    // Правильно прокручиваем к концу по строкам (не по символам)
-                    var cmdLines = _commandPanel.Text.ToString().Split('\n').Length;
-                    var cmdHeight = Math.Max(1, _commandPanel.Bounds.Height);
-                    var cmdTop = Math.Max(0, cmdLines - cmdHeight);
-                    _commandPanel.CursorPosition = new Point(0, cmdTop);
-                }
+                AddCommandOutput($"> {command}");
 
                 _ = Task.Run(async () =>
                 {
@@ -734,7 +997,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"ExecuteCommand error: {ex}");
+                        TryAppendErrorToFile($"ExecuteCommand error: {ex}");
                     }
                 });
 
@@ -795,8 +1058,19 @@ namespace RPBot
                     case "announce":
                     case "systems":
                         AddCommandOutput("Отправка статуса в Discord...");
-                        await _statusNotifier.SendAllSystemsActive("Ручная проверка систем");
-                        AddCommandOutput("Статус отправлен!");
+                        try
+                        {
+                            var ok = await _statusNotifier.SendAllSystemsActive("Ручная проверка систем");
+                            if (ok)
+                                AddCommandOutput("Статус успешно отправлен во все каналы.");
+                            else
+                                AddCommandOutput("Статус отправлен с ошибками. Подробности в логах.");
+                        }
+                        catch (Exception ex)
+                        {
+                            AddCommandOutput("Ошибка при отправке статуса. Смотрите логи.");
+                            TryAppendErrorToFile($"ExecuteCommand announce error: {ex}");
+                        }
                         break;
 
                     case "servers":
@@ -804,135 +1078,114 @@ namespace RPBot
                         break;
 
                     case "settings":
+                        if (args.Length == 0)
                         {
-                    if (args.Length == 0)
-                    {
-                        await ShowSettingsInteractive();
-                        break;
-                    }
+                            await ShowSettingsInteractive();
+                            break;
+                        }
 
-                            var sub = args[0].ToLowerInvariant();
-                            switch (sub)
-                            {
-                                case "list":
+                        var sub = args[0].ToLowerInvariant();
+                        switch (sub)
+                        {
+                            case "list":
+                                {
+                                    if (args.Length == 2 && ulong.TryParse(args[1], out var gid))
                                     {
-                                        if (args.Length == 2 && ulong.TryParse(args[1], out var gid))
+                                        var cfg = await _botController.GetServerConfigAsync(gid);
+                                        if (cfg == null)
                                         {
-                                            var cfg = await _botController.GetServerConfigAsync(gid);
-                                            if (cfg == null)
-                                            {
-                                                AddCommandOutput($"Настройки для {gid} не найдены.");
-                                            }
-                                            else
-                                            {
-                                                AddCommandOutput($"Настройки для {gid}:");
-                                                AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
-                                                AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
-                                                AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
-                                                AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
-                                                AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
-                                                AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
-                                                AddCommandOutput($"line_message: {cfg.LineMessage}");
-                                                AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
-                                                AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
-                                                AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
-                                            }
+                                            AddCommandOutput($"Настройки для {gid} не найдены.");
                                         }
                                         else
                                         {
-                                            var all = await _botController.GetAllServerConfigsAsync();
-                                            AddCommandOutput($"Всего конфигов: {all.Count}");
-                                            foreach (var kv in all)
-                                            {
-                                                AddCommandOutput($"- {kv.Key} (moderation={kv.Value.ModerateChannelID}, roll={kv.Value.RollChannelID})");
-                                            }
+                                            AddCommandOutput($"Настройки для {gid}:");
+                                            AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
+                                            AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
+                                            AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
+                                            AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
+                                            AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
+                                            AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
+                                            AddCommandOutput($"line_message: {cfg.LineMessage}");
+                                            AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
+                                            AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
+                                            AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")} ");
                                         }
-                                        break;
                                     }
-                                case "get":
+                                    else
                                     {
-                                        if (args.Length < 3 || !ulong.TryParse(args[1], out var gid))
+                                        var all = await _botController.GetAllServerConfigsAsync();
+                                        AddCommandOutput($"Всего конфигов: {all.Count}");
+                                        foreach (var kv in all)
                                         {
-                                            AddCommandOutput("Использование: settings get <guildId> <key>");
+                                            AddCommandOutput($"- {kv.Key} (moderation={kv.Value.ModerateChannelID}, roll={kv.Value.RollChannelID})");
                                         }
-                                        else
-                                        {
-                                            var key = args[2].ToLowerInvariant();
-                                            var cfg = await _botController.GetServerConfigAsync(gid);
-                                            if (cfg == null) { AddCommandOutput($"Настройки для {gid} не найдены."); break; }
-                                            string res = key switch
-                                            {
-                                                "moderation_channel" => cfg.ModerateChannelID.ToString(),
-                                                "welcome_channel" => cfg.WelcomeChannelID.ToString(),
-                                                "roll_channel" => cfg.RollChannelID.ToString(),
-                                                "stats_channel" => cfg.StatsChannelID.ToString(),
-                                                "record_channel" => cfg.RecordChannelID.ToString(),
-                                                "welcome_message" => cfg.WelcomeMessage ?? "",
-                                                "line_message" => cfg.LineMessage ?? "",
-                                                "default_role" => cfg.DefaultRoleID.ToString(),
-                                                "swear_filter" => cfg.SwearFilterEnabled.ToString(),
-                                                "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
-                                                _ => "Неизвестный ключ"
-                                            };
-                                            AddCommandOutput(res);
-                                        }
-                                        break;
                                     }
-                                case "set":
-                                    {
-                                        if (args.Length < 4 || !ulong.TryParse(args[1], out var gid))
-                                        {
-                                            AddCommandOutput("Использование: settings set <guildId> <key> <value|channelId|toggle>");
-                                            break;
-                                        }
-                                        var key = args[2].ToLowerInvariant();
-                                        var val = string.Join(' ', args.Skip(3));
-                                        ulong? channelId = null;
-                                        bool? toggle = null;
-                                        if (ulong.TryParse(val, out var cid)) channelId = cid;
-                                        else if (bool.TryParse(val, out var b)) toggle = b;
-
-                                        await _botController.SetServerConfigValueAsync(gid, key, val, channelId, toggle);
-                                        AddCommandOutput($"OK: set {key} for {gid}");
-                                        break;
-                                    }
-                                case "reset":
-                                    {
-                                        if (args.Length < 2 || !ulong.TryParse(args[1], out var gid))
-                                        {
-                                            AddCommandOutput("Использование: settings reset <guildId>");
-                                            break;
-                                        }
-                                        await _botController.ResetServerConfigAsync(gid);
-                                        AddCommandOutput($"Настройки для {gid} сброшены.");
-                                        break;
-                                    }
-                                default:
-                                    AddCommandOutput($"Неизвестная подкоманда settings: {sub}");
                                     break;
-                            }
+                                }
+                            case "get":
+                                {
+                                    if (args.Length < 3 || !ulong.TryParse(args[1], out var gid))
+                                    {
+                                        AddCommandOutput("Использование: settings get <guildId> <key>");
+                                    }
+                                    else
+                                    {
+                                        var key = args[2].ToLowerInvariant();
+                                        var cfg = await _botController.GetServerConfigAsync(gid);
+                                        if (cfg == null) { AddCommandOutput($"Настройки для {gid} не найдены."); break; }
+                                        string res = key switch
+                                        {
+                                            "moderation_channel" => cfg.ModerateChannelID.ToString(),
+                                            "welcome_channel" => cfg.WelcomeChannelID.ToString(),
+                                            "roll_channel" => cfg.RollChannelID.ToString(),
+                                            "stats_channel" => cfg.StatsChannelID.ToString(),
+                                            "record_channel" => cfg.RecordChannelID.ToString(),
+                                            "welcome_message" => cfg.WelcomeMessage ?? "",
+                                            "line_message" => cfg.LineMessage ?? "",
+                                            "default_role" => cfg.DefaultRoleID.ToString(),
+                                            "swear_filter" => cfg.SwearFilterEnabled.ToString(),
+                                            "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+                                            _ => "Неизвестный ключ"
+                                        };
+                                        AddCommandOutput(res);
+                                    }
+                                    break;
+                                }
+                            case "set":
+                                {
+                                    if (args.Length < 4 || !ulong.TryParse(args[1], out var gid))
+                                    {
+                                        AddCommandOutput("Использование: settings set <guildId> <key> <value|channelId|toggle>");
+                                        break;
+                                    }
+                                    var key = args[2].ToLowerInvariant();
+                                    var val = string.Join(' ', args.Skip(3));
+                                    ulong? channelId = null;
+                                    bool? toggle = null;
+                                    if (ulong.TryParse(val, out var cid)) channelId = cid;
+                                    else if (bool.TryParse(val, out var b)) toggle = b;
+
+                                    await _botController.SetServerConfigValueAsync(gid, key, val, channelId, toggle);
+                                    AddCommandOutput($"OK: set {key} for {gid}");
+                                    break;
+                                }
+                            case "reset":
+                                {
+                                    if (args.Length < 2 || !ulong.TryParse(args[1], out var gid))
+                                    {
+                                        AddCommandOutput("Использование: settings reset <guildId>");
+                                        break;
+                                    }
+                                    await _botController.ResetServerConfigAsync(gid);
+                                    AddCommandOutput($"Настройки для {gid} сброшены.");
+                                    break;
+                                }
+                            default:
+                                AddCommandOutput($"Неизвестная подкоманда settings: {sub}");
+                                break;
                         }
                         break;
 
-                    case "predict":
-                        var prediction = await _connectionPredictor.AnalyzeAndPredict();
-                        if (prediction != null)
-                        {
-                            AddCommandOutput($"Прогноз: {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss} (уверенность: {prediction.Confidence}%)");
-                        }
-                        else
-                        {
-                            AddCommandOutput("Прогнозов нет, соединение стабильно");
-                        }
-                        break;
-
-                    case "help":
-                        ShowHelp();
-                        break;
-
-                    default:
-                        AddCommandOutput($"Неизвестная команда: {cmd}");
-                        break;
                 }
             }
             catch (Exception ex)
@@ -943,7 +1196,9 @@ namespace RPBot
 
         public void AddLog(string message)
         {
-            var logMessage = $"[{DateTime.Now:HH:mm:ss}] {message}\n";
+            var formatted = FormatLogLines(message);
+            if (formatted.Count == 0)
+                return;
 
             if (_logPanel != null && Application.MainLoop != null && !_isDisposed)
             {
@@ -951,66 +1206,51 @@ namespace RPBot
                 {
                     try
                     {
-                        // Преобразуем ustring в string для работы
-                        string currentText = _logPanel.Text.ToString();
-                        _logPanel.Text = currentText + logMessage;
-
-                        // Прокручиваем вниз к новым сообщениям учитывать высоту панели
-                        var lines = _logPanel.Text.ToString().Split('\n').Length;
-                        var height = Math.Max(1, _logPanel.Bounds.Height);
-                        var newTop = Math.Max(0, lines - height);
-                        _logPanel.CursorPosition = new Point(0, newTop);
-
-                        _logPanel.SetNeedsDisplay();
-                        Application.Refresh();
+                        AppendLinesUnsafe(_logLines, _logPanel, formatted, MaxLogLines);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка добавления лога: {ex.Message}");
+                        TryAppendErrorToFile($"Ошибка добавления лога: {ex}");
                     }
                 });
             }
             else
             {
-                _pendingLogs.Add(logMessage);
+                _pendingLogLines.AddRange(formatted);
             }
         }
 
         private void AddCommandOutput(string text)
         {
+            var lines = SplitToLines(text)
+                .Select(NormalizePanelLine)
+                .ToList();
+
+            if (lines.Count == 0)
+                return;
+
             if (_commandPanel != null && Application.MainLoop != null && !_isDisposed)
             {
                 Application.MainLoop.Invoke(() =>
                 {
                     try
                     {
-                        // Преобразуем ustring в string для работы
-                        string currentText = _commandPanel.Text.ToString();
-                        _commandPanel.Text = currentText + text + "\n";
-
-                        var lines = _commandPanel.Text.ToString().Split('\n').Length;
-                        var height = Math.Max(1, _commandPanel.Bounds.Height);
-                        var newTop = Math.Max(0, lines - height);
-                        _commandPanel.CursorPosition = new Point(0, newTop);
-
-                        _commandPanel.SetNeedsDisplay();
-                        Application.Refresh();
+                        AppendLinesUnsafe(_commandLines, _commandPanel, lines, MaxCommandLines);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка добавления вывода команды: {ex.Message}");
+                        TryAppendErrorToFile($"Ошибка добавления вывода команды: {ex}");
                     }
                 });
             }
             else
             {
-                Console.WriteLine(text);
+                _pendingCommandLines.AddRange(lines);
             }
         }
 
         public void ShowSystemReady(string botName, int serverCount, double initTime)
         {
-            // Подготовка сообщения вне UI-потока
             string initTimeStr;
             if (initTime < 1)
                 initTimeStr = $"{(initTime * 1000):F0} мс";
@@ -1027,28 +1267,16 @@ namespace RPBot
             var readyMessage = $"╔══════════════════════════════════════════════════════╗\n" +
                               $"║             ВСЕ СИСТЕМЫ АКТИВНЫ!                 ║\n" +
                               $"╠══════════════════════════════════════════════════════╣\n" +
-                              $"║  Бот:         {botName,-30} ║\n" +
-                              $"║  Серверов:    {serverCount,-30} ║\n" +
-                              $"║  Время:       {currentTime,-30} ║\n" +
-                              $"║  Инициализация: {initTimeStr,-29} ║\n" +
+                              $"║  Бот:           {botName,-25}     ║\n" +
+                              $"║  Серверов:      {serverCount,-25} ║\n" +
+                              $"║  Время:         {currentTime,-25} ║\n" +
+                              $"║  Инициализация: {initTimeStr,-25} ║\n" +
                               $"╚══════════════════════════════════════════════════════╝\n";
 
-            // Если UI не готов или уже уничтожен — сохраним сообщение в pending и выйдем
             if (Application.MainLoop == null || _isDisposed || _logPanel == null || _commandPanel == null)
             {
-                // Добавим с меткой времени
-                _pendingLogs.Add($"[{DateTime.Now:HH:mm:ss}] {readyMessage}");
-                // Также добавим краткое уведомление для командной панели (если она есть later)
-                try
-                {
-                    if (_commandPanel != null)
-                    {
-                        var shortMsg = "Консоль готова к приёму команд. Введите 'help'\n";
-                        _pendingLogs.Add($"[{DateTime.Now:HH:mm:ss}] {shortMsg}");
-                    }
-                }
-                catch { }
-
+                _pendingLogLines.AddRange(FormatLogLines(readyMessage));
+                _pendingLogLines.AddRange(FormatLogLines("Консоль готова к приёму команд. Введите 'help'"));
                 return;
             }
 
@@ -1056,25 +1284,12 @@ namespace RPBot
             {
                 try
                 {
-                    string currentLogText = _logPanel?.Text.ToString() ?? "";
-                    _logPanel.Text = currentLogText + readyMessage;
-
-                    var logLines = _logPanel.Text.ToString().Split('\n').Length;
-                    _logPanel.CursorPosition = new Point(0, Math.Max(0, logLines - 1));
-
-                    string currentCommandText = _commandPanel?.Text.ToString() ?? "";
-                    _commandPanel.Text = currentCommandText + "Консоль готова к приёму команд. Введите 'help'\n";
-
-                    var cmdLines = _commandPanel.Text.ToString().Split('\n').Length;
-                    _commandPanel.CursorPosition = new Point(0, Math.Max(0, cmdLines - 1));
-
-                    _logPanel?.SetNeedsDisplay();
-                    _commandPanel?.SetNeedsDisplay();
-                    Application.Refresh();
+                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines(readyMessage), MaxLogLines);
+                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Консоль готова к приёму команд. Введите 'help'"), MaxLogLines);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Ошибка ShowSystemReady: {ex.Message}");
+                    TryAppendErrorToFile($"Ошибка ShowSystemReady: {ex}");
                 }
             });
         }
@@ -1083,7 +1298,6 @@ namespace RPBot
         {
             var tcs = new TaskCompletionSource<bool?>();
 
-            // Сохраняем состояние ввода до диалога
             bool previousInputState = _inputEnabled;
             if (_inputEnabled)
             {
@@ -1117,37 +1331,18 @@ namespace RPBot
                         }
                     };
 
-                    var yesButton = new Button("Y - Да")
-                    {
-                        X = Pos.Percent(20),
-                        Y = 4
-                    };
-                    yesButton.Clicked += () =>
-                    {
-                        Application.RequestStop(dialog);
-                        tcs.TrySetResult(true);
-                    };
+                    var yesButton = new Button("Y - Да") { X = Pos.Percent(20), Y = 4 };
+                    yesButton.Clicked += () => { Application.RequestStop(dialog); tcs.TrySetResult(true); };
 
-                    var noButton = new Button("N - Нет")
-                    {
-                        X = Pos.Percent(65),
-                        Y = 4
-                    };
-                    noButton.Clicked += () =>
-                    {
-                        Application.RequestStop(dialog);
-                        tcs.TrySetResult(false);
-                    };
+                    var noButton = new Button("N - Нет") { X = Pos.Percent(65), Y = 4 };
+                    noButton.Clicked += () => { Application.RequestStop(dialog); tcs.TrySetResult(false); };
 
                     dialog.Add(questionLabel, hintLabel, yesButton, noButton);
 
-                    // Устанавливаем фокус на кнопку НЕТ
                     noButton.SetFocus();
 
-                    // Обработчик закрытия диалога - ИСПРАВЛЕНО
                     dialog.Closed += (_) =>
                     {
-                        // Возвращаем состояние ввода после закрытия диалога
                         if (previousInputState)
                         {
                             Application.MainLoop.Invoke(() => EnableInput());
@@ -1181,7 +1376,6 @@ namespace RPBot
                 catch (Exception ex)
                 {
                     tcs.TrySetException(ex);
-                    // В случае ошибки обязательно разблокируем ввод
                     if (previousInputState)
                     {
                         Application.MainLoop.Invoke(() => EnableInput());
@@ -1225,7 +1419,7 @@ namespace RPBot
                 AddCommandOutput($"Ошибка получения статуса: {ex.Message}");
             }
         }
-         
+
         private async Task ListServers()
         {
             try
@@ -1265,23 +1459,242 @@ namespace RPBot
                 {
                     try
                     {
-                        if (_logPanel != null) _logPanel.Text = "";
-                        if (_commandPanel != null) _commandPanel.Text = "";
+                        _errorLogLengthAtRestart = GetErrorLogLength();
 
-                        string restartMsg = $"[{DateTime.Now:HH:mm:ss}] Бот перезапускается...\n";
-                        _logPanel.Text = restartMsg;
+                        _logLines.Clear();
+                        _commandLines.Clear();
+                        _logPanel?.SetNeedsDisplay();
+                        _commandPanel?.SetNeedsDisplay();
 
-                        _logPanel.CursorPosition = new Point(0, 1);
-                        _logPanel.SetNeedsDisplay();
-                        _commandPanel.SetNeedsDisplay();
-                        Application.Refresh();
+                        AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Бот перезапускается..."), MaxLogLines);
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка очистки UI: {ex.Message}");
+                        TryAppendErrorToFile($"Ошибка очистки UI: {ex}");
                     }
                 });
             }
+        }
+
+        public void NotifyRestartCompleted(string initiator)
+        {
+            if (Application.MainLoop == null || _isDisposed) return;
+
+            Application.MainLoop.Invoke(() =>
+            {
+                try
+                {
+                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines($"Перезапуск завершён. Инициатор: {initiator}"), MaxLogLines);
+
+                    var newErrors = ReadErrorLogDelta();
+                    if (!string.IsNullOrWhiteSpace(newErrors))
+                    {
+                        AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Ошибки за время перезапуска:"), MaxLogLines);
+                        AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines(newErrors), MaxLogLines);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TryAppendErrorToFile($"NotifyRestartCompleted error: {ex}");
+                }
+            });
+        }
+
+        private static IEnumerable<string> SplitToLines(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                yield break;
+
+            using var sr = new StringReader(text);
+            string? line;
+            while ((line = sr.ReadLine()) != null)
+                yield return line;
+        }
+
+        private static bool IsBoxGlyph(char c) => c is '│' or '┌' or '└' or '├' or '─' or '╔' or '╚' or '╠' or '║' or '═';
+
+        private static string NormalizePanelLine(string line)
+        {
+            if (line == null)
+                return string.Empty;
+
+            line = line.Replace("\r", "").TrimEnd();
+            if (line.Length == 0)
+                return string.Empty;
+
+            var trimmedStart = line.TrimStart();
+            if (trimmedStart.Length == 0)
+                return string.Empty;
+
+            var first = trimmedStart[0];
+            if (IsBoxGlyph(first) || first == '>')
+                return trimmedStart;
+
+            return trimmedStart;
+        }
+
+        private List<string> FormatLogLines(string message)
+        {
+            var now = DateTime.Now.ToString("HH:mm:ss");
+            var result = new List<string>();
+            foreach (var rawLine in SplitToLines(message))
+            {
+                var line = NormalizePanelLine(rawLine);
+                if (string.IsNullOrEmpty(line))
+                {
+                    result.Add(string.Empty);
+                    continue;
+                }
+
+                result.Add($"[{now}] {line}");
+            }
+
+            // Если сообщение без переводов строки, но пустое после нормализации
+            if (result.Count == 0 && !string.IsNullOrWhiteSpace(message))
+                result.Add($"[{now}] {NormalizePanelLine(message)}");
+
+            return result;
+        }
+
+        private void AppendLinesUnsafe(List<string> buffer, ListView? panel, IEnumerable<string> lines, int maxLines)
+        {
+            if (lines == null)
+                return;
+
+            foreach (var line in lines)
+            {
+                buffer.Add(line);
+            }
+
+            if (buffer.Count > maxLines)
+            {
+                buffer.RemoveRange(0, buffer.Count - maxLines);
+            }
+
+            if (panel != null)
+            {
+                try
+                {
+                    // Корректируем TopItem/SelectedItem внутри допустимых границ
+                    var height = Math.Max(1, panel.Bounds.Height);
+                    var maxTop = Math.Max(0, buffer.Count - height);
+
+                    if (panel.TopItem < 0) panel.TopItem = 0;
+                    if (panel.TopItem > maxTop) panel.TopItem = maxTop;
+
+                if (buffer.Count == 0)
+                {
+                    // No items -> clear selection
+                    try { panel.SelectedItem = -1; } catch { }
+                }
+                    else
+                    {
+                        var last = buffer.Count - 1;
+                        if (panel.SelectedItem < 0 || panel.SelectedItem > last)
+                            panel.SelectedItem = last;
+                    }
+
+                    ScrollListToBottom(panel, buffer);
+                    panel.SetNeedsDisplay();
+                }
+                catch (Exception ex)
+                {
+                    TryAppendErrorToFile($"AppendLinesUnsafe panel update error: {ex}");
+                }
+            }
+        }
+
+        private void ScrollListBy(ListView? panel, List<string> buffer, int delta)
+        {
+            if (panel == null)
+                return;
+
+            try
+            {
+                var height = Math.Max(1, panel.Bounds.Height);
+                var maxTop = Math.Max(0, buffer.Count - height);
+                var nextTop = panel.TopItem + delta;
+                if (nextTop < 0) nextTop = 0;
+                if (nextTop > maxTop) nextTop = maxTop;
+
+                panel.TopItem = nextTop;
+                panel.SetNeedsDisplay();
+            }
+            catch (Exception ex)
+            {
+                TryAppendErrorToFile($"ScrollListBy error: {ex}");
+            }
+        }
+
+        private void ScrollListToBottom(ListView panel, List<string> buffer)
+        {
+            var height = Math.Max(1, panel.Bounds.Height);
+            var maxTop = Math.Max(0, buffer.Count - height);
+            var top = Math.Max(0, Math.Min(panel.TopItem, maxTop));
+            panel.TopItem = top;
+
+            if (buffer.Count > 0)
+            {
+                var last = buffer.Count - 1;
+                if (panel.SelectedItem < 0 || panel.SelectedItem > last)
+                    panel.SelectedItem = last;
+            }
+            else
+            {
+                // No items -> clear selection
+                try { panel.SelectedItem = -1; } catch { }
+            }
+        }
+
+        private long GetErrorLogLength()
+        {
+            try
+            {
+                var path = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                if (!File.Exists(path))
+                    return 0;
+                return new FileInfo(path).Length;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private string ReadErrorLogDelta()
+        {
+            try
+            {
+                var path = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                if (!File.Exists(path))
+                    return string.Empty;
+
+                var start = _errorLogLengthAtRestart;
+                if (start < 0)
+                    return string.Empty;
+
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                if (fs.Length <= start)
+                    return string.Empty;
+
+                fs.Position = start;
+                using var sr = new StreamReader(fs);
+                return sr.ReadToEnd();
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static void TryAppendErrorToFile(string message)
+        {
+            try
+            {
+                var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+            }
+            catch { }
         }
 
         public void Dispose()
@@ -1289,45 +1702,32 @@ namespace RPBot
             if (_isDisposed) return;
             _isDisposed = true;
 
+            _isRunning = false;
+
             try
             {
-                // Отписываемся от UI-событий, чтобы убрать делегаты
                 try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
                 try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
                 try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
 
-                if (Application.MainLoop != null)
+                SafeShutdown();
+            }
+            catch { }
+
+            try
+            {
+                if (_uiInitialized != null && _uiInitialized.IsSet && Application.MainLoop != null)
                 {
-                    try
-                    {
-                        Application.MainLoop.Invoke(() =>
-                        {
-                            try
-                            {
-                                Application.RequestStop();
-                                Application.Shutdown();
-                            }
-                            catch { }
-                        });
-                    }
-                    catch
-                    {
-                        // Иногда MainLoop уже завершается — пробуем прямой Shutdown
-                        try { Application.Shutdown(); } catch { }
-                    }
+                    try { Application.MainLoop.Invoke(() => Application.RequestStop()); } catch { }
                 }
-                else
+                if (_uiThread != null && _uiThread.IsAlive)
                 {
-                    // Если MainLoop уже null — попытаемся корректно вызвать Shutdown() на всякий случай
-                    try { Application.Shutdown(); } catch { }
+                    _uiThread.Join(2000);
                 }
             }
             catch { }
 
-            // Даем время на завершение
-            // Сбрасываем состояние и даём время на завершение
             _isInitialized = false;
-            Thread.Sleep(500);
         }
     }
 }
