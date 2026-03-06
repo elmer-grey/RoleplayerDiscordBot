@@ -911,6 +911,16 @@ namespace RPBot
                             try { _mainWindow?.FocusFirst(); } catch { try { _mainWindow?.SetFocus(); } catch { } }
                             _inputField.SetFocus();
 
+                            // Удаляем прежние артефакты с текстом разблокировки, если они попали в буферы
+                            try
+                            {
+                                _logLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                _pendingLogLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                _commandLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                _pendingCommandLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                            }
+                            catch { }
+
                             Application.Refresh();
                         }
                     }
