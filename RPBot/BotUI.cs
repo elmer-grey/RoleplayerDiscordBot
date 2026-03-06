@@ -76,27 +76,37 @@ namespace RPBot
 
         private void RewrapLogicalToDisplay(List<string> logical, List<string> display, int availWidth, int maxLines)
         {
-            // Rebuild display from logical lines and enforce maxLines by dropping oldest logical lines
-            display.Clear();
-            foreach (var l in logical)
+            // Build full list of display rows with mapping to logical index
+            var rows = new List<(int logicalIndex, string text)>();
+            for (int i = 0; i < logical.Count; i++)
             {
-                foreach (var part in WrapLineForWidth(l ?? string.Empty, availWidth))
-                    display.Add(part);
-            }
-
-            // If too many display rows, drop oldest logical lines until within limit
-            while (display.Count > maxLines && logical.Count > 0)
-            {
-                // remove oldest logical line and rebuild
-                logical.RemoveAt(0);
-                display.Clear();
-                foreach (var l in logical)
+                var l = logical[i] ?? string.Empty;
+                foreach (var part in WrapLineForWidth(l, availWidth))
                 {
-                    foreach (var part in WrapLineForWidth(l ?? string.Empty, availWidth))
-                        display.Add(part);
+                    rows.Add((i, part));
                 }
             }
 
+            if (rows.Count <= maxLines)
+            {
+                // Use all rows
+                display.Clear();
+                foreach (var r in rows) display.Add(r.text);
+                return;
+            }
+
+            // Keep only the last maxLines display rows
+            var start = rows.Count - maxLines;
+            display.Clear();
+            for (int i = start; i < rows.Count; i++) display.Add(rows[i].text);
+
+            // Remove older logical lines that are no longer represented in display to free memory
+            var firstLogicalKept = rows[start].logicalIndex;
+            if (firstLogicalKept > 0)
+            {
+                // remove range [0, firstLogicalKept-1]
+                logical.RemoveRange(0, Math.Min(firstLogicalKept, logical.Count));
+            }
         }
 
         private bool ResizeWatcher(MainLoop main)
