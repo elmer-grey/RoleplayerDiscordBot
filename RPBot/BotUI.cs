@@ -1748,7 +1748,8 @@ namespace RPBot
                     if (panel.WordWrap)
                     {
                         var availWidth = Math.Max(1, panel.Bounds.Width);
-                        List<string> logical = ReferenceEquals(buffer, _logLines) ? _logLogicalLines : _commandLogicalLines;
+                        // pick logical buffer based on which panel we update
+                        List<string> logical = ReferenceEquals(panel, _logPanel) ? _logLogicalLines : _commandLogicalLines;
 
                         // Add incoming logical lines
                         foreach (var line in lines)
@@ -1758,6 +1759,9 @@ namespace RPBot
 
                         // Rebuild display buffer from logical lines
                         RewrapLogicalToDisplay(logical, buffer, availWidth, maxLines);
+
+                        // Update panel text from display rows immediately
+                        panel.Text = string.Join("\n", buffer);
                     }
                     else
                     {
