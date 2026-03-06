@@ -126,6 +126,17 @@ namespace RPBot
                         var height = Math.Max(1, _logPanel.Bounds.Height);
                         try { _logPanel.TopRow = Math.Max(0, _logLines.Count - height); } catch { }
                         _logPanel.SetNeedsDisplay();
+                        // Ensure TopRow sticks: reapply shortly after layout in case driver/layout overrides it
+                        try
+                        {
+                            Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(20), (MainLoop ml) =>
+                            {
+                                try { _logPanel.TopRow = Math.Max(0, _logLines.Count - Math.Max(1, _logPanel.Bounds.Height)); } catch { }
+                                try { _logPanel.SetNeedsDisplay(); } catch { }
+                                return false;
+                            });
+                        }
+                        catch { }
                         changed = true;
                     }
                 }
@@ -141,6 +152,16 @@ namespace RPBot
                         var cheight = Math.Max(1, _commandPanel.Bounds.Height);
                         try { _commandPanel.TopRow = Math.Max(0, _commandLines.Count - cheight); } catch { }
                         _commandPanel.SetNeedsDisplay();
+                        try
+                        {
+                            Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(20), (MainLoop ml) =>
+                            {
+                                try { _commandPanel.TopRow = Math.Max(0, _commandLines.Count - Math.Max(1, _commandPanel.Bounds.Height)); } catch { }
+                                try { _commandPanel.SetNeedsDisplay(); } catch { }
+                                return false;
+                            });
+                        }
+                        catch { }
                         changed = true;
                     }
                 }
