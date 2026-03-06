@@ -119,6 +119,8 @@ namespace RPBot
                         _lastLogWidth = w;
                         RewrapLogicalToDisplay(_logLogicalLines, _logLines, w, MaxLogLines);
                         _logPanel.Text = string.Join("\n", _logLines);
+                        var height = Math.Max(1, _logPanel.Bounds.Height);
+                        try { _logPanel.TopRow = Math.Max(0, _logLines.Count - height); } catch { }
                         _logPanel.SetNeedsDisplay();
                         changed = true;
                     }
@@ -132,6 +134,8 @@ namespace RPBot
                         _lastCommandWidth = w;
                         RewrapLogicalToDisplay(_commandLogicalLines, _commandLines, w, MaxCommandLines);
                         _commandPanel.Text = string.Join("\n", _commandLines);
+                        var cheight = Math.Max(1, _commandPanel.Bounds.Height);
+                        try { _commandPanel.TopRow = Math.Max(0, _commandLines.Count - cheight); } catch { }
                         _commandPanel.SetNeedsDisplay();
                         changed = true;
                     }
