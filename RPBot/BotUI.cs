@@ -96,7 +96,15 @@ namespace RPBot
                         display.Add(part);
                 }
             }
+
         }
+
+        private bool ResizeWatcher(MainLoop main)
+        {
+            RewrapIfNeeded();
+            return true;
+        }
+        
 
         private bool RewrapIfNeeded()
         {
@@ -924,14 +932,29 @@ namespace RPBot
             // Add periodic resize watcher to rewrap buffers when panel widths change
             try
             {
-                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(250), (MainLoopTimeoutHandler)delegate {
-                    RewrapIfNeeded();
-                    return true; // keep running
-                });
+                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(250), ResizeWatcher);
             }
             catch { }
 
             Application.RootMouseEvent += OnRootMouseEvent;
+
+            // Ensure initial wrapping/layout is applied after window creation
+            try
+            {
+                if (Application.MainLoop != null)
+                {
+                    Application.MainLoop.Invoke(() =>
+                    {
+                        try
+                        {
+                            RewrapIfNeeded();
+                            Application.Refresh();
+                        }
+                        catch { }
+                    });
+                }
+            }
+            catch { }
         }
 
         private bool OnRootKeyEvent(KeyEvent keyEvent)
