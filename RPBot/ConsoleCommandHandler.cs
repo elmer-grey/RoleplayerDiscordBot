@@ -201,13 +201,22 @@ namespace RPBot
                     case "announce":
                     case "systems":
                         Console.WriteLine("[CONSOLE] Отправка статуса в Discord...");
-                        await _statusNotifier.SendAllSystemsActive("📢 Ручная проверка систем");
-                        Console.WriteLine("[CONSOLE] Статус отправлен!");
+                        try
+                        {
+                            var ok = await _statusNotifier.SendAllSystemsActive("📢 Ручная проверка систем");
+                            if (ok) Console.WriteLine("[CONSOLE] Статус успешно отправлен во все каналы.");
+                            else Console.WriteLine("[CONSOLE] Статус отправлен с ошибками. Смотрите логи.");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[CONSOLE] Ошибка при отправке статусов: {ex.Message}");
+                        }
                         break;
 
                     case "test":
                         Console.WriteLine("[CONSOLE] Тестовое сообщение...");
-                        await _statusNotifier.SendAllSystemsActive("🧪 Тестовое уведомление");
+                        try { await _statusNotifier.SendAllSystemsActive("🧪 Тестовое уведомление"); }
+                        catch (Exception ex) { Console.WriteLine($"[CONSOLE] Ошибка тестового уведомления: {ex.Message}"); }
                         break;
 
                     case "reconnect":

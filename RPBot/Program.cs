@@ -848,15 +848,29 @@ namespace RPBot
                 var info = _reconnectionService.ConnectionInfo;
 
                 // Отправляем уведомление об успешном реконнекте
-                await _statusNotifier.SendReconnectSuccess(
-                    info.ReconnectAttempts,
-                    info.LastDisconnectReason
-                );
+                try
+                {
+                    await _statusNotifier.SendReconnectSuccess(
+                        info.ReconnectAttempts,
+                        info.LastDisconnectReason
+                    );
+                }
+                catch (Exception ex)
+                {
+                    await LogStartup($"Ошибка при отправке уведомления о переподключении: {ex.Message}");
+                }
 
-                // И ВАЖНОЕ СООБЩЕНИЕ "ВСЕ СИСТЕМЫ АКТИВНЫ"
-                await _statusNotifier.SendAllSystemsActive(
-                    $"Переподключение после: {info.LastDisconnectReason}"
-                );
+                // Попытка уведомить все сервера о восстановлении; логируем результат
+                try
+                {
+                    var ok = await _statusNotifier.SendAllSystemsActive($"Переподключение после: {info.LastDisconnectReason}");
+                    if (!ok)
+                        await LogStartup("SendAllSystemsActive завершился с ошибками. Смотрите подробности в логах.");
+                }
+                catch (Exception ex)
+                {
+                    await LogStartup($"Ошибка при массовой отправке статусов после реконнекта: {ex.Message}");
+                }
             }
         }
 

@@ -20,8 +20,8 @@ namespace RPBot
 
         // Элементы интерфейса
         private Window _mainWindow;
-        private ListView _logPanel;
-        private ListView _commandPanel;
+        private TextView _logPanel;
+        private TextView _commandPanel;
         private TextField _inputField;
         private Label _statusBar;
 
@@ -715,14 +715,16 @@ namespace RPBot
                 CanFocus = false
             };
 
-            _logPanel = new ListView(_logLines)
+            _logPanel = new TextView()
             {
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
+                ReadOnly = true,
+                WordWrap = false,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
-                },                
+                },
                 CanFocus = false,
                 TabStop = false
             };
@@ -738,10 +740,12 @@ namespace RPBot
                 CanFocus = false
             };
 
-            _commandPanel = new ListView(_commandLines)
+            _commandPanel = new TextView()
             {
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
+                ReadOnly = true,
+                WordWrap = false,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
@@ -1263,20 +1267,12 @@ namespace RPBot
                 initTimeStr = $"{minutes} мин {seconds:F0} сек";
             }
 
-            string currentTime = DateTime.Now.ToString("HH:mm:ss");
-            var readyMessage = $"╔══════════════════════════════════════════════════════╗\n" +
-                              $"║             ВСЕ СИСТЕМЫ АКТИВНЫ!                 ║\n" +
-                              $"╠══════════════════════════════════════════════════════╣\n" +
-                              $"║  Бот:           {botName,-25}     ║\n" +
-                              $"║  Серверов:      {serverCount,-25} ║\n" +
-                              $"║  Время:         {currentTime,-25} ║\n" +
-                              $"║  Инициализация: {initTimeStr,-25} ║\n" +
-                              $"╚══════════════════════════════════════════════════════╝\n";
+            // Показываем только краткое уведомление о готовности консоли
+            var readyShort = "Консоль готова к приёму команд. Введите 'help'";
 
-            if (Application.MainLoop == null || _isDisposed || _logPanel == null || _commandPanel == null)
+            if (Application.MainLoop == null || _isDisposed || _logPanel == null)
             {
-                _pendingLogLines.AddRange(FormatLogLines(readyMessage));
-                _pendingLogLines.AddRange(FormatLogLines("Консоль готова к приёму команд. Введите 'help'"));
+                _pendingLogLines.AddRange(FormatLogLines(readyShort));
                 return;
             }
 
@@ -1284,8 +1280,7 @@ namespace RPBot
             {
                 try
                 {
-                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines(readyMessage), MaxLogLines);
-                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Консоль готова к приёму команд. Введите 'help'"), MaxLogLines);
+                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines(readyShort), MaxLogLines);
                 }
                 catch (Exception ex)
                 {
@@ -1484,8 +1479,8 @@ namespace RPBot
             {
                 try
                 {
-                    AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines($"Перезапуск завершён. Инициатор: {initiator}"), MaxLogLines);
-
+                    // По завершении перезапуска не дублируем сообщение о завершении;
+                    // показываем только новые ошибки, если они появились.
                     var newErrors = ReadErrorLogDelta();
                     if (!string.IsNullOrWhiteSpace(newErrors))
                     {
@@ -1556,7 +1551,7 @@ namespace RPBot
             return result;
         }
 
-        private void AppendLinesUnsafe(List<string> buffer, ListView? panel, IEnumerable<string> lines, int maxLines)
+        private void AppendLinesUnsafe(List<string> buffer, TextView? panel, IEnumerable<string> lines, int maxLines)
         {
             if (lines == null)
                 return;
@@ -1575,26 +1570,11 @@ namespace RPBot
             {
                 try
                 {
-                    // Корректируем TopItem/SelectedItem внутри допустимых границ
+                    // Обновим текст панели (без автоскролла через SelectedItem)
+                    panel.Text = string.Join("\n", buffer);
                     var height = Math.Max(1, panel.Bounds.Height);
-                    var maxTop = Math.Max(0, buffer.Count - height);
-
-                    if (panel.TopItem < 0) panel.TopItem = 0;
-                    if (panel.TopItem > maxTop) panel.TopItem = maxTop;
-
-                if (buffer.Count == 0)
-                {
-                    // No items -> clear selection
-                    try { panel.SelectedItem = -1; } catch { }
-                }
-                    else
-                    {
-                        var last = buffer.Count - 1;
-                        if (panel.SelectedItem < 0 || panel.SelectedItem > last)
-                            panel.SelectedItem = last;
-                    }
-
-                    ScrollListToBottom(panel, buffer);
+                    var top = Math.Max(0, buffer.Count - height);
+                    try { panel.TopRow = top; } catch { }
                     panel.SetNeedsDisplay();
                 }
                 catch (Exception ex)
@@ -1604,20 +1584,21 @@ namespace RPBot
             }
         }
 
-        private void ScrollListBy(ListView? panel, List<string> buffer, int delta)
+        private void ScrollListBy(TextView? panel, List<string> buffer, int delta)
         {
             if (panel == null)
                 return;
-
             try
             {
                 var height = Math.Max(1, panel.Bounds.Height);
                 var maxTop = Math.Max(0, buffer.Count - height);
-                var nextTop = panel.TopItem + delta;
+                var currTop = 0;
+                try { currTop = panel.TopRow; } catch { currTop = 0; }
+                var nextTop = currTop + delta;
                 if (nextTop < 0) nextTop = 0;
                 if (nextTop > maxTop) nextTop = maxTop;
 
-                panel.TopItem = nextTop;
+                try { panel.TopRow = nextTop; } catch { }
                 panel.SetNeedsDisplay();
             }
             catch (Exception ex)
@@ -1626,24 +1607,29 @@ namespace RPBot
             }
         }
 
-        private void ScrollListToBottom(ListView panel, List<string> buffer)
+        private void ScrollListToBottom(TextView panel, List<string> buffer)
         {
             var height = Math.Max(1, panel.Bounds.Height);
             var maxTop = Math.Max(0, buffer.Count - height);
-            var top = Math.Max(0, Math.Min(panel.TopItem, maxTop));
-            panel.TopItem = top;
+            var currTop = 0;
+            try { currTop = panel.TopRow; } catch { currTop = 0; }
+            var top = Math.Max(0, Math.Min(currTop, maxTop));
+            try { panel.TopRow = top; } catch { }
 
-            if (buffer.Count > 0)
+            // Ensure text ends visible
+            try
             {
-                var last = buffer.Count - 1;
-                if (panel.SelectedItem < 0 || panel.SelectedItem > last)
-                    panel.SelectedItem = last;
+                if (buffer.Count > 0)
+                {
+                    var lastRow = buffer.Count - 1;
+                    try { panel.TopRow = Math.Max(0, lastRow - height + 1); } catch { }
+                }
+                else
+                {
+                    try { panel.TopRow = 0; } catch { }
+                }
             }
-            else
-            {
-                // No items -> clear selection
-                try { panel.SelectedItem = -1; } catch { }
-            }
+            catch { }
         }
 
         private long GetErrorLogLength()
