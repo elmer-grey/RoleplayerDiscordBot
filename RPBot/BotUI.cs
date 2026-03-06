@@ -47,6 +47,12 @@ namespace RPBot
 
         private readonly List<string> _logLines = new List<string>();
         private readonly List<string> _commandLines = new List<string>();
+        // Keep original logical lines so we can re-wrap on resize
+        private readonly List<string> _logLogicalLines = new List<string>();
+        private readonly List<string> _commandLogicalLines = new List<string>();
+
+        private int _lastLogWidth = -1;
+        private int _lastCommandWidth = -1;
 
         private readonly List<string> _pendingLogLines = new List<string>();
         private readonly List<string> _pendingCommandLines = new List<string>();
@@ -68,6 +74,69 @@ namespace RPBot
             _statusNotifier = statusNotifier;
         }
 
+        private void RewrapLogicalToDisplay(List<string> logical, List<string> display, int availWidth, int maxLines)
+        {
+            // Rebuild display from logical lines and enforce maxLines by dropping oldest logical lines
+            display.Clear();
+            foreach (var l in logical)
+            {
+                foreach (var part in WrapLineForWidth(l ?? string.Empty, availWidth))
+                    display.Add(part);
+            }
+
+            // If too many display rows, drop oldest logical lines until within limit
+            while (display.Count > maxLines && logical.Count > 0)
+            {
+                // remove oldest logical line and rebuild
+                logical.RemoveAt(0);
+                display.Clear();
+                foreach (var l in logical)
+                {
+                    foreach (var part in WrapLineForWidth(l ?? string.Empty, availWidth))
+                        display.Add(part);
+                }
+            }
+        }
+
+        private bool RewrapIfNeeded()
+        {
+            try
+            {
+                var changed = false;
+                if (_logPanel != null)
+                {
+                    var w = Math.Max(1, _logPanel.Bounds.Width);
+                    if (w != _lastLogWidth)
+                    {
+                        _lastLogWidth = w;
+                        RewrapLogicalToDisplay(_logLogicalLines, _logLines, w, MaxLogLines);
+                        _logPanel.Text = string.Join("\n", _logLines);
+                        _logPanel.SetNeedsDisplay();
+                        changed = true;
+                    }
+                }
+
+                if (_commandPanel != null)
+                {
+                    var w = Math.Max(1, _commandPanel.Bounds.Width);
+                    if (w != _lastCommandWidth)
+                    {
+                        _lastCommandWidth = w;
+                        RewrapLogicalToDisplay(_commandLogicalLines, _commandLines, w, MaxCommandLines);
+                        _commandPanel.Text = string.Join("\n", _commandLines);
+                        _commandPanel.SetNeedsDisplay();
+                        changed = true;
+                    }
+                }
+
+                return changed;
+            }
+            catch (Exception ex)
+            {
+                TryAppendErrorToFile($"RewrapIfNeeded error: {ex}");
+                return false;
+            }
+        }
         private static IEnumerable<string> WrapLineForWidth(string line, int width)
         {
             if (string.IsNullOrEmpty(line))
@@ -852,6 +921,16 @@ namespace RPBot
                 catch { }
             }
 
+            // Add periodic resize watcher to rewrap buffers when panel widths change
+            try
+            {
+                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(250), (MainLoopTimeoutHandler)delegate {
+                    RewrapIfNeeded();
+                    return true; // keep running
+                });
+            }
+            catch { }
+
             Application.RootMouseEvent += OnRootMouseEvent;
         }
 
@@ -1627,8 +1706,27 @@ namespace RPBot
             {
                 try
                 {
-                    // Обновим текст панели (без автоскролла через SelectedItem)
-                    panel.Text = string.Join("\n", buffer);
+                    // If panel wraps, maintain logical buffer and render display rows accordingly
+                    if (panel.WordWrap)
+                    {
+                        var availWidth = Math.Max(1, panel.Bounds.Width);
+                        List<string> logical = ReferenceEquals(buffer, _logLines) ? _logLogicalLines : _commandLogicalLines;
+
+                        // Add incoming logical lines
+                        foreach (var line in lines)
+                        {
+                            logical.Add(line ?? string.Empty);
+                        }
+
+                        // Rebuild display buffer from logical lines
+                        RewrapLogicalToDisplay(logical, buffer, availWidth, maxLines);
+                    }
+                    else
+                    {
+                        // Обновим текст панели (без автоскролла через SelectedItem)
+                        panel.Text = string.Join("\n", buffer);
+                    }
+
                     var height = Math.Max(1, panel.Bounds.Height);
                     var top = Math.Max(0, buffer.Count - height);
                     try { panel.TopRow = top; } catch { }
