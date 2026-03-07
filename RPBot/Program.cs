@@ -184,9 +184,9 @@ namespace RPBot
                 }
 
                 // default: bonk
-                if (targetOption == null || !TryGetUserId(targetOption, out var targetId2))
+                if (targetOption == null || !TryGetUserId(targetOption, out var targetId2) || targetId2 == command.User.Id)
                 {
-                    await command.RespondAsync("Укажите цель команды (target)", ephemeral: true);
+                    await command.RespondAsync("ну у каждого свои приколы... ты бонькнул сам себя, поздравляю", ephemeral: true);
                     return;
                 }
 
@@ -424,7 +424,6 @@ namespace RPBot
             if (_ui != null && _uiStarted)
             {
                 _ui.AddLog("Остановка из консоли...");
-                _ui.ClearForRestart();
             }
 
             _shouldExit = true;
@@ -1154,9 +1153,6 @@ namespace RPBot
             try
             {
                 // ЭТАП 1: Регистрация команд
-                await LogStartup($"┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ─────────────┐");
-
-
                 if (await _ui.AskYesNoQuestion(
                         "Нужно ли перерегистрировать команды?",
                         "Y - Да, N - Нет, таймаут 60 секунд",
@@ -1166,16 +1162,11 @@ namespace RPBot
                     await _commandHandler.InitializeAsync();
                     await _commandHandler.ListSlashCommandsAsync();
 
-                    // УВЕДОМЛЕНИЕ В UI
-                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
-                    _ui?.AddLog($"│      Команды зарегистрированы                         │");
-                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
+                    _ui?.AddLog("Команды зарегистрированы.");
                 }
                 else
                 {
-                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
-                    _ui?.AddLog($"│      Регистрация команд пропущена                     │");
-                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
+                    _ui?.AddLog("Регистрация команд пропущена.");
                     await _commandHandler.ListSlashCommandsAsync();
                 }
 
@@ -1480,46 +1471,57 @@ namespace RPBot
             {
                 var key = message.Content.Split(' ')[0].ToLower();
 
-                // Разделение команд по каналам
-                if (isVoiceChannel)
+                var voiceCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    var voiceCommands = new Dictionary<string, string>
-                    {
-                        {"!бегу", "бегу с сыном"},
-                        {"!гусь", "паста гуся"},
-                        {"!гусь-гидра", "паста гидры гуся"},
-                        {"!гусь-связь", "паста с гусём-связистом"},
-                        {"!начинается", "AFK"},
-                        {"!перекур", "перерыв"},
-                        {"!подсказка", "Чят, пляшем!"},
-                        {"!страх", "атата"},
-                        {"!убери", "ненавижу модеров"}
-                    };
+                    "!бегу",
+                    "!гусь",
+                    "!гусь-гидра",
+                    "!гусь-связь",
+                    "!начинается",
+                    "!перекур",
+                    "!подсказка",
+                    "!страх",
+                    "!убери"
+                };
 
-                    if (voiceCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
+                // ВРЕМЕННАЯ ЗАПЛАТКА: эти команды должны работать во всех чатах
+                // ("правила", "ссылки", "запись").
+                if (key is "!правила" or "!ссылки" or "!запись")
+                {
+                    if (_textBlocks.ContainsKey(key))
                     {
                         await message.Channel.SendMessageAsync(_textBlocks[key]);
                         return;
                     }
-                }
-                else if (isAllowedTextChannel)
-                {
-                    var textCommands = new Dictionary<string, string>
-                    {
-                        {"!правила", "правила сервера"},
-                        {"!ссылки", "полезные ссылки"},
-                        {"!запись", "документ для записи игр"}
-                    };
 
-                    if (textCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
+                    await message.Channel.SendMessageAsync("Текст для этой команды не настроен.");
+                    return;
+                }
+
+                // Голосовые команды
+                if (voiceCommands.Contains(key))
+                {
+                    if (!isVoiceChannel)
                     {
-                        await message.Channel.SendMessageAsync(_textBlocks[key]);
+                        await message.Channel.SendMessageAsync("Эта команда доступна только в чате голосового канала.");
                         return;
                     }
+
+                    if (_textBlocks.TryGetValue(key, out var text))
+                    {
+                        await message.Channel.SendMessageAsync(text);
+                        return;
+                    }
+
+                    await message.Channel.SendMessageAsync("Текст для этой команды не настроен.");
+                    return;
                 }
 
-                await message.Channel.SendMessageAsync("Неизвестная команда или неправильный канал для этой команды.");
+                // Неизвестная команда
+                await message.Channel.SendMessageAsync("Неизвестная команда. Введите `!команды` для списка.");
                 return;
+
+
             }
 
             if (message.Content.ToLower() == "👏")
@@ -2705,16 +2707,18 @@ namespace RPBot
                     var embeds = new List<Embed>();
                     var files = new List<FileAttachment>();
 
-                    foreach (var result in results)
+                    for (int i = 0; i < results.Count; i++)
                     {
+                        var result = results[i];
                         Console.WriteLine($"Результат броска: {result}");
                         var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
                         var filePath = Path.Combine(numbersDir, $"{result}.png");
                         if (File.Exists(filePath))
                         {
-                            files.Add(new FileAttachment(filePath, Path.GetFileName(filePath)));
+                            var uniqueFileName = $"{result}_{i + 1}.png";
+                            files.Add(new FileAttachment(filePath, uniqueFileName));
                             embeds.Add(new EmbedBuilder()
-                                .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                                .WithImageUrl($"attachment://{uniqueFileName}")
                                 .WithColor(GetGradientColor(result, 1, max))
                                 .Build());
                         }
@@ -3591,13 +3595,23 @@ namespace RPBot
                 var pauseTimeInfo = currentPause.Start != DateTime.MinValue ?
                     $"\nНа паузе с: {currentPause.Start:HH:mm}" : "";
 
+                var descriptionLines = new List<string>
+                {
+                    $"Мастер: {session.MasterName}",
+                    $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}",
+                    $"Статус: {(session.IsPaused ? $"⏸ На паузе{pauseTimeInfo}" : "▶ В процессе")}",
+                    $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}",
+                };
+
+                if (!string.IsNullOrWhiteSpace(session.EventDescription))
+                    descriptionLines.Add($"Описание: {session.EventDescription}");
+
+                if (!string.IsNullOrWhiteSpace(session.GameComment))
+                    descriptionLines.Add($"Комментарий: {session.GameComment}");
+
                 var embed = new EmbedBuilder()
                     .WithTitle($"Сессия: {session.GameName}")
-                    .WithDescription($"Мастер: {session.MasterName}\n" +
-                                   $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
-                                   $"Статус: {(session.IsPaused ? $"⏸ На паузе{pauseTimeInfo}" : "▶ В процессе")}\n" +
-                                   $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}\n" +
-                                   $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
+                    .WithDescription(string.Join("\n", descriptionLines))
                     .WithColor(session.IsPaused ? Color.Orange : Color.Green)
                     .Build();
 
@@ -3923,14 +3937,17 @@ namespace RPBot
                     return;
                 }
 
-                var newName = modal.Data.Components.First(x => x.CustomId == "game_name").Value;
-                var newMaster = modal.Data.Components.First(x => x.CustomId == "game_master").Value;
-                var newComment = modal.Data.Components.First(x => x.CustomId == "game_comment").Value;
+                var newName = (modal.Data.Components.First(x => x.CustomId == "game_name").Value ?? string.Empty).Trim();
+                var newMaster = (modal.Data.Components.First(x => x.CustomId == "game_master").Value ?? string.Empty).Trim();
+                var newCommentRaw = modal.Data.Components.First(x => x.CustomId == "game_comment").Value;
+                var newComment = NormalizeOptionalText(newCommentRaw);
+                var oldComment = NormalizeOptionalText(session.GameComment);
 
                 var changes = new List<string>();
                 if (session.GameName != newName) changes.Add($"Название: {session.GameName} → {newName}");
                 if (session.MasterName != newMaster) changes.Add($"Мастер: {session.MasterName} → {newMaster}");
-                if (session.GameComment != newComment) changes.Add($"Комментарий: {session.GameComment} → {newComment}");
+                if (!string.Equals(oldComment, newComment, StringComparison.Ordinal))
+                    changes.Add($"Комментарий: {(oldComment ?? "(пусто)")} → {(newComment ?? "(пусто)")}");
 
                 if (changes.Count == 0)
                 {
@@ -3949,6 +3966,14 @@ namespace RPBot
             {
                 _sessionSemaphore.Release();
             }
+        }
+
+        private static string? NormalizeOptionalText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            return value.Trim();
         }
 
         private async Task HandleStopSession(SocketMessageComponent component, GameSession session)
@@ -3990,26 +4015,6 @@ namespace RPBot
         private async Task HandleConfirmStop(SocketMessageComponent component, GameSession session)
         {
             Log($"Попытка подтверждения остановки сессии {session.SessionId}. Текущий счётчик семафора: {_sessionSemaphore.CurrentCount}");
-
-            /*// Добавляем timeout для семафора
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try
-            {
-                await _sessionSemaphore.WaitAsync(cts.Token);
-                Log($"Семафор захвачен для сессии {session.SessionId}. Текущий счётчик: {_sessionSemaphore.CurrentCount}");
-            }
-            catch (OperationCanceledException)
-            {
-                Log($"Таймаут при ожидании семафора для сессии {session.SessionId}! Возможен дедлок");
-                await SendTemporaryEphemeralResponse(component, "Ошибка: система занята. Попробуйте позже.");
-                return;
-            }
-            catch (Exception ex)
-            {
-                Log($"Критическая ошибка при захвате семафора: {ex.Message}");
-                await SendTemporaryEphemeralResponse(component, "Критическая ошибка системы.");
-                return;
-            }*/
 
             try
             {
