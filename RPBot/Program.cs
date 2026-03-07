@@ -38,6 +38,8 @@ namespace RPBot
         public bool PredictionsEnabled { get; set; } = true;
     }
 
+
+
     public enum StartupType
     {
         FirstStart,
@@ -121,9 +123,118 @@ namespace RPBot
             }
         }
 
+        // --- Bwonk persistence helpers (inside Program class) ---
+        private Dictionary<ulong, int> LoadBwonkCounts()
+        {
+            try
+            {
+                if (!File.Exists(_bwonkFilePath)) return new Dictionary<ulong, int>();
+                var json = File.ReadAllText(_bwonkFilePath);
+                var options = new JsonSerializerOptions();
+                var dict = JsonSerializer.Deserialize<Dictionary<ulong, int>>(json, options);
+                return dict ?? new Dictionary<ulong, int>();
+            }
+            catch
+            {
+                return new Dictionary<ulong, int>();
+            }
+        }
+
+        private void SaveBwonkCounts()
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(_bwonkFilePath) ?? AppContext.BaseDirectory;
+                Directory.CreateDirectory(dir);
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                var json = JsonSerializer.Serialize(_bwonkCounts, options);
+                File.WriteAllText(_bwonkFilePath, json);
+            }
+            catch { }
+        }
+
+        private async Task BwonkCommand(SocketSlashCommand command)
+        {
+            try
+            {
+                var opt = command.Data.Options.FirstOrDefault(o => o.Name == "target");
+                if (opt == null)
+                {
+                    await command.RespondAsync("Укажите цель команды (target)", ephemeral: true);
+                    return;
+                }
+
+                ulong targetId = 0;
+                if (opt.Value is IUser iu) targetId = iu.Id;
+                else if (opt.Value is long l) targetId = (ulong)l;
+                else if (opt.Value is ulong ul) targetId = ul;
+                else if (!ulong.TryParse(opt.Value?.ToString() ?? "", out targetId))
+                {
+                    await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                    return;
+                }
+
+                var invoker = command.User as SocketUser;
+                IUser targetUser = _client.GetUser(targetId) as IUser;
+                if (targetUser == null)
+                    targetUser = await _client.Rest.GetUserAsync(targetId) as IUser;
+
+                // Increment count
+                lock (_bwonkCounts)
+                {
+                    if (!_bwonkCounts.TryGetValue(targetId, out var c)) c = 0;
+                    c++;
+                    _bwonkCounts[targetId] = c;
+                    SaveBwonkCounts();
+                }
+
+                // Respond to invoker (ephemeral)
+                var invMsg = invoker != null ? $"Вы бонькнули {MentionUtils.MentionUser(targetId)}" : "Вы бонькнули пользователя.";
+                await command.RespondAsync(invMsg, ephemeral: true);
+
+                // Notify target via DM
+                try
+                {
+                    if (targetUser != null)
+                    {
+                        IMessageChannel dm = null;
+                        try
+                        {
+                            if (targetUser is SocketUser socketUser)
+                            {
+                                dm = await socketUser.CreateDMChannelAsync();
+                            }
+                            else
+                            {
+                                var restUser = await _client.Rest.GetUserAsync(targetId);
+                                if (restUser != null)
+                                    dm = await restUser.CreateDMChannelAsync();
+                            }
+                        }
+                        catch { }
+
+                        if (dm != null)
+                        {
+                            int total;
+                            lock (_bwonkCounts) { total = _bwonkCounts.TryGetValue(targetId, out var v) ? v : 0; }
+                            await dm.SendMessageAsync($"Вас бонькнули по делу или просто так. Вас уже бонькнули {total} раз, задумайтесь :kappa:");
+                        }
+                    }
+                }
+                catch { /* ignore DM failures */ }
+            }
+            catch (Exception ex)
+            {
+                try { await command.RespondAsync($"Ошибка выполнения команды: {ex.Message}", ephemeral: true); } catch { }
+            }
+        }
+
         private BotConfig _config;
         private Dictionary<ulong, ServerConfig> _serverConfigs = new();
         private string _serverConfigsPath;
+        // Bwonk counts persisted between runs
+        private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
+        private string _bwonkFilePath = Path.Combine(AppContext.BaseDirectory, "bwonks.json");
 
         // Сохранение/загрузка конфигураций серверов
         private void SaveServerConfigs()
@@ -214,6 +325,12 @@ namespace RPBot
                 .AddSingleton<GameSessionCommands>()
                 .AddSingleton<ModerationCommands>()
                 .BuildServiceProvider();
+            // Load persisted bwonk counts
+            try
+            {
+                _bwonkCounts = LoadBwonkCounts();
+            }
+            catch { _bwonkCounts = new Dictionary<ulong, int>(); }
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -711,6 +828,7 @@ namespace RPBot
             _client.UserJoined -= UserJoined;
             _client.MessageReceived -= HandleCommandAsync;
             _client.SlashCommandExecuted -= OnSlashCommandExecuted;
+            _client.SlashCommandExecuted -= BwonkCommand;
             _client.ModalSubmitted -= HandleModalSubmitted;
             _client.ButtonExecuted -= HandleButtonExecuted;
             _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
@@ -722,6 +840,7 @@ namespace RPBot
             _client.UserJoined += UserJoined;
             _client.MessageReceived += HandleCommandAsync;
             _client.SlashCommandExecuted += OnSlashCommandExecuted;
+            _client.SlashCommandExecuted += BwonkCommand;
             _client.ModalSubmitted += HandleModalSubmitted;
             _client.ButtonExecuted += HandleButtonExecuted;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
@@ -1191,6 +1310,7 @@ namespace RPBot
                         try { _client.UserJoined -= UserJoined; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing UserJoined: {ex}"); }
                         try { _client.MessageReceived -= HandleCommandAsync; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing MessageReceived: {ex}"); }
                         try { _client.SlashCommandExecuted -= OnSlashCommandExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing SlashCommandExecuted: {ex}"); }
+                        try { _client.SlashCommandExecuted -= BwonkCommand; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing BwonkCommand: {ex}"); }
                         try { _client.ModalSubmitted -= HandleModalSubmitted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ModalSubmitted: {ex}"); }
                         try { _client.ButtonExecuted -= HandleButtonExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ButtonExecuted: {ex}"); }
                         try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
@@ -1688,6 +1808,9 @@ namespace RPBot
                     break;
                 case "open_chat":
                     await OpenChatCommand(command);
+                    break;
+                case "bwonk":
+                    // handled separately by BwonkCommand subscription to avoid duplicate responses here
                     break;
                 default:
                     await command.RespondAsync("Команда не распознана.");

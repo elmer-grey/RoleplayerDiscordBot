@@ -213,6 +213,11 @@ namespace RPBot
                     .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
 
                 new SlashCommandBuilder()
+                    .WithName("bwonk")
+                    .WithDescription("Бонькнуть пользователя (приватное уведомление)")
+                    .AddOption("target", ApplicationCommandOptionType.User, "Пользователь, которого бонькают", isRequired: true),
+
+                new SlashCommandBuilder()
                     .WithName("q")
                     .WithDescription("Добавляет вас в очередь на выполнение действия.")
                     .AddOption("input", ApplicationCommandOptionType.String, "Формат: dY, где Y - верхняя граница", isRequired: true),
@@ -256,6 +261,10 @@ namespace RPBot
                     .WithName("open_chat")
                     .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
                     .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
+                new SlashCommandBuilder()
+                    .WithName("bwonk")
+                    .WithDescription("Бонькнуть пользователя (приватное уведомление)")
+                    .AddOption("target", ApplicationCommandOptionType.User, "Пользователь, которого бонькают", isRequired: true),
             };
         }
     }
