@@ -38,6 +38,7 @@ namespace RPBot
         private CancellationTokenSource _uiCts;
         private ManualResetEventSlim _uiInitialized = new ManualResetEventSlim(false);
         private bool _statusTimeoutAdded = false;
+        private bool _resizeTimeoutAdded = false;
 
         private bool _inputEnabled = false;
         private bool _isDisposed = false;
@@ -53,6 +54,9 @@ namespace RPBot
 
         private int _lastLogWidth = -1;
         private int _lastCommandWidth = -1;
+        private int _lastLogTopRow = 0;
+        private int _lastCommandTopRow = 0;
+        private readonly string _uiResizeTracePath = Path.Combine(AppContext.BaseDirectory, "UIResizeTrace.log");
 
         private readonly List<string> _pendingLogLines = new List<string>();
         private readonly List<string> _pendingCommandLines = new List<string>();
@@ -105,8 +109,26 @@ namespace RPBot
 
         private bool ResizeWatcher(MainLoop main)
         {
-            RewrapIfNeeded();
+            if (RewrapIfNeeded())
+            {
+                try { Application.Refresh(); } catch { }
+            }
             return true;
+        }
+
+        private void TraceUiResize(string source, TextView? panel, IReadOnlyCollection<string>? oldDisplay, int oldTop, IReadOnlyCollection<string>? newDisplay, int newTop)
+        {
+            try
+            {
+                var width = panel != null ? panel.Bounds.Width : -1;
+                var height = panel != null ? panel.Bounds.Height : -1;
+                var topRow = -1;
+                try { if (panel != null) topRow = panel.TopRow; } catch { }
+
+                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] src={source}; width={width}; height={height}; oldDisplay={oldDisplay?.Count ?? -1}; newDisplay={newDisplay?.Count ?? -1}; oldTop={oldTop}; newTop={newTop}; actualTop={topRow}{Environment.NewLine}";
+                File.AppendAllText(_uiResizeTracePath, line);
+            }
+            catch { }
         }
         
 
@@ -117,51 +139,52 @@ namespace RPBot
                 var changed = false;
                 if (_logPanel != null)
                 {
-                    var w = Math.Max(1, _logPanel.Bounds.Width);
+                    var w = GetUsablePanelWidth(_logPanel);
                     if (w != _lastLogWidth)
                     {
+                        var oldTop = _lastLogTopRow;
+                        var oldDisplay = _logLines.ToList();
+                        var oldVisible = _logPanel.Visible;
+
                         _lastLogWidth = w;
+                        try { _logPanel.Visible = false; } catch { }
                         RewrapLogicalToDisplay(_logLogicalLines, _logLines, w, MaxLogLines);
                         _logPanel.Text = string.Join("\n", _logLines);
-                        var height = Math.Max(1, _logPanel.Bounds.Height);
-                        try { _logPanel.TopRow = Math.Max(0, _logLines.Count - height); } catch { }
-                        _logPanel.SetNeedsDisplay();
-                        // Ensure TopRow sticks: reapply shortly after layout in case driver/layout overrides it
                         try
                         {
-                            Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(20), (MainLoop ml) =>
-                            {
-                                try { _logPanel.TopRow = Math.Max(0, _logLines.Count - Math.Max(1, _logPanel.Bounds.Height)); } catch { }
-                                try { _logPanel.SetNeedsDisplay(); } catch { }
-                                return false;
-                            });
+                            _lastLogTopRow = GetPreservedTopRow(_logPanel, oldDisplay, oldTop, _logLines);
+                            _logPanel.TopRow = _lastLogTopRow;
+                            TraceUiResize("log-rewrap", _logPanel, oldDisplay, oldTop, _logLines, _lastLogTopRow);
                         }
                         catch { }
+                        try { _logPanel.Visible = oldVisible; } catch { }
+                        _logPanel.SetNeedsDisplay();
                         changed = true;
                     }
                 }
 
                 if (_commandPanel != null)
                 {
-                    var w = Math.Max(1, _commandPanel.Bounds.Width);
+                    var w = GetUsablePanelWidth(_commandPanel);
                     if (w != _lastCommandWidth)
                     {
+                        var oldTop = _lastCommandTopRow;
+                        var oldDisplay = _commandLines.ToList();
+                        var oldVisible = _commandPanel.Visible;
+
                         _lastCommandWidth = w;
+                        try { _commandPanel.Visible = false; } catch { }
                         RewrapLogicalToDisplay(_commandLogicalLines, _commandLines, w, MaxCommandLines);
                         _commandPanel.Text = string.Join("\n", _commandLines);
-                        var cheight = Math.Max(1, _commandPanel.Bounds.Height);
-                        try { _commandPanel.TopRow = Math.Max(0, _commandLines.Count - cheight); } catch { }
-                        _commandPanel.SetNeedsDisplay();
                         try
                         {
-                            Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(20), (MainLoop ml) =>
-                            {
-                                try { _commandPanel.TopRow = Math.Max(0, _commandLines.Count - Math.Max(1, _commandPanel.Bounds.Height)); } catch { }
-                                try { _commandPanel.SetNeedsDisplay(); } catch { }
-                                return false;
-                            });
+                            _lastCommandTopRow = GetPreservedTopRow(_commandPanel, oldDisplay, oldTop, _commandLines);
+                            _commandPanel.TopRow = _lastCommandTopRow;
+                            TraceUiResize("command-rewrap", _commandPanel, oldDisplay, oldTop, _commandLines, _lastCommandTopRow);
                         }
                         catch { }
+                        try { _commandPanel.Visible = oldVisible; } catch { }
+                        _commandPanel.SetNeedsDisplay();
                         changed = true;
                     }
                 }
@@ -174,6 +197,38 @@ namespace RPBot
                 return false;
             }
         }
+        private static int GetUsablePanelWidth(TextView panel)
+        {
+            // Небольшой запас, чтобы не упираться в правую границу TextView
+            return Math.Max(1, panel.Bounds.Width - 1);
+        }
+
+        private static int GetBottomTopRow(TextView panel, IReadOnlyCollection<string> displayLines)
+        {
+            var height = Math.Max(1, panel.Bounds.Height);
+
+            if (displayLines.Count <= height)
+                return 0;
+
+            return Math.Max(0, displayLines.Count - height);
+        }
+
+        private static int GetPreservedTopRow(TextView panel, IReadOnlyCollection<string> oldDisplayLines, int oldTopRow, IReadOnlyCollection<string> newDisplayLines)
+        {
+            var height = Math.Max(1, panel.Bounds.Height);
+            var oldMaxTop = Math.Max(0, oldDisplayLines.Count - height);
+            var newMaxTop = Math.Max(0, newDisplayLines.Count - height);
+
+            if (oldTopRow >= oldMaxTop)
+                return newMaxTop;
+
+            var offsetFromBottom = oldMaxTop - Math.Max(0, oldTopRow);
+            var newTop = newMaxTop - offsetFromBottom;
+            if (newTop < 0) newTop = 0;
+            if (newTop > newMaxTop) newTop = newMaxTop;
+            return newTop;
+        }
+
         private static IEnumerable<string> WrapLineForWidth(string line, int width)
         {
             if (string.IsNullOrEmpty(line))
@@ -182,32 +237,76 @@ namespace RPBot
                 yield break;
             }
 
-            var remaining = line;
-            while (remaining.Length > 0)
+            width = Math.Max(1, width);
+
+            // Для рамок/псевдографики лучше использовать жёсткий перенос
+            if (line.Length > 0 && IsBoxGlyph(line[0]))
             {
-                if (remaining.Length <= width)
+                var boxRemaining = line;
+                while (boxRemaining.Length > width)
                 {
-                    yield return remaining;
-                    yield break;
+                    yield return boxRemaining.Substring(0, width);
+                    boxRemaining = boxRemaining.Substring(width);
                 }
 
-                // Try to break at last space within width
-                var segment = remaining.Substring(0, width);
-                var lastSpace = segment.LastIndexOf(' ');
-                if (lastSpace > Math.Max(0, width / 2))
-                {
-                    // break at space
-                    var part = remaining.Substring(0, lastSpace).TrimEnd();
-                    yield return part;
-                    remaining = remaining.Substring(lastSpace + 1);
-                }
-                else
-                {
-                    // hard break
-                    yield return segment;
-                    remaining = remaining.Substring(width);
-                }
+                if (boxRemaining.Length > 0)
+                    yield return boxRemaining;
+
+                yield break;
             }
+
+            var words = line.Split(' ');
+            var current = string.Empty;
+
+            foreach (var word in words)
+            {
+                if (string.IsNullOrEmpty(current))
+                {
+                    if (word.Length <= width)
+                    {
+                        current = word;
+                        continue;
+                    }
+
+                    // Слишком длинное слово — режем по ширине
+                    var longWord = word;
+                    while (longWord.Length > width)
+                    {
+                        yield return longWord.Substring(0, width);
+                        longWord = longWord.Substring(width);
+                    }
+
+                    current = longWord;
+                    continue;
+                }
+
+                var candidate = current + " " + word;
+                if (candidate.Length <= width)
+                {
+                    current = candidate;
+                    continue;
+                }
+
+                yield return current;
+
+                if (word.Length <= width)
+                {
+                    current = word;
+                    continue;
+                }
+
+                var nextLongWord = word;
+                while (nextLongWord.Length > width)
+                {
+                    yield return nextLongWord.Substring(0, width);
+                    nextLongWord = nextLongWord.Substring(width);
+                }
+
+                current = nextLongWord;
+            }
+
+            if (!string.IsNullOrEmpty(current))
+                yield return current;
         }
 
         // Ensure Terminal.Gui is initialized in a threadsafe manner
@@ -319,6 +418,7 @@ namespace RPBot
                                     _statusBar = null;
                                     // Allow status timer to be re-registered on next CreateMainWindow
                                     _statusTimeoutAdded = false;
+                                    _resizeTimeoutAdded = false;
                                 }
                                 catch (Exception ex)
                                 {
@@ -345,6 +445,7 @@ namespace RPBot
                         _statusBar = null;
                         // Allow status timer to be re-registered on next CreateMainWindow
                         _statusTimeoutAdded = false;
+                        _resizeTimeoutAdded = false;
                     }
 
                     _isInitialized = false;
@@ -862,7 +963,7 @@ namespace RPBot
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ReadOnly = true,
-                WordWrap = true,
+                WordWrap = false,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
@@ -887,7 +988,7 @@ namespace RPBot
                 Width = Dim.Fill(),
                 Height = Dim.Fill(),
                 ReadOnly = true,
-                WordWrap = true,
+                WordWrap = false,
                 ColorScheme = new ColorScheme
                 {
                     Normal = new Terminal.Gui.Attribute(Color.White, Color.Black)
@@ -958,10 +1059,30 @@ namespace RPBot
                 catch { }
             }
 
+            if (!_resizeTimeoutAdded && Application.MainLoop != null)
+            {
+                try
+                {
+                    Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(16), ResizeWatcher);
+                    _resizeTimeoutAdded = true;
+                }
+                catch { }
+            }
+
             // Subscribe to window resize to rewrap immediately when user resizes
             try
             {
-                _mainWindow.Resized += (_) => { try { RewrapIfNeeded(); } catch { } };
+                _mainWindow.Resized += (_) =>
+                {
+                    try
+                    {
+                        TraceUiResize("window-resized-before", _logPanel, _logLines, _lastLogTopRow, _logLines, _lastLogTopRow);
+                        RewrapIfNeeded();
+                        Application.Refresh();
+                        TraceUiResize("window-resized-after", _logPanel, _logLines, _lastLogTopRow, _logLines, _lastLogTopRow);
+                    }
+                    catch { }
+                };
             }
             catch { }
 
@@ -1648,6 +1769,10 @@ namespace RPBot
 
                         _logLines.Clear();
                         _commandLines.Clear();
+                        _logLogicalLines.Clear();
+                        _commandLogicalLines.Clear();
+                        _lastLogTopRow = 0;
+                        _lastCommandTopRow = 0;
                         _logPanel?.SetNeedsDisplay();
                         _commandPanel?.SetNeedsDisplay();
 
@@ -1746,61 +1871,56 @@ namespace RPBot
             if (lines == null)
                 return;
 
-            // If panel supports word wrap, split logical lines into display rows
-            if (panel != null && panel.WordWrap)
-            {
-                var availWidth = Math.Max(1, panel.Bounds.Width);
-                foreach (var line in lines)
-                {
-                    foreach (var part in WrapLineForWidth(line ?? string.Empty, availWidth))
-                        buffer.Add(part);
-                }
-            }
-            else
-            {
-                foreach (var line in lines)
-                {
-                    buffer.Add(line);
-                }
-            }
-
-            if (buffer.Count > maxLines)
-            {
-                buffer.RemoveRange(0, buffer.Count - maxLines);
-            }
-
             if (panel != null)
             {
                 try
                 {
-                    // If panel wraps, maintain logical buffer and render display rows accordingly
-                    if (panel.WordWrap)
+                    if (ReferenceEquals(panel, _logPanel) || ReferenceEquals(panel, _commandPanel))
                     {
-                        var availWidth = Math.Max(1, panel.Bounds.Width);
-                        // pick logical buffer based on which panel we update
                         List<string> logical = ReferenceEquals(panel, _logPanel) ? _logLogicalLines : _commandLogicalLines;
 
-                        // Add incoming logical lines
                         foreach (var line in lines)
                         {
                             logical.Add(line ?? string.Empty);
                         }
 
-                        // Rebuild display buffer from logical lines
-                        RewrapLogicalToDisplay(logical, buffer, availWidth, maxLines);
+                        if (logical.Count > maxLines)
+                        {
+                            logical.RemoveRange(0, logical.Count - maxLines);
+                        }
 
-                        // Update panel text from display rows immediately
+                        RewrapLogicalToDisplay(logical, buffer, GetUsablePanelWidth(panel), maxLines);
                         panel.Text = string.Join("\n", buffer);
+
+                        var height = Math.Max(1, panel.Bounds.Height);
+                        var top = buffer.Count <= height ? 0 : GetBottomTopRow(panel, buffer);
+                        try
+                        {
+                            if (ReferenceEquals(panel, _logPanel))
+                                _lastLogTopRow = top;
+                            else if (ReferenceEquals(panel, _commandPanel))
+                                _lastCommandTopRow = top;
+
+                            panel.TopRow = top;
+                            TraceUiResize(ReferenceEquals(panel, _logPanel) ? "log-append" : "command-append", panel, null, 0, buffer, top);
+                        }
+                        catch { }
                     }
                     else
                     {
-                        // Обновим текст панели (без автоскролла через SelectedItem)
+                        foreach (var line in lines)
+                        {
+                            buffer.Add(line ?? string.Empty);
+                        }
+
+                        if (buffer.Count > maxLines)
+                        {
+                            buffer.RemoveRange(0, buffer.Count - maxLines);
+                        }
+
                         panel.Text = string.Join("\n", buffer);
                     }
 
-                    var height = Math.Max(1, panel.Bounds.Height);
-                    var top = Math.Max(0, buffer.Count - height);
-                    try { panel.TopRow = top; } catch { }
                     panel.SetNeedsDisplay();
                 }
                 catch (Exception ex)
@@ -1816,13 +1936,25 @@ namespace RPBot
                 return;
             try
             {
-                var height = Math.Max(1, panel.Bounds.Height);
-                var maxTop = Math.Max(0, buffer.Count - height);
                 var currTop = 0;
                 try { currTop = panel.TopRow; } catch { currTop = 0; }
                 var nextTop = currTop + delta;
                 if (nextTop < 0) nextTop = 0;
-                if (nextTop > maxTop) nextTop = maxTop;
+
+                if (ReferenceEquals(panel, _logPanel))
+                {
+                    var maxTop = GetBottomTopRow(panel, _logLines);
+                    if (nextTop > maxTop) nextTop = maxTop;
+                    _lastLogTopRow = nextTop;
+                    TraceUiResize("log-scroll", panel, _logLines, currTop, _logLines, nextTop);
+                }
+                else if (ReferenceEquals(panel, _commandPanel))
+                {
+                    var maxTop = GetBottomTopRow(panel, _commandLines);
+                    if (nextTop > maxTop) nextTop = maxTop;
+                    _lastCommandTopRow = nextTop;
+                    TraceUiResize("command-scroll", panel, _commandLines, currTop, _commandLines, nextTop);
+                }
 
                 try { panel.TopRow = nextTop; } catch { }
                 panel.SetNeedsDisplay();
