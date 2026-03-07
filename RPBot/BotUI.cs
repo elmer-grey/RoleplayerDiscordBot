@@ -29,6 +29,11 @@ namespace RPBot
         private List<string> _commandHistory = new List<string>();
         private int _historyIndex = -1;
         private bool _isInitialized = false;
+        private string _tabCompletionPrefix = string.Empty;
+        private string _tabCompletionSeed = string.Empty;
+        private string _tabCompletionSuffix = string.Empty;
+        private List<string> _tabCompletionMatches = new List<string>();
+        private int _tabCompletionIndex = -1;
 
         // Lock to protect Terminal.Gui Init/Shutdown from concurrent calls
         private readonly object _uiLock = new object();
@@ -1263,6 +1268,137 @@ namespace RPBot
             return true;
         }
 
+        private static IReadOnlyList<string> GetUiRootCommandSuggestions()
+        {
+            return new[]
+            {
+                "announce",
+                "exit",
+                "help",
+                "predict",
+                "reconnect",
+                "restart",
+                "servers",
+                "settings",
+                "status",
+                "stop",
+                "systems"
+            };
+        }
+
+        private static IReadOnlyList<string> GetUiSettingsSubcommandSuggestions()
+        {
+            return new[] { "get", "list", "reset", "set" };
+        }
+
+        private static IReadOnlyList<string> GetUiSettingsKeySuggestions()
+        {
+            return new[]
+            {
+                "default_role",
+                "general_rg_channel",
+                "line_message",
+                "moderation_channel",
+                "record_channel",
+                "roll_channel",
+                "stats_channel",
+                "swear_filter",
+                "swear_words",
+                "welcome_channel",
+                "welcome_message"
+            };
+        }
+
+        private static List<string> GetUiCommandSuggestions(string prefixContext)
+        {
+            var contextParts = prefixContext
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (contextParts.Length == 0)
+                return GetUiRootCommandSuggestions().ToList();
+
+            if (!string.Equals(contextParts[0], "settings", StringComparison.OrdinalIgnoreCase))
+                return new List<string>();
+
+            if (contextParts.Length == 1)
+                return GetUiSettingsSubcommandSuggestions().ToList();
+
+            var settingsSubcommand = contextParts[1].ToLowerInvariant();
+            if ((settingsSubcommand == "get" || settingsSubcommand == "set") && contextParts.Length >= 3)
+                return GetUiSettingsKeySuggestions().ToList();
+
+            return new List<string>();
+        }
+
+        private void ResetTabCompletion()
+        {
+            _tabCompletionPrefix = string.Empty;
+            _tabCompletionSeed = string.Empty;
+            _tabCompletionSuffix = string.Empty;
+            _tabCompletionMatches.Clear();
+            _tabCompletionIndex = -1;
+        }
+
+        private bool TryCycleCommandCompletion()
+        {
+            var input = _inputField?.Text.ToString() ?? string.Empty;
+            var endsWithSpace = input.Length > 0 && char.IsWhiteSpace(input[^1]);
+
+            string prefix;
+            string commandPart;
+            if (endsWithSpace)
+            {
+                prefix = input;
+                commandPart = string.Empty;
+            }
+            else
+            {
+                var spaceIndex = input.LastIndexOf(' ');
+                prefix = spaceIndex >= 0 ? input[..(spaceIndex + 1)] : string.Empty;
+                commandPart = spaceIndex >= 0 ? input[(spaceIndex + 1)..] : input;
+            }
+
+            if (string.IsNullOrWhiteSpace(commandPart) && string.IsNullOrWhiteSpace(prefix))
+                return false;
+
+            if (_tabCompletionIndex < 0 || _tabCompletionPrefix != prefix || _tabCompletionSeed != commandPart)
+            {
+                var suggestionSource = prefix.Length == 0
+                    ? GetUiRootCommandSuggestions().ToList()
+                    : GetUiCommandSuggestions(prefix);
+
+                _tabCompletionSeed = commandPart;
+                _tabCompletionPrefix = prefix;
+                _tabCompletionSuffix = string.Empty;
+                _tabCompletionMatches = suggestionSource
+                    .Where(x => x.StartsWith(commandPart, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (_tabCompletionMatches.Count == 0)
+                {
+                    ResetTabCompletion();
+                    return false;
+                }
+
+                _tabCompletionIndex = 0;
+            }
+            else
+            {
+                _tabCompletionIndex++;
+                if (_tabCompletionIndex > _tabCompletionMatches.Count)
+                    _tabCompletionIndex = 0;
+            }
+
+            var replacement = _tabCompletionIndex == _tabCompletionMatches.Count
+                ? _tabCompletionSeed
+                : _tabCompletionMatches[_tabCompletionIndex];
+
+            _inputField.Text = _tabCompletionPrefix + replacement;
+            return true;
+        }
+
         private void OnInputKeyPress(KeyEventEventArgs args)
         {
             if (!_inputEnabled)
@@ -1270,6 +1406,14 @@ namespace RPBot
                 args.Handled = true;
                 return;
             }
+
+            if (args.KeyEvent.Key == Key.Tab)
+            {
+                args.Handled = TryCycleCommandCompletion();
+                return;
+            }
+
+            ResetTabCompletion();
 
             if (args.KeyEvent.Key == Key.Enter)
             {
@@ -1616,13 +1760,60 @@ namespace RPBot
                         }
                     };
 
+                    void ConfirmYes()
+                    {
+                        if (tcs.Task.IsCompleted)
+                            return;
+
+                        Application.RequestStop(dialog);
+                        tcs.TrySetResult(true);
+                    }
+
+                    void ConfirmNo()
+                    {
+                        if (tcs.Task.IsCompleted)
+                            return;
+
+                        Application.RequestStop(dialog);
+                        tcs.TrySetResult(false);
+                    }
+
                     var yesButton = new Button("Y - Да") { X = Pos.Percent(20), Y = 4 };
-                    yesButton.Clicked += () => { Application.RequestStop(dialog); tcs.TrySetResult(true); };
+                    yesButton.Clicked += ConfirmYes;
 
                     var noButton = new Button("N - Нет") { X = Pos.Percent(65), Y = 4 };
-                    noButton.Clicked += () => { Application.RequestStop(dialog); tcs.TrySetResult(false); };
+                    noButton.Clicked += ConfirmNo;
 
                     dialog.Add(questionLabel, hintLabel, yesButton, noButton);
+
+                    dialog.KeyPress += (args) =>
+                    {
+                        try
+                        {
+                            switch (args.KeyEvent.Key)
+                            {
+                                case Key.Y:
+                                case Key.y:
+                                    ConfirmYes();
+                                    args.Handled = true;
+                                    break;
+                                case Key.N:
+                                case Key.n:
+                                case Key.Esc:
+                                    ConfirmNo();
+                                    args.Handled = true;
+                                    break;
+                                case Key.Enter:
+                                    if (yesButton.HasFocus)
+                                        ConfirmYes();
+                                    else
+                                        ConfirmNo();
+                                    args.Handled = true;
+                                    break;
+                            }
+                        }
+                        catch { }
+                    };
 
                     noButton.SetFocus();
 
@@ -1647,8 +1838,7 @@ namespace RPBot
                             {
                                 try
                                 {
-                                    Application.RequestStop(dialog);
-                                    tcs.TrySetResult(false);
+                                    ConfirmNo();
                                 }
                                 catch { }
                             });
@@ -1679,6 +1869,7 @@ namespace RPBot
             AddCommandOutput("servers  - Список серверов");
             AddCommandOutput("announce - Отправить статус в Discord");
             AddCommandOutput("predict  - Сделать прогноз подключения");
+            AddCommandOutput("reconnect- Принудительный реконнект");
             AddCommandOutput("restart  - Перезапуск бота");
             AddCommandOutput("stop     - Остановка бота");
             AddCommandOutput("==========================");
