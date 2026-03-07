@@ -95,6 +95,7 @@ namespace RPBot
                     .WithDescription($"Бот {_client.CurrentUser.Username} успешно запущен и работает в штатном режиме.")
                     .AddField("📊 Статус", "✅ Онлайн", true)
                     .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
+                    .AddField("📶 Задержка", $"{_client.Latency} мс", true)
                     .AddField("🔄 Версия", "0.6.0.0", true)
                     .WithFooter(f => f.Text = "Система мониторинга")
                     .WithCurrentTimestamp();
@@ -197,6 +198,43 @@ namespace RPBot
                         {
                             var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
                             System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+
+        public async Task SendReconnectNotification(string reason = "Ручной реконнект по команде")
+        {
+            foreach (var guild in _client.Guilds)
+            {
+                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                {
+                    try
+                    {
+                        if (config.ModerateChannelID == 0) continue;
+                        var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
+                        if (channel == null) continue;
+
+                        var embed = new EmbedBuilder()
+                            .WithTitle("🔄 ПЕРЕПОДКЛЮЧЕНИЕ БОТА")
+                            .WithColor(Color.Blue)
+                            .WithDescription("Бот выполняет переподключение к Discord.")
+                            .AddField("📋 Причина", reason, true)
+                            .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
+                            .WithFooter(f => f.Text = "Ожидайте восстановления связи")
+                            .WithCurrentTimestamp();
+
+                        await channel.SendMessageAsync(embed: embed.Build());
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSink?.Invoke($"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
+                        try
+                        {
+                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex}\n");
                         }
                         catch { }
                     }

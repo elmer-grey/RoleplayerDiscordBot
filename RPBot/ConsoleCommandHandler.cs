@@ -222,7 +222,16 @@ namespace RPBot
                     case "reconnect":
                     case "force reconnect":
                         Console.WriteLine("[CONSOLE] Принудительный реконнект...");
-                        await _reconnectionService.HandleDisconnect(new Exception("Manual reconnect"));
+                        try
+                        {
+                            if (_client.ConnectionState == ConnectionState.Connected)
+                                await _statusNotifier.SendReconnectNotification("Ручной реконнект из консоли");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[CONSOLE] Ошибка уведомления о реконнекте: {ex.Message}");
+                        }
+                        await _reconnectionService.RequestManualReconnectAsync("Ручной реконнект из консоли");
                         break;
 
                     case "predict":

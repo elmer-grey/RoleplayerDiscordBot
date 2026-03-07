@@ -44,6 +44,7 @@ namespace RPBot
         private ManualResetEventSlim _uiInitialized = new ManualResetEventSlim(false);
         private bool _statusTimeoutAdded = false;
         private bool _resizeTimeoutAdded = false;
+        private bool _dialogInputActive = false;
 
         private bool _inputEnabled = false;
         private bool _isDisposed = false;
@@ -1108,6 +1109,9 @@ namespace RPBot
 
         private bool OnRootKeyEvent(KeyEvent keyEvent)
         {
+            if (_dialogInputActive)
+                return false;
+
             if (!_inputEnabled)
             {
                 if (keyEvent.Key == (Key.C | Key.CtrlMask))
@@ -1361,7 +1365,12 @@ namespace RPBot
             if (string.IsNullOrWhiteSpace(commandPart) && string.IsNullOrWhiteSpace(prefix))
                 return false;
 
-            if (_tabCompletionIndex < 0 || _tabCompletionPrefix != prefix || _tabCompletionSeed != commandPart)
+            var canContinueCycle = _tabCompletionIndex >= 0
+                && _tabCompletionPrefix == prefix
+                && (string.Equals(_tabCompletionPrefix + _tabCompletionSeed, input, StringComparison.OrdinalIgnoreCase)
+                    || _tabCompletionMatches.Any(x => string.Equals(_tabCompletionPrefix + x, input, StringComparison.OrdinalIgnoreCase)));
+
+            if (!canContinueCycle)
             {
                 var suggestionSource = prefix.Length == 0
                     ? GetUiRootCommandSuggestions().ToList()
@@ -1437,6 +1446,10 @@ namespace RPBot
                     {
                         TryAppendErrorToFile($"ExecuteCommand error: {ex}");
                     }
+                    finally
+                    {
+                        AddCommandSpacer();
+                    }
                 });
 
                 args.Handled = true;
@@ -1491,6 +1504,36 @@ namespace RPBot
 
                     case "status":
                         ShowDetailedStatus();
+                        break;
+
+                    case "help":
+                        ShowHelp();
+                        break;
+
+                    case "predict":
+                        var prediction = await _connectionPredictor.AnalyzeAndPredict();
+                        if (prediction != null)
+                        {
+                            AddCommandOutput($"[ПРОГНОЗ] {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss} (уверенность: {prediction.Confidence}%)");
+                        }
+                        else
+                        {
+                            AddCommandOutput("[ПРОГНОЗ] Прогнозов нет, соединение стабильно");
+                        }
+                        break;
+
+                    case "reconnect":
+                        AddCommandOutput("Принудительный реконнект...");
+                        try
+                        {
+                            if (_client.ConnectionState == Discord.ConnectionState.Connected)
+                                await _statusNotifier.SendReconnectNotification("Ручной реконнект из UI");
+                        }
+                        catch (Exception ex)
+                        {
+                            TryAppendErrorToFile($"ExecuteCommand reconnect notification error: {ex}");
+                        }
+                        await _reconnectionService.RequestManualReconnectAsync("Ручной реконнект из UI");
                         break;
 
                     case "announce":
@@ -1624,11 +1667,37 @@ namespace RPBot
                         }
                         break;
 
+                    default:
+                        AddCommandOutput($"Неизвестная команда: {cmd}. Введите 'help' для списка команд.");
+                        break;
+
                 }
             }
             catch (Exception ex)
             {
                 AddCommandOutput($"Ошибка: {ex.Message}");
+            }
+        }
+
+        private void AddCommandSpacer()
+        {
+            if (_commandPanel != null && Application.MainLoop != null && !_isDisposed)
+            {
+                Application.MainLoop.Invoke(() =>
+                {
+                    try
+                    {
+                        AppendLinesUnsafe(_commandLines, _commandPanel, new[] { string.Empty }, MaxCommandLines);
+                    }
+                    catch (Exception ex)
+                    {
+                        TryAppendErrorToFile($"Ошибка добавления отступа вывода команды: {ex}");
+                    }
+                });
+            }
+            else
+            {
+                _pendingCommandLines.Add(string.Empty);
             }
         }
 
@@ -1739,6 +1808,7 @@ namespace RPBot
                 {
                     Console.CursorVisible = false;
                     var dialog = new Dialog("Подтверждение", 50, 8);
+                    _dialogInputActive = true;
 
                     var questionLabel = new Label(question)
                     {
@@ -1786,21 +1856,41 @@ namespace RPBot
 
                     dialog.Add(questionLabel, hintLabel, yesButton, noButton);
 
-                    dialog.KeyPress += (args) =>
+                    void HandleDialogKey(KeyEventEventArgs args)
                     {
                         try
                         {
-                            switch (args.KeyEvent.Key)
+                            var key = args.KeyEvent.Key;
+                            var keyChar = char.ToLowerInvariant((char)(uint)key);
+
+                            if (keyChar == 'y' || keyChar == 'н')
                             {
-                                case Key.Y:
-                                case Key.y:
-                                    ConfirmYes();
-                                    args.Handled = true;
-                                    break;
-                                case Key.N:
-                                case Key.n:
+                                ConfirmYes();
+                                args.Handled = true;
+                                return;
+                            }
+
+                            if (keyChar == 'n' || keyChar == 'т')
+                            {
+                                ConfirmNo();
+                                args.Handled = true;
+                                return;
+                            }
+
+                            switch (key)
+                            {
                                 case Key.Esc:
                                     ConfirmNo();
+                                    args.Handled = true;
+                                    break;
+                                case Key.CursorLeft:
+                                case Key.CursorUp:
+                                    yesButton.SetFocus();
+                                    args.Handled = true;
+                                    break;
+                                case Key.CursorRight:
+                                case Key.CursorDown:
+                                    noButton.SetFocus();
                                     args.Handled = true;
                                     break;
                                 case Key.Enter:
@@ -1813,12 +1903,17 @@ namespace RPBot
                             }
                         }
                         catch { }
-                    };
+                    }
+
+                    dialog.KeyPress += HandleDialogKey;
+                    yesButton.KeyPress += HandleDialogKey;
+                    noButton.KeyPress += HandleDialogKey;
 
                     noButton.SetFocus();
 
                     dialog.Closed += (_) =>
                     {
+                        _dialogInputActive = false;
                         if (previousInputState)
                         {
                             Application.MainLoop.Invoke(() => EnableInput());
@@ -1850,6 +1945,7 @@ namespace RPBot
                 }
                 catch (Exception ex)
                 {
+                    _dialogInputActive = false;
                     tcs.TrySetException(ex);
                     if (previousInputState)
                     {
@@ -1869,7 +1965,7 @@ namespace RPBot
             AddCommandOutput("servers  - Список серверов");
             AddCommandOutput("announce - Отправить статус в Discord");
             AddCommandOutput("predict  - Сделать прогноз подключения");
-            AddCommandOutput("reconnect- Принудительный реконнект");
+            AddCommandOutput("reconnect - Принудительный реконнект");
             AddCommandOutput("restart  - Перезапуск бота");
             AddCommandOutput("stop     - Остановка бота");
             AddCommandOutput("==========================");

@@ -819,6 +819,11 @@ namespace RPBot
                 {
                     try
                     {
+                        if (recon != null && recon.ShouldPauseBackgroundDisconnectChecks)
+                        {
+                            continue;
+                        }
+
                         if (client.ConnectionState == ConnectionState.Disconnected && !_shouldExit)
                         {
                             await LogStartup("⚠️ Фоновая проверка: обнаружено отключение");
@@ -827,7 +832,7 @@ namespace RPBot
                             {
                                 try
                                 {
-                                    await recon.HandleDisconnect(new Exception("Background check"));
+                                    await recon.HandleDisconnect(new BackgroundDisconnectException());
                                 }
                                 catch (Exception ex)
                                 {
@@ -871,17 +876,21 @@ namespace RPBot
         private async Task OnDisconnectDetected(Exception exception)
         {
             var reason = _reconnectionService.ConnectionInfo.LastDisconnectReason;
-            await LogStartup($"Отключение: {reason}");
 
-            await _statusNotifier.SendConnectionIssue(
-                reason,
-                _reconnectionService.ConnectionInfo.ReconnectAttempts + 1
-            );
+            if (exception is not GatewayReconnectException)
+            {
+                await LogStartup($"Отключение: {reason}");
+
+                await _statusNotifier.SendConnectionIssue(
+                    reason,
+                    _reconnectionService.ConnectionInfo.ReconnectAttempts + 1
+                );
+            }
         }
 
         private async Task OnReconnectStarted(string message)
         {
-            await LogStartup($"{message}");
+            await LogStartup(message);
         }
 
         private async Task OnReconnectCompleted(bool success)

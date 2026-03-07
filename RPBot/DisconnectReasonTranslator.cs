@@ -34,6 +34,10 @@ namespace RPBot
                 return " WebSocket ошибка";
 
             // Discord специфичные
+            if (ex is ManualReconnectException)
+                return "Ручной реконнект по команде";
+            if (ex is BackgroundDisconnectException)
+                return "Фоновая проверка: клиент всё ещё отключен";
             if (ex is GatewayReconnectException)
                 return "Плановый реконнект Discord";
             if (msg.Contains("rate limit"))
