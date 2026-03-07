@@ -184,9 +184,9 @@ namespace RPBot
                 }
 
                 // default: bonk
-                if (targetOption == null || !TryGetUserId(targetOption, out var targetId2))
+                if (targetOption == null || !TryGetUserId(targetOption, out var targetId2) || targetId2 == command.User.Id)
                 {
-                    await command.RespondAsync("Укажите цель команды (target)", ephemeral: true);
+                    await command.RespondAsync("ну у каждого свои приколы... ты бонькнул сам себя, поздравляю", ephemeral: true);
                     return;
                 }
 
@@ -424,7 +424,6 @@ namespace RPBot
             if (_ui != null && _uiStarted)
             {
                 _ui.AddLog("Остановка из консоли...");
-                _ui.ClearForRestart();
             }
 
             _shouldExit = true;
@@ -1154,9 +1153,6 @@ namespace RPBot
             try
             {
                 // ЭТАП 1: Регистрация команд
-                await LogStartup($"┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ─────────────┐");
-
-
                 if (await _ui.AskYesNoQuestion(
                         "Нужно ли перерегистрировать команды?",
                         "Y - Да, N - Нет, таймаут 60 секунд",
@@ -1166,16 +1162,11 @@ namespace RPBot
                     await _commandHandler.InitializeAsync();
                     await _commandHandler.ListSlashCommandsAsync();
 
-                    // УВЕДОМЛЕНИЕ В UI
-                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
-                    _ui?.AddLog($"│      Команды зарегистрированы                         │");
-                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
+                    _ui?.AddLog("Команды зарегистрированы.");
                 }
                 else
                 {
-                    _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
-                    _ui?.AddLog($"│      Регистрация команд пропущена                     │");
-                    _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
+                    _ui?.AddLog("Регистрация команд пропущена.");
                     await _commandHandler.ListSlashCommandsAsync();
                 }
 
