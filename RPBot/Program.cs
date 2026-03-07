@@ -38,8 +38,6 @@ namespace RPBot
         public bool PredictionsEnabled { get; set; } = true;
     }
 
-
-
     public enum StartupType
     {
         FirstStart,
@@ -155,73 +153,63 @@ namespace RPBot
 
         private async Task BwonkCommand(SocketSlashCommand command)
         {
+            if (command.Data.Name != "bwonk") return;
             try
             {
-                var opt = command.Data.Options.FirstOrDefault(o => o.Name == "target");
-                if (opt == null)
+                var action = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString();
+                action = string.IsNullOrWhiteSpace(action) ? "bonk" : action;
+
+                var targetOption = command.Data.Options.FirstOrDefault(o => o.Name == "target");
+
+                static bool TryGetUserId(SocketSlashCommandDataOption? opt, out ulong userId)
+                {
+                    userId = 0;
+                    if (opt?.Value is IUser iu) { userId = iu.Id; return true; }
+                    if (opt?.Value is long l) { userId = (ulong)l; return true; }
+                    if (opt?.Value is ulong ul) { userId = ul; return true; }
+                    return ulong.TryParse(opt?.Value?.ToString() ?? "", out userId);
+                }
+
+                if (string.Equals(action, "stats", StringComparison.OrdinalIgnoreCase))
+                {
+                    var targetId = command.User.Id;
+                    if (targetOption != null && TryGetUserId(targetOption, out var parsed))
+                        targetId = parsed;
+
+                    int total;
+                    lock (_bwonkCounts) { total = _bwonkCounts.TryGetValue(targetId, out var v) ? v : 0; }
+
+                    await command.RespondAsync($"{MentionUtils.MentionUser(targetId)} был бонькнут {total} раз.", ephemeral: true);
+                    return;
+                }
+
+                // default: bonk
+                if (targetOption == null || !TryGetUserId(targetOption, out var targetId2))
                 {
                     await command.RespondAsync("Укажите цель команды (target)", ephemeral: true);
                     return;
                 }
 
-                ulong targetId = 0;
-                if (opt.Value is IUser iu) targetId = iu.Id;
-                else if (opt.Value is long l) targetId = (ulong)l;
-                else if (opt.Value is ulong ul) targetId = ul;
-                else if (!ulong.TryParse(opt.Value?.ToString() ?? "", out targetId))
-                {
-                    await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
-                    return;
-                }
-
-                var invoker = command.User as SocketUser;
-                IUser targetUser = _client.GetUser(targetId) as IUser;
-                if (targetUser == null)
-                    targetUser = await _client.Rest.GetUserAsync(targetId) as IUser;
-
-                // Increment count
+                int newTotal;
                 lock (_bwonkCounts)
                 {
-                    if (!_bwonkCounts.TryGetValue(targetId, out var c)) c = 0;
+                    if (!_bwonkCounts.TryGetValue(targetId2, out var c)) c = 0;
                     c++;
-                    _bwonkCounts[targetId] = c;
+                    _bwonkCounts[targetId2] = c;
+                    newTotal = c;
                     SaveBwonkCounts();
                 }
 
-                // Respond to invoker (ephemeral)
-                var invMsg = invoker != null ? $"Вы бонькнули {MentionUtils.MentionUser(targetId)}" : "Вы бонькнули пользователя.";
-                await command.RespondAsync(invMsg, ephemeral: true);
+                await command.RespondAsync($"Вы бонькнули {MentionUtils.MentionUser(targetId2)}", ephemeral: true);
 
-                // Notify target via DM
                 try
                 {
-                    if (targetUser != null)
+                    if (command.Channel is IMessageChannel channel)
                     {
-                        IMessageChannel dm = null;
-                        try
-                        {
-                            if (targetUser is SocketUser socketUser)
-                            {
-                                dm = await socketUser.CreateDMChannelAsync();
-                            }
-                            else
-                            {
-                                var restUser = await _client.Rest.GetUserAsync(targetId);
-                                if (restUser != null)
-                                    dm = await restUser.CreateDMChannelAsync();
-                            }
-                        }
-                        catch { }
-
-                        if (dm != null)
-                        {
-                            int total;
-                            lock (_bwonkCounts) { total = _bwonkCounts.TryGetValue(targetId, out var v) ? v : 0; }
-                            await dm.SendMessageAsync($"Вас бонькнули по делу или просто так. Вас уже бонькнули {total} раз, задумайтесь :kappa:");
-                        }
+                        await channel.SendMessageAsync($"{MentionUtils.MentionUser(targetId2)}, Вас бонькнули по делу или просто так. Вас уже бонькнули {newTotal} раз, задумайтесь :kappa:");
                     }
                 }
-                catch { /* ignore DM failures */ }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -1810,7 +1798,7 @@ namespace RPBot
                     await OpenChatCommand(command);
                     break;
                 case "bwonk":
-                    // handled separately by BwonkCommand subscription to avoid duplicate responses here
+                    // handled by BwonkCommand (subscribed handler)
                     break;
                 default:
                     await command.RespondAsync("Команда не распознана.");
