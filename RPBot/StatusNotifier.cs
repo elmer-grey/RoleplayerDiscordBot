@@ -17,6 +17,7 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         private readonly Dictionary<ulong, ServerConfig> _serverConfigs;
         private StartupType _lastStartupType = StartupType.FirstStart;
+        private string? _lastStartupReason;
 
         public Action<string>? LogSink { get; set; }
 
@@ -29,6 +30,33 @@ namespace RPBot
         public void SetStartupType(StartupType type)
         {
             _lastStartupType = type;
+        }
+
+        public void SetStartupContext(StartupType type, string? reason)
+        {
+            _lastStartupType = type;
+            _lastStartupReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
+        }
+
+        private string GetStartupTypeDisplay()
+        {
+            return _lastStartupType switch
+            {
+                StartupType.Restart => "Перезапуск",
+                StartupType.Reconnect => "Переподключение",
+                _ => "Первичный запуск"
+            };
+        }
+
+        private string? GetStartupReasonDisplay(string fallbackReason)
+        {
+            if (_lastStartupType == StartupType.FirstStart)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(_lastStartupReason))
+                return _lastStartupReason;
+
+            return string.IsNullOrWhiteSpace(fallbackReason) ? null : fallbackReason;
         }
 
         public async Task<bool> SendAllSystemsActive(string reason)
@@ -58,8 +86,8 @@ namespace RPBot
                 var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                 if (channel == null) return true; // nothing to do — treat as success
 
-                var isReconnect = _lastStartupType == StartupType.Reconnect ||
-                                 (_lastStartupType == StartupType.Restart && reason.Contains("переподключение"));
+                var startupType = GetStartupTypeDisplay();
+                var startupReason = GetStartupReasonDisplay(reason);
 
                 var embed = new EmbedBuilder()
                     .WithTitle("🟢 ВСЕ СИСТЕМЫ АКТИВНЫ")
@@ -67,11 +95,16 @@ namespace RPBot
                     .WithDescription($"Бот {_client.CurrentUser.Username} успешно запущен и работает в штатном режиме.")
                     .AddField("📊 Статус", "✅ Онлайн", true)
                     .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
-                    .AddField("🔧 Тип запуска", isReconnect ? "Переподключение" : "Первичный запуск", true)
-                    .AddField("📋 Причина", reason, true)
                     .AddField("🔄 Версия", "0.6.0.0", true)
                     .WithFooter(f => f.Text = "Система мониторинга")
                     .WithCurrentTimestamp();
+
+                embed.AddField("🔧 Тип запуска", startupType, true);
+
+                if (!string.IsNullOrWhiteSpace(startupReason))
+                {
+                    embed.AddField("📋 Причина", startupReason, true);
+                }
 
                 await channel.SendMessageAsync(embed: embed.Build());
                 return true;
@@ -164,6 +197,47 @@ namespace RPBot
                         {
                             var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
                             System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Отправляет сообщение о полном выключении бота
+        /// </summary>
+        public async Task SendShutdownNotification(string reason = "Плановое завершение работы")
+        {
+            foreach (var guild in _client.Guilds)
+            {
+                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                {
+                    try
+                    {
+                        if (config.ModerateChannelID == 0) continue;
+                        var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
+                        if (channel == null) continue;
+
+                        var embed = new EmbedBuilder()
+                            .WithTitle("⏹️ БОТ ОСТАНОВЛЕН")
+                            .WithColor(Color.DarkGrey)
+                            .WithDescription("Бот завершил работу и сейчас находится офлайн.")
+                            .AddField("📋 Причина", reason, true)
+                            .AddField("📊 Статус", "⛔ Оффлайн", true)
+                            .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
+                            .WithFooter(f => f.Text = "Система мониторинга")
+                            .WithCurrentTimestamp();
+
+                        await channel.SendMessageAsync(embed: embed.Build());
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSink?.Invoke($"[StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex.Message}");
+                        try
+                        {
+                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex}\n");
                         }
                         catch { }
                     }

@@ -56,7 +56,6 @@ namespace RPBot
         private int _lastCommandWidth = -1;
         private int _lastLogTopRow = 0;
         private int _lastCommandTopRow = 0;
-        private readonly string _uiResizeTracePath = Path.Combine(AppContext.BaseDirectory, "UIResizeTrace.log");
 
         private readonly List<string> _pendingLogLines = new List<string>();
         private readonly List<string> _pendingCommandLines = new List<string>();
@@ -116,22 +115,6 @@ namespace RPBot
             return true;
         }
 
-        private void TraceUiResize(string source, TextView? panel, IReadOnlyCollection<string>? oldDisplay, int oldTop, IReadOnlyCollection<string>? newDisplay, int newTop)
-        {
-            try
-            {
-                var width = panel != null ? panel.Bounds.Width : -1;
-                var height = panel != null ? panel.Bounds.Height : -1;
-                var topRow = -1;
-                try { if (panel != null) topRow = panel.TopRow; } catch { }
-
-                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] src={source}; width={width}; height={height}; oldDisplay={oldDisplay?.Count ?? -1}; newDisplay={newDisplay?.Count ?? -1}; oldTop={oldTop}; newTop={newTop}; actualTop={topRow}{Environment.NewLine}";
-                File.AppendAllText(_uiResizeTracePath, line);
-            }
-            catch { }
-        }
-        
-
         private bool RewrapIfNeeded()
         {
             try
@@ -154,7 +137,6 @@ namespace RPBot
                         {
                             _lastLogTopRow = GetPreservedTopRow(_logPanel, oldDisplay, oldTop, _logLines);
                             _logPanel.TopRow = _lastLogTopRow;
-                            TraceUiResize("log-rewrap", _logPanel, oldDisplay, oldTop, _logLines, _lastLogTopRow);
                         }
                         catch { }
                         try { _logPanel.Visible = oldVisible; } catch { }
@@ -180,7 +162,6 @@ namespace RPBot
                         {
                             _lastCommandTopRow = GetPreservedTopRow(_commandPanel, oldDisplay, oldTop, _commandLines);
                             _commandPanel.TopRow = _lastCommandTopRow;
-                            TraceUiResize("command-rewrap", _commandPanel, oldDisplay, oldTop, _commandLines, _lastCommandTopRow);
                         }
                         catch { }
                         try { _commandPanel.Visible = oldVisible; } catch { }
@@ -1076,10 +1057,8 @@ namespace RPBot
                 {
                     try
                     {
-                        TraceUiResize("window-resized-before", _logPanel, _logLines, _lastLogTopRow, _logLines, _lastLogTopRow);
                         RewrapIfNeeded();
                         Application.Refresh();
-                        TraceUiResize("window-resized-after", _logPanel, _logLines, _lastLogTopRow, _logLines, _lastLogTopRow);
                     }
                     catch { }
                 };
@@ -1902,7 +1881,6 @@ namespace RPBot
                                 _lastCommandTopRow = top;
 
                             panel.TopRow = top;
-                            TraceUiResize(ReferenceEquals(panel, _logPanel) ? "log-append" : "command-append", panel, null, 0, buffer, top);
                         }
                         catch { }
                     }
@@ -1946,14 +1924,12 @@ namespace RPBot
                     var maxTop = GetBottomTopRow(panel, _logLines);
                     if (nextTop > maxTop) nextTop = maxTop;
                     _lastLogTopRow = nextTop;
-                    TraceUiResize("log-scroll", panel, _logLines, currTop, _logLines, nextTop);
                 }
                 else if (ReferenceEquals(panel, _commandPanel))
                 {
                     var maxTop = GetBottomTopRow(panel, _commandLines);
                     if (nextTop > maxTop) nextTop = maxTop;
                     _lastCommandTopRow = nextTop;
-                    TraceUiResize("command-scroll", panel, _commandLines, currTop, _commandLines, nextTop);
                 }
 
                 try { panel.TopRow = nextTop; } catch { }

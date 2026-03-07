@@ -172,6 +172,7 @@ namespace RPBot
                         ServerConfigs[kv.Key] = kv.Value;
                     }
                 }
+
             }
             catch (Exception ex)
             {
@@ -245,10 +246,15 @@ namespace RPBot
         }
 
         private StartupType _currentStartupType = StartupType.FirstStart;
+        private string? _startupReason;
+        private StartupType _nextStartupType = StartupType.FirstStart;
+        private string? _nextStartupReason;
         private DateTime _startupTime;
 
         public bool ShouldExit => _shouldExit;
         public bool ShouldRestart => _shouldRestart;
+        public StartupType NextStartupType => _nextStartupType;
+        public string? NextStartupReason => _nextStartupReason;
 
         public async Task RestartAsync()
         {
@@ -273,7 +279,10 @@ namespace RPBot
             _shouldRestart = true;
             _shouldExit = true;
             _currentStartupType = StartupType.Restart;
-            _statusNotifier?.SetStartupType(StartupType.Restart);
+            _startupReason = "Перезапуск по команде из консоли";
+            _nextStartupType = StartupType.Restart;
+            _nextStartupReason = _startupReason;
+            _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
             _reconnectionService?.Shutdown();
 
             // Stop Discord client (best-effort)
@@ -292,11 +301,20 @@ namespace RPBot
                 }
                 catch { }
             }
+
+            await LogShutdownState(isRestart: true, initiator: _restartInitiator);
         }
 
         public async Task StopAsync()
         {
             await LogStartup("Остановка из консоли...");
+
+            try
+            {
+                if (_statusNotifier != null)
+                    await _statusNotifier.SendShutdownNotification("Остановка по команде из консоли");
+            }
+            catch { }
 
             if (_ui != null && _uiStarted)
             {
@@ -321,6 +339,8 @@ namespace RPBot
                 }
                 catch { }
             }
+
+            await LogShutdownState(isRestart: false, initiator: "console");
 
             // Dispose and exit
             try { await DisposeAsync(); } catch { }
@@ -438,6 +458,7 @@ namespace RPBot
                             _ = LogInfo($"Предупреждение: роль {sconfig.DefaultRoleID} не найдена на сервере {guildId}.");
                     }
                 }
+
             }
             catch (Exception ex)
             {
@@ -462,14 +483,22 @@ namespace RPBot
 
         public void SetStartupType(StartupType type)
         {
+            SetStartupContext(type, null);
+        }
+
+        public void SetStartupContext(StartupType type, string? reason)
+        {
             _currentStartupType = type;
-            _statusNotifier?.SetStartupType(type);
+            _startupReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
+            _statusNotifier?.SetStartupContext(type, _startupReason);
         }
 
         static async Task Main(string[] args)
         {
             bool restart;
             int restartCount = 0;
+            var pendingStartupType = StartupType.FirstStart;
+            string? pendingStartupReason = null;
 
             do
             {
@@ -483,13 +512,12 @@ namespace RPBot
 
                 using (var program = new Program())
                 {
-                    if (restartCount > 0)
-                    {
-                        program.SetStartupType(StartupType.Restart);
-                    }
+                    program.SetStartupContext(pendingStartupType, pendingStartupReason);
 
                     await program.RunBotAsync();
                     restart = program.ShouldRestart;
+                    pendingStartupType = restart ? program.NextStartupType : StartupType.FirstStart;
+                    pendingStartupReason = restart ? program.NextStartupReason : null;
                     restartCount++;
                 }
 
@@ -569,6 +597,11 @@ namespace RPBot
                 await _restartLock.WaitAsync();
                 try
                 {
+                    if (_currentStartupType == StartupType.Reconnect)
+                    {
+                        _startupReason ??= "Восстановление соединения после ошибки подключения";
+                    }
+
                     // Показываем специальное сообщение при рестарте
                     var version = _config?.BotVersion ?? "0.6.0.0";
                     if (_currentStartupType == StartupType.Restart)
@@ -598,7 +631,7 @@ namespace RPBot
                         {
                             LogSink = msg => _ui?.AddLog(msg)
                         };
-                        _statusNotifier.SetStartupType(_currentStartupType);
+                        _statusNotifier.SetStartupContext(_currentStartupType, _startupReason);
 
                         // ПЕРЕПОДПИСЫВАЕМСЯ
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
@@ -873,6 +906,11 @@ namespace RPBot
                 // Попытка уведомить все сервера о восстановлении; логируем результат
                 try
                 {
+                    var reconnectReason = $"Переподключение после: {info.LastDisconnectReason}";
+                    _currentStartupType = StartupType.Reconnect;
+                    _startupReason = reconnectReason;
+                    _statusNotifier?.SetStartupContext(StartupType.Reconnect, reconnectReason);
+
                     var ok = await _statusNotifier.SendAllSystemsActive($"Переподключение после: {info.LastDisconnectReason}");
                     if (!ok)
                         await LogStartup("SendAllSystemsActive завершился с ошибками. Смотрите подробности в логах.");
@@ -911,10 +949,16 @@ namespace RPBot
                 _shouldRestart = true;
                 _shouldExit = true;
                 _currentStartupType = StartupType.Restart;
+                _startupReason = "Авто-перезапуск из-за множества попыток переподключения";
+                _nextStartupType = StartupType.Restart;
+                _nextStartupReason = _startupReason;
+                _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
 
                 _reconnectionService?.Shutdown();
 
                 try { await _client.StopAsync(); } catch { }
+
+                await LogShutdownState(isRestart: true, initiator: _restartInitiator);
             }
             catch (Exception ex)
             {
@@ -2098,6 +2142,17 @@ namespace RPBot
             {
                 _logSemaphore.Release();
             }
+        }
+
+        private async Task LogShutdownState(bool isRestart, string initiator)
+        {
+            var version = _config?.BotVersion ?? "0.6.0.0";
+            var mode = isRestart ? "перезапуск" : "завершение работы";
+            var message = isRestart
+                ? $"Бот завершил текущий цикл работы. Режим: {mode}. Инициатор: {initiator}. Версия: {version}"
+                : $"Бот завершил работу. Режим: {mode}. Инициатор: {initiator}. Версия: {version}";
+
+            await LogStartup(message);
         }
 
         private async Task LogError(string errorMessage)
