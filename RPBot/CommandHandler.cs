@@ -268,6 +268,19 @@ namespace RPBot
                     .WithName("open_chat")
                     .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
                     .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
+
+
+                new SlashCommandBuilder()
+                    .WithName("event_notify")
+                    .WithDescription("Личные уведомления о новых событиях (в личные сообщения)")
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("action")
+                        .WithDescription("Действие")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("subscribe", "subscribe")
+                        .AddChoice("unsubscribe", "unsubscribe")
+                        .AddChoice("status", "status")
+                        .WithRequired(true)),
             };
         }
     }

@@ -227,6 +227,9 @@ namespace RPBot
         private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
 		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine("Settings", "bwonks.json"));
 
+		private EventNotificationService _eventNotifications;
+		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine("Settings", "event-notify.json"));
+
         // Сохранение/загрузка конфигураций серверов
         private void SaveServerConfigs()
         {
@@ -332,6 +335,16 @@ namespace RPBot
                 _bwonkCounts = LoadBwonkCounts();
             }
 			catch { _bwonkCounts = new Dictionary<ulong, int>(); }
+
+			// Load persisted DM event-notification subscriptions
+			try
+			{
+				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
+			}
+			catch
+			{
+				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
+			}
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -340,7 +353,7 @@ namespace RPBot
             {
                 GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
                                GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
-                               GatewayIntents.GuildScheduledEvents,
+                               GatewayIntents.GuildScheduledEvents | GatewayIntents.DirectMessages,
                 ConnectionTimeout = _config.Connection.ConnectionTimeout,
                 MessageCacheSize = _config.Connection.MessageCacheSize,
                 LogLevel = LogSeverity.Info,
@@ -663,6 +676,10 @@ namespace RPBot
                     if (channelId.HasValue) sconfig.WelcomeChannelID = channelId.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var wc)) sconfig.WelcomeChannelID = wc;
                     break;
+                case "general_rg_channel":
+                    if (channelId.HasValue) sconfig.GeneralRGChannelID = channelId.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var grg)) sconfig.GeneralRGChannelID = grg;
+                    break;
                 case "welcome_message":
                     sconfig.WelcomeMessage = value ?? "";
                     break;
@@ -722,6 +739,14 @@ namespace RPBot
                         var ch = guild.GetTextChannel(sconfig.WelcomeChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: welcome_channel {sconfig.WelcomeChannelID} не найден на сервере {guildId}.");
+                    }
+
+
+                    if (sconfig.GeneralRGChannelID != 0)
+                    {
+                        var ch = guild.GetTextChannel(sconfig.GeneralRGChannelID);
+                        if (ch == null)
+                            _ = LogInfo($"Предупреждение: general_rg_channel {sconfig.GeneralRGChannelID} не найден на сервере {guildId}.");
                     }
 
                     if (sconfig.DefaultRoleID != 0)
@@ -977,7 +1002,6 @@ namespace RPBot
                     _restartLock.Release();
                 }
             }
-// No-op patch to ensure file updated
         }
 
         private async Task SetupDiscordEvents()
@@ -991,6 +1015,7 @@ namespace RPBot
             _client.SlashCommandExecuted -= BwonkCommand;
             _client.ModalSubmitted -= HandleModalSubmitted;
             _client.ButtonExecuted -= HandleButtonExecuted;
+            _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
             _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
 
@@ -1003,6 +1028,7 @@ namespace RPBot
             _client.SlashCommandExecuted += BwonkCommand;
             _client.ModalSubmitted += HandleModalSubmitted;
             _client.ButtonExecuted += HandleButtonExecuted;
+            _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
 
@@ -1010,6 +1036,18 @@ namespace RPBot
         }
 
         // Отдельные обработчики для событий
+        private async Task OnGuildScheduledEventCreated(SocketGuildEvent guildEvent)
+        {
+            try
+            {
+                await AnnounceGuildScheduledEventCreated(guildEvent);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка в OnGuildScheduledEventCreated: {ex.Message}");
+            }
+        }
+
         private async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent)
         {
             try
@@ -1033,6 +1071,105 @@ namespace RPBot
                 await LogError($"Ошибка в OnGuildScheduledEventCompleted: {ex.Message}");
             }
         }
+
+		private async Task AnnounceGuildScheduledEventCreated(SocketGuildEvent guildEvent)
+		{
+			if (guildEvent?.Guild == null)
+				return;
+
+			var guild = guildEvent.Guild;
+			if (!ServerConfigs.TryGetValue(guild.Id, out var config))
+				return;
+
+			if (config.GeneralRGChannelID == 0)
+				return;
+
+			var announceChannel = await _client.GetChannelAsync(config.GeneralRGChannelID) as ITextChannel;
+			if (announceChannel == null)
+				return;
+
+			static string Truncate(string? value, int max)
+			{
+				if (string.IsNullOrWhiteSpace(value))
+					return string.Empty;
+				value = value.Trim();
+				return value.Length <= max ? value : value.Substring(0, max - 1) + "…";
+			}
+
+			var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
+			var startLocal = guildEvent.StartTime.ToLocalTime();
+			var endLocal = guildEvent.EndTime?.ToLocalTime();
+
+			// Определяем, в каком канале будет проходить событие
+			string whereText;
+			if (guildEvent.Channel != null)
+			{
+				// Пытаемся показать именно голосовой/сценный канал, как Discord-упоминание
+				whereText = $"<#{guildEvent.Channel.Id}>";
+			}
+			else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
+			{
+				whereText = Truncate(guildEvent.Location, 256);
+			}
+			else
+			{
+				whereText = "не указано";
+			}
+
+			var embedBuilder = new EmbedBuilder()
+				.WithTitle($"📅 Новое событие: {guildEvent.Name}")
+				.WithUrl(eventUrl)
+				.WithColor(Color.Blue)
+				.WithCurrentTimestamp();
+
+			if (!string.IsNullOrWhiteSpace(guildEvent.Description))
+			{
+				embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
+			}
+
+			embedBuilder.AddField("🏰 Сервер", guild.Name, true);
+			embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+			embedBuilder.AddField("📍 Где", whereText, true);
+
+			if (guildEvent.Creator != null)
+				embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+
+			embedBuilder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
+			var embed = embedBuilder.Build();
+
+			await announceChannel.SendMessageAsync(embed: embed);
+
+			var subscriberIds = _eventNotifications.GetActiveSubscribers(guild.Id);
+			if (subscriberIds.Count == 0)
+				return;
+
+			foreach (var userId in subscriberIds)
+			{
+				try
+				{
+					var user = guild.GetUser(userId) as IUser ?? _client.GetUser(userId);
+					if (user == null)
+					{
+						try { user = await _client.Rest.GetUserAsync(userId); } catch { }
+					}
+
+					if (user == null)
+						continue;
+
+					var dm = await user.CreateDMChannelAsync();
+					await dm.SendMessageAsync(embed: embed);
+				}
+				catch (Exception ex)
+				{
+					// Логируем сбой доставки в ЛС, но не прерываем рассылку остальным подписчикам
+					try
+					{
+						await LogError($"Не удалось отправить DM о событии пользователю {userId} на сервере {guild.Id}: {ex.Message}");
+					}
+					catch { }
+				}
+			}
+		}
 
         private async Task WaitForReadyAsync()
         {
@@ -1441,6 +1578,7 @@ namespace RPBot
                         try { _client.SlashCommandExecuted -= BwonkCommand; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing BwonkCommand: {ex}"); }
                         try { _client.ModalSubmitted -= HandleModalSubmitted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ModalSubmitted: {ex}"); }
                         try { _client.ButtonExecuted -= HandleButtonExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ButtonExecuted: {ex}"); }
+                        try { _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCreated: {ex}"); }
                         try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
                         try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCompleted: {ex}"); }
 
@@ -1522,9 +1660,61 @@ namespace RPBot
             }
         }
 
+		private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
+		{
+			var text = (message.Content ?? string.Empty).Trim();
+			if (text.Length == 0)
+				return false;
+
+			// Нормализуем пробелы и приводим к нижнему регистру
+			var normalized = Regex.Replace(text, "\\s+", " ").Trim().ToLowerInvariant();
+			var userId = message.Author.Id;
+
+			if (normalized is "стоп" or "хватит" or "stop")
+			{
+				_eventNotifications.Pause(userId);
+				await message.AddReactionAsync(new Emoji("✅"));
+				await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши «хочу» или подпишись заново через /event_notify subscribe на сервере.");
+				return true;
+			}
+
+			if (normalized is "хочу" or "включи" or "start")
+			{
+				_eventNotifications.Unpause(userId);
+				await message.AddReactionAsync(new Emoji("✅"));
+				await message.Channel.SendMessageAsync("[Сохранено] Личные уведомления снова включены (если ты был подписан на сервере). Проверить/подписаться: /event_notify status или /event_notify subscribe в нужном сервере.");
+				return true;
+			}
+
+			if (normalized is "статус" or "status")
+			{
+				var paused = _eventNotifications.IsPaused(userId);
+				await message.AddReactionAsync(new Emoji("✅"));
+				await message.Channel.SendMessageAsync(paused
+					? "[Статус] Сейчас личные уведомления поставлены на паузу. Чтобы вернуть — напиши «хочу»."
+					: "[Статус] Сейчас личные уведомления не на паузе. Подписка на конкретный сервер проверяется командой /event_notify status на сервере.");
+				return true;
+			}
+
+			if (normalized is "подписка" or "subscribe" or "отписка" or "unsubscribe")
+			{
+				await message.Channel.SendMessageAsync("Подписка/отписка делается на конкретном сервере: используй /event_notify subscribe или /event_notify unsubscribe в нужном сервере.");
+				return true;
+			}
+
+			return false;
+		}
+
         private async Task HandleCommandAsync(SocketMessage arg)
         {
             if (arg is not SocketUserMessage message || message.Author.IsBot) return;
+
+			// DM команды для управления уведомлениями о событиях
+			if (message.Channel is IDMChannel)
+			{
+				if (await TryHandleEventNotifyDirectMessageAsync(message))
+					return;
+			}
 
             var context = new SocketCommandContext(_client, message);
             var user = message.Author as SocketGuildUser;
@@ -1596,7 +1786,7 @@ namespace RPBot
             {
                 var commandsList = new StringBuilder();
                 commandsList.AppendLine("Доступные команды:");
-                commandsList.AppendLine("\n**--Для (двух) текстовых чатов--**");
+                commandsList.AppendLine("\n**--Во всех чатах--**");
                 commandsList.AppendLine("`!правила` - правила сервера");
                 commandsList.AppendLine("`!ссылки` - полезные ссылки");
                 commandsList.AppendLine("`!запись` - документ для записи игр");
@@ -1949,6 +2139,9 @@ namespace RPBot
                 case "open_chat":
                     await OpenChatCommand(command);
                     break;
+                case "event_notify":
+                    await EventNotifyCommand(command);
+                    break;
                 case "bwonk":
                     // handled by BwonkCommand (subscribed handler)
                     break;
@@ -1957,6 +2150,58 @@ namespace RPBot
                     break;
             }
         }
+
+		private async Task EventNotifyCommand(SocketSlashCommand command)
+		{
+			var guildId = command.GuildId;
+			if (!guildId.HasValue)
+			{
+				await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
+				return;
+			}
+
+			try
+			{
+				var action = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString();
+				action = string.IsNullOrWhiteSpace(action) ? "status" : action;
+
+				switch (action.ToLowerInvariant())
+				{
+					case "subscribe":
+					{
+						_eventNotifications.Subscribe(guildId.Value, command.User.Id);
+						await command.RespondAsync("Готово. Буду присылать в личные сообщения уведомления о новых событиях на этом сервере. Чтобы отключить — /event_notify unsubscribe или напиши мне «стоп».", ephemeral: true);
+						break;
+					}
+					case "unsubscribe":
+					{
+						var removed = _eventNotifications.Unsubscribe(guildId.Value, command.User.Id);
+						await command.RespondAsync(removed
+							? "Ок, отписал от уведомлений по этому серверу."
+							: "Вы и так не были подписаны на уведомления по этому серверу.", ephemeral: true);
+						break;
+					}
+					case "status":
+					default:
+					{
+						var subscribed = _eventNotifications.IsSubscribed(guildId.Value, command.User.Id);
+						var paused = _eventNotifications.IsPaused(command.User.Id);
+						var txt = $"Подписка на этот сервер: {(subscribed ? "✅ да" : "❌ нет")}. Пауза личных уведомлений: {(paused ? "⏸️ да" : "▶️ нет")}.";
+						await command.RespondAsync(txt, ephemeral: true);
+						break;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				await LogError($"Ошибка в EventNotifyCommand: {ex.Message}");
+				try
+				{
+					await command.RespondAsync("Произошла ошибка при работе с подпиской. Попробуйте ещё раз позже или сообщите администратору.", ephemeral: true);
+				}
+				catch { }
+			}
+		}
 
         private async Task StopQueue(SocketSlashCommand command)
         {
