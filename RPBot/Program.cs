@@ -1438,23 +1438,36 @@ namespace RPBot
         {
             try
             {
-                // ЭТАП 1: Регистрация команд
-                if (await _ui.AskYesNoQuestion(
-                        "Нужно ли перерегистрировать команды?",
-                        "Y - Да, N - Нет, таймаут 60 секунд",
-                        60
-                    ) == true)
-                {
-                    await _commandHandler.InitializeAsync();
-                    await _commandHandler.ListSlashCommandsAsync();
+				// ЭТАП 1: Регистрация команд
+				var isDailyRestart =
+					_currentStartupType == StartupType.Restart &&
+					string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
 
-                    _ui?.AddLog("Команды зарегистрированы.");
-                }
-                else
-                {
-                    _ui?.AddLog("Регистрация команд пропущена.");
-                    await _commandHandler.ListSlashCommandsAsync();
-                }
+				if (isDailyRestart)
+				{
+					// После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
+					_ui?.AddLog("Регистрация команд пропущена (ежедневная перезагрузка).");
+					await _commandHandler.ListSlashCommandsAsync();
+				}
+				else
+				{
+					if (await _ui.AskYesNoQuestion(
+							"Нужно ли перерегистрировать команды?",
+							"Y - Да, N - Нет, таймаут 60 секунд",
+							60
+						) == true)
+					{
+						await _commandHandler.InitializeAsync();
+						await _commandHandler.ListSlashCommandsAsync();
+						
+						_ui?.AddLog("Команды зарегистрированы.");
+					}
+					else
+					{
+						_ui?.AddLog("Регистрация команд пропущена.");
+						await _commandHandler.ListSlashCommandsAsync();
+					}
+				}
 
                 // ЭТАП 2: Активация обработчиков
                 await LogStartup($"┌──────────── ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ ─────────┐");
