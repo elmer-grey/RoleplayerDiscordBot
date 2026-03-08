@@ -1,9 +1,11 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.12.35527.113 d17.12
+# Visual Studio Version 18
+VisualStudioVersion = 18.3.11520.95
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RPBot", "RPBot\RPBot.csproj", "{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BenchmarkSuite1", "BenchmarkSuite1\BenchmarkSuite1.csproj", "{A20861A9-411E-6150-BF5C-69E8196E5D22}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -13,10 +15,17 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Release|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E52E74B-ADDA-481B-A83F-2C3BE552CD1A}.Release|Any CPU.Build.0 = Debug|Any CPU
+		{A20861A9-411E-6150-BF5C-69E8196E5D22}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A20861A9-411E-6150-BF5C-69E8196E5D22}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A20861A9-411E-6150-BF5C-69E8196E5D22}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A20861A9-411E-6150-BF5C-69E8196E5D22}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {1DCB330E-763C-4CA6-9695-5055B8F04048}
 	EndGlobalSection
 EndGlobal
