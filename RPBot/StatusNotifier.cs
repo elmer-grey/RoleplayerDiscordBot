@@ -115,7 +115,10 @@ namespace RPBot
                 LogSink?.Invoke($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
                 try
                 {
-                    var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                    var logDirRaw = BotConfig.Current?.LogDirectory;
+                    var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+                    System.IO.Directory.CreateDirectory(logDir);
+                    var path = System.IO.Path.Combine(logDir, "ErrorLog.txt");
                     System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex}\n");
                 }
                 catch { }
@@ -239,7 +242,10 @@ namespace RPBot
                         LogSink?.Invoke($"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
                         try
                         {
-                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+                            var logDirRaw = BotConfig.Current?.LogDirectory;
+                            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+                            System.IO.Directory.CreateDirectory(logDir);
+                            var path = System.IO.Path.Combine(logDir, "ErrorLog.txt");
                             System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex}\n");
                         }
                         catch { }

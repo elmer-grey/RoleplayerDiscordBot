@@ -110,8 +110,8 @@ namespace RPBot
         // Путь к файлу с текстовыми блоками (по умолчанию рядом с исполняемым файлом)
 		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
 
-        // Директория для логов
-		public string LogDirectory { get; set; } = "Logs";
+        // Директория для логов (по умолчанию в Settings/Logs, чтобы ничего не сыпалось в корень)
+		public string LogDirectory { get; set; } = Path.Combine(SettingsFolderName, "Logs");
 
         // Директория с картинками для бросков (например Numbers)
 		public string NumbersDirectory { get; set; } = "Numbers";
