@@ -2257,7 +2257,7 @@ namespace RPBot
         {
             try
             {
-                var path = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+				var path = GetErrorLogPath();
                 if (!File.Exists(path))
                     return 0;
                 return new FileInfo(path).Length;
@@ -2272,7 +2272,7 @@ namespace RPBot
         {
             try
             {
-                var path = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+				var path = GetErrorLogPath();
                 if (!File.Exists(path))
                     return string.Empty;
 
@@ -2298,11 +2298,19 @@ namespace RPBot
         {
             try
             {
-                var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
+				var logPath = GetErrorLogPath();
                 File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
             }
             catch { }
         }
+
+		private static string GetErrorLogPath()
+		{
+			var logDir = BotConfig.Current?.LogDirectory;
+			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
+			Directory.CreateDirectory(resolvedLogDir);
+			return Path.Combine(resolvedLogDir, "ErrorLog.txt");
+		}
 
         public void Dispose()
         {

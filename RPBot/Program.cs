@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -75,6 +76,8 @@ namespace RPBot
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
         private Task? _backgroundMonitoringTask;
+		private CancellationTokenSource? _dailyRestartCts;
+		private Task? _dailyRestartTask;
         private string _restartInitiator = "console";
 
         private TextWriter? _originalOut;
@@ -222,7 +225,7 @@ namespace RPBot
         private string _serverConfigsPath;
         // Bwonk counts persisted between runs
         private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
-        private string _bwonkFilePath = Path.Combine(AppContext.BaseDirectory, "bwonks.json");
+		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine("Settings", "bwonks.json"));
 
         // Сохранение/загрузка конфигураций серверов
         private void SaveServerConfigs()
@@ -281,9 +284,19 @@ namespace RPBot
 
         public Program()
         {
-            _config = BotConfig.Load("config.json");
-            _serverConfigsPath = BotConfig.ResolvePath("serverconfigs.json");
+			var configRelativePath = Path.Combine("Settings", "config.json");
+			var configResolvedPath = BotConfig.ResolvePath(configRelativePath);
+			_config = BotConfig.Load(configRelativePath);
+			_serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
+
+			// Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
+			try
+			{
+				Console.WriteLine($"Config: {configResolvedPath}");
+				Console.WriteLine($"Config BotToken present: {!string.IsNullOrWhiteSpace(_config?.BotToken)}");
+			}
+			catch { }
 
             _client = CreateDiscordClient();
             _commandService = new CommandService();
@@ -318,7 +331,7 @@ namespace RPBot
             {
                 _bwonkCounts = LoadBwonkCounts();
             }
-            catch { _bwonkCounts = new Dictionary<ulong, int>(); }
+			catch { _bwonkCounts = new Dictionary<ulong, int>(); }
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -361,54 +374,72 @@ namespace RPBot
         public StartupType NextStartupType => _nextStartupType;
         public string? NextStartupReason => _nextStartupReason;
 
-        public async Task RestartAsync()
-        {
-            // Signal UI and background tasks to prepare for restart
-            _restartInitiator = "console";
-            if (_ui != null && _uiStarted)
-            {
-                _ui.AddLog($"Перезапуск... Инициатор: {_restartInitiator}");
-                _ui.ClearForRestart();
-                // Do not dispose UI here — the persistent UI thread will remain active
-            }
+		public Task RestartAsync()
+		{
+			// Сохраняем существующую логику перезапуска из консоли
+			return RestartWithReasonAsync(
+				initiator: "console",
+				reason: "Перезапуск по команде из консоли");
+		}
 
-            // Отправляем уведомление в Discord о перезапуске (best-effort)
-            try
-            {
-                if (_statusNotifier != null)
-                    await _statusNotifier.SendRestartNotification("Перезапуск по команде из консоли");
-            }
-            catch { }
+		private async Task RestartWithReasonAsync(string initiator, string reason)
+		{
+			// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
+			if (_shouldExit)
+				return;
 
-            _restartInitiator = "console";
-            _shouldRestart = true;
-            _shouldExit = true;
-            _currentStartupType = StartupType.Restart;
-            _startupReason = "Перезапуск по команде из консоли";
-            _nextStartupType = StartupType.Restart;
-            _nextStartupReason = _startupReason;
-            _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
-            _reconnectionService?.Shutdown();
+			// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
+			StopDailyRestartScheduler();
 
-            // Stop Discord client (best-effort)
-            try { await _client.StopAsync(); } catch { }
+			// Signal UI and background tasks to prepare for restart
+			_restartInitiator = initiator;
+			if (_ui != null && _uiStarted)
+			{
+				// Требование: логировать "Ежедневная перезагрузка" при плановом рестарте
+				if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
+					_ui.AddLog("Ежедневная перезагрузка");
 
-            // Await background monitoring task to finish (with timeout)
-            if (_backgroundMonitoringTask != null)
-            {
-                try
-                {
-                    var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
-                    if (t != _backgroundMonitoringTask)
-                    {
-                        await LogStartup("Background tasks did not complete within timeout before restart.");
-                    }
-                }
-                catch { }
-            }
+				_ui.AddLog($"Перезапуск... Инициатор: {_restartInitiator}");
+				_ui.ClearForRestart();
+				// Do not dispose UI here — the persistent UI thread will remain active
+			}
 
-            await LogShutdownState(isRestart: true, initiator: _restartInitiator);
-        }
+			// Отправляем уведомление в Discord о перезапуске (best-effort)
+			try
+			{
+				if (_statusNotifier != null)
+					await _statusNotifier.SendRestartNotification(reason);
+			}
+			catch { }
+
+			_shouldRestart = true;
+			_shouldExit = true;
+			_currentStartupType = StartupType.Restart;
+			_startupReason = reason;
+			_nextStartupType = StartupType.Restart;
+			_nextStartupReason = _startupReason;
+			_statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
+			_reconnectionService?.Shutdown();
+
+			// Stop Discord client (best-effort)
+			try { await _client.StopAsync(); } catch { }
+
+			// Await background monitoring task to finish (with timeout)
+			if (_backgroundMonitoringTask != null)
+			{
+				try
+				{
+					var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
+					if (t != _backgroundMonitoringTask)
+					{
+						await LogStartup("Background tasks did not complete within timeout before restart.");
+					}
+				}
+				catch { }
+			}
+
+			await LogShutdownState(isRestart: true, initiator: _restartInitiator);
+		}
 
         public async Task StopAsync()
         {
@@ -426,7 +457,8 @@ namespace RPBot
                 _ui.AddLog("Остановка из консоли...");
             }
 
-            _shouldExit = true;
+			_shouldExit = true;
+			StopDailyRestartScheduler();
             _reconnectionService?.Shutdown();
 
             try { await _client.StopAsync(); } catch { }
@@ -450,6 +482,143 @@ namespace RPBot
             try { await DisposeAsync(); } catch { }
             Environment.Exit(0);
         }
+
+		private void StartDailyRestartScheduler()
+		{
+			if (_config != null && !_config.DailyRestartEnabled)
+				return;
+
+			if (_dailyRestartTask != null && !_dailyRestartTask.IsCompleted)
+				return;
+
+			StopDailyRestartScheduler();
+			_dailyRestartCts = new CancellationTokenSource();
+			_dailyRestartTask = Task.Run(() => DailyRestartLoopAsync(_dailyRestartCts.Token));
+		}
+
+		private void StopDailyRestartScheduler()
+		{
+			try { _dailyRestartCts?.Cancel(); } catch { }
+			try { _dailyRestartCts?.Dispose(); } catch { }
+			_dailyRestartCts = null;
+		}
+
+		private async Task DailyRestartLoopAsync(CancellationToken ct)
+		{
+			try
+			{
+				if (_config != null && !_config.DailyRestartEnabled)
+					return;
+
+				var (nextUtc, planText) = GetNextDailyRestartUtc();
+				var delay = nextUtc - DateTimeOffset.UtcNow;
+				if (delay < TimeSpan.Zero)
+					delay = TimeSpan.Zero;
+
+				await LogStartup($"Ежедневная перезагрузка: запланирована на {planText}");
+
+				await Task.Delay(delay, ct);
+
+				if (ct.IsCancellationRequested || _shouldExit)
+					return;
+
+				await RestartWithReasonAsync(
+					initiator: "scheduler",
+					reason: "Ежедневная перезагрузка");
+			}
+			catch (TaskCanceledException)
+			{
+				// normal
+			}
+			catch (Exception ex)
+			{
+				try { await LogStartup($"⚠️ DailyRestartLoop error: {ex.Message}"); } catch { }
+			}
+		}
+
+		private (DateTimeOffset NextUtc, string PlanText) GetNextDailyRestartUtc()
+		{
+			var nowUtc = DateTimeOffset.UtcNow;
+			var localTz = TimeZoneInfo.Local;
+
+			static bool TryParseTime(string? value, out TimeSpan time)
+			{
+				time = default;
+				if (string.IsNullOrWhiteSpace(value))
+					return false;
+
+				var trimmed = value.Trim();
+				if (TimeSpan.TryParse(trimmed, CultureInfo.InvariantCulture, out var parsed) || TimeSpan.TryParse(trimmed, out parsed))
+				{
+					time = new TimeSpan(parsed.Hours, parsed.Minutes, parsed.Seconds);
+					return true;
+				}
+
+				return false;
+			}
+
+			static DateTime BuildUnspecifiedDateTime(DateTime date, TimeSpan time)
+			{
+				return new DateTime(date.Year, date.Month, date.Day, time.Hours, time.Minutes, time.Seconds, DateTimeKind.Unspecified);
+			}
+
+			static DateTimeOffset NextInZoneUtc(TimeZoneInfo tz, TimeSpan targetTime, DateTimeOffset currentUtc)
+			{
+				var nowInZone = TimeZoneInfo.ConvertTime(currentUtc, tz);
+				var nextDate = nowInZone.Date;
+				if (nowInZone.TimeOfDay >= targetTime)
+					nextDate = nextDate.AddDays(1);
+
+				var nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
+				var nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
+
+				// Safety: гарантируем, что время действительно в будущем.
+				if (nextUtc <= currentUtc.UtcDateTime)
+				{
+					nextDate = nextDate.AddDays(1);
+					nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
+					nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
+				}
+
+				return new DateTimeOffset(nextUtc, TimeSpan.Zero);
+			}
+
+			// Время перезагрузки берём только из config.json
+			if (!TryParseTime(_config?.DailyRestartLocalTime, out var localTarget))
+				throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
+
+			// Если локальная TZ = Москва и включено предпочтение московского времени — используем его.
+			if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
+				TryGetMoscowTimeZone(out var mskTz) && mskTz != null &&
+				string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
+				TryParseTime(_config?.DailyRestartMoscowTime, out var mskTarget))
+			{
+				var nextUtc = NextInZoneUtc(mskTz, mskTarget, nowUtc);
+				var nextMsk = TimeZoneInfo.ConvertTime(nextUtc, mskTz);
+				return (nextUtc, $"{nextMsk:dd.MM.yyyy HH:mm:ss} (МСК)");
+			}
+
+			var nextLocalUtc = NextInZoneUtc(localTz, localTarget, nowUtc);
+			var nextLocal = TimeZoneInfo.ConvertTime(nextLocalUtc, localTz);
+			return (nextLocalUtc, $"{nextLocal:dd.MM.yyyy HH:mm:ss} (локальное)");
+		}
+
+		private static bool TryGetMoscowTimeZone(out TimeZoneInfo? mskTz)
+		{
+			var candidates = new[] { "Europe/Moscow", "Russian Standard Time" };
+			foreach (var id in candidates)
+			{
+				try
+				{
+					mskTz = TimeZoneInfo.FindSystemTimeZoneById(id);
+					return true;
+				}
+				catch { }
+			}
+
+			mskTz = null;
+			return false;
+		}
 
         // Методы для доступа из UI (реализация IBotController)
         public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
@@ -694,7 +863,8 @@ namespace RPBot
                 CommandLogSink = msg => _ui?.AddLog(msg);
             }
 
-            _textBlocks = LoadTextFromFile(_config.TextBlocksPath);
+			// Загрузка текстовых блоков из пути конфига (относительные пути считаем от каталога приложения)
+			_textBlocks = LoadTextFromFile(BotConfig.ResolvePath(_config.TextBlocksPath));
 
             while (!_isDisposed && !_shouldExit)
             {
@@ -767,6 +937,9 @@ namespace RPBot
 
                         // Запускаем инициализацию с опросом
                         await InitializeBotWithProgress();
+
+						// Ежедневный плановый перезапуск (время задаётся в config.json)
+						StartDailyRestartScheduler();
 
                         // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
                         _backgroundMonitoringTask = Task.Run(BackgroundMonitoringLoopWrapper);
@@ -1045,35 +1218,9 @@ namespace RPBot
             try
             {
                 await LogStartup("Авто-перезапуск: превышено число попыток реконнекта, инициируем полный перезапуск клиента...");
-
-                // Отправляем уведомление в Discord (если клиент ещё доступен)
-                try { if (_statusNotifier != null) await _statusNotifier.SendRestartNotification("Авто-перезапуск из-за множества попыток переподключения"); } catch { }
-
-                // Обновляем UI и явно закрываем его, чтобы избежать утечек
-                _restartInitiator = "discord";
-                if (_ui != null)
-                {
-                    try
-                    {
-                        _ui.AddLog($"Авто-перезапуск... Инициатор: {_restartInitiator}");
-                        _ui.ClearForRestart();
-                        // Do not dispose persistent UI here; keep UI thread alive
-                    }
-                    catch { }
-                }
-                _shouldRestart = true;
-                _shouldExit = true;
-                _currentStartupType = StartupType.Restart;
-                _startupReason = "Авто-перезапуск из-за множества попыток переподключения";
-                _nextStartupType = StartupType.Restart;
-                _nextStartupReason = _startupReason;
-                _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
-
-                _reconnectionService?.Shutdown();
-
-                try { await _client.StopAsync(); } catch { }
-
-                await LogShutdownState(isRestart: true, initiator: _restartInitiator);
+				await RestartWithReasonAsync(
+					initiator: "discord",
+					reason: "Авто-перезапуск из-за множества попыток переподключения");
             }
             catch (Exception ex)
             {
@@ -1129,7 +1276,8 @@ namespace RPBot
                 return _config.BotToken.Trim();
 
             // Если токен не найден — бросаем, чтобы не пытаться залогиниться пустым токеном
-            throw new InvalidOperationException("Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in config.json.");
+			var cfgPath = BotConfig.ResolvePath(Path.Combine("Settings", "config.json"));
+			throw new InvalidOperationException($"Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in '{cfgPath}'.");
         }
 
         private bool _readyCompleted = false;
@@ -1263,6 +1411,7 @@ namespace RPBot
             _isDisposed = true;
 
             _shouldExit = true;
+			StopDailyRestartScheduler();
 
             try
             {
@@ -1737,9 +1886,10 @@ namespace RPBot
 
         private int GetBugReportCounter()
         {
-            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
-            Directory.CreateDirectory(logDir);
-            string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
+			var logDirRaw = _config?.LogDirectory;
+			var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+			Directory.CreateDirectory(logDir);
+			string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
             if (File.Exists(counterFilePath))
             {
@@ -2234,7 +2384,8 @@ namespace RPBot
 
         private async Task LogStartup(string message)
         {
-            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            var logDirRaw = _config?.LogDirectory;
+            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "StartupLog.txt");
 
@@ -2279,7 +2430,8 @@ namespace RPBot
 
         private async Task LogError(string errorMessage)
         {
-            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            var logDirRaw = _config?.LogDirectory;
+            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "ErrorLog.txt");
 
@@ -2311,7 +2463,8 @@ namespace RPBot
 
         private async Task LogInfo(string infoMessage)
         {
-            var logDir = _config?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            var logDirRaw = _config?.LogDirectory;
+            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
             string path = Path.Combine(logDir, "InfoLog.txt");
 
@@ -3429,7 +3582,14 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ShutdownQueue error: {ex.Message}\n"); } catch { }
+				try
+				{
+					var logDirRaw = BotConfig.Current?.LogDirectory;
+					var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+					Directory.CreateDirectory(logDir);
+					File.AppendAllText(Path.Combine(logDir, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ShutdownQueue error: {ex.Message}\n");
+				}
+				catch { }
             }
         }
     }

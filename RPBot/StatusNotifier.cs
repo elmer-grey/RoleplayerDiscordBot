@@ -156,8 +156,11 @@ namespace RPBot
                         LogSink?.Invoke($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
                         try
                         {
-                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}\n");
+							var logDirRaw = BotConfig.Current?.LogDirectory;
+							var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+							System.IO.Directory.CreateDirectory(logDir);
+							var path = System.IO.Path.Combine(logDir, "ErrorLog.txt");
+							System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}\n");
                         }
                         catch { }
                     }
@@ -196,8 +199,11 @@ namespace RPBot
                         LogSink?.Invoke($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
                         try
                         {
-                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
+							var logDirRaw = BotConfig.Current?.LogDirectory;
+							var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+							System.IO.Directory.CreateDirectory(logDir);
+							var path = System.IO.Path.Combine(logDir, "ErrorLog.txt");
+							System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
                         }
                         catch { }
                     }

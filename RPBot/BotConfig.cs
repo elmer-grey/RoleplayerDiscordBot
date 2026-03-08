@@ -11,6 +11,71 @@ namespace RPBot
 {
     public class BotConfig
     {
+		public const string SettingsFolderName = "Settings";
+
+		public static string GetSettingsDirectory()
+		{
+			return ResolvePath(SettingsFolderName);
+		}
+
+		/// <summary>
+		/// Переносит файлы настроек/локальных данных из старых путей (корень каталога запуска)
+		/// в новую папку Settings. Безопасно: не перетирает файлы, если целевой уже существует.
+		/// </summary>
+		public static void MigrateLegacySettingsFiles()
+		{
+			try
+			{
+				var baseDir = AppContext.BaseDirectory;
+				var settingsDir = GetSettingsDirectory();
+				Directory.CreateDirectory(settingsDir);
+
+				void MoveIfExists(string sourcePath, string targetPath)
+				{
+					try
+					{
+						if (!File.Exists(sourcePath))
+							return;
+
+						Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? settingsDir);
+						if (!File.Exists(targetPath))
+						{
+							File.Move(sourcePath, targetPath);
+							return;
+						}
+
+						var dir = Path.GetDirectoryName(targetPath) ?? settingsDir;
+						var name = Path.GetFileNameWithoutExtension(targetPath);
+						var ext = Path.GetExtension(targetPath);
+						var legacyTarget = Path.Combine(dir, $"{name}.legacy-{DateTime.Now:yyyyMMdd-HHmmss}{ext}");
+						File.Move(sourcePath, legacyTarget);
+					}
+					catch { }
+				}
+
+				MoveIfExists(
+					sourcePath: Path.Combine(baseDir, "config.json"),
+					targetPath: Path.Combine(settingsDir, "config.json"));
+
+				MoveIfExists(
+					sourcePath: Path.Combine(baseDir, "restart_bot.ps1"),
+					targetPath: Path.Combine(settingsDir, "restart_bot.ps1"));
+
+				MoveIfExists(
+					sourcePath: Path.Combine(baseDir, "serverconfigs.json"),
+					targetPath: Path.Combine(settingsDir, "serverconfigs.json"));
+
+				MoveIfExists(
+					sourcePath: Path.Combine(baseDir, "bwonks.json"),
+					targetPath: Path.Combine(settingsDir, "bwonks.json"));
+
+				MoveIfExists(
+					sourcePath: Path.Combine(baseDir, "Pastes.txt"),
+					targetPath: Path.Combine(settingsDir, "Pastes.txt"));
+			}
+			catch { }
+		}
+
         // Текущая загруженная конфигурация (удобство для доступа из других классов)
         public static BotConfig? Current { get; private set; }
 
@@ -43,19 +108,28 @@ namespace RPBot
         public PredictionConfig Prediction { get; set; } = new PredictionConfig();
 
         // Путь к файлу с текстовыми блоками (по умолчанию рядом с исполняемым файлом)
-        public string TextBlocksPath { get; set; } = Path.Combine(AppContext.BaseDirectory, "Pastes.txt");
+		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
 
         // Директория для логов
-        public string LogDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Logs");
+		public string LogDirectory { get; set; } = "Logs";
 
         // Директория с картинками для бросков (например Numbers)
-        public string NumbersDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Numbers");
+		public string NumbersDirectory { get; set; } = "Numbers";
 
         // Путь до скрипта перезапуска (может быть относительным к каталогу приложения)
-        public string RestartScriptPath { get; set; } = "restart_bot.ps1";
+		public string RestartScriptPath { get; set; } = Path.Combine(SettingsFolderName, "restart_bot.ps1");
+
+		// Ежедневная плановая перезагрузка
+		public bool DailyRestartEnabled { get; set; } = false;
+		// Время плановой перезагрузки по локальному времени (формат: HH:mm или HH:mm:ss)
+		public string? DailyRestartLocalTime { get; set; } = null;
+		// Время плановой перезагрузки по Москве, если локальная таймзона = Москва (формат: HH:mm или HH:mm:ss)
+		public string? DailyRestartMoscowTime { get; set; } = null;
+		// Если true и локальная таймзона = Москва — использовать DailyRestartMoscowTime, иначе DailyRestartLocalTime
+		public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
 
         // Директория для отчетов об ошибках (bug reports)
-        public string BugReportDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "Logs");
+		public string BugReportDirectory { get; set; } = "Logs";
 
         // Версия бота (отображается в логах/статусах)
         public string BotVersion { get; set; } = "0.6.0.0";
@@ -78,10 +152,30 @@ namespace RPBot
             {
                 try
                 {
-                    string json = File.ReadAllText(resolvedPath);
-                    var cfg = JsonSerializer.Deserialize<BotConfig>(json) ?? new BotConfig();
-                    Current = cfg;
-                    return cfg;
+					string json = File.ReadAllText(resolvedPath);
+					var options = new JsonSerializerOptions
+					{
+						PropertyNameCaseInsensitive = true,
+						ReadCommentHandling = JsonCommentHandling.Skip,
+						AllowTrailingCommas = true
+					};
+					var cfg = JsonSerializer.Deserialize<BotConfig>(json, options) ?? new BotConfig();
+					Current = cfg;
+
+					// Автодополнение конфига новыми полями: если их не было в json,
+					// пересохраняем, чтобы они появились в файле.
+					var needsResave =
+						!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
+						!json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
+						!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
+						!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal);
+
+					if (needsResave)
+					{
+						cfg.Save(resolvedPath);
+					}
+
+					return cfg;
                 }
                 catch (Exception ex)
                 {
