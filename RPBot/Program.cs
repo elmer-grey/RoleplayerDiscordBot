@@ -231,6 +231,64 @@ namespace RPBot
 		private EventNotificationService _eventNotifications;
 		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine("Settings", "event-notify.json"));
 
+        // Слияние конфигурации сервера из статического словаря (дефолты)
+        // и конфигурации из файла/памяти (переопределения).
+        // Логика: если в serverconfig поле 0/null/пустое, используем значение из словаря.
+        private static ServerConfig MergeServerConfig(ServerConfig defaults, ServerConfig overrides)
+        {
+            if (defaults == null) return overrides;
+            if (overrides == null) return defaults;
+
+            return new ServerConfig
+            {
+                GuildID = overrides.GuildID != 0 ? overrides.GuildID : defaults.GuildID,
+
+                ModerateChannelID = overrides.ModerateChannelID != 0
+                    ? overrides.ModerateChannelID
+                    : defaults.ModerateChannelID,
+
+                WelcomeChannelID = overrides.WelcomeChannelID != 0
+                    ? overrides.WelcomeChannelID
+                    : defaults.WelcomeChannelID,
+
+                GeneralRGChannelID = overrides.GeneralRGChannelID != 0
+                    ? overrides.GeneralRGChannelID
+                    : defaults.GeneralRGChannelID,
+
+                RollChannelID = overrides.RollChannelID != 0
+                    ? overrides.RollChannelID
+                    : defaults.RollChannelID,
+
+                StatsChannelID = overrides.StatsChannelID != 0
+                    ? overrides.StatsChannelID
+                    : defaults.StatsChannelID,
+
+                RecordChannelID = overrides.RecordChannelID != 0
+                    ? overrides.RecordChannelID
+                    : defaults.RecordChannelID,
+
+                WelcomeMessage = !string.IsNullOrWhiteSpace(overrides.WelcomeMessage)
+                    ? overrides.WelcomeMessage
+                    : defaults.WelcomeMessage,
+
+                LineMessage = !string.IsNullOrWhiteSpace(overrides.LineMessage)
+                    ? overrides.LineMessage
+                    : defaults.LineMessage,
+
+                DefaultRoleID = overrides.DefaultRoleID != 0
+                    ? overrides.DefaultRoleID
+                    : defaults.DefaultRoleID,
+
+                // Булевые флаги трактуем как явные значения из serverconfig
+                SwearFilterEnabled = overrides.SwearFilterEnabled,
+                PredictionsEnabled = overrides.PredictionsEnabled,
+
+                SwearWords = (overrides.SwearWords != null && overrides.SwearWords.Count > 0)
+                    ? overrides.SwearWords
+                    : defaults.SwearWords
+            };
+        }
+
         // Сохранение/загрузка конфигураций серверов
         private void SaveServerConfigs()
         {
@@ -245,10 +303,18 @@ namespace RPBot
                 var json = JsonSerializer.Serialize(_serverConfigs, options);
                 File.WriteAllText(resolved, json);
 
-                // Синхронизируем статический словарь
+                // Синхронизируем статический словарь с учётом дефолтов:
+                // если в _serverConfigs поле 0/null, берём значение из уже существующего ServerConfigs.
                 foreach (var kv in _serverConfigs)
                 {
-                    ServerConfigs[kv.Key] = kv.Value;
+                    if (ServerConfigs.TryGetValue(kv.Key, out var existing))
+                    {
+                        ServerConfigs[kv.Key] = MergeServerConfig(existing, kv.Value);
+                    }
+                    else
+                    {
+                        ServerConfigs[kv.Key] = kv.Value;
+                    }
                 }
             }
             catch (Exception ex)
@@ -275,7 +341,16 @@ namespace RPBot
                     _serverConfigs = dict;
                     foreach (var kv in dict)
                     {
-                        ServerConfigs[kv.Key] = kv.Value;
+                        if (ServerConfigs.TryGetValue(kv.Key, out var existing))
+                        {
+                            // Обновляем конфиг сервера, используя дефолты из статического словаря
+                            // там, где в файле 0/null.
+                            ServerConfigs[kv.Key] = MergeServerConfig(existing, kv.Value);
+                        }
+                        else
+                        {
+                            ServerConfigs[kv.Key] = kv.Value;
+                        }
                     }
                 }
 
@@ -635,15 +710,29 @@ namespace RPBot
 		}
 
         // Методы для доступа из UI (реализация IBotController)
+        // ВОЗВРАЩАЕМ "ЭФФЕКТИВНЫЕ" КОНФИГИ, А НЕ СЫРЫЕ _serverConfigs,
+        // чтобы UI/консоль показывали ровно то, с чем реально работает бот.
         public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
         {
-            return Task.FromResult(new Dictionary<ulong, ServerConfig>(_serverConfigs));
+            // Клонируем текущий эффективный словарь ServerConfigs,
+            // чтобы избежать случайной внешней модификации.
+            return Task.FromResult(new Dictionary<ulong, ServerConfig>(ServerConfigs));
         }
 
         public Task<ServerConfig?> GetServerConfigAsync(ulong guildId)
         {
+            // Сначала пробуем вернуть эффективную конфигурацию,
+            // уже собранную через MergeServerConfig (дефолты + overrides).
+            if (ServerConfigs.TryGetValue(guildId, out var effective))
+            {
+                return Task.FromResult<ServerConfig?>(effective);
+            }
+
+            // На всякий случай fallback на "сырые" данные, если по каким-то причинам
+            // в ServerConfigs ещё нет записи (не должно происходить в нормальном сценарии).
             if (_serverConfigs.TryGetValue(guildId, out var cfg))
                 return Task.FromResult<ServerConfig?>(cfg);
+
             return Task.FromResult<ServerConfig?>(null);
         }
 
