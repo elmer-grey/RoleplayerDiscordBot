@@ -110,8 +110,8 @@ namespace RPBot
         // Путь к файлу с текстовыми блоками (по умолчанию рядом с исполняемым файлом)
 		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
 
-        // Директория для логов (по умолчанию в Settings/Logs, чтобы ничего не сыпалось в корень)
-		public string LogDirectory { get; set; } = Path.Combine(SettingsFolderName, "Logs");
+        // Директория для логов (по умолчанию отдельная папка Logs рядом с EXE)
+		public string LogDirectory { get; set; } = "Logs";
 
         // Директория с картинками для бросков (например Numbers)
 		public string NumbersDirectory { get; set; } = "Numbers";
@@ -159,16 +159,28 @@ namespace RPBot
 						ReadCommentHandling = JsonCommentHandling.Skip,
 						AllowTrailingCommas = true
 					};
-					var cfg = JsonSerializer.Deserialize<BotConfig>(json, options) ?? new BotConfig();
-					Current = cfg;
+                    var cfg = JsonSerializer.Deserialize<BotConfig>(json, options) ?? new BotConfig();
+                    Current = cfg;
 
-					// Автодополнение конфига новыми полями: если их не было в json,
+					// Автодополнение/миграция конфига новыми полями: если их не было в json,
 					// пересохраняем, чтобы они появились в файле.
-					var needsResave =
-						!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
+					var needsResave = false;
+					if (!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
 						!json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
 						!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
-						!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal);
+						!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
+					{
+						needsResave = true;
+					}
+
+					// Миграция старого значения LogDirectory из "Settings/Logs" в "Logs",
+					// чтобы не создавать папку Settings/Logs рядом с EXE.
+					var legacyLogs = Path.Combine(SettingsFolderName, "Logs");
+					if (string.Equals(cfg.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase))
+					{
+						cfg.LogDirectory = "Logs";
+						needsResave = true;
+					}
 
 					if (needsResave)
 					{

@@ -2781,7 +2781,11 @@ namespace RPBot
             var logDirRaw = _config?.LogDirectory;
             var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
-            string path = Path.Combine(logDir, "ErrorLog.txt");
+
+            // Логи ошибок теперь пишутся в ежедневные файлы вида ErrorLog_yyyyMMdd.txt,
+            // чтобы после каждого ежедневного рестарта начинался новый лог.
+            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+            string path = Path.Combine(logDir, $"ErrorLog_{dateSuffix}.txt");
 
             await _logSemaphore.WaitAsync();
             try
@@ -2814,7 +2818,10 @@ namespace RPBot
             var logDirRaw = _config?.LogDirectory;
             var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
-            string path = Path.Combine(logDir, "InfoLog.txt");
+
+            // Информационные логи также разделяем по дням: InfoLog_yyyyMMdd.txt
+            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+            string path = Path.Combine(logDir, $"InfoLog_{dateSuffix}.txt");
 
             await _logSemaphore.WaitAsync();
             try

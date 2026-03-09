@@ -2309,7 +2309,9 @@ namespace RPBot
 			var logDir = BotConfig.Current?.LogDirectory;
 			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
 			Directory.CreateDirectory(resolvedLogDir);
-			return Path.Combine(resolvedLogDir, "ErrorLog.txt");
+			// Используем тот же шаблон имени, что и Program.LogError: ErrorLog_yyyyMMdd.txt
+			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+			return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
 		}
 
         public void Dispose()
