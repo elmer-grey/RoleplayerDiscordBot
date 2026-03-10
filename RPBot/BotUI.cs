@@ -539,16 +539,30 @@ namespace RPBot
 				string[] actions = new[] { "get", "set", "list", "reset", "help" };
                 int actionIndex = await ShowSelectionDialog("Выберите действие", actions);
                 if (actionIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-                var action = actions[actionIndex];
+				var action = actions[actionIndex];
 
 				if (action == "help")
 				{
-					AddCommandOutput("Справка по интерактивным настройкам:");
-					AddCommandOutput("- get: показать текущее значение выбранного параметра для этого сервера.");
-					AddCommandOutput("- set: изменить выбранный параметр (канал/роль выбираются из списка, флаги — true/false, текст вводится вручную).");
-					AddCommandOutput("- list: вывести все основные настройки сервера в человекочитаемом виде.");
-					AddCommandOutput("- reset: сбросить настройки сервера до значений по умолчанию.");
-					AddCommandOutput("Повторно вызовите settings в терминале, чтобы снова открыть меню, если нужно продолжить настройку.");
+					AddCommandOutput("Параметры, которые можно менять для этого сервера:");
+					AddCommandOutput("- Канал модерации: куда отправляются сообщения модерации (ключ moderation_channel).");
+					AddCommandOutput("- Приветственный канал: канал для приветственных сообщений (welcome_channel).");
+					AddCommandOutput("- Основной РГ-канал: основной канал для игровых сообщений/РГ (general_rg_channel).");
+					AddCommandOutput("- Канал бросков: канал по умолчанию для бросков кубиков (roll_channel).");
+					AddCommandOutput("- Канал статистики: канал для статистики и служебных сообщений (stats_channel).");
+					AddCommandOutput("- Канал записей: канал для сохранения записей/логов (record_channel).");
+					AddCommandOutput("- Приветственное сообщение: текст, который бот пишет при входе новых пользователей (welcome_message).");
+					AddCommandOutput("- Сообщение для команды LINE: текст, который выводится по команде LINE (line_message).");
+					AddCommandOutput("- Роль по умолчанию: роль, которую можно выдавать новым участникам (default_role).");
+					AddCommandOutput("- Роль суперпользователя: роль с расширенными правами управления ботом (super_user_role).");
+					AddCommandOutput("- Фильтр мата включён: включает/выключает фильтрацию мата (swear_filter).");
+					AddCommandOutput("- Слова фильтра мата: дополнительный список запрещённых слов через запятую (swear_words).");
+					AddCommandOutput("- Прогнозы отключения включены: включает/выключает прогнозы падения соединения (predictions).");
+					AddCommandOutput("");
+					AddCommandOutput("Как вводятся значения в интерактивном режиме:");
+					AddCommandOutput("- Для каналов и ролей бот показывает список и просит выбрать нужный вариант.");
+					AddCommandOutput("- Для флагов (фильтр мата, прогнозы) предлагается выбрать true/false.");
+					AddCommandOutput("- Для текстов (приветствие, LINE) нужно ввести строку.");
+					AddCommandOutput("- Для списка слов фильтра мата вводите слова через запятую без кавычек.");
 					return;
 				}
 
@@ -1618,6 +1632,11 @@ namespace RPBot
                         var sub = args[0].ToLowerInvariant();
                         switch (sub)
                         {
+							case "reload":
+								await _botController.ReloadServerConfigsAsync();
+								AddCommandOutput("Конфигурации серверов перезагружены из файла serverconfigs.json.");
+								break;
+
 							case "help":
 								AddCommandOutput("Справка по settings в терминале:");
 								AddCommandOutput("settings — без аргументов откроет интерактивное меню выбора сервера и параметров.");

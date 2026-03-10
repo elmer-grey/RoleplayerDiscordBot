@@ -61,6 +61,7 @@ namespace RPBot
         Task<ServerConfig?> GetServerConfigAsync(ulong guildId);
         Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null);
         Task ResetServerConfigAsync(ulong guildId);
+		Task ReloadServerConfigsAsync();
     }
 
     class Program : IDisposable, IBotController
@@ -308,20 +309,6 @@ namespace RPBot
 				};
 				var json = JsonSerializer.Serialize(_serverConfigs, options);
                 File.WriteAllText(resolved, json);
-
-                // Синхронизируем статический словарь с учётом дефолтов:
-                // если в _serverConfigs поле 0/null, берём значение из уже существующего ServerConfigs.
-                foreach (var kv in _serverConfigs)
-                {
-                    if (ServerConfigs.TryGetValue(kv.Key, out var existing))
-                    {
-                        ServerConfigs[kv.Key] = MergeServerConfig(existing, kv.Value);
-                    }
-                    else
-                    {
-                        ServerConfigs[kv.Key] = kv.Value;
-                    }
-                }
             }
             catch (Exception ex)
             {
@@ -341,24 +328,12 @@ namespace RPBot
 
                 var json = File.ReadAllText(resolved);
                 var options = new JsonSerializerOptions();
-                var dict = JsonSerializer.Deserialize<Dictionary<ulong, ServerConfig>>(json, options);
-                if (dict != null)
-                {
-                    _serverConfigs = dict;
-                    foreach (var kv in dict)
-                    {
-                        if (ServerConfigs.TryGetValue(kv.Key, out var existing))
-                        {
-                            // Обновляем конфиг сервера, используя дефолты из статического словаря
-                            // там, где в файле 0/null.
-                            ServerConfigs[kv.Key] = MergeServerConfig(existing, kv.Value);
-                        }
-                        else
-                        {
-                            ServerConfigs[kv.Key] = kv.Value;
-                        }
-                    }
-                }
+				var dict = JsonSerializer.Deserialize<Dictionary<ulong, ServerConfig>>(json, options);
+				if (dict != null)
+				{
+					// Рабочие конфиги серверов теперь целиком берём из файла
+					_serverConfigs = dict;
+				}
 
             }
             catch (Exception ex)
@@ -389,7 +364,7 @@ namespace RPBot
             // ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
             _reconnectionService = new ReconnectionService(_client);
             _connectionPredictor = new ConnectionPredictor(_reconnectionService);
-            _statusNotifier = new StatusNotifier(_client, ServerConfigs);
+			_statusNotifier = new StatusNotifier(_client, _serverConfigs);
 
             // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
@@ -725,31 +700,26 @@ namespace RPBot
 		}
 
         // Методы для доступа из UI (реализация IBotController)
-        // ВОЗВРАЩАЕМ "ЭФФЕКТИВНЫЕ" КОНФИГИ, А НЕ СЫРЫЕ _serverConfigs,
-        // чтобы UI/консоль показывали ровно то, с чем реально работает бот.
         public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
         {
-            // Клонируем текущий эффективный словарь ServerConfigs,
-            // чтобы избежать случайной внешней модификации.
-            return Task.FromResult(new Dictionary<ulong, ServerConfig>(ServerConfigs));
+			// Клонируем текущий словарь _serverConfigs, чтобы избежать внешней модификации.
+			return Task.FromResult(new Dictionary<ulong, ServerConfig>(_serverConfigs));
         }
 
         public Task<ServerConfig?> GetServerConfigAsync(ulong guildId)
         {
-            // Сначала пробуем вернуть эффективную конфигурацию,
-            // уже собранную через MergeServerConfig (дефолты + overrides).
-            if (ServerConfigs.TryGetValue(guildId, out var effective))
-            {
-                return Task.FromResult<ServerConfig?>(effective);
-            }
-
-            // На всякий случай fallback на "сырые" данные, если по каким-то причинам
-            // в ServerConfigs ещё нет записи (не должно происходить в нормальном сценарии).
-            if (_serverConfigs.TryGetValue(guildId, out var cfg))
-                return Task.FromResult<ServerConfig?>(cfg);
-
-            return Task.FromResult<ServerConfig?>(null);
+			if (_serverConfigs.TryGetValue(guildId, out var cfg))
+				return Task.FromResult<ServerConfig?>(cfg);
+			
+			return Task.FromResult<ServerConfig?>(null);
         }
+
+		public Task ReloadServerConfigsAsync()
+		{
+			// Перечитываем serverconfigs.json и пересобираем эффективные ServerConfigs
+			LoadServerConfigs();
+			return Task.CompletedTask;
+		}
 
         public Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null)
         {
@@ -2100,7 +2070,7 @@ namespace RPBot
         private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string? responseMessage, string? emoji, string? lineMessages, string? emoteKappa, string? emoteAga) GetResponseData(SocketMessage message)
         {
             var channel = message.Channel as SocketGuildChannel;
-            if (channel == null || !ServerConfigs.TryGetValue(channel.Guild.Id, out var config))
+			if (channel == null || !_serverConfigs.TryGetValue(channel.Guild.Id, out var config))
             {
                 return (0, 0, 0, null, null, null, null, null);
             }
@@ -2497,7 +2467,7 @@ namespace RPBot
 
 			if (string.IsNullOrWhiteSpace(actionOpt))
 			{
-				await command.RespondAsync("Укажите действие: get/set/list/reset/help", ephemeral: true);
+				await command.RespondAsync("Укажите действие: get/set/list/reset/reload/help", ephemeral: true);
 				return;
 			}
 
@@ -2517,6 +2487,7 @@ namespace RPBot
 						sb.AppendLine("/settings action:get key:<ключ> — показать значение одного параметра.");
 						sb.AppendLine("/settings action:set key:<ключ> value:<значение> — изменить параметр.");
 						sb.AppendLine("/settings action:reset — сбросить настройки этого сервера.");
+						sb.AppendLine("/settings action:reload — перечитать настройки всех серверов из serverconfigs.json.");
 						sb.AppendLine();
 						sb.AppendLine("Передача значений:");
 						sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
@@ -2536,6 +2507,13 @@ namespace RPBot
 					}
 					break;
 
+				case "reload":
+					{
+						LoadServerConfigs();
+						await command.RespondAsync("Конфигурации серверов перезагружены из файла serverconfigs.json.", ephemeral: true);
+					}
+					break;
+
                 case "list":
                     {
                         var sb = new StringBuilder();
@@ -2550,38 +2528,42 @@ namespace RPBot
                         sb.AppendLine($"line_message: {sconfig.LineMessage}");
                         sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
 						sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
-                        sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
+						sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
+						sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
+						sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
                         await command.RespondAsync(sb.ToString(), ephemeral: true);
                     }
                     break;
 
                 case "get":
-                    {
-                        if (string.IsNullOrWhiteSpace(keyOpt))
-                        {
-                            await command.RespondAsync("Укажите ключ настройки (например: moderation_channel).", ephemeral: true);
-                            return;
-                        }
+					{
+						if (string.IsNullOrWhiteSpace(keyOpt))
+						{
+							await command.RespondAsync("Укажите ключ настройки (например: moderation_channel).", ephemeral: true);
+							return;
+						}
 
-                        string result = keyOpt switch
-                        {
-                            "moderation_channel" => sconfig.ModerateChannelID.ToString(),
-                            "welcome_channel" => sconfig.WelcomeChannelID.ToString(),
-                            "roll_channel" => sconfig.RollChannelID.ToString(),
-                            "stats_channel" => sconfig.StatsChannelID.ToString(),
-                            "record_channel" => sconfig.RecordChannelID.ToString(),
-                            "welcome_message" => sconfig.WelcomeMessage ?? "",
-                            "line_message" => sconfig.LineMessage ?? "",
-                            "general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
-                            "default_role" => sconfig.DefaultRoleID.ToString(),
-                            "swear_filter" => sconfig.SwearFilterEnabled.ToString(),
+						string result = keyOpt switch
+						{
+							"moderation_channel" => sconfig.ModerateChannelID.ToString(),
+							"welcome_channel" => sconfig.WelcomeChannelID.ToString(),
+							"roll_channel" => sconfig.RollChannelID.ToString(),
+							"stats_channel" => sconfig.StatsChannelID.ToString(),
+							"record_channel" => sconfig.RecordChannelID.ToString(),
+							"welcome_message" => sconfig.WelcomeMessage ?? "",
+							"line_message" => sconfig.LineMessage ?? "",
+							"general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
+							"default_role" => sconfig.DefaultRoleID.ToString(),
 							"super_user_role" => sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "",
-                            _ => "Неизвестный ключ"
-                        };
+							"swear_filter" => sconfig.SwearFilterEnabled.ToString(),
+							"swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
+							"predictions" => sconfig.PredictionsEnabled.ToString(),
+							_ => "Неизвестный ключ"
+						};
 
-                        await command.RespondAsync(result, ephemeral: true);
-                    }
-                    break;
+						await command.RespondAsync(result, ephemeral: true);
+					}
+					break;
 
                 case "set":
                     {

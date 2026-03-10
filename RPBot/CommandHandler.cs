@@ -176,6 +176,7 @@ namespace RPBot
                         .AddChoice("set", "set")
                         .AddChoice("list", "list")
 						.AddChoice("reset", "reset")
+						.AddChoice("reload", "reload")
 						.AddChoice("help", "help")
                         .WithRequired(true))
                     .AddOption(new SlashCommandOptionBuilder()
