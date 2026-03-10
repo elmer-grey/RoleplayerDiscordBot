@@ -95,7 +95,6 @@ namespace RPBot
                     rows.Add((i, part));
                 }
             }
-
             if (rows.Count <= maxLines)
             {
                 // Use all rows
@@ -312,17 +311,18 @@ namespace RPBot
                     }
 
                     // Ждём сигнализации Init внутри UI-потока (best-effort)
-                    if (!_uiInitialized.Wait(5000))
-                    {
-                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized: UI thread did not initialize within timeout\n"); } catch { }
-                    }
+						if (!_uiInitialized.Wait(5000))
+						{
+							// Техническая диагностика UI: пишем в отдельный UiErrorLog_yyyyMMdd.txt
+							TryAppendErrorToFile("EnsureUiInitialized: UI thread did not initialize within timeout");
+						}
 
-                    _isInitialized = _uiInitialized.IsSet;
-                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized: Init completed\n"); } catch { }
+						_isInitialized = _uiInitialized.IsSet;
+						TryAppendErrorToFile("EnsureUiInitialized: Init completed");
                 }
                 catch (Exception ex)
                 {
-                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] EnsureUiInitialized error: {ex}\n"); } catch { }
+						TryAppendErrorToFile($"EnsureUiInitialized error: {ex}");
                     _isInitialized = false;
                     throw;
                 }
@@ -341,19 +341,19 @@ namespace RPBot
 
                 _uiThread = new Thread(() =>
                 {
-                    try
-                    {
-                        Application.Init();
-                        _uiInitialized.Set();
-                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UI thread: Init completed\n"); } catch { }
+					try
+					{
+						Application.Init();
+						_uiInitialized.Set();
+						TryAppendErrorToFile("UI thread: Init completed");
 
                         // Запускаем главный цикл; управление subviews будет выполняться через MainLoop.Invoke
                         Application.Run(Application.Top);
                     }
-                    catch (Exception ex)
-                    {
-                        try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] UI thread exception: {ex}\n"); } catch { }
-                    }
+					catch (Exception ex)
+					{
+						TryAppendErrorToFile($"UI thread exception: {ex}");
+					}
                     finally
                     {
                         try { Application.Shutdown(); } catch { }
@@ -407,16 +407,16 @@ namespace RPBot
                                     _statusTimeoutAdded = false;
                                     _resizeTimeoutAdded = false;
                                 }
-                                catch (Exception ex)
-                                {
-                                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown inner error: {ex}\n"); } catch { }
-                                }
+									catch (Exception ex)
+									{
+										TryAppendErrorToFile($"SafeShutdown inner error: {ex}");
+									}
                             });
                         }
-                        catch (Exception ex)
-                        {
-                            try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown Invoke error: {ex}\n"); } catch { }
-                        }
+						catch (Exception ex)
+						{
+							TryAppendErrorToFile($"SafeShutdown Invoke error: {ex}");
+						}
                     }
                     else
                     {
@@ -437,10 +437,10 @@ namespace RPBot
 
                     _isInitialized = false;
                 }
-                catch (Exception ex)
-                {
-                    try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SafeShutdown outer error: {ex}\n"); } catch { }
-                }
+					catch (Exception ex)
+					{
+						TryAppendErrorToFile($"SafeShutdown outer error: {ex}");
+					}
             }
         }
 
@@ -822,12 +822,7 @@ namespace RPBot
 
                         if (!guiReady)
                         {
-                            try
-                            {
-                                var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Warning: Application.Driver/Top not ready before Application.Run, retrying loop\n");
-                            }
-                            catch { }
+						TryAppendErrorToFile("Warning: Application.Driver/Top not ready before Application.Run, retrying loop");
 
                             continue;
                         }
@@ -843,22 +838,16 @@ namespace RPBot
                                         Application.Top?.Add(_mainWindow);
                                     }
                                 }
-                                catch (Exception ex)
-                                {
-                                    try
-                                    {
-                                        var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                                        File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] AddMainWindow error: {ex}\n");
-                                    }
-                                    catch { }
-                                }
+									catch (Exception ex)
+									{
+										TryAppendErrorToFile($"AddMainWindow error: {ex}");
+									}
                             });
                         }
-                        catch (Exception ex)
-                        {
-                            var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            try { File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] AddMainWindow invoke failed: {ex}\n"); } catch { }
-                        }
+						catch (Exception ex)
+						{
+							TryAppendErrorToFile($"AddMainWindow invoke failed: {ex}");
+						}
 
                         while (_isRunning && _uiThread != null && _uiThread.IsAlive)
                         {
@@ -871,13 +860,7 @@ namespace RPBot
                     {
                         AddLog($"Application.Run error: {ex.Message}");
 
-                        try
-                        {
-                            var logPath = Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            var text = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Application.Run error:\n{ex}\n\n";
-                            File.AppendAllText(logPath, text);
-                        }
-                        catch { }
+						TryAppendErrorToFile($"Application.Run error: {ex}");
 
                         try
                         {
@@ -2253,7 +2236,18 @@ namespace RPBot
             catch { }
         }
 
-        private long GetErrorLogLength()
+		// Путь к основному ErrorLog (внутренние ошибки бота), который отображается в UI.
+		// Используем тот же шаблон, что и Program.LogError: ErrorLog_yyyyMMdd.txt в LogDirectory.
+		private string GetErrorLogPath()
+		{
+			var logDir = BotConfig.Current?.LogDirectory;
+			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
+			Directory.CreateDirectory(resolvedLogDir);
+			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+			return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
+		}
+
+		private long GetErrorLogLength()
         {
             try
             {
@@ -2298,20 +2292,20 @@ namespace RPBot
         {
             try
             {
-				var logPath = GetErrorLogPath();
-                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+				var logPath = GetUiErrorLogPath();
+				File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
             }
             catch { }
         }
 
-		private static string GetErrorLogPath()
+		private static string GetUiErrorLogPath()
 		{
 			var logDir = BotConfig.Current?.LogDirectory;
 			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
 			Directory.CreateDirectory(resolvedLogDir);
-			// Используем тот же шаблон имени, что и Program.LogError: ErrorLog_yyyyMMdd.txt
+			// Отдельный лог ошибок UI по дням: UiErrorLog_yyyyMMdd.txt
 			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-			return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
+			return Path.Combine(resolvedLogDir, $"UiErrorLog_{dateSuffix}.txt");
 		}
 
         public void Dispose()

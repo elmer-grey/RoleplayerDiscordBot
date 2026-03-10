@@ -2735,12 +2735,14 @@ namespace RPBot
             var logDirRaw = _config?.LogDirectory;
             var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
             Directory.CreateDirectory(logDir);
-            string path = Path.Combine(logDir, "StartupLog.txt");
+			// Ежедневный лог запуска: StartupLog_yyyyMMdd.txt
+			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+			string path = Path.Combine(logDir, $"StartupLog_{dateSuffix}.txt");
 
             await _logSemaphore.WaitAsync();
             try
             {
-                // Ротация логов
+				// Ротация логов по размеру (5 МБ)
                 if (File.Exists(path))
                 {
                     var fileInfo = new FileInfo(path);

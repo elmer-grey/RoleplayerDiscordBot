@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using System.Threading.Tasks;
 using System.IO;
 
@@ -11,6 +12,8 @@ namespace RPBot
 {
     public class BotConfig
     {
+		// Папка Settings живёт рядом с Logs в корне каталога приложения
+		// (оба пути относительные к AppContext.BaseDirectory).
 		public const string SettingsFolderName = "Settings";
 
 		public static string GetSettingsDirectory()
@@ -18,75 +21,19 @@ namespace RPBot
 			return ResolvePath(SettingsFolderName);
 		}
 
-		/// <summary>
-		/// Переносит файлы настроек/локальных данных из старых путей (корень каталога запуска)
-		/// в новую папку Settings. Безопасно: не перетирает файлы, если целевой уже существует.
-		/// </summary>
-		public static void MigrateLegacySettingsFiles()
+		// Текущая загруженная конфигурация (удобство для доступа из других классов)
+		public static BotConfig? Current { get; private set; }
+
+		// Утилита: если путь относительный — трактуем его относительно каталога приложения (где лежит exe)
+		public static string ResolvePath(string path)
 		{
-			try
-			{
-				var baseDir = AppContext.BaseDirectory;
-				var settingsDir = GetSettingsDirectory();
-				Directory.CreateDirectory(settingsDir);
+			if (string.IsNullOrWhiteSpace(path))
+				return AppContext.BaseDirectory;
 
-				void MoveIfExists(string sourcePath, string targetPath)
-				{
-					try
-					{
-						if (!File.Exists(sourcePath))
-							return;
-
-						Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? settingsDir);
-						if (!File.Exists(targetPath))
-						{
-							File.Move(sourcePath, targetPath);
-							return;
-						}
-
-						var dir = Path.GetDirectoryName(targetPath) ?? settingsDir;
-						var name = Path.GetFileNameWithoutExtension(targetPath);
-						var ext = Path.GetExtension(targetPath);
-						var legacyTarget = Path.Combine(dir, $"{name}.legacy-{DateTime.Now:yyyyMMdd-HHmmss}{ext}");
-						File.Move(sourcePath, legacyTarget);
-					}
-					catch { }
-				}
-
-				MoveIfExists(
-					sourcePath: Path.Combine(baseDir, "config.json"),
-					targetPath: Path.Combine(settingsDir, "config.json"));
-
-				MoveIfExists(
-					sourcePath: Path.Combine(baseDir, "restart_bot.ps1"),
-					targetPath: Path.Combine(settingsDir, "restart_bot.ps1"));
-
-				MoveIfExists(
-					sourcePath: Path.Combine(baseDir, "serverconfigs.json"),
-					targetPath: Path.Combine(settingsDir, "serverconfigs.json"));
-
-				MoveIfExists(
-					sourcePath: Path.Combine(baseDir, "bwonks.json"),
-					targetPath: Path.Combine(settingsDir, "bwonks.json"));
-
-				MoveIfExists(
-					sourcePath: Path.Combine(baseDir, "Pastes.txt"),
-					targetPath: Path.Combine(settingsDir, "Pastes.txt"));
-			}
-			catch { }
+			return Path.IsPathRooted(path) ? path : Path.Combine(AppContext.BaseDirectory, path);
 		}
 
-        // Текущая загруженная конфигурация (удобство для доступа из других классов)
-        public static BotConfig? Current { get; private set; }
-
-        // Утилита: если путь относительный — трактуем его относительно каталога приложения
-        public static string ResolvePath(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-                return AppContext.BaseDirectory;
-
-            return Path.IsPathRooted(path) ? path : Path.Combine(AppContext.BaseDirectory, path);
-        }
+        // === ИДЕНТИФИКАЦИЯ И БАЗОВЫЕ НАСТРОЙКИ ===
 
         // Токен бота — хранится в config.json или в переменной окружения DISCORD_BOT_TOKEN
         public string? BotToken { get; set; } = null;
@@ -97,39 +44,6 @@ namespace RPBot
             295189463376855040, // Канал "КнР"
             1288192593137635359  // Канал "Тест"
         };
-
-        // Настройки подключения
-        public ConnectionConfig Connection { get; set; } = new ConnectionConfig();
-
-        // Настройки UI
-        public UIConfig UI { get; set; } = new UIConfig();
-
-        // Настройки прогнозирования
-        public PredictionConfig Prediction { get; set; } = new PredictionConfig();
-
-        // Путь к файлу с текстовыми блоками (по умолчанию рядом с исполняемым файлом)
-		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
-
-        // Директория для логов (по умолчанию отдельная папка Logs рядом с EXE)
-		public string LogDirectory { get; set; } = "Logs";
-
-        // Директория с картинками для бросков (например Numbers)
-		public string NumbersDirectory { get; set; } = "Numbers";
-
-        // Путь до скрипта перезапуска (может быть относительным к каталогу приложения)
-		public string RestartScriptPath { get; set; } = Path.Combine(SettingsFolderName, "restart_bot.ps1");
-
-		// Ежедневная плановая перезагрузка
-		public bool DailyRestartEnabled { get; set; } = false;
-		// Время плановой перезагрузки по локальному времени (формат: HH:mm или HH:mm:ss)
-		public string? DailyRestartLocalTime { get; set; } = null;
-		// Время плановой перезагрузки по Москве, если локальная таймзона = Москва (формат: HH:mm или HH:mm:ss)
-		public string? DailyRestartMoscowTime { get; set; } = null;
-		// Если true и локальная таймзона = Москва — использовать DailyRestartMoscowTime, иначе DailyRestartLocalTime
-		public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
-
-        // Директория для отчетов об ошибках (bug reports)
-		public string BugReportDirectory { get; set; } = "Logs";
 
         // Версия бота (отображается в логах/статусах)
         public string BotVersion { get; set; } = "0.6.0.0";
@@ -142,6 +56,47 @@ namespace RPBot
             "бляд",
             "сука"
         };
+
+        // === ПОДКЛЮЧЕНИЕ И UI ===
+
+        // Настройки подключения
+        public ConnectionConfig Connection { get; set; } = new ConnectionConfig();
+
+        // Настройки UI
+        public UIConfig UI { get; set; } = new UIConfig();
+
+        // Настройки прогнозирования соединения
+        public PredictionConfig Prediction { get; set; } = new PredictionConfig();
+
+        // === ЛОГИ И ОТЧЁТЫ ===
+
+        // Директория для логов (по умолчанию отдельная папка Logs рядом с EXE)
+		public string LogDirectory { get; set; } = "Logs";
+
+        // Директория для отчётов об ошибках (bug reports)
+		public string BugReportDirectory { get; set; } = "Logs";
+
+        // === ПУТИ К ФАЙЛАМ ===
+
+        // Путь к файлу с текстовыми блоками (по умолчанию в Settings/Pastes.txt)
+		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
+
+        // Директория с картинками для бросков (например, Numbers)
+		public string NumbersDirectory { get; set; } = Path.Combine(SettingsFolderName, "Numbers");
+
+        // Путь до скрипта перезапуска (может быть относительным к каталогу приложения)
+		public string RestartScriptPath { get; set; } = Path.Combine(SettingsFolderName, "restart_bot.ps1");
+
+        // === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
+
+		// Включить/выключить ежедневную плановую перезагрузку
+		public bool DailyRestartEnabled { get; set; } = false;
+		// Время плановой перезагрузки по локальному времени (формат: HH:mm или HH:mm:ss)
+		public string? DailyRestartLocalTime { get; set; } = null;
+		// Время плановой перезагрузки по Москве, если локальная таймзона = Москва (формат: HH:mm или HH:mm:ss)
+		public string? DailyRestartMoscowTime { get; set; } = null;
+		// Если true и локальная таймзона = Москва — использовать DailyRestartMoscowTime, иначе DailyRestartLocalTime
+		public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
 
         // Загрузить конфигурацию из файла
         public static BotConfig Load(string path = "config.json")
@@ -198,11 +153,35 @@ namespace RPBot
                 }
             }
 
-            // Создать конфиг по умолчанию и сохранить
-            var config = new BotConfig();
-            Current = config;
-            config.Save(resolvedPath);
-            return config;
+			// Создать конфиг по умолчанию и сохранить
+			var config = new BotConfig();
+			Current = config;
+
+			// Генерируем config.json с комментариями и полной структурой всех разделов,
+			// используя обычную сериализацию BotConfig, чтобы не терять поля.
+			var defaultDir = Path.GetDirectoryName(resolvedPath) ?? AppContext.BaseDirectory;
+			Directory.CreateDirectory(defaultDir);
+
+			var serializerOptions = new JsonSerializerOptions
+			{
+				WriteIndented = true,
+				Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+			};
+			var jsonBody = JsonSerializer.Serialize(config, serializerOptions);
+			var header =
+				"// Основные настройки бота (config.json)\n" +
+				"// BotToken можно оставить пустым и задать через переменную окружения DISCORD_BOT_TOKEN.\n" +
+				"// GuildIDs — список ID серверов, на которых бот работает.\n" +
+				"// LogDirectory — папка для логов (по умолчанию Logs рядом с exe).\n" +
+				"// BugReportDirectory — папка для отчётов об ошибках (bug_report_*.txt).\n" +
+				"// TextBlocksPath — файл с текстовыми блоками для команд.\n" +
+				"// NumbersDirectory — папка с картинками для бросков кубиков.\n" +
+				"// RestartScriptPath — скрипт для внешнего перезапуска бота.\n" +
+				"// DailyRestart* — настройки ежедневной перезагрузки (локальное время и время по МСК).\n" +
+				"// DefaultSwearWords — базовый список слов для фильтра мата.\n";
+			var defaultJsonWithComments = header + Environment.NewLine + jsonBody + Environment.NewLine;
+			File.WriteAllText(resolvedPath, defaultJsonWithComments, System.Text.Encoding.UTF8);
+			return config;
         }
 
         // Сохранить конфигурацию в файл
@@ -213,8 +192,16 @@ namespace RPBot
                 var resolvedPath = ResolvePath(path);
                 var dir = Path.GetDirectoryName(resolvedPath) ?? AppContext.BaseDirectory;
                 Directory.CreateDirectory(dir);
-                string json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(resolvedPath, json);
+
+                // При сохранении конфига используем UnsafeRelaxedJsonEscaping,
+                // чтобы кириллица и другие символы писались напрямую, а не как \uXXXX.
+                var options = new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                };
+				string json = JsonSerializer.Serialize(this, options);
+                File.WriteAllText(resolvedPath, json, System.Text.Encoding.UTF8);
             }
             catch (Exception ex)
             {
