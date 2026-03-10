@@ -301,8 +301,12 @@ namespace RPBot
                 var dir = Path.GetDirectoryName(resolved) ?? AppContext.BaseDirectory;
                 Directory.CreateDirectory(dir);
 
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                var json = JsonSerializer.Serialize(_serverConfigs, options);
+				var options = new JsonSerializerOptions
+				{
+					WriteIndented = true,
+					Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+				};
+				var json = JsonSerializer.Serialize(_serverConfigs, options);
                 File.WriteAllText(resolved, json);
 
                 // Синхронизируем статический словарь с учётом дефолтов:
@@ -807,11 +811,14 @@ namespace RPBot
                     if (toggle.HasValue) sconfig.PredictionsEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var p)) sconfig.PredictionsEnabled = p;
                     break;
-                default:
-                    break;
-            }
+				default:
+					break;
+			}
 
-            // Валидация: если указаны channel/role - проверим, что они есть на сервере и залогируем предупреждения
+			// Сразу сохраняем изменения serverconfig и пересобираем эффективные ServerConfigs
+			SaveServerConfigs();
+
+			// Валидация: если указаны channel/role - проверим, что они есть на сервере и залогируем предупреждения
             try
             {
                 var guild = _client.GetGuild(guildId);
@@ -2488,11 +2495,11 @@ namespace RPBot
             var channelOpt = command.Data.Options.FirstOrDefault(o => o.Name == "channel")?.Value;
             var toggleOpt = command.Data.Options.FirstOrDefault(o => o.Name == "toggle")?.Value;
 
-            if (string.IsNullOrWhiteSpace(actionOpt))
-            {
-                await command.RespondAsync("Укажите действие: get/set/list/reset", ephemeral: true);
-                return;
-            }
+			if (string.IsNullOrWhiteSpace(actionOpt))
+			{
+				await command.RespondAsync("Укажите действие: get/set/list/reset/help", ephemeral: true);
+				return;
+			}
 
             if (!_serverConfigs.TryGetValue(guildId, out var sconfig))
             {
@@ -2500,8 +2507,35 @@ namespace RPBot
                 _serverConfigs[guildId] = sconfig;
             }
 
-            switch (actionOpt)
-            {
+			switch (actionOpt)
+			{
+				case "help":
+					{
+						var sb = new StringBuilder();
+						sb.AppendLine("Справка по /settings:");
+						sb.AppendLine("/settings action:list — показать все текущие настройки сервера.");
+						sb.AppendLine("/settings action:get key:<ключ> — показать значение одного параметра.");
+						sb.AppendLine("/settings action:set key:<ключ> value:<значение> — изменить параметр.");
+						sb.AppendLine("/settings action:reset — сбросить настройки этого сервера.");
+						sb.AppendLine();
+						sb.AppendLine("Передача значений:");
+						sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
+						sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с числовым ID канала.");
+						sb.AppendLine("  Если указаны оба, приоритет у channel.");
+						sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
+						sb.AppendLine("- Для логических переключателей (swear_filter, predictions) используйте toggle:true/false или value:true/false.");
+						sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+						sb.AppendLine();
+						sb.AppendLine("Примеры:");
+						sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
+						sb.AppendLine("/settings action:set key:moderation_channel value:123456789012345678");
+						sb.AppendLine("/settings action:set key:default_role value:123456789012345678");
+						sb.AppendLine("/settings action:set key:swear_filter toggle:true");
+						sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
+						await command.RespondAsync(sb.ToString(), ephemeral: true);
+					}
+					break;
+
                 case "list":
                     {
                         var sb = new StringBuilder();

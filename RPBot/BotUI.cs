@@ -458,34 +458,70 @@ namespace RPBot
                 int selectedGuildIndex = -1;
                 var tcsGuild = new TaskCompletionSource<int>();
 
-                Application.MainLoop.Invoke(() =>
-                {
-                    var dlg = new Dialog("Выберите сервер", 60, 20);
-                    var items = guilds.Select(g => $"{g.Name} ({g.Id})").ToList();
-                    var list = new ListView(items)
-                    {
-                        X = 0,
-                        Y = 0,
-                        Width = Dim.Fill(),
-                        Height = Dim.Fill() - 3
-                    };
+				Application.MainLoop.Invoke(() =>
+				{
+					var dlg = new Dialog("Выберите сервер", 60, 20);
+					var items = guilds.Select(g => $"{g.Name} ({g.Id})").ToList();
+					var list = new ListView(items)
+					{
+						X = 0,
+						Y = 0,
+						Width = Dim.Fill(),
+						Height = Dim.Fill() - 3
+					};
 
-                    var ok = new Button("OK") { X = Pos.Percent(20), Y = Pos.Bottom(list) };
-                    var cancel = new Button("Cancel") { X = Pos.Percent(65), Y = Pos.Bottom(list) };
+					var ok = new Button("OK") { X = Pos.Percent(15), Y = Pos.Bottom(list) };
+					var help = new Button("Help") { X = Pos.Center(), Y = Pos.Bottom(list) };
+					var cancel = new Button("Cancel") { X = Pos.Percent(75), Y = Pos.Bottom(list) };
 
-                    ok.Clicked += () =>
-                    {
-                        selectedGuildIndex = list.SelectedItem;
-                        Application.RequestStop(dlg);
-                        tcsGuild.TrySetResult(selectedGuildIndex);
-                    };
-                    cancel.Clicked += () =>
-                    {
-                        Application.RequestStop(dlg);
-                        tcsGuild.TrySetResult(-1);
-                    };
+					ok.Clicked += () =>
+					{
+						selectedGuildIndex = list.SelectedItem;
+						Application.RequestStop(dlg);
+						tcsGuild.TrySetResult(selectedGuildIndex);
+					};
+					help.Clicked += () =>
+					{
+						// Краткая справка прямо из диалога выбора сервера
+						AddCommandOutput("Интерактивные настройки сервера:");
+						AddCommandOutput("1) Выберите сервер и нажмите OK.");
+						AddCommandOutput("2) Выберите действие: get/set/list/reset/help.");
+						AddCommandOutput("   - get: показать текущее значение выбранного параметра.");
+						AddCommandOutput("   - set: изменить параметр (канал/роль из списка, флаги true/false, текст руками).");
+						AddCommandOutput("   - list: вывести все настройки сервера.");
+						AddCommandOutput("   - reset: сбросить настройки до значений по умолчанию.");
+						AddCommandOutput("   - help: показать эту же справку после выбора сервера.");
+						AddCommandOutput("Esc или Cancel — выход без изменений.");
+					};
+					cancel.Clicked += () =>
+					{
+						Application.RequestStop(dlg);
+						tcsGuild.TrySetResult(-1);
+					};
 
-                    dlg.Add(list, ok, cancel);
+					// Поддержка Enter/Esc для выбора сервера с клавиатуры
+					dlg.KeyPress += e =>
+					{
+						try
+						{
+							if (e.KeyEvent.Key == Key.Enter)
+							{
+								selectedGuildIndex = list.SelectedItem;
+								Application.RequestStop(dlg);
+								tcsGuild.TrySetResult(selectedGuildIndex);
+								e.Handled = true;
+							}
+							else if (e.KeyEvent.Key == Key.Esc)
+							{
+								Application.RequestStop(dlg);
+								tcsGuild.TrySetResult(-1);
+								e.Handled = true;
+							}
+						}
+						catch { }
+					};
+
+					dlg.Add(list, ok, help, cancel);
                     Application.Run(dlg);
                 });
 
@@ -499,35 +535,48 @@ namespace RPBot
                 var selectedGuild = guilds[selectedGuildIndex];
                 var guildId = selectedGuild.Id;
 
-                // Выбор действия
-                string[] actions = new[] { "get", "set", "list", "reset" };
+				// Выбор действия
+				string[] actions = new[] { "get", "set", "list", "reset", "help" };
                 int actionIndex = await ShowSelectionDialog("Выберите действие", actions);
                 if (actionIndex < 0) { AddCommandOutput("Операция отменена."); return; }
                 var action = actions[actionIndex];
 
+				if (action == "help")
+				{
+					AddCommandOutput("Справка по интерактивным настройкам:");
+					AddCommandOutput("- get: показать текущее значение выбранного параметра для этого сервера.");
+					AddCommandOutput("- set: изменить выбранный параметр (канал/роль выбираются из списка, флаги — true/false, текст вводится вручную).");
+					AddCommandOutput("- list: вывести все основные настройки сервера в человекочитаемом виде.");
+					AddCommandOutput("- reset: сбросить настройки сервера до значений по умолчанию.");
+					AddCommandOutput("Повторно вызовите settings в терминале, чтобы снова открыть меню, если нужно продолжить настройку.");
+					return;
+				}
+
                 if (action == "list")
                 {
                     var cfg = await _botController.GetServerConfigAsync(guildId);
-                    if (cfg == null)
-                    {
-                        AddCommandOutput($"Настройки для {guildId} не найдены.");
-                    }
-                    else
-                    {
-                        AddCommandOutput($"Настройки для {guildId}:");
-                        AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
-                        AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
-                        AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
-                        AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
-                        AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
-                        AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
-                        AddCommandOutput($"line_message: {cfg.LineMessage}");
-                        AddCommandOutput($"general_rg_channel: {cfg.GeneralRGChannelID}");
-                        AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
-						AddCommandOutput($"super_user_role: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
-                        AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
-                        AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
-                    }
+					if (cfg == null)
+					{
+						AddCommandOutput($"Настройки для {guildId} не найдены.");
+					}
+					else
+					{
+						AddCommandOutput($"Настройки для {guildId}:");
+						// Единый порядок и человекочитаемые названия ключей
+						AddCommandOutput($"Канал модерации: {cfg.ModerateChannelID}");
+						AddCommandOutput($"Приветственный канал: {cfg.WelcomeChannelID}");
+						AddCommandOutput($"Основной РГ-канал: {cfg.GeneralRGChannelID}");
+						AddCommandOutput($"Канал бросков: {cfg.RollChannelID}");
+						AddCommandOutput($"Канал статистики: {cfg.StatsChannelID}");
+						AddCommandOutput($"Канал записей: {cfg.RecordChannelID}");
+						AddCommandOutput($"Приветственное сообщение: {cfg.WelcomeMessage}");
+						AddCommandOutput($"Сообщение для команды LINE: {cfg.LineMessage}");
+						AddCommandOutput($"Роль по умолчанию: {cfg.DefaultRoleID}");
+						AddCommandOutput($"Роль суперпользователя: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
+						AddCommandOutput($"Фильтр мата включён: {cfg.SwearFilterEnabled}");
+						AddCommandOutput($"Слова фильтра мата: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
+						AddCommandOutput($"Прогнозы отключения включены: {cfg.PredictionsEnabled}");
+					}
                     return;
                 }
 
@@ -538,35 +587,50 @@ namespace RPBot
                     return;
                 }
 
-                // Действия get/set требуют выбора ключа
-				string[] keys = new[] {
-					"moderation_channel","welcome_channel","roll_channel","stats_channel","record_channel","general_rg_channel",
-					"welcome_message","line_message","default_role","super_user_role","swear_filter","swear_words"
+				// Действия get/set требуют выбора ключа (отображаем русские описания, но работаем с внутренними именами)
+				(string key, string label)[] keyDefinitions = new[]
+				{
+					("moderation_channel", "Канал модерации"),
+					("welcome_channel", "Приветственный канал"),
+					("general_rg_channel", "Основной РГ-канал"),
+					("roll_channel", "Канал бросков"),
+					("stats_channel", "Канал статистики"),
+					("record_channel", "Канал записей"),
+					("welcome_message", "Приветственное сообщение"),
+					("line_message", "Сообщение для команды LINE"),
+					("default_role", "Роль по умолчанию"),
+					("super_user_role", "Роль суперпользователя"),
+					("swear_filter", "Фильтр мата включён"),
+					("swear_words", "Слова фильтра мата"),
+					("predictions", "Прогнозы отключения включены")
 				};
-
-                int keyIndex = await ShowSelectionDialog("Выберите ключ", keys);
+				
+				var labels = keyDefinitions.Select(k => k.label).ToArray();
+				int keyIndex = await ShowSelectionDialog("Выберите параметр", labels);
                 if (keyIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-                var key = keys[keyIndex];
+				var key = keyDefinitions[keyIndex].key;
 
                 if (action == "get")
                 {
                     var cfg = await _botController.GetServerConfigAsync(guildId);
                     if (cfg == null) { AddCommandOutput($"Настройки для {guildId} не найдены."); return; }
-                    string res = key switch
-                    {
-                        "moderation_channel" => cfg.ModerateChannelID.ToString(),
-                        "welcome_channel" => cfg.WelcomeChannelID.ToString(),
-                        "roll_channel" => cfg.RollChannelID.ToString(),
-                        "stats_channel" => cfg.StatsChannelID.ToString(),
-                        "record_channel" => cfg.RecordChannelID.ToString(),
-                        "welcome_message" => cfg.WelcomeMessage ?? "",
-                        "line_message" => cfg.LineMessage ?? "",
-                        "default_role" => cfg.DefaultRoleID.ToString(),
+					string res = key switch
+					{
+						"moderation_channel" => cfg.ModerateChannelID.ToString(),
+						"welcome_channel" => cfg.WelcomeChannelID.ToString(),
+						"general_rg_channel" => cfg.GeneralRGChannelID.ToString(),
+						"roll_channel" => cfg.RollChannelID.ToString(),
+						"stats_channel" => cfg.StatsChannelID.ToString(),
+						"record_channel" => cfg.RecordChannelID.ToString(),
+						"welcome_message" => cfg.WelcomeMessage ?? "",
+						"line_message" => cfg.LineMessage ?? "",
+						"default_role" => cfg.DefaultRoleID.ToString(),
 						"super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
 						"swear_filter" => cfg.SwearFilterEnabled.ToString(),
-                        "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
-                        _ => "Неизвестный ключ"
-                    };
+						"swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+						"predictions" => cfg.PredictionsEnabled.ToString(),
+						_ => "Неизвестный ключ"
+					};
                     AddCommandOutput(res);
                     return;
                 }
@@ -1554,6 +1618,19 @@ namespace RPBot
                         var sub = args[0].ToLowerInvariant();
                         switch (sub)
                         {
+							case "help":
+								AddCommandOutput("Справка по settings в терминале:");
+								AddCommandOutput("settings — без аргументов откроет интерактивное меню выбора сервера и параметров.");
+								AddCommandOutput("settings list <guildId> — показать настройки конкретного сервера.");
+								AddCommandOutput("settings get <guildId> <key> — показать одно значение по внутреннему ключу.");
+								AddCommandOutput("settings set <guildId> <key> <value> — изменить параметр.");
+								AddCommandOutput("settings reset <guildId> — сбросить настройки сервера.");
+								AddCommandOutput("");
+								AddCommandOutput("В интерактивном меню (settings без аргументов) каналы и роли выбираются из списка,");
+								AddCommandOutput("для булевых флагов (фильтр мата, прогнозы) предлагается выбор true/false,");
+								AddCommandOutput("для текстовых значений (приветствие, LINE) вводится произвольная строка.");
+								break;
+
                             case "list":
                                 {
                                     if (args.Length == 2 && ulong.TryParse(args[1], out var gid))
