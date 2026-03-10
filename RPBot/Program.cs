@@ -32,6 +32,8 @@ namespace RPBot
         public string WelcomeMessage { get; set; }
         public string LineMessage { get; set; }
         public ulong DefaultRoleID { get; set; }
+		// Роль "суперпользователя" на сервере, имеющая расширенные права управления ботом
+		public ulong? SuperUserRoleId { get; set; } = null;
         // Включить фильтр мата для этого сервера
         public bool SwearFilterEnabled { get; set; } = false;
         // Доп. список слов для фильтрации на уровне сервера (если пуст — используются BotConfig.DefaultSwearWords)
@@ -465,7 +467,7 @@ namespace RPBot
 
 		public Task RestartAsync()
 		{
-			// Сохраняем существующую логику перезапуска из консоли
+			// Перезапуск по команде из консоли
 			return RestartWithReasonAsync(
 				initiator: "console",
 				reason: "Перезапуск по команде из консоли");
@@ -530,47 +532,56 @@ namespace RPBot
 			await LogShutdownState(isRestart: true, initiator: _restartInitiator);
 		}
 
-        public async Task StopAsync()
-        {
-            await LogStartup("Остановка из консоли...");
+		public Task StopAsync()
+		{
+			// Остановка по команде из консоли с общей логикой выключения
+			return StopInternalAsync(
+				initiator: "console",
+				startupLogMessage: "Остановка из консоли...",
+				shutdownNotificationReason: "Остановка по команде из консоли");
+		}
 
-            try
-            {
-                if (_statusNotifier != null)
-                    await _statusNotifier.SendShutdownNotification("Остановка по команде из консоли");
-            }
-            catch { }
+		private async Task StopInternalAsync(string initiator, string startupLogMessage, string shutdownNotificationReason)
+		{
+			await LogStartup(startupLogMessage);
 
-            if (_ui != null && _uiStarted)
-            {
-                _ui.AddLog("Остановка из консоли...");
-            }
+			try
+			{
+				if (_statusNotifier != null)
+					await _statusNotifier.SendShutdownNotification(shutdownNotificationReason);
+			}
+			catch { }
+
+			if (_ui != null && _uiStarted)
+			{
+				_ui.AddLog(startupLogMessage);
+			}
 
 			_shouldExit = true;
 			StopDailyRestartScheduler();
-            _reconnectionService?.Shutdown();
+			_reconnectionService?.Shutdown();
 
-            try { await _client.StopAsync(); } catch { }
+			try { await _client.StopAsync(); } catch { }
 
-            if (_backgroundMonitoringTask != null)
-            {
-                try
-                {
-                    var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
-                    if (t != _backgroundMonitoringTask)
-                    {
-                        await LogStartup("Background tasks did not complete within timeout before stop.");
-                    }
-                }
-                catch { }
-            }
+			if (_backgroundMonitoringTask != null)
+			{
+				try
+				{
+					var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
+					if (t != _backgroundMonitoringTask)
+					{
+						await LogStartup("Background tasks did not complete within timeout before stop.");
+					}
+				}
+				catch { }
+			}
 
-            await LogShutdownState(isRestart: false, initiator: "console");
+			await LogShutdownState(isRestart: false, initiator: initiator);
 
-            // Dispose and exit
-            try { await DisposeAsync(); } catch { }
-            Environment.Exit(0);
-        }
+			// Dispose and exit
+			try { await DisposeAsync(); } catch { }
+			Environment.Exit(0);
+		}
 
 		private void StartDailyRestartScheduler()
 		{
@@ -779,6 +790,9 @@ namespace RPBot
                 case "default_role":
                     if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var dr)) sconfig.DefaultRoleID = dr;
                     break;
+				case "super_user_role":
+					if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var su)) sconfig.SuperUserRoleId = su;
+					break;
                 case "swear_filter":
                     if (toggle.HasValue) sconfig.SwearFilterEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var b)) sconfig.SwearFilterEnabled = b;
@@ -845,6 +859,13 @@ namespace RPBot
                         if (role == null)
                             _ = LogInfo($"Предупреждение: роль {sconfig.DefaultRoleID} не найдена на сервере {guildId}.");
                     }
+
+					if (sconfig.SuperUserRoleId.HasValue && sconfig.SuperUserRoleId.Value != 0)
+					{
+						var suRole = guild.Roles.FirstOrDefault(r => r.Id == sconfig.SuperUserRoleId.Value);
+						if (suRole == null)
+							_ = LogInfo($"Предупреждение: SuperUserRoleId {sconfig.SuperUserRoleId.Value} не найдена на сервере {guildId}.");
+					}
                 }
 
             }
@@ -1996,45 +2017,38 @@ namespace RPBot
                 await HandleLineCommand(user, message, lineMessages);
             }
 
-            if (user.Username == "perekrestok_mirov")
+            // Управление ботом через чат: только участники с ролью "Хранители"
+            if (user is SocketGuildUser guildUser)
             {
-                if (message.Content.ToLower().Contains("бот, спокойной ночи"))
+                var hasKeeperRole = guildUser.Roles.Any(r => string.Equals(r.Name, "Хранители", StringComparison.OrdinalIgnoreCase));
+
+                if (hasKeeperRole)
                 {
-                    await message.Channel.SendMessageAsync("Отключение всех систем...");
-                    await LogStartup($"Бот отключен пользователем {message.Author.Username} в {DateTime.Now}.");
-                    _shouldExit = true;
-                    await _client.StopAsync();
-                    Environment.Exit(0);
-                }
+                    var content = message.Content.ToLower();
 
-                if (message.Content.ToLower().Contains("бот, перезагрузка"))
-                {
-                    await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
-                    await LogStartup($"Инициализация перезагрузки пользователем {message.Author.Username} в {DateTime.Now}.");
-
-                    var scriptPath = BotConfig.ResolvePath(BotConfig.Current?.RestartScriptPath ?? "restart_bot.ps1");
-
-                    var processStartInfo = new ProcessStartInfo
+                    if (content.Contains("бот, спокойной ночи"))
                     {
-                        FileName = "powershell.exe",
-                        Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"",
-                        RedirectStandardOutput = false,
-                        RedirectStandardError = false,
-                        UseShellExecute = true,
-                        CreateNoWindow = false
-                    };
+                        await message.Channel.SendMessageAsync("Отключение всех систем...");
+                        await LogStartup($"Бот отключен по команде из чата пользователем {message.Author.Username} в {DateTime.Now}.");
 
-                    try
-                    {
-                        using (var process = new Process { StartInfo = processStartInfo })
-                        {
-                            process.Start();
-                            await process.WaitForExitAsync();
-                        }
+                        // Остановка с той же логикой, что и при команде из консоли, но с пометкой об инициаторе
+                        await StopInternalAsync(
+                            initiator: "chat",
+                            startupLogMessage: "Остановка по команде из чата...",
+                            shutdownNotificationReason: "Остановка по команде из чата");
+                        return;
                     }
-                    catch (Exception ex)
+
+                    if (content.Contains("бот, перезагрузка"))
                     {
-                        await LogStartup("Ошибка при запуске скрипта: " + ex.Message);
+                        await message.Channel.SendMessageAsync("Бот будет перезагружен. Пожалуйста, подождите... Примерное время ожидания от 10 секунд до 3 минут.");
+                        await LogStartup($"Инициализация перезагрузки по команде из чата пользователем {message.Author.Username} в {DateTime.Now}.");
+
+                        // Перезапуск через общую логику RestartWithReasonAsync
+                        await RestartWithReasonAsync(
+                            initiator: "chat",
+                            reason: $"Перезапуск по команде из чата пользователем {message.Author.Username}");
+                        return;
                     }
                 }
             }
@@ -2443,20 +2457,30 @@ namespace RPBot
                 return;
             }
 
-            var guildId = command.GuildId.Value;
-            var user = command.User as SocketGuildUser;
-            if (user == null)
-            {
-                await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
-                return;
-            }
+			var guildId = command.GuildId.Value;
+			var user = command.User as SocketGuildUser;
+			if (user == null)
+			{
+				await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+				return;
+			}
 
-            // Только администраторы/менеджеры сервера
-            if (!user.GuildPermissions.Administrator && !user.GuildPermissions.ManageGuild)
-            {
-                await command.RespondAsync("У вас нет прав для управления настройками (требуется право Manage Guild или Admin).", ephemeral: true);
-                return;
-            }
+			// Проверка прав: администратор/ManageGuild или наличие роли суперпользователя (если она настроена на сервере)
+			var isAdmin = user.GuildPermissions.Administrator || user.GuildPermissions.ManageGuild;
+			ulong? superUserRoleId = null;
+			if (_serverConfigs.TryGetValue(guildId, out var existingCfg))
+			{
+				superUserRoleId = existingCfg.SuperUserRoleId;
+			}
+
+			var hasSuperUserRole = superUserRoleId.HasValue && superUserRoleId.Value != 0 &&
+				user.Roles.Any(r => r.Id == superUserRoleId.Value);
+
+			if (!isAdmin && !hasSuperUserRole)
+			{
+				await command.RespondAsync("У вас нет прав для управления настройками (требуется роль суперпользователя или права Manage Guild/Admin).", ephemeral: true);
+				return;
+			}
 
             var actionOpt = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString()?.ToLowerInvariant();
             var keyOpt = command.Data.Options.FirstOrDefault(o => o.Name == "key")?.Value?.ToString()?.ToLowerInvariant();
@@ -2491,6 +2515,7 @@ namespace RPBot
                         sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
                         sb.AppendLine($"line_message: {sconfig.LineMessage}");
                         sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+						sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
                         sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
                         await command.RespondAsync(sb.ToString(), ephemeral: true);
                     }
@@ -2516,6 +2541,7 @@ namespace RPBot
                             "general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
                             "default_role" => sconfig.DefaultRoleID.ToString(),
                             "swear_filter" => sconfig.SwearFilterEnabled.ToString(),
+							"super_user_role" => sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "",
                             _ => "Неизвестный ключ"
                         };
 
@@ -2687,6 +2713,28 @@ namespace RPBot
                                     }
                                 }
                                 break;
+							case "super_user_role":
+								{
+									if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
+									{
+										var guild = _client.GetGuild(guildId);
+										var role = guild?.Roles.FirstOrDefault(r => r.Id == v);
+										if (role == null)
+										{
+											await command.RespondAsync($"Ошибка: роль с ID {v} не найдена на этом сервере.", ephemeral: true);
+											return;
+										}
+
+										sconfig.SuperUserRoleId = v;
+										SaveServerConfigs();
+										await command.RespondAsync($"super_user_role установлен: {v}", ephemeral: true);
+									}
+									else
+									{
+										await command.RespondAsync("Ошибка: укажите ID роли числом.", ephemeral: true);
+									}
+								}
+								break;
                             case "swear_filter":
                                 {
                                     bool state = false;

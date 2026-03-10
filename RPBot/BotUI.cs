@@ -524,6 +524,7 @@ namespace RPBot
                         AddCommandOutput($"line_message: {cfg.LineMessage}");
                         AddCommandOutput($"general_rg_channel: {cfg.GeneralRGChannelID}");
                         AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
+						AddCommandOutput($"super_user_role: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
                         AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
                         AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
                     }
@@ -538,10 +539,10 @@ namespace RPBot
                 }
 
                 // Действия get/set требуют выбора ключа
-                string[] keys = new[] {
-                    "moderation_channel","welcome_channel","roll_channel","stats_channel","record_channel","general_rg_channel",
-                    "welcome_message","line_message","default_role","swear_filter","swear_words"
-                };
+				string[] keys = new[] {
+					"moderation_channel","welcome_channel","roll_channel","stats_channel","record_channel","general_rg_channel",
+					"welcome_message","line_message","default_role","super_user_role","swear_filter","swear_words"
+				};
 
                 int keyIndex = await ShowSelectionDialog("Выберите ключ", keys);
                 if (keyIndex < 0) { AddCommandOutput("Операция отменена."); return; }
@@ -561,7 +562,8 @@ namespace RPBot
                         "welcome_message" => cfg.WelcomeMessage ?? "",
                         "line_message" => cfg.LineMessage ?? "",
                         "default_role" => cfg.DefaultRoleID.ToString(),
-                        "swear_filter" => cfg.SwearFilterEnabled.ToString(),
+						"super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
+						"swear_filter" => cfg.SwearFilterEnabled.ToString(),
                         "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
                         _ => "Неизвестный ключ"
                     };
@@ -591,7 +593,7 @@ namespace RPBot
                         return;
                     }
                 }
-                else if (key == "default_role")
+				else if (key == "default_role" || key == "super_user_role")
                 {
                     var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
                     var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
@@ -1283,6 +1285,7 @@ namespace RPBot
             return new[]
             {
                 "default_role",
+				"super_user_role",
                 "general_rg_channel",
                 "line_message",
                 "moderation_channel",

@@ -84,9 +84,6 @@ namespace RPBot
         // Директория с картинками для бросков (например, Numbers)
 		public string NumbersDirectory { get; set; } = Path.Combine(SettingsFolderName, "Numbers");
 
-        // Путь до скрипта перезапуска (может быть относительным к каталогу приложения)
-		public string RestartScriptPath { get; set; } = Path.Combine(SettingsFolderName, "restart_bot.ps1");
-
         // === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
 
 		// Включить/выключить ежедневную плановую перезагрузку
@@ -125,10 +122,17 @@ namespace RPBot
 						!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
 						!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
 					{
-						needsResave = true;
-					}
+					needsResave = true;
+				}
 
-					// Миграция старого значения LogDirectory из "Settings/Logs" в "Logs",
+				// Если в старом config.json есть устаревшее поле RestartScriptPath,
+				// пересохраняем файл, чтобы удалить его из структуры.
+				if (json.Contains("\"RestartScriptPath\"", StringComparison.Ordinal))
+				{
+					needsResave = true;
+				}
+
+				// Миграция старого значения LogDirectory из "Settings/Logs" в "Logs",
 					// чтобы не создавать папку Settings/Logs рядом с EXE.
 					var legacyLogs = Path.Combine(SettingsFolderName, "Logs");
 					if (string.Equals(cfg.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase))
@@ -176,7 +180,6 @@ namespace RPBot
 				"// BugReportDirectory — папка для отчётов об ошибках (bug_report_*.txt).\n" +
 				"// TextBlocksPath — файл с текстовыми блоками для команд.\n" +
 				"// NumbersDirectory — папка с картинками для бросков кубиков.\n" +
-				"// RestartScriptPath — скрипт для внешнего перезапуска бота.\n" +
 				"// DailyRestart* — настройки ежедневной перезагрузки (локальное время и время по МСК).\n" +
 				"// DefaultSwearWords — базовый список слов для фильтра мата.\n";
 			var defaultJsonWithComments = header + Environment.NewLine + jsonBody + Environment.NewLine;

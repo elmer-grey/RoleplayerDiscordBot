@@ -167,7 +167,7 @@ namespace RPBot
 
                 new SlashCommandBuilder()
                     .WithName("settings")
-                    .WithDescription("Управление настройками бота на этом сервере (только для администраторов).")
+					.WithDescription("Управление настройками бота на этом сервере (для администраторов и роли суперпользователя).")
                     .AddOption(new SlashCommandOptionBuilder()
                         .WithName("action")
                         .WithDescription("Действие: get, set, list, reset")
@@ -190,6 +190,7 @@ namespace RPBot
                         .AddChoice("line_message", "line_message")
                         .AddChoice("general_rg_channel", "general_rg_channel")
                         .AddChoice("default_role", "default_role")
+						.AddChoice("super_user_role", "super_user_role")
                         .AddChoice("swear_filter", "swear_filter")
                         .AddChoice("swear_words", "swear_words")
                         .AddChoice("predictions", "predictions")
