@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using System;
@@ -152,6 +152,10 @@ namespace RPBot
                     .WithDescription("Выводит список команд, которые используются для подсчёта времени игры."),
 
                 new SlashCommandBuilder()
+                    .WithName("help_predict")
+                    .WithDescription("Выводит справку по системе прогнозов и ставок на костяшки."),
+
+                new SlashCommandBuilder()
                     .WithName("clr")
                     .WithDescription("Удаляет выбранное количество сообщений.")
                     .AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений, которые нужно удалить", isRequired: true),
@@ -196,10 +200,61 @@ namespace RPBot
                         .AddChoice("swear_filter", "swear_filter")
                         .AddChoice("swear_words", "swear_words")
                         .AddChoice("predictions", "predictions")
+                        .AddChoice("event_voice_channel", "event_voice_channel")
                         .WithRequired(false))
                     .AddOption("value", ApplicationCommandOptionType.String, "Значение для установки (ID канала, текст, true/false для переключателей)")
                     .AddOption("channel", ApplicationCommandOptionType.Channel, "Канал (альтернативный способ указать канал)")
-                    .AddOption("toggle", ApplicationCommandOptionType.Boolean, "Переключатель (true/false)") ,
+					.AddOption("toggle", ApplicationCommandOptionType.Boolean, "Переключатель (true/false)") ,
+
+				new SlashCommandBuilder()
+					.WithName("prediction")
+					.WithDescription("Игровые прогнозы и ставки на костяшки.")
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("action")
+						.WithDescription("Действие: create, bet, resolve, cancel, status, adjust_points")
+						.WithType(ApplicationCommandOptionType.String)
+						.AddChoice("create", "create")
+						.AddChoice("bet", "bet")
+						.AddChoice("resolve", "resolve")
+						.AddChoice("cancel", "cancel")
+						.AddChoice("status", "status")
+						.AddChoice("adjust_points", "adjust_points")
+						.WithRequired(true))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("title")
+						.WithDescription("Название прогноза (для create)")
+						.WithType(ApplicationCommandOptionType.String)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("outcome1")
+						.WithDescription("Исход 1 (для create)")
+						.WithType(ApplicationCommandOptionType.String)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("outcome2")
+						.WithDescription("Исход 2 (для create)")
+						.WithType(ApplicationCommandOptionType.String)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("duration_minutes")
+						.WithDescription("Сколько минут открыт приём ставок (для create)")
+						.WithType(ApplicationCommandOptionType.Integer)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("outcome")
+						.WithDescription("Исход (1 или 2) для bet/resolve")
+						.WithType(ApplicationCommandOptionType.Integer)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("amount")
+						.WithDescription("Количество костяшек для ставки (для bet) или изменение баланса (для adjust_points)")
+						.WithType(ApplicationCommandOptionType.Integer)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("user")
+						.WithDescription("Пользователь для ручной корректировки баланса (adjust_points)")
+						.WithType(ApplicationCommandOptionType.User)
+						.WithRequired(false)) ,
 
                 new SlashCommandBuilder()
                     .WithName("roll")
@@ -288,3 +343,4 @@ namespace RPBot
         }
     }
 }
+

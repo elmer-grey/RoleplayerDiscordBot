@@ -556,11 +556,13 @@ namespace RPBot
 					AddCommandOutput("- Роль суперпользователя: роль с расширенными правами управления ботом (super_user_role).");
 					AddCommandOutput("- Фильтр мата включён: включает/выключает фильтрацию мата (swear_filter).");
 					AddCommandOutput("- Слова фильтра мата: дополнительный список запрещённых слов через запятую (swear_words).");
-					AddCommandOutput("- Прогнозы отключения включены: включает/выключает прогнозы падения соединения (predictions).");
+					AddCommandOutput("- Прогнозы включены: включает/выключает игровые прогнозы и ставки (predictions).");
+                    AddCommandOutput("- Event-голосовой канал: канал события для начисления костяшек (event_voice_channel).");
 					AddCommandOutput("");
 					AddCommandOutput("Как вводятся значения в интерактивном режиме:");
 					AddCommandOutput("- Для каналов и ролей бот показывает список и просит выбрать нужный вариант.");
 					AddCommandOutput("- Для флагов (фильтр мата, прогнозы) предлагается выбрать true/false.");
+                    AddCommandOutput("- Event-голосовой канал выбирается из списка голосовых каналов.");
 					AddCommandOutput("- Для текстов (приветствие, LINE) нужно ввести строку.");
 					AddCommandOutput("- Для списка слов фильтра мата вводите слова через запятую без кавычек.");
 					return;
@@ -577,12 +579,13 @@ namespace RPBot
 					{
 						AddCommandOutput($"Настройки для {guildId}:");
 						// Единый порядок и человекочитаемые названия ключей
-						AddCommandOutput($"Канал модерации: {cfg.ModerateChannelID}");
-						AddCommandOutput($"Приветственный канал: {cfg.WelcomeChannelID}");
-						AddCommandOutput($"Основной РГ-канал: {cfg.GeneralRGChannelID}");
-						AddCommandOutput($"Канал бросков: {cfg.RollChannelID}");
-						AddCommandOutput($"Канал статистики: {cfg.StatsChannelID}");
-						AddCommandOutput($"Канал записей: {cfg.RecordChannelID}");
+						AddCommandOutput($"Канал модерации: {selectedGuild.GetTextChannel(cfg.ModerateChannelID)?.Name ?? "не задан"}");
+						AddCommandOutput($"Приветственный канал: {selectedGuild.GetTextChannel(cfg.WelcomeChannelID)?.Name ?? "не задан"}");
+						AddCommandOutput($"Основной РГ-канал: {selectedGuild.GetTextChannel(cfg.GeneralRGChannelID)?.Name ?? "не задан"}");
+						AddCommandOutput($"Канал бросков: {selectedGuild.GetTextChannel(cfg.RollChannelID)?.Name ?? "не задан"}");
+						AddCommandOutput($"Канал статистики: {selectedGuild.GetTextChannel(cfg.StatsChannelID)?.Name ?? "не задан"}");
+						AddCommandOutput($"Канал записей: {selectedGuild.GetTextChannel(cfg.RecordChannelID)?.Name ?? "не задан"}");
+                        AddCommandOutput($"Event-голосовой канал: {selectedGuild.GetVoiceChannel(cfg.EventVoiceChannelID)?.Name ?? "не задан"}");
 						AddCommandOutput($"Приветственное сообщение: {cfg.WelcomeMessage}");
 						AddCommandOutput($"Сообщение для команды LINE: {cfg.LineMessage}");
 						AddCommandOutput($"Роль по умолчанию: {cfg.DefaultRoleID}");
@@ -610,6 +613,7 @@ namespace RPBot
 					("roll_channel", "Канал бросков"),
 					("stats_channel", "Канал статистики"),
 					("record_channel", "Канал записей"),
+                    ("event_voice_channel", "Event-голосовой канал"),
 					("welcome_message", "Приветственное сообщение"),
 					("line_message", "Сообщение для команды LINE"),
 					("default_role", "Роль по умолчанию"),
@@ -656,19 +660,37 @@ namespace RPBot
 
                 if (key.EndsWith("_channel") )
                 {
-                    // Покажем список текстовых каналов сервера
-                    var textChannels = selectedGuild.TextChannels.OrderBy(c => c.Position).ToList();
-                    if (textChannels.Count > 0)
+                    if (key == "event_voice_channel")
                     {
-                        var items = textChannels.Select(c => $"{c.Name} ({c.Id})").ToArray();
-                        int chIndex = await ShowSelectionDialog("Выберите канал", items);
-                        if (chIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-                        channelId = textChannels[chIndex].Id;
+                        var voiceChannels = selectedGuild.VoiceChannels.OrderBy(c => c.Position).ToList();
+                        if (voiceChannels.Count > 0)
+                        {
+                            var items = voiceChannels.Select(c => $"{c.Name} ({c.Id})").ToArray();
+                            int chIndex = await ShowSelectionDialog("Выберите голосовой канал события", items);
+                            if (chIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                            channelId = voiceChannels[chIndex].Id;
+                        }
+                        else
+                        {
+                            AddCommandOutput("На сервере нет голосовых каналов для выбора.");
+                            return;
+                        }
                     }
                     else
                     {
-                        AddCommandOutput("На сервере нет текстовых каналов для выбора.");
-                        return;
+                        var textChannels = selectedGuild.TextChannels.OrderBy(c => c.Position).ToList();
+                        if (textChannels.Count > 0)
+                        {
+                            var items = textChannels.Select(c => $"{c.Name} ({c.Id})").ToArray();
+                            int chIndex = await ShowSelectionDialog("Выберите канал", items);
+                            if (chIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+                            channelId = textChannels[chIndex].Id;
+                        }
+                        else
+                        {
+                            AddCommandOutput("На сервере нет текстовых каналов для выбора.");
+                            return;
+                        }
                     }
                 }
 				else if (key == "default_role" || key == "super_user_role")
@@ -695,14 +717,26 @@ namespace RPBot
                 }
 
                 // Валидация перед отправкой
+                // Валидация перед отправкой
                 if (channelId.HasValue)
                 {
-                    // проверим, что канал существует
-                    var ch = selectedGuild.GetTextChannel(channelId.Value);
-                    if (ch == null)
+                    if (key == "event_voice_channel")
                     {
-                        AddCommandOutput("Выбранный канал не найден на сервере.");
-                        return;
+                        var ch = selectedGuild.GetVoiceChannel(channelId.Value);
+                        if (ch == null)
+                        {
+                            AddCommandOutput("Выбранный голосовой канал не найден на сервере.");
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        var ch = selectedGuild.GetTextChannel(channelId.Value);
+                        if (ch == null)
+                        {
+                            AddCommandOutput("Выбранный канал не найден на сервере.");
+                            return;
+                        }
                     }
                 }
 
@@ -1648,6 +1682,7 @@ namespace RPBot
 								AddCommandOutput("В интерактивном меню (settings без аргументов) каналы и роли выбираются из списка,");
 								AddCommandOutput("для булевых флагов (фильтр мата, прогнозы) предлагается выбор true/false,");
 								AddCommandOutput("для текстовых значений (приветствие, LINE) вводится произвольная строка.");
+                                AddCommandOutput("event_voice_channel задаётся ID голосового канала (или через интерактивный выбор).");
 								break;
 
                             case "list":
@@ -1672,6 +1707,8 @@ namespace RPBot
                                             AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
                                             AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
                                             AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")} ");
+                                            AddCommandOutput($"predictions: {cfg.PredictionsEnabled}");
+                                            AddCommandOutput($"event_voice_channel: {cfg.EventVoiceChannelID}");
                                         }
                                     }
                                     else
@@ -1708,6 +1745,8 @@ namespace RPBot
                                             "default_role" => cfg.DefaultRoleID.ToString(),
                                             "swear_filter" => cfg.SwearFilterEnabled.ToString(),
                                             "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+                                            "predictions" => cfg.PredictionsEnabled.ToString(),
+                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
                                             _ => "Неизвестный ключ"
                                         };
                                         AddCommandOutput(res);
@@ -2441,3 +2480,11 @@ namespace RPBot
         }
     }
 }
+
+
+
+
+
+
+
+

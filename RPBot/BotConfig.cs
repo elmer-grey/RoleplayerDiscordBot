@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.IO;
 
@@ -65,7 +66,7 @@ namespace RPBot
         // Настройки UI
         public UIConfig UI { get; set; } = new UIConfig();
 
-        // Настройки прогнозирования соединения
+        // Настройки прогнозирования отключений соединения (отдельно от игровых прогнозов/ставок)
         public PredictionConfig Prediction { get; set; } = new PredictionConfig();
 
         // === ЛОГИ И ОТЧЁТЫ ===
@@ -235,7 +236,17 @@ namespace RPBot
     {
         public int MinDisconnectsForPrediction { get; set; } = 3;
         public int PredictionConfidenceThreshold { get; set; } = 50;
+        // Включить/выключить прогнозы отключений соединения (не игровые прогнозы)
         public bool EnablePredictions { get; set; } = true;
+
+        // Алиас для кода, чтобы явно отличать от игровых прогнозов.
+        // JSON-ключ остаётся прежним: EnablePredictions.
+        [JsonIgnore]
+        public bool EnableConnectionPredictions
+        {
+            get => EnablePredictions;
+            set => EnablePredictions = value;
+        }
         public int MaxPredictionsPerHour { get; set; } = 2; // Ограничение на количество прогнозов
         public int CooldownMinutes { get; set; } = 30; // Задержка между прогнозами
         // Новые настройки для более стабильной и консервативной работы предсказателя
