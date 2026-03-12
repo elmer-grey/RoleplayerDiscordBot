@@ -313,7 +313,18 @@ namespace RPBot
 
         private Task Log(string message)
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RECONNECT] {message}");
+            try
+            {
+                var msg = $"[RECONNECT] {message}";
+                var lower = message?.ToLowerInvariant() ?? string.Empty;
+                if (lower.Contains("ошиб") || lower.Contains("error") || lower.Contains("exception"))
+                    Logger.LogError(msg);
+                else if (lower.Contains("отключ") || lower.Contains("disconnect") || lower.Contains("реконнект") || lower.Contains("не удал") || lower.Contains("failed"))
+                    Logger.LogWarning(msg);
+                else
+                    Logger.LogInfo(msg);
+            }
+            catch { }
             return Task.CompletedTask;
         }
 

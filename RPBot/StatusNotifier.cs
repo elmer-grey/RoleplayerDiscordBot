@@ -17,6 +17,8 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         private readonly Dictionary<ulong, ServerConfig> _serverConfigs;
         private StartupType _lastStartupType = StartupType.FirstStart;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastSent = new();
+        private readonly TimeSpan _sendCooldown = TimeSpan.FromSeconds(60);
 
         public StatusNotifier(DiscordSocketClient client, Dictionary<ulong, ServerConfig> serverConfigs)
         {
@@ -69,7 +71,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
+                Logger.LogError($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
             }
         }
 
@@ -86,6 +88,15 @@ namespace RPBot
                     {
                         var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
                         if (channel == null) continue;
+
+                        // Throttle identical notifications per guild+reason
+                        var key = $"{guild.Id}:{reason}";
+                        if (_lastSent.TryGetValue(key, out var last) && DateTime.UtcNow - last < _sendCooldown)
+                        {
+                            Logger.LogDebug($"Suppressed connection issue notification for guild {guild.Id}: {reason}");
+                            continue;
+                        }
+                        _lastSent[key] = DateTime.UtcNow;
 
                         var embed = new EmbedBuilder()
                             .WithTitle("⚠️ ПРОБЛЕМЫ С ПОДКЛЮЧЕНИЕМ")

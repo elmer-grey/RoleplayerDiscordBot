@@ -107,6 +107,14 @@ namespace RPBot
         {
             _config = BotConfig.Load("config.json");
 
+            // Initialize global logger early
+            try
+            {
+                Logger.Initialize(_config?.LogDirectory);
+                Logger.RedirectConsoleOutputs();
+            }
+            catch { }
+
             _client = CreateDiscordClient();
             _commandService = new CommandService();
 
@@ -166,6 +174,7 @@ namespace RPBot
 
         private StartupType _currentStartupType = StartupType.FirstStart;
         private DateTime _startupTime;
+        private DateTime _lastPredictionSent = DateTime.MinValue;
 
         public bool ShouldExit => _shouldExit;
         public bool ShouldRestart => _shouldRestart;
@@ -216,11 +225,10 @@ namespace RPBot
 
                 if (restartCount > 0)
                 {
-                    Console.Clear();
-                    Console.WriteLine($" ПЕРЕЗАПУСК #{restartCount}");
-                    Console.WriteLine($"Время: {DateTime.Now:HH:mm:ss}");
-                    Console.WriteLine("================================================");
-                    Console.WriteLine();
+                    try { Console.Clear(); } catch { }
+                    Logger.LogInfo($"ПЕРЕЗАПУСК #{restartCount}");
+                    Logger.LogInfo($"Время: {DateTime.Now:HH:mm:ss}");
+                    Logger.LogInfo("================================================");
                 }
 
                 using (var program = new Program())
@@ -237,13 +245,13 @@ namespace RPBot
 
                 if (restart)
                 {
-                    Console.WriteLine("\n Подготовка к перезапуску...");
+                    Logger.LogInfo("Подготовка к перезапуску...");
                     await Task.Delay(2000); // Небольшая пауза перед перезапуском
                 }
 
             } while (restart);
 
-            Console.WriteLine("Бот остановлен.");
+            Logger.LogInfo("Бот остановлен.");
         }
 
         private BotUI _ui;
@@ -467,25 +475,31 @@ namespace RPBot
                     if (_client.ConnectionState == ConnectionState.Disconnected &&
                         !_shouldExit)
                     {
-                        await LogStartup("⚠️ Фоновая проверка: обнаружено отключение");
+                        Logger.LogWarning("BACKGROUND CHECK: client disconnected");
                         await _reconnectionService.HandleDisconnect(new Exception("Background check"));
                     }
                 }
                 catch (Exception ex)
                 {
-                    await LogStartup($"⚠️ Ошибка мониторинга: {ex.Message}");
+                    Logger.LogError($"BACKGROUND MONITOR ERROR: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
 
         private async Task OnDisconnectDetected(Exception exception)
         {
-            var reason = _reconnectionService.ConnectionInfo.LastDisconnectReason;
-            await LogStartup($"Отключение: {reason}");
+            var info = _reconnectionService.ConnectionInfo;
+            var reason = info.LastDisconnectReason;
+            var details = info.LastDisconnectDetails;
+            var attempts = info.ReconnectAttempts;
+
+            var structured = $"DISCONNECT | Reason: {reason} | Attempts: {attempts} | Details: {details}";
+
+            try { Logger.LogWarning(structured); } catch { }
 
             await _statusNotifier.SendConnectionIssue(
                 reason,
-                _reconnectionService.ConnectionInfo.ReconnectAttempts + 1
+                attempts + 1
             );
         }
 
@@ -515,7 +529,19 @@ namespace RPBot
 
         private async Task OnPredictionMade(ConnectionPredictor.PredictionResult prediction)
         {
-            await LogStartup($"Прогноз: {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss}");
+            var now = DateTime.UtcNow;
+            var cooldown = TimeSpan.FromMinutes(5);
+
+            var logMsg = $"PREDICTION | Reason: {prediction.Reason} | Confidence: {prediction.Confidence}% | At: {prediction.PredictedTime:HH:mm:ss}";
+            Logger.LogInfo(logMsg);
+
+            if (now - _lastPredictionSent < cooldown)
+            {
+                Logger.LogDebug($"Prediction suppressed (cooldown). Last: {_lastPredictionSent:HH:mm:ss}");
+                return;
+            }
+
+            _lastPredictionSent = now;
             await SendPredictionMessage(prediction);
         }
 
@@ -584,6 +610,7 @@ namespace RPBot
                     _ui?.AddLog($"├───────────────────────────────────────────────────────┤");
                     _ui?.AddLog($"│      Команды зарегистрированы                         │");
                     _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
+                    await LogStartup("Команды зарегистрированы");
                 }
                 else
                 {
@@ -591,6 +618,7 @@ namespace RPBot
                     _ui?.AddLog($"│      Регистрация команд пропущена                     │");
                     _ui?.AddLog($"└───────────────────────────────────────────────────────┘");
                     await _commandHandler.ListSlashCommandsAsync();
+                    await LogStartup("Регистрация команд пропущена");
                 }
 
                 // ЭТАП 2: Активация обработчиков
@@ -630,6 +658,7 @@ namespace RPBot
                     initTime
                 );
 
+                await LogStartup($"Инициализация завершена. Время инициализации: {initTime:F1} сек.");
                 // LogStartup теперь отправляет в UI
             }
             catch (Exception ex)
@@ -777,7 +806,7 @@ namespace RPBot
 
             // Приветствие
             var lowerContent = message.Content.ToLower();
-            var greetings = new[] { "привет", "приветствую", "здравствуйте", "здравствуй", "hello", "hi", "хай", "ку", "здрасте" };
+            var greetings = new[] { "привет", "привет-привет", "hiii", "приветствую", "здравствуйте", "здравствуй", "hello", "hi", "хай", "ку", "здрасте" };
 
             // Разбиваем сообщение на отдельные слова
             var messageWords = lowerContent.Split(new[] { ' ', ',', '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries);
@@ -794,7 +823,7 @@ namespace RPBot
             {
                 var commandsList = new StringBuilder();
                 commandsList.AppendLine("Доступные команды:");
-                commandsList.AppendLine("\n**--Для (двух) текстовых чатов--**");
+                commandsList.AppendLine("\n**--Во всех чатах--**");
                 commandsList.AppendLine("`!правила` - правила сервера");
                 commandsList.AppendLine("`!ссылки` - полезные ссылки");
                 commandsList.AppendLine("`!запись` - документ для записи игр");
@@ -817,46 +846,53 @@ namespace RPBot
             if (message.Content.StartsWith("!"))
             {
                 var key = message.Content.Split(' ')[0].ToLower();
-
-                // Разделение команд по каналам
-                if (isVoiceChannel)
+                var voiceCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    var voiceCommands = new Dictionary<string, string>
-                    {
-                        {"!бегу", "бегу с сыном"},
-                        {"!гусь", "паста гуся"},
-                        {"!гусь-гидра", "паста гидры гуся"},
-                        {"!гусь-связь", "паста с гусём-связистом"},
-                        {"!начинается", "AFK"},
-                        {"!перекур", "перерыв"},
-                        {"!подсказка", "Чят, пляшем!"},
-                        {"!страх", "атата"},
-                        {"!убери", "ненавижу модеров"}
-                    };
-
-                    if (voiceCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
+                    "!бегу",
+                    "!гусь",
+                    "!гусь-гидра",
+                    "!гусь-связь",
+                    "!начинается",
+                    "!перекур",
+                    "!подсказка",
+                    "!страх",
+                    "!убери"
+                };
+                
+                // ВРЕМЕННАЯ ЗАПЛАТКА: эти команды должны работать во всех чатах
+                // ("правила", "ссылки", "запись").
+                if (key is "!правила" or "!ссылки" or "!запись")
+                {
+                    if (_textBlocks.ContainsKey(key))
                     {
                         await message.Channel.SendMessageAsync(_textBlocks[key]);
                         return;
                     }
-                }
-                else if (isAllowedTextChannel)
-                {
-                    var textCommands = new Dictionary<string, string>
-                    {
-                        {"!правила", "правила сервера"},
-                        {"!ссылки", "полезные ссылки"},
-                        {"!запись", "документ для записи игр"}
-                    };
 
-                    if (textCommands.ContainsKey(key) && _textBlocks.ContainsKey(key))
-                    {
-                        await message.Channel.SendMessageAsync(_textBlocks[key]);
+                        await message.Channel.SendMessageAsync("Текст для этой команды не настроен.");
+                    return;
+                }
+
+                // Голосовые команды
+                if (voiceCommands.Contains(key))
+                {
+                    if (!isVoiceChannel)
+                    { 
+                        await message.Channel.SendMessageAsync("Эта команда доступна только в чате голосового канала.");
                         return;
                     }
+
+                    if (_textBlocks.TryGetValue(key, out var text))
+                    {
+                        await message.Channel.SendMessageAsync(text);
+                        return;
+                    }
+                    await message.Channel.SendMessageAsync("Текст для этой команды не настроен.");
+                    return;
                 }
 
-                await message.Channel.SendMessageAsync("Неизвестная команда или неправильный канал для этой команды.");
+                // Неизвестная команда
+                await message.Channel.SendMessageAsync("Неизвестная команда. Введите `!команды` для списка.");
                 return;
             }
 
@@ -994,21 +1030,30 @@ namespace RPBot
             return (0, 0, 0, null, null, null, null, null);
         }
 
-        private async Task HandleGreetingCommand(SocketGuildUser user, SocketMessage message, string responseMessage, string emoji)
+        private async Task HandleGreetingCommand(SocketGuildUser? user, SocketMessage message, string? responseMessage, string? emoji)
         {
+            if (!string.IsNullOrWhiteSpace(emoji))
+            {
+                try { await message.AddReactionAsync(new Emoji(emoji)); } catch { }
+            }
 
-            await message.AddReactionAsync(new Emoji(emoji));
-
-            if (user.Username == "perekrestok_mirov" || user.Username == "domen_")
+            if (user != null && (user.Username == "perekrestok_mirov" || user.Username == "domen_"))
             {
                 int reportCount = GetBugReportCounter();
                 await message.Channel.SendMessageAsync($"Приветствую тебя, Админ. Все системы в норме. Отчётов о неисправности: {reportCount}");
             }
             else
             {
-                var formattedMessage = responseMessage.Replace("{user.Mention}", user.Mention);
-                var responseMessageObj = await message.Channel.SendMessageAsync(formattedMessage);
-                await responseMessageObj.AddReactionAsync(new Emoji("✅"));
+                if (string.IsNullOrWhiteSpace(responseMessage))
+                {
+                    await message.Channel.SendMessageAsync("Привет!");
+                }
+                else
+                {
+                    var formattedMessage = responseMessage.Replace("{user.Mention}", user?.Mention ?? "гость");
+                    var responseMessageObj = await message.Channel.SendMessageAsync(formattedMessage);
+                    try { await responseMessageObj.AddReactionAsync(new Emoji("✅")); } catch { }
+                }
             }
             await LogInfo("Приветствие с ботом");
         }
@@ -1073,12 +1118,20 @@ namespace RPBot
 
         private int GetBugReportCounter()
         {
-            string counterFilePath = @"C:\Favorites\Desktop\НРИ\Discord_BR\bug_report_counter.txt";
+            var cfg = BotConfig.Load();
+            string logDir = cfg?.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+            try { Directory.CreateDirectory(logDir); } catch { }
+            string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
-            if (File.Exists(counterFilePath))
+            try
             {
-                return int.Parse(File.ReadAllText(counterFilePath));
+                if (File.Exists(counterFilePath))
+                {
+                    var content = File.ReadAllText(counterFilePath).Trim();
+                    if (int.TryParse(content, out var val)) return val;
+                }
             }
+            catch { }
 
             return 0;
         }

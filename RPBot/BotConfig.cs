@@ -11,8 +11,8 @@ namespace RPBot
 {
     public class BotConfig
     {
-        // Токен бота — хранится в config.json или в переменной окружения DISCORD_BOT_TOKEN
-        public string? BotToken { get; set; } = null;
+        // Токен бота — временно хранится в коде (для рабочей версии). В тестовом merge это будет убрано.
+        public string? BotToken { get; set; } = "MTMzMTYyODkxMDE1MjEyMjM4OA.GJutjl.wTDw8Tp1wI8ZNehE4TnFNkNKTFRJQ2Q0DPG4JI";
 
         // ID серверов, где бот работает
         public List<ulong> GuildIDs { get; set; } = new List<ulong>

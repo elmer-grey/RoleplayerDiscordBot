@@ -31,7 +31,7 @@ namespace RPBot
             if (msg.Contains("aborted"))
                 return "Соединение прервано";
             if (msg.Contains("websocket") || msg.Contains("web socket"))
-                return " WebSocket ошибка";
+                return "WebSocket ошибка";
 
             // Discord специфичные
             if (ex is GatewayReconnectException)
@@ -47,7 +47,10 @@ namespace RPBot
             if (msg.Contains("canceled"))
                 return "Операция отменена";
 
-            return $" {ex.GetType().Name}";
+            // Fallback: include exception type and message for better diagnostics
+            var typeName = ex.GetType().Name;
+            var text = string.IsNullOrWhiteSpace(ex.Message) ? typeName : $"{typeName}: {ex.Message}";
+            return text;
         }
 
         public static string GetEmojiForReason(string reason)

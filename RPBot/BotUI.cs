@@ -90,7 +90,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Критическая ошибка UI: {ex.Message}");
+                try { Logger.LogError($"Критическая ошибка UI: {ex.Message}"); } catch { }
                 Environment.Exit(1);
             }
         }
@@ -350,7 +350,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка разблокировки ввода: {ex.Message}");
+                        try { Logger.LogError($"Ошибка разблокировки ввода: {ex.Message}"); } catch { }
                     }
                 });
             }
@@ -377,7 +377,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка блокировки ввода: {ex.Message}");
+                        try { Logger.LogError($"Ошибка блокировки ввода: {ex.Message}"); } catch { }
                     }
                 });
             }
@@ -546,7 +546,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка добавления лога: {ex.Message}");
+                        try { Logger.LogError($"Ошибка добавления лога: {ex.Message}"); } catch { }
                     }
                 });
             }
@@ -576,13 +576,13 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка добавления вывода команды: {ex.Message}");
+                        try { Logger.LogError($"Ошибка добавления вывода команды: {ex.Message}"); } catch { }
                     }
                 });
             }
             else
             {
-                Console.WriteLine(text);
+                try { Logger.LogInfo(text); } catch { }
             }
         }
 

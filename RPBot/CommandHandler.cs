@@ -60,7 +60,7 @@ namespace RPBot
 
                 foreach (var command in commands)
                 {
-                    Console.WriteLine($"Гильдия: {guildId}, Команда: {command.Name}, ID: {command.Id}");
+                    Logger.LogInfo($"Гильдия: {guildId}, Команда: {command.Name}, ID: {command.Id}");
                 }
 
                 processedGuilds++;
@@ -77,7 +77,7 @@ namespace RPBot
             int totalCommands = allCommands.Count * _guildIDs.Count;
             int completedCommands = 0;
 
-            Console.WriteLine($"\n┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ({totalCommands} операций) ────────────┐");
+            Logger.LogInfo($"┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ({totalCommands} операций) ────────────┐");
 
             foreach (var guildId in _guildIDs)
             {
