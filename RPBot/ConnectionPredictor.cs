@@ -54,8 +54,8 @@ namespace RPBot
             {
                 // ensure single analyzer at a time
             }
-            // Проверяем, включены ли прогнозы
-            if (!_config.EnablePredictions)
+            // Проверяем, включены ли прогнозы ОТКЛЮЧЕНИЙ соединения
+			if (!_config.EnableConnectionPredictions)
                 return null;
 
             // Проверяем защиту от спама (но не блокируем подтверждение кандидата)
