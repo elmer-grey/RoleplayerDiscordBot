@@ -108,6 +108,45 @@ namespace RPBot
                         await modal.RespondAsync($"Ошибка обработки модального окна: {ex.Message}", ephemeral: true);
                     }
                 }
+                else if (parts[0] == "pred_create_modal")
+                {
+                    // pred_create_modal:<guildId>:<channelId>
+                    if (parts.Length < 3) { await modal.RespondAsync("Неверный модал.", ephemeral: true); return; }
+                    if (!ulong.TryParse(parts[1], out var guildId)) { await modal.RespondAsync("Неверный guildId.", ephemeral: true); return; }
+                    if (!ulong.TryParse(parts[2], out var channelId)) { await modal.RespondAsync("Неверный channelId.", ephemeral: true); return; }
+
+                    var flat = modal.Data.Components.SelectMany(r => r.Components);
+                    var title = flat.FirstOrDefault(c => c.CustomId == "title")?.Value ?? string.Empty;
+                    var oc1 = flat.FirstOrDefault(c => c.CustomId == "outcome1")?.Value ?? string.Empty;
+                    var oc2 = flat.FirstOrDefault(c => c.CustomId == "outcome2")?.Value ?? string.Empty;
+                    var durationStr = flat.FirstOrDefault(c => c.CustomId == "duration_minutes")?.Value ?? string.Empty;
+
+                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
+                    {
+                        await modal.RespondAsync("Заполните заголовок и оба исхода.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
+                    {
+                        await modal.RespondAsync("Неверная длительность (минут).", ephemeral: true);
+                        return;
+                    }
+
+                    var userId = modal.User.Id;
+                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    if (channel == null)
+                    {
+                        await modal.RespondAsync("Не удалось найти указанный канал.", ephemeral: true);
+                        return;
+                    }
+
+                    var (ok, error, pred) = await _predictionService.CreateAsync(guildId, userId, channel, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
+                    if (ok)
+                        await modal.RespondAsync($"Прогноз создан: {title}", ephemeral: true);
+                    else
+                        await modal.RespondAsync(error, ephemeral: true);
+                }
             }
             catch { }
         }

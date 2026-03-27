@@ -92,32 +92,7 @@ namespace RPBot
                         await command.RespondAsync("Создавать прогнозы могут только мастера НРИ или администраторы.", ephemeral: true);
                         return;
                     }
-
-                    if (string.IsNullOrWhiteSpace(titleOpt) || string.IsNullOrWhiteSpace(outcome1Opt) || string.IsNullOrWhiteSpace(outcome2Opt))
-                    {
-                        await command.RespondAsync("Для создания прогноза укажите title, outcome1 и outcome2.", ephemeral: true);
-                        return;
-                    }
-
-                    var hasActiveEventInChannel = guildChannel.Guild.Events.Any(e =>
-                        e.Status == GuildScheduledEventStatus.Active &&
-                        e.Channel != null &&
-                        e.Channel.Id == guildChannel.Id);
-
-                    if (!hasActiveEventInChannel)
-                    {
-                        await command.RespondAsync("Создать прогноз можно только при активном событии в этом канале.", ephemeral: true);
-                        return;
-                    }
-
-                    if (durationOpt == null || !int.TryParse(durationOpt.ToString(), out var parsed) || parsed <= 0)
-                    {
-                        await command.RespondAsync("Для создания прогноза укажите duration_minutes (> 0).", ephemeral: true);
-                        return;
-                    }
-
-                    var minutes = parsed;
-
+                    // Open modal for creating prediction (friendly UI)
                     var targetMessageChannel = command.Channel as ISocketMessageChannel;
                     if (targetMessageChannel == null)
                     {
@@ -125,16 +100,16 @@ namespace RPBot
                         return;
                     }
 
-                    var (ok, error, _) = await _predictionService.CreateAsync(
-                        guildId,
-                        user.Id,
-                        targetMessageChannel,
-                        titleOpt,
-                        outcome1Opt,
-                        outcome2Opt,
-                        TimeSpan.FromMinutes(minutes));
+                    var modal = new ModalBuilder()
+                        .WithTitle("Создать прогноз")
+                        .WithCustomId($"pred_create_modal:{guildId}:{targetMessageChannel.Id}")
+                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза")
+                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1")
+                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2")
+                        .AddTextInput("Длительность (минут)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
+                        .Build();
 
-                    await command.RespondAsync(ok ? $"Прогноз создан: {titleOpt}" : error, ephemeral: true);
+                    await command.RespondWithModalAsync(modal);
                     break;
                 }
 
