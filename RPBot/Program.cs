@@ -50,106 +50,7 @@ namespace RPBot
        public int TelegramMessageThreadId { get; set; } = 0;
     }
 
-        private async Task HandleModalSubmitted(SocketModal modal)
-        {
-            try
-            {
-                var customId = modal.Data.CustomId ?? string.Empty;
-                var parts = customId.Split(':');
-                if (parts.Length == 0) return;
-
-                if (parts[0] == "pred_bet_modal")
-                {
-                    if (parts.Length < 2) {
-                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
-                        return;
-                    }
-
-                    if (!ulong.TryParse(parts[1], out var guildId))
-                    {
-                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
-                        return;
-                    }
-
-                    // Извлекаем поля
-                    try
-                    {
-                        var flat = modal.Data.Components.SelectMany(r => r.Components);
-                        var outcomeComp = flat.FirstOrDefault(c => c.CustomId == "outcome");
-                        var amountComp = flat.FirstOrDefault(c => c.CustomId == "amount");
-                        var outcomeStr = outcomeComp?.Value ?? string.Empty;
-                        var amountStr = amountComp?.Value ?? string.Empty;
-
-                        if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
-                        {
-                            await modal.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
-                            return;
-                        }
-
-                        if (!long.TryParse(amountStr, out var amount) || amount <= 0)
-                        {
-                            await modal.RespondAsync("Сумма должна быть положительна.", ephemeral: true);
-                            return;
-                        }
-
-                        var userId = modal.User.Id;
-                        var (ok, error) = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
-                        if (ok)
-                        {
-                            await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true);
-                        }
-                        else
-                        {
-                            await modal.RespondAsync(error, ephemeral: true);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        await modal.RespondAsync($"Ошибка обработки модального окна: {ex.Message}", ephemeral: true);
-                    }
-                }
-                else if (parts[0] == "pred_create_modal")
-                {
-                    // pred_create_modal:<guildId>:<channelId>
-                    if (parts.Length < 3) { await modal.RespondAsync("Неверный модал.", ephemeral: true); return; }
-                    if (!ulong.TryParse(parts[1], out var guildId)) { await modal.RespondAsync("Неверный guildId.", ephemeral: true); return; }
-                    if (!ulong.TryParse(parts[2], out var channelId)) { await modal.RespondAsync("Неверный channelId.", ephemeral: true); return; }
-
-                    var flat = modal.Data.Components.SelectMany(r => r.Components);
-                    var title = flat.FirstOrDefault(c => c.CustomId == "title")?.Value ?? string.Empty;
-                    var oc1 = flat.FirstOrDefault(c => c.CustomId == "outcome1")?.Value ?? string.Empty;
-                    var oc2 = flat.FirstOrDefault(c => c.CustomId == "outcome2")?.Value ?? string.Empty;
-                    var durationStr = flat.FirstOrDefault(c => c.CustomId == "duration_minutes")?.Value ?? string.Empty;
-
-                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
-                    {
-                        await modal.RespondAsync("Заполните заголовок и оба исхода.", ephemeral: true);
-                        return;
-                    }
-
-                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
-                    {
-                        await modal.RespondAsync("Неверная длительность (минут).", ephemeral: true);
-                        return;
-                    }
-
-                    var userId = modal.User.Id;
-                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
-                    if (channel == null)
-                    {
-                        await modal.RespondAsync("Не удалось найти указанный канал.", ephemeral: true);
-                        return;
-                    }
-
-                    var (ok, error, pred) = await _predictionService.CreateAsync(guildId, userId, channel, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
-                    if (ok)
-                        await modal.RespondAsync($"Прогноз создан: {title}", ephemeral: true);
-                    else
-                        await modal.RespondAsync(error, ephemeral: true);
-                }
-            }
-            catch { }
-        }
+        // Modal handling moved inside Program class
 
     public enum StartupType
     {
@@ -252,6 +153,111 @@ namespace RPBot
             {
                 Console.WriteLine($"CleanupServices error: {ex.Message}");
             }
+        }
+
+        private async Task HandleModalSubmitted(SocketModal modal)
+        {
+            try
+            {
+                var customId = modal.Data.CustomId ?? string.Empty;
+                var parts = customId.Split(':');
+                if (parts.Length == 0) return;
+
+                if (parts[0] == "pred_bet_modal")
+                {
+                    if (parts.Length < 2)
+                    {
+                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
+                        return;
+                    }
+
+                    var flat = modal.Data.Components;
+                    var outcomeComp = flat.FirstOrDefault(c => string.Equals(c.CustomId, "outcome", StringComparison.OrdinalIgnoreCase));
+                    var amountComp = flat.FirstOrDefault(c => string.Equals(c.CustomId, "amount", StringComparison.OrdinalIgnoreCase));
+                    var outcomeStr = outcomeComp?.Value ?? string.Empty;
+                    var amountStr = amountComp?.Value ?? string.Empty;
+
+                    if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                    {
+                        await modal.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!long.TryParse(amountStr, out var amount) || amount <= 0)
+                    {
+                        await modal.RespondAsync("Сумма должна быть положительна.", ephemeral: true);
+                        return;
+                    }
+
+                    var userId = modal.User.Id;
+                    var res = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
+                    if (res.ok)
+                    {
+                        await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true);
+                    }
+                    else
+                    {
+                        await modal.RespondAsync(res.error, ephemeral: true);
+                    }
+                }
+                else if (parts[0] == "pred_create_modal")
+                {
+                    if (parts.Length < 3)
+                    {
+                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.RespondAsync("Неверный guildId.", ephemeral: true);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[2], out var channelId))
+                    {
+                        await modal.RespondAsync("Неверный channelId.", ephemeral: true);
+                        return;
+                    }
+
+                    var flat = modal.Data.Components;
+                    var title = flat.FirstOrDefault(c => string.Equals(c.CustomId, "title", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
+                    var oc1 = flat.FirstOrDefault(c => string.Equals(c.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
+                    var oc2 = flat.FirstOrDefault(c => string.Equals(c.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
+                    var durationStr = flat.FirstOrDefault(c => string.Equals(c.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
+
+                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
+                    {
+                        await modal.RespondAsync("Заполните заголовок и оба исхода.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
+                    {
+                        await modal.RespondAsync("Неверная длительность (минут).", ephemeral: true);
+                        return;
+                    }
+
+                    var userId = modal.User.Id;
+                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    if (channel == null)
+                    {
+                        await modal.RespondAsync("Не удалось найти указанный канал.", ephemeral: true);
+                        return;
+                    }
+
+                    var createRes = await _predictionService.CreateAsync(guildId, userId, channel, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
+                    if (createRes.ok)
+                        await modal.RespondAsync($"Прогноз создан: {title}", ephemeral: true);
+                    else
+                        await modal.RespondAsync(createRes.error, ephemeral: true);
+                }
+            }
+            catch { }
         }
 
         private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
