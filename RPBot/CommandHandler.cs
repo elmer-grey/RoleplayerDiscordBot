@@ -14,10 +14,10 @@ namespace RPBot
         private readonly CommandService _commandService;
         private readonly List<ulong> _guildIDs;
 
-        private static BotUI _ui;
+        private static BotUI? _ui;
 
         // 👇 ДОБАВЛЯЕМ СОБЫТИЕ ДЛЯ ОТСЛЕЖИВАНИЯ ПРОГРЕССА
-        public event Func<int, int, string, Task> OnCommandProgress;
+        public event Func<int, int, string, Task>? OnCommandProgress;
 
         // 👇 ДЛЯ РАСЧЕТА ВРЕМЕНИ
         private DateTime _registrationStartTime;
@@ -30,7 +30,7 @@ namespace RPBot
         }
 
         // Метод для установки UI (вызывать из Program.cs после создания UI)
-        public static void SetUI(BotUI ui)
+        public static void SetUI(BotUI? ui)
         {
             _ui = ui;
         }

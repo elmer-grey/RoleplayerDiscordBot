@@ -47,7 +47,8 @@ namespace RPBot
         };
 
         // Версия бота (отображается в логах/статусах)
-        public string BotVersion { get; set; } = "0.6.0.0";
+        public string BotVersion { get; set; } = "1.0.0.0";
+
 
         // Список слов, используемых по умолчанию в фильтре мата (нижний регистр лучше)
         public List<string> DefaultSwearWords { get; set; } = new List<string>
@@ -125,6 +126,14 @@ namespace RPBot
 					{
 					needsResave = true;
 				}
+
+               // Telegram settings moved to serverconfigs.json (ServerConfig)
+                if (json.Contains("\"TelegramEnabled\"", StringComparison.Ordinal) ||
+                    json.Contains("\"TelegramBotToken\"", StringComparison.Ordinal) ||
+                    json.Contains("\"TelegramChatId\"", StringComparison.Ordinal))
+                {
+                    needsResave = true;
+                }
 
 				// Если в старом config.json есть устаревшее поле RestartScriptPath,
 				// пересохраняем файл, чтобы удалить его из структуры.

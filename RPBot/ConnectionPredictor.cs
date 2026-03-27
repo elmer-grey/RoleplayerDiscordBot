@@ -38,7 +38,7 @@ namespace RPBot
             public bool IsSuppressed { get; set; } // was suppressed awaiting confirmation
         }
 
-        public ConnectionPredictor(ReconnectionService reconnectionService, PredictionConfig config = null)
+        public ConnectionPredictor(ReconnectionService reconnectionService, PredictionConfig? config = null)
         {
             _reconnectionService = reconnectionService;
             _connectionInfo = reconnectionService.ConnectionInfo;

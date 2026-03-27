@@ -5,16 +5,13 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn Condition="'$(Configuration)' == 'Debug'">$(NoWarn);NU1900</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="Numbers\**" />
     <EmbeddedResource Remove="Numbers\**" />
     <None Remove="Numbers\**" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="ConsoleCommandHandler.cs" />
   </ItemGroup>
 
   <ItemGroup>

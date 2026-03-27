@@ -33,6 +33,11 @@ namespace RPBot
             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
         }
 
+        public Task HandleSlashCommand(SocketSlashCommand command)
+        {
+            return command.RespondAsync("Команда prediction временно недоступна.", ephemeral: true);
+        }
+
         public ActivePrediction? GetActive(ulong guildId)
         {
             _active.TryGetValue(guildId, out var p);

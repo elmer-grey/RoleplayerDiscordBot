@@ -19,11 +19,11 @@ namespace RPBot
         private StatusNotifier _statusNotifier;
 
         // Элементы интерфейса
-        private Window _mainWindow;
-        private TextView _logPanel;
-        private TextView _commandPanel;
-        private TextField _inputField;
-        private Label _statusBar;
+        private Window? _mainWindow;
+        private TextView? _logPanel;
+        private TextView? _commandPanel;
+        private TextField? _inputField;
+        private Label? _statusBar;
 
         private bool _isRunning = true;
         private List<string> _commandHistory = new List<string>();
@@ -39,8 +39,8 @@ namespace RPBot
         private readonly object _uiLock = new object();
 
         // Permanent UI thread fields
-        private Thread _uiThread;
-        private CancellationTokenSource _uiCts;
+        private Thread? _uiThread;
+        private CancellationTokenSource? _uiCts;
         private ManualResetEventSlim _uiInitialized = new ManualResetEventSlim(false);
         private bool _statusTimeoutAdded = false;
         private bool _resizeTimeoutAdded = false;
@@ -656,7 +656,7 @@ namespace RPBot
                 // action == set
                 ulong? channelId = null;
                 bool? toggle = null;
-                string value = null;
+                string? value = null;
 
                 if (key.EndsWith("_channel") )
                 {
@@ -793,9 +793,9 @@ namespace RPBot
             return tcs.Task;
         }
 
-        private Task<string> ShowInputDialog(string title)
+        private Task<string?> ShowInputDialog(string title)
         {
-            var tcs = new TaskCompletionSource<string>();
+            var tcs = new TaskCompletionSource<string?>();
             Application.MainLoop.Invoke(() =>
             {
                 var dlg = new Dialog(title, 60, 8);
@@ -842,8 +842,11 @@ namespace RPBot
                 {
                     if (Console.WindowWidth < 100 || Console.WindowHeight < 30)
                     {
-                        Console.SetWindowSize(120, 35);
-                        Console.SetBufferSize(120, 1000);
+                        if (OperatingSystem.IsWindows())
+                        {
+                            Console.SetWindowSize(120, 35);
+                            Console.SetBufferSize(120, 1000);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -943,7 +946,7 @@ namespace RPBot
 
                         try
                         {
-                            Application.MainLoop.Invoke(() =>
+                            Application.MainLoop?.Invoke(() =>
                             {
                                 try
                                 {
@@ -1156,15 +1159,18 @@ namespace RPBot
             // Subscribe to window resize to rewrap immediately when user resizes
             try
             {
-                _mainWindow.Resized += (_) =>
+                if (_mainWindow != null)
                 {
-                    try
+                    _mainWindow.Resized += (_) =>
                     {
-                        RewrapIfNeeded();
-                        Application.Refresh();
-                    }
-                    catch { }
-                };
+                        try
+                        {
+                            RewrapIfNeeded();
+                            Application.Refresh();
+                        }
+                        catch { }
+                    };
+                }
             }
             catch { }
 
@@ -1172,7 +1178,7 @@ namespace RPBot
             try
             {
                 int attempts = 0;
-                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(200), (MainLoop ml) =>
+                Application.MainLoop?.AddTimeout(TimeSpan.FromMilliseconds(200), (MainLoop ml) =>
                 {
                     attempts++;
                     var ok = RewrapIfNeeded();
@@ -1501,6 +1507,9 @@ namespace RPBot
             var replacement = _tabCompletionIndex == _tabCompletionMatches.Count
                 ? _tabCompletionSeed
                 : _tabCompletionMatches[_tabCompletionIndex];
+
+            if (_inputField == null)
+                return false;
 
             _inputField.Text = _tabCompletionPrefix + replacement;
             return true;

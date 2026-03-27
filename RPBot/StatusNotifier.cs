@@ -96,7 +96,7 @@ namespace RPBot
                     .AddField("📊 Статус", "✅ Онлайн", true)
                     .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
                     .AddField("📶 Задержка", $"{_client.Latency} мс", true)
-                    .AddField("🔄 Версия", "0.6.0.0", true)
+                    .AddField("🔄 Версия", BotConfig.Current?.BotVersion ?? "?", true)
                     .WithFooter(f => f.Text = "Система мониторинга")
                     .WithCurrentTimestamp();
 

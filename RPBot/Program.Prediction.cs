@@ -7,9 +7,9 @@ using System.Threading.Tasks;
 
 namespace RPBot
 {
-    partial class Program
+    public partial class Program
     {
-        private async Task PredictionCommand(SocketSlashCommand command)
+        internal async Task PredictionCommand(SocketSlashCommand command)
         {
             var guildChannel = command.Channel as SocketGuildChannel;
             if (guildChannel == null)
