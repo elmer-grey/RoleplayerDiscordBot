@@ -170,11 +170,21 @@ namespace RPBot
                 return;
             }
             // Show ephemeral balance and a confirm button before modal
+            // Check active prediction exists to avoid showing intermediate UI when none
+            var active = _predictionService.GetActive(guildId);
+            if (active == null || active.IsResolved)
+            {
+                try { await component.RespondAsync("Сейчас нет активного прогноза.", ephemeral: true); } catch { }
+                ScheduleDeleteOriginalResponse(component);
+                return;
+            }
+
             var balance = _pointsService.GetBalance(guildId, component.User.Id);
             var cb = new ComponentBuilder()
                 .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}", style: ButtonStyle.Primary);
 
-            await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build());
+            try { await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
+            ScheduleDeleteOriginalResponse(component);
         }
 
         private async Task HandlePredictionBetConfirmButton(SocketMessageComponent component, string[] parts)
@@ -199,6 +209,20 @@ namespace RPBot
                 .Build();
 
             await component.RespondWithModalAsync(modal);
+            // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
+        }
+
+        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    try { await interaction.DeleteOriginalResponseAsync(); } catch { }
+                }
+                catch { }
+            });
         }
 
         private async Task HandlePredictionCancelButton(SocketMessageComponent component, string[] parts)
@@ -213,9 +237,13 @@ namespace RPBot
             var resolverId = user?.Id ?? 0UL;
             var (ok, error) = await _predictionService.CancelAsync(guildId, resolverId, isAdmin);
             if (ok)
-                await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); });
+            {
+                try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+            }
             else
-                await component.RespondAsync(error, ephemeral: true);
+            {
+                try { await component.RespondAsync(error, ephemeral: true); } catch { }
+            }
         }
 
         private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
@@ -231,9 +259,14 @@ namespace RPBot
             var resolverId = user?.Id ?? 0UL;
             var (ok, error) = await _predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
             if (!ok)
-                await component.RespondAsync(error, ephemeral: true);
+            {
+                // Avoid responding if the original message was deleted — try update quietly
+                try { await component.RespondAsync(error, ephemeral: true); } catch { }
+            }
             else
-                await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); });
+            {
+                try { await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); }); } catch { }
+            }
         }
 
         // --- Bwonk persistence helpers (inside Program class) ---
@@ -2453,9 +2486,15 @@ namespace RPBot
                     var res = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
                     await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
                     if (res.ok)
+                    {
                         await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
                     else
+                    {
                         await modal.RespondAsync(res.error, ephemeral: true);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
 
                     return;
                 }
@@ -2507,9 +2546,15 @@ namespace RPBot
                     var createRes = await _predictionService.CreateAsync(guildId, creatorId, channelId, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                     if (createRes.ok)
+                    {
                         await modal.RespondAsync($"Прогноз создан: {title}", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
                     else
+                    {
                         await modal.RespondAsync(createRes.error, ephemeral: true);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
 
                     return;
                 }
@@ -2532,8 +2577,7 @@ namespace RPBot
             catch (Exception ex)
             {
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
-                _ = component.RespondAsync("Ошибка обработки", ephemeral: true)
-                    .ConfigureAwait(false);
+                try { await component.RespondAsync("Ошибка обработки", ephemeral: true); } catch { }
             }
         }
 

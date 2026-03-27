@@ -93,10 +93,35 @@ namespace RPBot
                         return;
                     }
                     // Open modal for creating prediction (friendly UI)
+                    // Require user to be in a voice channel and that channel has an active scheduled event
+                    var guildUser = command.User as SocketGuildUser;
+                    var userVoiceChannel = guildUser?.VoiceChannel;
+
+                    // Diagnostic logging to help understand why modal may be shown unexpectedly
+                    try
+                    {
+                        await LogInfo($"Prediction create invoked: guild={guildId} user={command.User.Id} action=create channel={command.Channel.Id} userVoiceChannelId={(userVoiceChannel?.Id.ToString() ?? "null")} ");
+                        var evs = guildChannel.Guild.Events.Select(e => new { e.Id, e.Name, e.Status, ChannelId = (e.Channel != null ? e.Channel.Id : 0UL), e.Location }).ToList();
+                        await LogInfo($"Guild events count: {evs.Count}");
+                        foreach (var ev in evs)
+                        {
+                            await LogInfo($"Event: id={ev.Id} name='{ev.Name}' status={ev.Status} channelId={ev.ChannelId} location='{ev.Location}'");
+                        }
+                    }
+                    catch { }
+
+                    if (userVoiceChannel == null || !IsActiveEventOnChannel(userVoiceChannel.Id))
+                    {
+                        await command.RespondAsync("Чтобы создать прогноз, вы должны находиться в голосовом канале с активным событием.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
+                        return;
+                    }
+
                     var targetMessageChannel = command.Channel as ISocketMessageChannel;
                     if (targetMessageChannel == null)
                     {
                         await command.RespondAsync("Не удалось получить чат канала для публикации прогноза.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -110,6 +135,7 @@ namespace RPBot
                         .Build();
 
                     await command.RespondWithModalAsync(modal);
+                    // Defer deletion of the ephemeral confirmation that will be sent after modal submit (handled in modal handler)
                     break;
                 }
 
@@ -141,6 +167,7 @@ namespace RPBot
 
                     var (ok, error) = await _predictionService.PlaceBetAsync(guildId, user.Id, outcomeNum, amount);
                     await command.RespondAsync(ok ? $"Ставка {amount} костяшек на исход {outcomeNum} принята." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -161,6 +188,7 @@ namespace RPBot
                     var isAdmin = user.GuildPermissions.Administrator;
                     var (ok, error) = await _predictionService.ResolveAsync(guildId, user.Id, isAdmin, outcomeNum);
                     await command.RespondAsync(ok ? "Прогноз завершён." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -175,6 +203,7 @@ namespace RPBot
                     var isAdmin = user.GuildPermissions.Administrator;
                     var (ok, error) = await _predictionService.CancelAsync(guildId, user.Id, isAdmin);
                     await command.RespondAsync(ok ? "Прогноз отменён. Все ставки возвращены." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 

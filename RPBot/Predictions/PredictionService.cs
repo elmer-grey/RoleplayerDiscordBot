@@ -264,17 +264,18 @@ namespace RPBot
             try
             {
                 foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
-            {
-                // ставка + ставка * coef
-                var profitDouble = bet.Amount * coefRounded;
-                var profit = (long)Math.Round(profitDouble, MidpointRounding.AwayFromZero);
-                var totalReturn = bet.Amount + profit;
-                _points.Add(guildId, bet.UserId, totalReturn);
-
-                if (profit > topWinnerProfit)
                 {
-                    topWinnerProfit = profit;
-                    topWinnerUserId = (long)bet.UserId;
+                    // ставка + ставка * coef
+                    var profitDouble = bet.Amount * coefRounded;
+                    var profit = (long)Math.Round(profitDouble, MidpointRounding.AwayFromZero);
+                    var totalReturn = bet.Amount + profit;
+                    _points.Add(guildId, bet.UserId, totalReturn);
+
+                    if (profit > topWinnerProfit)
+                    {
+                        topWinnerProfit = profit;
+                        topWinnerUserId = (long)bet.UserId;
+                    }
                 }
             }
             finally
