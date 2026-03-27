@@ -106,7 +106,7 @@ namespace RPBot
                         .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза")
                         .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1")
                         .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2")
-                        .AddTextInput("Длительность (минут)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
+                        .AddTextInput("Продолжительность сбора ставок (минуты)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
                         .Build();
 
                     await command.RespondWithModalAsync(modal);
