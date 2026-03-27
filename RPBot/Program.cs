@@ -227,8 +227,28 @@ namespace RPBot
                 await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
                 return;
             }
+            // Show ephemeral balance and a confirm button before modal
+            var balance = _pointsService.GetBalance(guildId, component.User.Id);
+            var cb = new ComponentBuilder()
+                .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}", style: ButtonStyle.Primary);
 
-            // Открываем модальное окно для ввода ставки
+            await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build());
+        }
+
+        private async Task HandlePredictionBetConfirmButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_bet_confirm:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            if (user == null)
+            {
+                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                return;
+            }
+
+            // Open modal to input bet
             var modal = new ModalBuilder()
                 .WithTitle("Сделать ставку")
                 .WithCustomId($"pred_bet_modal:{guildId}")
@@ -2469,6 +2489,9 @@ namespace RPBot
             {
                 case "pred_bet":
                     await HandlePredictionBetButton(component, parts);
+                    break;
+                case "pred_bet_confirm":
+                    await HandlePredictionBetConfirmButton(component, parts);
                     break;
                 case "pred_cancel":
                     await HandlePredictionCancelButton(component, parts);

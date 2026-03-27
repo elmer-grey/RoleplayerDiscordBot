@@ -485,7 +485,19 @@ namespace RPBot
                     return;
 
                 var embed = BuildEmbed(p, showLocked);
-                await msg.ModifyAsync(props => props.Embed = embed).ConfigureAwait(false);
+                // Build components only if prediction is not resolved/cancelled
+                MessageComponent? comps = null;
+                if (!p.IsResolved)
+                {
+                    var cb = BuildComponents(p, showLocked);
+                    comps = cb?.Build();
+                }
+
+                await msg.ModifyAsync(props =>
+                {
+                    props.Embed = embed;
+                    props.Components = comps;
+                }).ConfigureAwait(false);
             }
             catch
             {
