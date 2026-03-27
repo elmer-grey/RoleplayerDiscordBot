@@ -2427,17 +2427,14 @@ namespace RPBot
                         return;
                     }
 
-                    // Extract fields from modal rows
+                    // Extract fields from modal components (flat)
                     string outcomeStr = string.Empty;
                     string amountStr = string.Empty;
-                    foreach (var row in modal.Data.Components)
+                    foreach (var comp in modal.Data.Components)
                     {
-                        foreach (var comp in row.Components)
-                        {
-                            try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
-                            if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
-                        }
+                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
+                        if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
                     }
 
                     if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
@@ -2483,16 +2480,13 @@ namespace RPBot
                     }
 
                     string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, durationStr = string.Empty;
-                    foreach (var row in modal.Data.Components)
+                    foreach (var comp in modal.Data.Components)
                     {
-                        foreach (var comp in row.Components)
-                        {
-                            try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
-                            if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
-                        }
+                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
+                        if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
                     }
 
                     await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' duration='{durationStr}' user={modal.User.Id}");
