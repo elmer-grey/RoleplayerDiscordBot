@@ -50,6 +50,68 @@ namespace RPBot
        public int TelegramMessageThreadId { get; set; } = 0;
     }
 
+        private async Task HandleModalSubmitted(SocketModal modal)
+        {
+            try
+            {
+                var customId = modal.Data.CustomId ?? string.Empty;
+                var parts = customId.Split(':');
+                if (parts.Length == 0) return;
+
+                if (parts[0] == "pred_bet_modal")
+                {
+                    if (parts.Length < 2) {
+                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
+                        return;
+                    }
+
+                    // Извлекаем поля
+                    try
+                    {
+                        var flat = modal.Data.Components.SelectMany(r => r.Components);
+                        var outcomeComp = flat.FirstOrDefault(c => c.CustomId == "outcome");
+                        var amountComp = flat.FirstOrDefault(c => c.CustomId == "amount");
+                        var outcomeStr = outcomeComp?.Value ?? string.Empty;
+                        var amountStr = amountComp?.Value ?? string.Empty;
+
+                        if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                        {
+                            await modal.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                            return;
+                        }
+
+                        if (!long.TryParse(amountStr, out var amount) || amount <= 0)
+                        {
+                            await modal.RespondAsync("Сумма должна быть положительна.", ephemeral: true);
+                            return;
+                        }
+
+                        var userId = modal.User.Id;
+                        var (ok, error) = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
+                        if (ok)
+                        {
+                            await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true);
+                        }
+                        else
+                        {
+                            await modal.RespondAsync(error, ephemeral: true);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        await modal.RespondAsync($"Ошибка обработки модального окна: {ex.Message}", ephemeral: true);
+                    }
+                }
+            }
+            catch { }
+        }
+
     public enum StartupType
     {
         FirstStart,
@@ -151,6 +213,65 @@ namespace RPBot
             {
                 Console.WriteLine($"CleanupServices error: {ex.Message}");
             }
+        }
+
+        private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_bet:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            if (user == null)
+            {
+                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                return;
+            }
+
+            // Открываем модальное окно для ввода ставки
+            var modal = new ModalBuilder()
+                .WithTitle("Сделать ставку")
+                .WithCustomId($"pred_bet_modal:{guildId}")
+                .AddTextInput("Исход (1 или 2)", "outcome", TextInputStyle.Short, placeholder: "1 или 2")
+                .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
+                .Build();
+
+            await component.RespondWithModalAsync(modal);
+        }
+
+        private async Task HandlePredictionCancelButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_cancel:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+
+            var resolverId = user?.Id ?? 0UL;
+            var (ok, error) = await _predictionService.CancelAsync(guildId, resolverId, isAdmin);
+            if (ok)
+                await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); });
+            else
+                await component.RespondAsync(error, ephemeral: true);
+        }
+
+        private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_resolve:<guildId>:<outcomeId>
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            if (!int.TryParse(parts[2], out var outcomeId)) return;
+
+            var user = component.User as SocketGuildUser;
+            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+
+            var resolverId = user?.Id ?? 0UL;
+            var (ok, error) = await _predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
+            if (!ok)
+                await component.RespondAsync(error, ephemeral: true);
+            else
+                await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); });
         }
 
         // --- Bwonk persistence helpers (inside Program class) ---
@@ -2346,6 +2467,15 @@ namespace RPBot
 
             switch (buttonType)
             {
+                case "pred_bet":
+                    await HandlePredictionBetButton(component, parts);
+                    break;
+                case "pred_cancel":
+                    await HandlePredictionCancelButton(component, parts);
+                    break;
+                case "pred_resolve":
+                    await HandlePredictionResolveButton(component, parts);
+                    break;
                 case "pause_session":
                 case "resume_session":
                 case "edit_session":
@@ -6110,28 +6240,4 @@ namespace RPBot
                 return $"{count} сообщений удалено.";
         }
     }
-
-// (удалено) leaks: hardcoded token
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

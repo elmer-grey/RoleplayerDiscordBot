@@ -95,7 +95,8 @@ namespace RPBot
             };
 
             var embed = BuildEmbed(prediction, showLocked: false);
-            var message = await targetChannel.SendMessageAsync(embed: embed).ConfigureAwait(false);
+            var components = BuildComponents(prediction, showLocked: false);
+            var message = await targetChannel.SendMessageAsync(embed: embed, components: components.Build()).ConfigureAwait(false);
             prediction.MessageId = message.Id;
 
             if (_active.TryAdd(guildId, prediction))
@@ -157,12 +158,36 @@ namespace RPBot
                 return (false, "Время приёма ставок истекло.");
             }
 
-            if (p.Bets.ContainsKey(userId))
-                return (false, "Вы уже сделали ставку, изменить её нельзя.");
-
             if (amount <= 0)
                 return (false, "Сумма ставки должна быть положительной.");
 
+            // Если пользователь уже ставил
+            if (p.Bets.TryGetValue(userId, out var existing))
+            {
+                // Разрешаем только добавление на тот же исход
+                if (existing.OutcomeId != outcomeId)
+                    return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
+
+                // Тратим дополнительные очки
+                if (!_points.TrySpend(guildId, userId, amount))
+                    return (false, "Недостаточно костяшек для этой ставки.");
+
+                existing.Amount += amount;
+
+                var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                outcome.TotalStake += amount;
+                if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
+                {
+                    outcome.TopUserId = userId;
+                    outcome.TopUserStake = existing.Amount;
+                }
+
+                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
+                return (true, string.Empty);
+            }
+
+            // Новая ставка
             if (!_points.TrySpend(guildId, userId, amount))
                 return (false, "Недостаточно костяшек для этой ставки.");
 
@@ -175,12 +200,12 @@ namespace RPBot
 
             p.Bets[userId] = bet;
 
-            var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
-            outcome.TotalStake += amount;
-            if (!outcome.TopUserId.HasValue || amount > outcome.TopUserStake)
+            var outcomeNew = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+            outcomeNew.TotalStake += amount;
+            if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
             {
-                outcome.TopUserId = userId;
-                outcome.TopUserStake = amount;
+                outcomeNew.TopUserId = userId;
+                outcomeNew.TopUserStake = amount;
             }
 
             await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
@@ -372,6 +397,27 @@ namespace RPBot
             builder.WithFooter(showLocked ? "Приём ставок завершён" : "Ставьте костяшки до указанного времени");
 
             return builder.Build();
+        }
+
+        private ComponentBuilder BuildComponents(ActivePrediction p, bool showLocked)
+        {
+            var mb = new ComponentBuilder();
+
+            if (!p.IsLocked && !p.IsResolved)
+            {
+                // Пока приём ставок открыт: кнопки сделать ставку и отменить (общая доступность; проверка прав на сервере при обработке)
+                mb.WithButton("Сделать ставку", customId: $"pred_bet:{p.GuildId}", style: ButtonStyle.Primary);
+                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
+            }
+            else if (p.IsLocked && !p.IsResolved)
+            {
+                // Приём завершён — показать выбор исхода и отмену
+                mb.WithButton("Выбрать исход 1", customId: $"pred_resolve:{p.GuildId}:1", style: ButtonStyle.Success);
+                mb.WithButton("Выбрать исход 2", customId: $"pred_resolve:{p.GuildId}:2", style: ButtonStyle.Success);
+                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
+            }
+
+            return mb;
         }
 
         private Embed BuildResultEmbed(
