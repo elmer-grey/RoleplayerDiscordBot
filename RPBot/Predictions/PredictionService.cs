@@ -162,55 +162,63 @@ namespace RPBot
                 return (false, "Сумма ставки должна быть положительной.");
 
             // Если пользователь уже ставил
-            if (p.Bets.TryGetValue(userId, out var existing))
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (p.Bets.TryGetValue(userId, out var existing))
             {
                 // Разрешаем только добавление на тот же исход
                 if (existing.OutcomeId != outcomeId)
                     return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
 
                 // Тратим дополнительные очки
-                if (!_points.TrySpend(guildId, userId, amount))
-                    return (false, "Недостаточно костяшек для этой ставки.");
+                    if (!_points.TrySpend(guildId, userId, amount))
+                        return (false, "Недостаточно костяшек для этой ставки.");
 
-                existing.Amount += amount;
+                    existing.Amount += amount;
 
-                var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
-                outcome.TotalStake += amount;
-                if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
-                {
-                    outcome.TopUserId = userId;
-                    outcome.TopUserStake = existing.Amount;
-                }
+                    var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                    outcome.TotalStake += amount;
+                    if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
+                    {
+                        outcome.TopUserId = userId;
+                        outcome.TopUserStake = existing.Amount;
+                    }
 
-                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-                await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
-                return (true, string.Empty);
+                    await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                    await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
+                    return (true, string.Empty);
             }
 
             // Новая ставка
-            if (!_points.TrySpend(guildId, userId, amount))
-                return (false, "Недостаточно костяшек для этой ставки.");
+                if (!_points.TrySpend(guildId, userId, amount))
+                    return (false, "Недостаточно костяшек для этой ставки.");
 
-            var bet = new PredictionBet
-            {
-                UserId = userId,
-                OutcomeId = outcomeId,
-                Amount = amount
-            };
+                var bet = new PredictionBet
+                {
+                    UserId = userId,
+                    OutcomeId = outcomeId,
+                    Amount = amount
+                };
 
-            p.Bets[userId] = bet;
+                p.Bets[userId] = bet;
 
-            var outcomeNew = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
-            outcomeNew.TotalStake += amount;
-            if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
-            {
-                outcomeNew.TopUserId = userId;
-                outcomeNew.TopUserStake = amount;
+                var outcomeNew = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                outcomeNew.TotalStake += amount;
+                if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
+                {
+                    outcomeNew.TopUserId = userId;
+                    outcomeNew.TopUserStake = amount;
+                }
+
+                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
+                return (true, string.Empty);
             }
-
-            await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-            await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
-            return (true, string.Empty);
+            finally
+            {
+                p.Sync.Release();
+            }
         }
 
         public async Task<(bool ok, string error)> ResolveAsync(
@@ -251,7 +259,11 @@ namespace RPBot
             long topWinnerUserId = 0;
             long topWinnerProfit = 0;
 
-            foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
+            // Ensure thread-safety when distributing payouts
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
             {
                 // ставка + ставка * coef
                 var profitDouble = bet.Amount * coefRounded;
@@ -264,6 +276,10 @@ namespace RPBot
                     topWinnerProfit = profit;
                     topWinnerUserId = (long)bet.UserId;
                 }
+            }
+            finally
+            {
+                p.Sync.Release();
             }
 
             // Удаляем старое сообщение и публикуем новое с результатом
@@ -311,9 +327,18 @@ namespace RPBot
             if (!(resolverId == p.CreatorId || isAdminOverride))
                 return (false, "Отменить прогноз может только создатель или администратор.");
 
-            foreach (var bet in p.Bets.Values)
+            // Refunds - perform under lock
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
             {
-                _points.Add(guildId, bet.UserId, bet.Amount);
+                foreach (var bet in p.Bets.Values)
+                {
+                    _points.Add(guildId, bet.UserId, bet.Amount);
+                }
+            }
+            finally
+            {
+                p.Sync.Release();
             }
 
             try
