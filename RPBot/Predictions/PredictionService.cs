@@ -44,8 +44,16 @@ namespace RPBot
             // Фоновая задача для авто-блокировки ставок по истечении времени
             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
 
-            // Попробуем загрузить ранее сохранённые прогнозы
+            // Попробуем загрузить ранее сохранённые прогнозы после готовности клиента,
+            // иначе кэш каналов/гильдий может быть пустым и мы получим ложные RESTORE_FAIL.
+            _client.Ready += OnClientReadyForRestore;
+        }
+
+        private Task OnClientReadyForRestore()
+        {
+            _client.Ready -= OnClientReadyForRestore;
             _ = Task.Run(() => LoadStateAsync());
+            return Task.CompletedTask;
         }
 
         private class PersistentPrediction
@@ -110,6 +118,11 @@ namespace RPBot
                     try
                     {
                         var p = kv.Value;
+
+                        // Skip already resolved/cancelled items.
+                        if (p.IsResolved)
+                            continue;
+
                         var ap = new ActivePrediction
                         {
                             GuildId = p.GuildId,
@@ -127,15 +140,122 @@ namespace RPBot
                             Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
                         };
 
+                        // Normalize: recompute totals from bets to avoid zeroed pools after restart.
+                        ap.Outcome1.TotalStake = 0;
+                        ap.Outcome2.TotalStake = 0;
+                        foreach (var b in ap.Bets.Values)
+                        {
+                            if (b.OutcomeId == 1) ap.Outcome1.TotalStake += b.Amount;
+                            else if (b.OutcomeId == 2) ap.Outcome2.TotalStake += b.Amount;
+                        }
+
+                        // Validate message existence. If the original message is gone, auto-cancel and refund.
+                        ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                            ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+
+                        // Cache might not be warm yet after reconnect/restart; try async fetch once.
+                        if (ch == null)
+                        {
+                            try
+                            {
+                                var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
+                                ch = fetched as ISocketMessageChannel;
+                            }
+                            catch { }
+                        }
+
+                        if (ch == null || p.MessageId == 0)
+                        {
+                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+
+                            // Remove from persisted state so it doesn't keep re-triggering on next restart.
+                            try
+                            {
+                                dict.Remove(kv.Key);
+                            }
+                            catch { }
+
+                            continue;
+                        }
+
+                        try
+                        {
+                            var msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
+                            if (msg == null)
+                            {
+                                await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                                await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+
+                                try { dict.Remove(kv.Key); } catch { }
+                                continue;
+                            }
+                        }
+                        catch
+                        {
+                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                            continue;
+                        }
+
                         // Ensure Sync is new
                         // Add to active dictionaries
                         _active[p.GuildId] = ap;
-                        var ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel;
-                        if (ch != null)
-                            _activeChannels[p.GuildId] = ch;
+
+                        _activeChannels[p.GuildId] = ch;
+
+                        await LogAsync($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}").ConfigureAwait(false);
                     }
                     catch { }
                 }
+
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                // If we removed any broken entries, persist the cleaned dict too.
+                try
+                {
+                    var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                    var cleanedJson = System.Text.Json.JsonSerializer.Serialize(dict, options);
+                    await File.WriteAllTextAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
+                }
+                catch { }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private async Task AutoCancelRestoredPredictionAsync(ActivePrediction p, string cancelReason)
+        {
+            try
+            {
+                // Refund
+                await p.Sync.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    foreach (var bet in p.Bets.Values)
+                        _points.Add(p.GuildId, bet.UserId, bet.Amount);
+                }
+                finally
+                {
+                    p.Sync.Release();
+                }
+
+                // Try to notify in channel
+                try
+                {
+                    var channel = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                        ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+                    if (channel != null)
+                    {
+                        var cancelEmbed = BuildCancelEmbed(p, cancelReason);
+                        await channel.SendMessageAsync(embed: cancelEmbed).ConfigureAwait(false);
+                    }
+                }
+                catch { }
+
+                await LogAsync($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'").ConfigureAwait(false);
             }
             catch
             {
@@ -371,6 +491,8 @@ namespace RPBot
 
             long topWinnerUserId = 0;
             long topWinnerProfit = 0;
+            long winnersProfitTotal = 0;
+            int winnersCount = 0;
 
             // Ensure thread-safety when distributing payouts
             await p.Sync.WaitAsync().ConfigureAwait(false);
@@ -384,6 +506,9 @@ namespace RPBot
                     var totalReturn = bet.Amount + profit;
                     _points.Add(guildId, bet.UserId, totalReturn);
 
+                    winnersProfitTotal += profit;
+                    winnersCount++;
+
                     if (profit > topWinnerProfit)
                     {
                         topWinnerProfit = profit;
@@ -395,6 +520,9 @@ namespace RPBot
             {
                 p.Sync.Release();
             }
+
+            var othersProfit = winnersProfitTotal - topWinnerProfit;
+            var othersCount = Math.Max(0, winnersCount - (topWinnerUserId != 0 ? 1 : 0));
 
             // Удаляем старое сообщение и публикуем новое с результатом
             try
@@ -414,7 +542,16 @@ namespace RPBot
                         catch { }
                     }
 
-                    var resultEmbed = BuildResultEmbed(p, winningOutcome, losingOutcome, coef, totalPool, topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId, topWinnerProfit);
+                    var resultEmbed = BuildResultEmbed(
+                        p,
+                        winningOutcome,
+                        losingOutcome,
+                        coef,
+                        totalPool,
+                        topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId,
+                        topWinnerProfit,
+                        othersProfit,
+                        othersCount);
                     await channel.SendMessageAsync(embed: resultEmbed).ConfigureAwait(false);
                 }
             }
@@ -532,6 +669,20 @@ namespace RPBot
             if (!showLocked && TryGetMoscowTime(p.BetsCloseAtUtc.UtcDateTime, out var mskTime))
             {
                 builder.AddField("Приём ставок до", $"{mskTime:dd.MM.yyyy HH:mm} по МСК", false);
+
+                var left = p.BetsCloseAtUtc - DateTimeOffset.UtcNow;
+                if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+                var leftSeconds = (int)Math.Ceiling(left.TotalSeconds);
+                var leftStr = leftSeconds <= 0
+                    ? "0с"
+                    : leftSeconds < 1
+                        ? "<1с"
+                        : leftSeconds >= 3600
+                            ? $"{leftSeconds / 3600}ч {(leftSeconds % 3600) / 60}м {leftSeconds % 60}с"
+                            : leftSeconds >= 60
+                                ? $"{leftSeconds / 60}м {leftSeconds % 60}с"
+                                : $"{leftSeconds}с";
+                builder.AddField("До окончания приёма ставок", leftStr, false);
             }
 
             builder.WithFooter(showLocked ? "Приём ставок завершён" : "Ставьте костяшки до указанного времени");
@@ -567,7 +718,9 @@ namespace RPBot
             double coef,
             long totalPool,
             ulong? topWinnerUserId,
-            long topWinnerProfit)
+            long topWinnerProfit,
+            long othersProfit,
+            int othersCount)
         {
             var builder = new EmbedBuilder()
                 .WithTitle($"Результат прогноза: {p.Title}")
@@ -579,9 +732,14 @@ namespace RPBot
             builder.AddField("Общий пул", totalPool.ToString(), false);
             builder.AddField("Коэффициент", Math.Max(0, coef).ToString("F2"), false);
 
-            if (topWinnerUserId.HasValue && topWinnerProfit > 0)
+            if (topWinnerUserId.HasValue)
             {
                 builder.AddField("Топ выигрыш", $"<@{topWinnerUserId}> заработал {topWinnerProfit} костяшек", false);
+            }
+
+            if (othersCount > 0 && othersProfit > 0)
+            {
+                builder.AddField("Остальные победители", $"Остальные участники заработали {othersProfit} костяшек ({othersCount} чел.)", false);
             }
 
             return builder.Build();
@@ -633,17 +791,38 @@ namespace RPBot
         {
             while (!token.IsCancellationRequested)
             {
+                var delaySeconds = 10;
                 try
                 {
                     var now = DateTimeOffset.UtcNow;
-                    foreach (var kv in _active)
+                    foreach (var kv in _active.ToArray())
                     {
                         var p = kv.Value;
-                        if (!p.IsLocked && now >= p.BetsCloseAtUtc)
+                        try
                         {
-                            p.IsLocked = true;
-                            await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
-                            await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}'");
+                            if (!p.IsLocked)
+                            {
+                                var toClose = p.BetsCloseAtUtc - now;
+                                if (toClose <= TimeSpan.FromSeconds(15) && toClose > TimeSpan.Zero)
+                                    delaySeconds = 1;
+                            }
+
+                            if (!p.IsLocked && now >= p.BetsCloseAtUtc)
+                            {
+                                p.IsLocked = true;
+                                await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
+                                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+                                await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}'");
+                            }
+                            else if (!p.IsResolved)
+                            {
+                                // Keep refreshing while active so the countdown stays up-to-date.
+                                await UpdateMessageAsync(p, showLocked: p.IsLocked).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await LogAsync($"MONITOR_ERROR guild={p.GuildId} msg={p.MessageId} err='{ex.Message}'").ConfigureAwait(false);
                         }
                     }
                 }
@@ -654,7 +833,7 @@ namespace RPBot
 
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(20), token).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token).ConfigureAwait(false);
                 }
                 catch (TaskCanceledException)
                 {

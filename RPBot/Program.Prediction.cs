@@ -144,24 +144,28 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (outcomeNumberOpt == null || amountOpt == null)
                     {
                         await command.RespondAsync("Укажите outcome (1 или 2) и amount (количество костяшек).", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
                     {
                         await command.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (!long.TryParse(amountOpt.ToString(), out var amount) || amount <= 0)
                     {
                         await command.RespondAsync("Сумма должна быть положительным числом.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -176,12 +180,14 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
                     {
                         await command.RespondAsync("Укажите outcome (1 или 2) для завершения прогноза.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -197,6 +203,7 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -212,6 +219,7 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -249,6 +257,7 @@ namespace RPBot
                     }
 
                     await command.RespondAsync(sb.ToString(), ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -257,6 +266,7 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -264,12 +274,14 @@ namespace RPBot
                     if (!isAdmin)
                     {
                         await command.RespondAsync("Ручная корректировка баланса доступна только администраторам.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (amountOpt == null || !long.TryParse(amountOpt.ToString(), out var delta) || delta == 0)
                     {
                         await command.RespondAsync("Укажите amount (целое число, можно отрицательное, но не 0).", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -279,11 +291,13 @@ namespace RPBot
 
                     var newBalance = _pointsService.GetBalance(guildId, targetUserId);
                     await command.RespondAsync($"Баланс пользователя <@{targetUserId}> изменён на {delta}. Текущий баланс: {newBalance}", ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
                 default:
                     await command.RespondAsync("Неизвестное действие для /prediction.", ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
             }
         }
