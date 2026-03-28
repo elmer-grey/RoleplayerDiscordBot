@@ -49,6 +49,18 @@ namespace RPBot
         // Версия бота (отображается в логах/статусах)
         public string BotVersion { get; set; } = "1.0.0.0";
 
+        // Представление версии для UI (например "v1.0.0")
+        public string GetDisplayVersion()
+        {
+            var v = string.IsNullOrWhiteSpace(BotVersion) ? "0.0.0.0" : BotVersion.Trim();
+            var parts = v.Split('.');
+            if (parts.Length >= 3)
+                return $"v{parts[0]}.{parts[1]}.{parts[2]}";
+            if (parts.Length == 2)
+                return $"v{parts[0]}.{parts[1]}";
+            return $"v{v}";
+        }
+
 
         // Список слов, используемых по умолчанию в фильтре мата (нижний регистр лучше)
         public List<string> DefaultSwearWords { get; set; } = new List<string>

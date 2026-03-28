@@ -22,15 +22,125 @@ namespace RPBot
         private readonly ConcurrentDictionary<ulong, ActivePrediction> _active = new();
         private readonly ConcurrentDictionary<ulong, ISocketMessageChannel> _activeChannels = new();
         private readonly CancellationTokenSource _cts = new();
+        private readonly string _stateFilePath;
 
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
         {
             _client = client;
             _points = points;
             _logPath = logPath;
+            // State file for persisting active predictions across restarts
+            try
+            {
+                var settingsDir = BotConfig.ResolvePath(BotConfig.SettingsFolderName);
+                Directory.CreateDirectory(settingsDir);
+                _stateFilePath = Path.Combine(settingsDir, "predictions_state.json");
+            }
+            catch
+            {
+                _stateFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_state.json");
+            }
 
             // Фоновая задача для авто-блокировки ставок по истечении времени
             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
+
+            // Попробуем загрузить ранее сохранённые прогнозы
+            _ = Task.Run(() => LoadStateAsync());
+        }
+
+        private class PersistentPrediction
+        {
+            public ulong GuildId { get; set; }
+            public ulong CreatorId { get; set; }
+            public ulong ChannelId { get; set; }
+            public ulong MessageId { get; set; }
+            public string Title { get; set; } = string.Empty;
+            public PredictionOutcome Outcome1 { get; set; } = new PredictionOutcome { Id = 1 };
+            public PredictionOutcome Outcome2 { get; set; } = new PredictionOutcome { Id = 2 };
+            public DateTimeOffset CreatedAtUtc { get; set; }
+            public DateTimeOffset BetsCloseAtUtc { get; set; }
+            public bool IsLocked { get; set; }
+            public bool IsResolved { get; set; }
+            public int? WinningOutcomeId { get; set; }
+            public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
+        }
+
+        private async Task SaveStateAsync()
+        {
+            try
+            {
+                var snapshot = _active.ToDictionary(kv => kv.Key, kv => new PersistentPrediction
+                {
+                    GuildId = kv.Value.GuildId,
+                    CreatorId = kv.Value.CreatorId,
+                    ChannelId = kv.Value.ChannelId,
+                    MessageId = kv.Value.MessageId,
+                    Title = kv.Value.Title,
+                    Outcome1 = kv.Value.Outcome1,
+                    Outcome2 = kv.Value.Outcome2,
+                    CreatedAtUtc = kv.Value.CreatedAtUtc,
+                    BetsCloseAtUtc = kv.Value.BetsCloseAtUtc,
+                    IsLocked = kv.Value.IsLocked,
+                    IsResolved = kv.Value.IsResolved,
+                    WinningOutcomeId = kv.Value.WinningOutcomeId,
+                    Bets = kv.Value.Bets
+                });
+
+                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
+                await File.WriteAllTextAsync(_stateFilePath, json).ConfigureAwait(false);
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
+
+        private async Task LoadStateAsync()
+        {
+            try
+            {
+                if (!File.Exists(_stateFilePath)) return;
+                var json = await File.ReadAllTextAsync(_stateFilePath).ConfigureAwait(false);
+                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
+                if (dict == null) return;
+
+                foreach (var kv in dict)
+                {
+                    try
+                    {
+                        var p = kv.Value;
+                        var ap = new ActivePrediction
+                        {
+                            GuildId = p.GuildId,
+                            CreatorId = p.CreatorId,
+                            ChannelId = p.ChannelId,
+                            MessageId = p.MessageId,
+                            Title = p.Title,
+                            Outcome1 = p.Outcome1 ?? new PredictionOutcome{Id=1},
+                            Outcome2 = p.Outcome2 ?? new PredictionOutcome{Id=2},
+                            CreatedAtUtc = p.CreatedAtUtc,
+                            BetsCloseAtUtc = p.BetsCloseAtUtc,
+                            IsLocked = p.IsLocked,
+                            IsResolved = p.IsResolved,
+                            WinningOutcomeId = p.WinningOutcomeId,
+                            Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
+                        };
+
+                        // Ensure Sync is new
+                        // Add to active dictionaries
+                        _active[p.GuildId] = ap;
+                        var ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel;
+                        if (ch != null)
+                            _activeChannels[p.GuildId] = ch;
+                    }
+                    catch { }
+                }
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         public Task HandleSlashCommand(SocketSlashCommand command)
@@ -109,6 +219,9 @@ namespace RPBot
 
                 await LogAsync(
                     $"CREATE guild={guildId}({guildName}) channel={channelId}({channelName}) creator={creatorId}({creatorName}) title='{title}' dur={duration} outcomes=[1:'{outcome1Name}';2:'{outcome2Name}'] pool={totalPool} dist=1:{outcome1Stake} 2:{outcome2Stake}");
+
+                // Persist prediction state so it survives bot restarts
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
 
                 return (true, string.Empty, prediction);
             }
@@ -309,6 +422,7 @@ namespace RPBot
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
+            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
             await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F1}");
             return (true, string.Empty);
         }

@@ -2296,7 +2296,7 @@ namespace RPBot
                         else
                         {
                             var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
+                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.0.0.0"}");
                             if (ok)
                                 await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
                             else
@@ -3731,7 +3731,7 @@ namespace RPBot
 
         private async Task LogShutdownState(bool isRestart, string initiator)
         {
-            var version = _config?.BotVersion ?? "0.6.0.0";
+            var version = _config?.BotVersion ?? "0.0.0.0";
             var mode = isRestart ? "перезапуск" : "завершение работы";
             var message = isRestart
                 ? $"Бот завершил текущий цикл работы. Режим: {mode}. Инициатор: {initiator}. Версия: {version}"
