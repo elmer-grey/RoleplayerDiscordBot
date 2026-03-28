@@ -50,6 +50,8 @@ namespace RPBot
        public int TelegramMessageThreadId { get; set; } = 0;
     }
 
+        // Modal handling moved inside Program class
+
     public enum StartupType
     {
         FirstStart,
@@ -91,6 +93,8 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
+
+        private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
         private Task? _backgroundMonitoringTask;
 		private CancellationTokenSource? _dailyRestartCts;
@@ -150,6 +154,179 @@ namespace RPBot
             catch (Exception ex)
             {
                 Console.WriteLine($"CleanupServices error: {ex.Message}");
+            }
+        }
+
+
+
+        private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_bet:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            if (user == null)
+            {
+                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                return;
+            }
+            // Show ephemeral balance and a confirm button before modal
+            // Check active prediction exists to avoid showing intermediate UI when none
+            var active = _predictionService.GetActive(guildId);
+            if (active == null || active.IsResolved)
+            {
+                try { await component.RespondAsync("Сейчас нет активного прогноза.", ephemeral: true); } catch { }
+                ScheduleDeleteOriginalResponse(component);
+                return;
+            }
+
+            var balance = _pointsService.GetBalance(guildId, component.User.Id);
+            var cb = new ComponentBuilder()
+                .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}", style: ButtonStyle.Primary);
+
+            try { await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
+            ScheduleDeleteOriginalResponse(component);
+        }
+
+        private async Task HandlePredictionBetConfirmButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_bet_confirm:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            if (user == null)
+            {
+                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                return;
+            }
+
+            // Remember the ephemeral balance interaction so we can delete it as soon as the modal is submitted.
+            _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
+
+            var active = _predictionService?.GetActive(guildId);
+            PredictionBet? existingBet = null;
+            var hasExistingBet = active != null && active.Bets.TryGetValue(component.User.Id, out existingBet);
+
+            // Open modal to input bet
+            Modal modal;
+            if (hasExistingBet && existingBet != null)
+            {
+                var existingOutcomeName = existingBet!.OutcomeId == 1 ? active!.Outcome1.Name : active!.Outcome2.Name;
+                modal = new ModalBuilder()
+                    .WithTitle("Увеличить ставку")
+                    .WithCustomId($"pred_bet_add_modal:{guildId}")
+                    .AddTextInput($"Ваш исход: {existingOutcomeName}", "amount", TextInputStyle.Short, placeholder: "Сколько ещё поставить")
+                    .Build();
+            }
+            else
+            {
+                modal = new ModalBuilder()
+                    .WithTitle("Сделать ставку")
+                    .WithCustomId($"pred_bet_modal:{guildId}")
+                    .AddTextInput("Исход (1 или 2)", "outcome", TextInputStyle.Short, placeholder: "1 или 2")
+                    .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
+                    .Build();
+            }
+
+            await component.RespondWithModalAsync(modal);
+            // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
+        }
+
+        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    try { await interaction.DeleteOriginalResponseAsync(); } catch { }
+                }
+                catch { }
+            });
+        }
+
+        private void ScheduleDeleteMessage(IUserMessage? message, int seconds = 30)
+        {
+            if (message == null) return;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(seconds));
+                    try { await message.DeleteAsync().ConfigureAwait(false); } catch { }
+                }
+                catch { }
+            });
+        }
+
+        private void ScheduleDeleteFollowup(SocketInteraction interaction, IMessage? message, int seconds = 30)
+        {
+            if (interaction == null || message == null) return;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(seconds));
+                  try
+                    {
+                        // Followups are real messages; delete them via channel REST fetch.
+                        var ch = _client.GetChannel(message.Channel.Id) as IMessageChannel;
+                        if (ch != null)
+                        {
+                            var msg = await ch.GetMessageAsync(message.Id).ConfigureAwait(false) as IUserMessage;
+                            if (msg != null)
+                                await msg.DeleteAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch { }
+                }
+                catch { }
+            });
+        }
+
+        private async Task HandlePredictionCancelButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_cancel:<guildId>
+            if (parts.Length < 2) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+
+            var user = component.User as SocketGuildUser;
+            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+
+            var resolverId = user?.Id ?? 0UL;
+            var (ok, error) = await _predictionService.CancelAsync(guildId, resolverId, isAdmin);
+            if (ok)
+            {
+                try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+            }
+            else
+            {
+                try { await component.RespondAsync(error, ephemeral: true); } catch { }
+            }
+        }
+
+        private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_resolve:<guildId>:<outcomeId>
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            if (!int.TryParse(parts[2], out var outcomeId)) return;
+
+            var user = component.User as SocketGuildUser;
+            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+
+            var resolverId = user?.Id ?? 0UL;
+            var (ok, error) = await _predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
+            if (!ok)
+            {
+                // Avoid responding if the original message was deleted — try update quietly
+                try { await component.RespondAsync(error, ephemeral: true); } catch { }
+            }
+            else
+            {
+                try { await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); }); } catch { }
             }
         }
 
@@ -2161,11 +2338,63 @@ namespace RPBot
                 // ЭТАП 2: Активация обработчиков
                 await LogStartup($"┌──────────── ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ ─────────┐");
                 await SetupDiscordEvents();
-                await ResyncEventAnnouncementsOnStartupAsync();
                 await LogStartup($"└───────────────────────────────────────────────────────┘");
 
-                // ЭТАП 3: Отправка статусов
-                await LogStartup($"┌──────────── ЭТАП 3/4: ОТПРАВКА СТАТУСОВ ──────────────┐");
+                // ЭТАП 3: Синхронизация (эвенты/прогнозы)
+                await LogStartup($"┌──────────── ЭТАП 3/4: СИНХРОНИЗАЦИЯ ───────────────────┐");
+                await ResyncEventAnnouncementsOnStartupAsync();
+                try
+                {
+                    static string Trunc(string? s, int max)
+                    {
+                        if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+                        s = s.Trim();
+                        return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
+                    }
+
+                    // Best-effort log: PredictionService restores state on start; here we log a snapshot.
+                    var anyPred = false;
+                    foreach (var g in _client.Guilds)
+                    {
+                        var ap = _predictionService?.GetActive(g.Id);
+                        if (ap == null || ap.IsResolved)
+                            continue;
+
+                        anyPred = true;
+                        var lockText = ap.IsLocked ? "LOCK" : "OPEN";
+                        var closes = ap.BetsCloseAtUtc.ToLocalTime();
+                        await LogStartup($"│   [PRED] {lockText,-4} {g.Name,-22} | ставок: {ap.Bets.Count,-3} | пул: {ap.TotalPool,-6}│");
+                        await LogStartup($"│        title: {Trunc(ap.Title, 44),-44}│");
+                        await LogStartup($"│        closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} o2={ap.Outcome2.TotalStake}│");
+
+                        // Print up to N bets to keep startup log compact.
+                        var betLines = ap.Bets.Values
+                            .OrderByDescending(b => b.Amount)
+                            .Take(6)
+                            .Select(b => $"{b.UserId}:{b.Amount}#{b.OutcomeId}")
+                            .ToList();
+
+                        if (betLines.Count == 0)
+                        {
+                            await LogStartup($"│        bets: (нет ставок)                               │");
+                        }
+                        else
+                        {
+                            var joined = string.Join(" | ", betLines);
+                            await LogStartup($"│        bets: {Trunc(joined, 52),-52}│");
+                        }
+                    }
+
+                    if (!anyPred)
+                    {
+                        await LogStartup($"│   [PRED] активных прогнозов не найдено                 │");
+                    }
+                }
+                catch { }
+                await LogStartup($"└───────────────────────────────────────────────────────┘");
+
+                // ЭТАП 4: Отправка статусов
+                await LogStartup($"┌──────────── ЭТАП 4/4: ОТПРАВКА СТАТУСОВ ──────────────┐");
 
                 var guildsList = _client.Guilds.ToList();
                 for (int i = 0; i < guildsList.Count; i++)
@@ -2180,7 +2409,7 @@ namespace RPBot
                         else
                         {
                             var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.6.0.0"}");
+                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.0.0.0"}");
                             if (ok)
                                 await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
                             else
@@ -2192,7 +2421,7 @@ namespace RPBot
 
                 await LogStartup($"└───────────────────────────────────────────────────────┘");
 
-                // ЭТАП 4: ФИНАЛ
+                // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
                 // Защита: если событие Ready не сработало и _readyTime остался MinValue,
                 // используем время старта инициализации как начало, чтобы не получить отрицательное время.
@@ -2315,11 +2544,229 @@ namespace RPBot
 
         private async Task HandleModalSubmitted(SocketModal modal)
         {
-            // Разбираем ID сессии из CustomId модального окна
-            var parts = modal.Data.CustomId.Split(':');
-            if (parts.Length >= 2 && parts[0] == "edit_modal")
+            var customId = modal.Data.CustomId ?? string.Empty;
+            try
             {
-                await new GameSessionCommands(_client).HandleEditModal(modal);
+                await LogInfo($"Modal submitted: CustomId={customId} User={modal.User?.Id} Username={modal.User?.Username}");
+               // Respond directly (ephemeral) so we can delete the original response reliably.
+                var parts = customId.Split(':');
+                if (parts.Length == 0) return;
+
+                // Existing edit modal handling
+                if (parts.Length >= 2 && parts[0] == "edit_modal")
+                {
+                    await new GameSessionCommands(_client).HandleEditModal(modal);
+                    return;
+                }
+
+                // Handle bet modal: pred_bet_modal:<guildId>
+                if (parts[0] == "pred_bet_modal")
+                {
+                    if (parts.Length < 2)
+                    {
+                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
+                        return;
+                    }
+
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
+                        return;
+                    }
+
+                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
+                    try
+                    {
+                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
+                        {
+                            try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
+                        }
+                    }
+                    catch { }
+
+                    // Extract fields from modal components (flat)
+                    string outcomeStr = string.Empty;
+                    string amountStr = string.Empty;
+                    foreach (var comp in modal.Data.Components)
+                    {
+                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
+                        if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
+                    }
+
+                    if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                    {
+                        await modal.FollowupAsync("Исход должен быть 1 или 2.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    if (!long.TryParse(amountStr, out var amount) || amount <= 0)
+                    {
+                        await modal.FollowupAsync("Сумма должна быть положительна.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var userId = modal.User.Id;
+                    var res = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
+                    await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
+                    if (res.ok)
+                    {
+                        try { await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true).ConfigureAwait(false); } catch { }
+                    }
+                    else
+                    {
+                        try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                    }
+
+                  ScheduleDeleteOriginalResponse(modal);
+
+                    return;
+                }
+
+                // Handle bet add modal: pred_bet_add_modal:<guildId>
+                if (parts[0] == "pred_bet_add_modal")
+                {
+                    if (parts.Length < 2)
+                    {
+                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.FollowupAsync("Неверный идентификатор сервера.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
+                    try
+                    {
+                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
+                        {
+                            try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
+                        }
+                    }
+                    catch { }
+
+                    var active = _predictionService?.GetActive(guildId);
+                    if (active == null || active.IsResolved)
+                    {
+                        await modal.FollowupAsync("Сейчас нет активного прогноза.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    if (!active.Bets.TryGetValue(modal.User.Id, out var existingBet))
+                    {
+                        await modal.FollowupAsync("Вы ещё не делали ставку. Используйте обычную ставку.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    string amountStr = string.Empty;
+                    foreach (var comp in modal.Data.Components)
+                    {
+                        if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase))
+                            amountStr = comp.Value ?? string.Empty;
+                    }
+
+                    if (!long.TryParse(amountStr, out var amount) || amount <= 0)
+                    {
+                        await modal.FollowupAsync("Сумма должна быть положительна.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var outcomeNum = existingBet.OutcomeId;
+                    var res = await _predictionService!.PlaceBetAsync(guildId, modal.User.Id, outcomeNum, amount);
+                    await LogInfo($"PlaceBet(add) result: ok={res.ok} error={res.error}");
+                    if (res.ok)
+                    {
+                        try { await modal.RespondAsync($"Ставка увеличена на {amount} (исход {outcomeNum}).", ephemeral: true).ConfigureAwait(false); } catch { }
+                    }
+                    else
+                    {
+                        try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                    }
+
+                    ScheduleDeleteOriginalResponse(modal);
+                    return;
+                }
+
+                // Handle create modal: pred_create_modal:<guildId>:<channelId>
+                if (parts[0] == "pred_create_modal")
+                {
+                    if (parts.Length < 3)
+                    {
+                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.FollowupAsync("Неверный guildId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[2], out var channelId))
+                    {
+                        await modal.FollowupAsync("Неверный channelId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, durationStr = string.Empty;
+                    foreach (var comp in modal.Data.Components)
+                    {
+                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
+                        if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
+                    }
+
+                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' duration='{durationStr}' user={modal.User.Id}");
+
+                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
+                    {
+                        await modal.FollowupAsync("Заполните заголовок и оба исхода.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
+                    {
+                        await modal.FollowupAsync("Неверная длительность (минут).", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var creatorId = modal.User.Id;
+                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channelId, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
+                    await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
+                    if (createRes.ok)
+                    {
+                        await modal.FollowupAsync($"Прогноз создан: {title}", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
+                    else
+                    {
+                        await modal.FollowupAsync(createRes.error, ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
+
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                try { await LogError($"HandleModalSubmitted exception for CustomId={customId}: {ex}"); } catch { }
+                try { await modal.FollowupAsync("Что-то пошло не так. Повторите попытку.", ephemeral: true).ConfigureAwait(false); } catch { }
+                try { ScheduleDeleteOriginalResponse(modal); } catch { }
             }
         }
 
@@ -2334,8 +2781,7 @@ namespace RPBot
             catch (Exception ex)
             {
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
-                _ = component.RespondAsync("Ошибка обработки", ephemeral: true)
-                    .ConfigureAwait(false);
+                try { await component.RespondAsync("Ошибка обработки", ephemeral: true); } catch { }
             }
         }
 
@@ -2346,6 +2792,18 @@ namespace RPBot
 
             switch (buttonType)
             {
+                case "pred_bet":
+                    await HandlePredictionBetButton(component, parts);
+                    break;
+                case "pred_bet_confirm":
+                    await HandlePredictionBetConfirmButton(component, parts);
+                    break;
+                case "pred_cancel":
+                    await HandlePredictionCancelButton(component, parts);
+                    break;
+                case "pred_resolve":
+                    await HandlePredictionResolveButton(component, parts);
+                    break;
                 case "pause_session":
                 case "resume_session":
                 case "edit_session":
@@ -3477,7 +3935,7 @@ namespace RPBot
 
         private async Task LogShutdownState(bool isRestart, string initiator)
         {
-            var version = _config?.BotVersion ?? "0.6.0.0";
+            var version = _config?.BotVersion ?? "0.0.0.0";
             var mode = isRestart ? "перезапуск" : "завершение работы";
             var message = isRestart
                 ? $"Бот завершил текущий цикл работы. Режим: {mode}. Инициатор: {initiator}. Версия: {version}"
@@ -4256,24 +4714,29 @@ namespace RPBot
         public async Task Help_Predict(SocketSlashCommand command)
         {
             var helpMessage = new EmbedBuilder()
-                .WithTitle("📈 Помощь по прогнозам и ставкам")
+                .WithTitle("📈 Прогнозы и ставки — помощь")
                 .WithColor(Color.DarkTeal)
-                .WithDescription("Система прогнозов работает в чате голосового канала события и использует костяшки как валюту ставок.")
-                .AddField("🔹 Основные действия",
-                    "> `/prediction action:create title:<название> outcome1:<исход1> outcome2:<исход2> duration_minutes:<минуты>` — создать прогноз (мастер НРИ/админ)\n" +
-                    "> `/prediction action:bet outcome:<1|2> amount:<костяшки>` — сделать ставку\n" +
+                .WithDescription("Прогнозы позволяют ставить **костяшки** на один из двух исходов. Создание — через модал, ставки — через кнопки под сообщением прогноза.")
+                .AddField("✅ Где работает",
+                    "`create/bet/resolve/cancel` доступны **только в чате голосового канала**.\n" +
+                    "Для создания прогноза нужно: **быть в голосовом канале** и чтобы на нём было **активное событие**.")
+                .AddField("🧩 Команды",
+                    "> `/prediction action:create` — открыть модал создания прогноза (мастер НРИ/админ)\n" +
+                    "> `/prediction action:status` — показать ваш баланс и текущий прогноз\n" +
+                    "> `/prediction action:bet outcome:<1|2> amount:<N>` — ставка без кнопок (альтернатива)\n" +
                     "> `/prediction action:resolve outcome:<1|2>` — завершить прогноз (создатель/админ)\n" +
-                    "> `/prediction action:cancel` — отменить прогноз и вернуть все ставки (создатель/админ)\n" +
-                    "> `/prediction action:status` — посмотреть текущий статус и свой баланс\n" +
-                    "> `/prediction action:adjust_points amount:<число> user:<пользователь>` — вручную изменить баланс (только администратор)")
-                .AddField("⚠️ Ограничения",
-                    "• `create`, `bet`, `resolve`, `cancel` доступны только в чате голосового канала\n" +
-                    "• Создать прогноз можно только при активном событии в этом канале\n" +
-                    "• Если событие завершилось, активный прогноз закрывается автоматически с возвратом ставок")
-                .AddField("💡 Важно",
-                    "• Ставку можно сделать только один раз на текущий прогноз\n" +
+                    "> `/prediction action:cancel` — отменить прогноз и вернуть ставки (создатель/админ)\n" +
+                    "> `/prediction action:adjust_points amount:<число> user:<пользователь>` — изменить баланс (только админ)")
+                .AddField("🖱️ Ставки через кнопки",
+                    "1) `Сделать ставку` → появится баланс и `Продолжить`\n" +
+                    "2) `Продолжить` → модал ставки\n" +
+                    "3) Если ставка уже была, откроется модал **увеличения ставки** без выбора исхода")
+                .AddField("⏳ Таймер",
+                    "Пока приём ставок активен, в сообщении прогноза отображается **сколько осталось времени**. Обновление происходит примерно каждые 10 секунд.")
+                .AddField("ℹ️ Важно",
                     "• Приём ставок закрывается автоматически по времени\n" +
-                    "• Баланс всегда можно проверить через `action:status`")
+                    "• Ephemeral-уведомления (баланс/подтверждения) удаляются автоматически\n" +
+                    "• Если событие завершилось, активный прогноз закрывается с возвратом ставок")
                 .WithFooter("Если что-то работает не так — используйте /bug_report")
                 .Build();
 
@@ -6110,28 +6573,4 @@ namespace RPBot
                 return $"{count} сообщений удалено.";
         }
     }
-
-// (удалено) leaks: hardcoded token
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

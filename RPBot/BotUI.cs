@@ -1013,7 +1013,8 @@ namespace RPBot
         {
             if (_isDisposed) return;
 
-            _mainWindow = new Window($"Discord Bot Control Panel v0.6.0 - {DateTime.Now:HH:mm:ss}")
+            var displayVersion = BotConfig.Current?.GetDisplayVersion() ?? "v?";
+            _mainWindow = new Window($"Discord Bot Control Panel {displayVersion} - {DateTime.Now:HH:mm:ss}")
             {
                 X = 0,
                 Y = 0,

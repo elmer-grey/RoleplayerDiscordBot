@@ -35,6 +35,9 @@ namespace RPBot
         public int? WinningOutcomeId { get; set; }
         public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
 
+        // Synchronization primitive for concurrent operations on this prediction
+        public System.Threading.SemaphoreSlim Sync { get; } = new System.Threading.SemaphoreSlim(1, 1);
+
         public long TotalPool => Outcome1.TotalStake + Outcome2.TotalStake;
 
         public double RawOdds1 => Outcome1.TotalStake <= 0 ? 1.0 : (double)TotalPool / Outcome1.TotalStake;

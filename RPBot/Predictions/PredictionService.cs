@@ -22,15 +22,245 @@ namespace RPBot
         private readonly ConcurrentDictionary<ulong, ActivePrediction> _active = new();
         private readonly ConcurrentDictionary<ulong, ISocketMessageChannel> _activeChannels = new();
         private readonly CancellationTokenSource _cts = new();
+        private readonly string _stateFilePath;
 
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
         {
             _client = client;
             _points = points;
             _logPath = logPath;
+            // State file for persisting active predictions across restarts
+            try
+            {
+                var settingsDir = BotConfig.ResolvePath(BotConfig.SettingsFolderName);
+                Directory.CreateDirectory(settingsDir);
+                _stateFilePath = Path.Combine(settingsDir, "predictions_state.json");
+            }
+            catch
+            {
+                _stateFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_state.json");
+            }
 
             // Фоновая задача для авто-блокировки ставок по истечении времени
             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
+
+            // Попробуем загрузить ранее сохранённые прогнозы после готовности клиента,
+            // иначе кэш каналов/гильдий может быть пустым и мы получим ложные RESTORE_FAIL.
+            _client.Ready += OnClientReadyForRestore;
+        }
+
+        private Task OnClientReadyForRestore()
+        {
+            _client.Ready -= OnClientReadyForRestore;
+            _ = Task.Run(() => LoadStateAsync());
+            return Task.CompletedTask;
+        }
+
+        private class PersistentPrediction
+        {
+            public ulong GuildId { get; set; }
+            public ulong CreatorId { get; set; }
+            public ulong ChannelId { get; set; }
+            public ulong MessageId { get; set; }
+            public string Title { get; set; } = string.Empty;
+            public PredictionOutcome Outcome1 { get; set; } = new PredictionOutcome { Id = 1 };
+            public PredictionOutcome Outcome2 { get; set; } = new PredictionOutcome { Id = 2 };
+            public DateTimeOffset CreatedAtUtc { get; set; }
+            public DateTimeOffset BetsCloseAtUtc { get; set; }
+            public bool IsLocked { get; set; }
+            public bool IsResolved { get; set; }
+            public int? WinningOutcomeId { get; set; }
+            public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
+        }
+
+        private async Task SaveStateAsync()
+        {
+            try
+            {
+                var snapshot = _active.ToDictionary(kv => kv.Key, kv => new PersistentPrediction
+                {
+                    GuildId = kv.Value.GuildId,
+                    CreatorId = kv.Value.CreatorId,
+                    ChannelId = kv.Value.ChannelId,
+                    MessageId = kv.Value.MessageId,
+                    Title = kv.Value.Title,
+                    Outcome1 = kv.Value.Outcome1,
+                    Outcome2 = kv.Value.Outcome2,
+                    CreatedAtUtc = kv.Value.CreatedAtUtc,
+                    BetsCloseAtUtc = kv.Value.BetsCloseAtUtc,
+                    IsLocked = kv.Value.IsLocked,
+                    IsResolved = kv.Value.IsResolved,
+                    WinningOutcomeId = kv.Value.WinningOutcomeId,
+                    Bets = kv.Value.Bets
+                });
+
+                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
+                await File.WriteAllTextAsync(_stateFilePath, json).ConfigureAwait(false);
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
+
+        private async Task LoadStateAsync()
+        {
+            try
+            {
+                if (!File.Exists(_stateFilePath)) return;
+                var json = await File.ReadAllTextAsync(_stateFilePath).ConfigureAwait(false);
+                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
+                if (dict == null) return;
+
+                foreach (var kv in dict)
+                {
+                    try
+                    {
+                        var p = kv.Value;
+
+                        // Skip already resolved/cancelled items.
+                        if (p.IsResolved)
+                            continue;
+
+                        var ap = new ActivePrediction
+                        {
+                            GuildId = p.GuildId,
+                            CreatorId = p.CreatorId,
+                            ChannelId = p.ChannelId,
+                            MessageId = p.MessageId,
+                            Title = p.Title,
+                            Outcome1 = p.Outcome1 ?? new PredictionOutcome{Id=1},
+                            Outcome2 = p.Outcome2 ?? new PredictionOutcome{Id=2},
+                            CreatedAtUtc = p.CreatedAtUtc,
+                            BetsCloseAtUtc = p.BetsCloseAtUtc,
+                            IsLocked = p.IsLocked,
+                            IsResolved = p.IsResolved,
+                            WinningOutcomeId = p.WinningOutcomeId,
+                            Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
+                        };
+
+                        // Normalize: recompute totals from bets to avoid zeroed pools after restart.
+                        ap.Outcome1.TotalStake = 0;
+                        ap.Outcome2.TotalStake = 0;
+                        foreach (var b in ap.Bets.Values)
+                        {
+                            if (b.OutcomeId == 1) ap.Outcome1.TotalStake += b.Amount;
+                            else if (b.OutcomeId == 2) ap.Outcome2.TotalStake += b.Amount;
+                        }
+
+                        // Validate message existence. If the original message is gone, auto-cancel and refund.
+                        ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                            ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+
+                        // Cache might not be warm yet after reconnect/restart; try async fetch once.
+                        if (ch == null)
+                        {
+                            try
+                            {
+                                var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
+                                ch = fetched as ISocketMessageChannel;
+                            }
+                            catch { }
+                        }
+
+                        if (ch == null || p.MessageId == 0)
+                        {
+                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+
+                            // Remove from persisted state so it doesn't keep re-triggering on next restart.
+                            try
+                            {
+                                dict.Remove(kv.Key);
+                            }
+                            catch { }
+
+                            continue;
+                        }
+
+                        try
+                        {
+                            var msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
+                            if (msg == null)
+                            {
+                                await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                                await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+
+                                try { dict.Remove(kv.Key); } catch { }
+                                continue;
+                            }
+                        }
+                        catch
+                        {
+                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                            continue;
+                        }
+
+                        // Ensure Sync is new
+                        // Add to active dictionaries
+                        _active[p.GuildId] = ap;
+
+                        _activeChannels[p.GuildId] = ch;
+
+                        await LogAsync($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}").ConfigureAwait(false);
+                    }
+                    catch { }
+                }
+
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                // If we removed any broken entries, persist the cleaned dict too.
+                try
+                {
+                    var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                    var cleanedJson = System.Text.Json.JsonSerializer.Serialize(dict, options);
+                    await File.WriteAllTextAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
+                }
+                catch { }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private async Task AutoCancelRestoredPredictionAsync(ActivePrediction p, string cancelReason)
+        {
+            try
+            {
+                // Refund
+                await p.Sync.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    foreach (var bet in p.Bets.Values)
+                        _points.Add(p.GuildId, bet.UserId, bet.Amount);
+                }
+                finally
+                {
+                    p.Sync.Release();
+                }
+
+                // Try to notify in channel
+                try
+                {
+                    var channel = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                        ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+                    if (channel != null)
+                    {
+                        var cancelEmbed = BuildCancelEmbed(p, cancelReason);
+                        await channel.SendMessageAsync(embed: cancelEmbed).ConfigureAwait(false);
+                    }
+                }
+                catch { }
+
+                await LogAsync($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'").ConfigureAwait(false);
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         public Task HandleSlashCommand(SocketSlashCommand command)
@@ -95,7 +325,8 @@ namespace RPBot
             };
 
             var embed = BuildEmbed(prediction, showLocked: false);
-            var message = await targetChannel.SendMessageAsync(embed: embed).ConfigureAwait(false);
+            var components = BuildComponents(prediction, showLocked: false);
+            var message = await targetChannel.SendMessageAsync(embed: embed, components: components.Build()).ConfigureAwait(false);
             prediction.MessageId = message.Id;
 
             if (_active.TryAdd(guildId, prediction))
@@ -108,6 +339,9 @@ namespace RPBot
 
                 await LogAsync(
                     $"CREATE guild={guildId}({guildName}) channel={channelId}({channelName}) creator={creatorId}({creatorName}) title='{title}' dur={duration} outcomes=[1:'{outcome1Name}';2:'{outcome2Name}'] pool={totalPool} dist=1:{outcome1Stake} 2:{outcome2Stake}");
+
+                // Persist prediction state so it survives bot restarts
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
 
                 return (true, string.Empty, prediction);
             }
@@ -157,35 +391,67 @@ namespace RPBot
                 return (false, "Время приёма ставок истекло.");
             }
 
-            if (p.Bets.ContainsKey(userId))
-                return (false, "Вы уже сделали ставку, изменить её нельзя.");
-
             if (amount <= 0)
                 return (false, "Сумма ставки должна быть положительной.");
 
-            if (!_points.TrySpend(guildId, userId, amount))
-                return (false, "Недостаточно костяшек для этой ставки.");
-
-            var bet = new PredictionBet
+            // Если пользователь уже ставил
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
             {
-                UserId = userId,
-                OutcomeId = outcomeId,
-                Amount = amount
-            };
-
-            p.Bets[userId] = bet;
-
-            var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
-            outcome.TotalStake += amount;
-            if (!outcome.TopUserId.HasValue || amount > outcome.TopUserStake)
+                if (p.Bets.TryGetValue(userId, out var existing))
             {
-                outcome.TopUserId = userId;
-                outcome.TopUserStake = amount;
+                // Разрешаем только добавление на тот же исход
+                if (existing.OutcomeId != outcomeId)
+                    return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
+
+                // Тратим дополнительные очки
+                    if (!_points.TrySpend(guildId, userId, amount))
+                        return (false, "Недостаточно костяшек для этой ставки.");
+
+                    existing.Amount += amount;
+
+                    var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                    outcome.TotalStake += amount;
+                    if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
+                    {
+                        outcome.TopUserId = userId;
+                        outcome.TopUserStake = existing.Amount;
+                    }
+
+                    await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                    await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
+                    return (true, string.Empty);
             }
 
-            await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-            await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
-            return (true, string.Empty);
+            // Новая ставка
+                if (!_points.TrySpend(guildId, userId, amount))
+                    return (false, "Недостаточно костяшек для этой ставки.");
+
+                var bet = new PredictionBet
+                {
+                    UserId = userId,
+                    OutcomeId = outcomeId,
+                    Amount = amount
+                };
+
+                p.Bets[userId] = bet;
+
+                var outcomeNew = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                outcomeNew.TotalStake += amount;
+                if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
+                {
+                    outcomeNew.TopUserId = userId;
+                    outcomeNew.TopUserStake = amount;
+                }
+
+                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
+                return (true, string.Empty);
+            }
+            finally
+            {
+                p.Sync.Release();
+            }
         }
 
         public async Task<(bool ok, string error)> ResolveAsync(
@@ -225,21 +491,38 @@ namespace RPBot
 
             long topWinnerUserId = 0;
             long topWinnerProfit = 0;
+            long winnersProfitTotal = 0;
+            int winnersCount = 0;
 
-            foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
+            // Ensure thread-safety when distributing payouts
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
             {
-                // ставка + ставка * coef
-                var profitDouble = bet.Amount * coefRounded;
-                var profit = (long)Math.Round(profitDouble, MidpointRounding.AwayFromZero);
-                var totalReturn = bet.Amount + profit;
-                _points.Add(guildId, bet.UserId, totalReturn);
-
-                if (profit > topWinnerProfit)
+                foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
                 {
-                    topWinnerProfit = profit;
-                    topWinnerUserId = (long)bet.UserId;
+                    // ставка + ставка * coef
+                    var profitDouble = bet.Amount * coefRounded;
+                    var profit = (long)Math.Round(profitDouble, MidpointRounding.AwayFromZero);
+                    var totalReturn = bet.Amount + profit;
+                    _points.Add(guildId, bet.UserId, totalReturn);
+
+                    winnersProfitTotal += profit;
+                    winnersCount++;
+
+                    if (profit > topWinnerProfit)
+                    {
+                        topWinnerProfit = profit;
+                        topWinnerUserId = (long)bet.UserId;
+                    }
                 }
             }
+            finally
+            {
+                p.Sync.Release();
+            }
+
+            var othersProfit = winnersProfitTotal - topWinnerProfit;
+            var othersCount = Math.Max(0, winnersCount - (topWinnerUserId != 0 ? 1 : 0));
 
             // Удаляем старое сообщение и публикуем новое с результатом
             try
@@ -259,7 +542,16 @@ namespace RPBot
                         catch { }
                     }
 
-                    var resultEmbed = BuildResultEmbed(p, winningOutcome, losingOutcome, coef, totalPool, topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId, topWinnerProfit);
+                    var resultEmbed = BuildResultEmbed(
+                        p,
+                        winningOutcome,
+                        losingOutcome,
+                        coef,
+                        totalPool,
+                        topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId,
+                        topWinnerProfit,
+                        othersProfit,
+                        othersCount);
                     await channel.SendMessageAsync(embed: resultEmbed).ConfigureAwait(false);
                 }
             }
@@ -267,6 +559,7 @@ namespace RPBot
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
+            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
             await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F1}");
             return (true, string.Empty);
         }
@@ -286,9 +579,18 @@ namespace RPBot
             if (!(resolverId == p.CreatorId || isAdminOverride))
                 return (false, "Отменить прогноз может только создатель или администратор.");
 
-            foreach (var bet in p.Bets.Values)
+            // Refunds - perform under lock
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
             {
-                _points.Add(guildId, bet.UserId, bet.Amount);
+                foreach (var bet in p.Bets.Values)
+                {
+                    _points.Add(guildId, bet.UserId, bet.Amount);
+                }
+            }
+            finally
+            {
+                p.Sync.Release();
             }
 
             try
@@ -367,11 +669,46 @@ namespace RPBot
             if (!showLocked && TryGetMoscowTime(p.BetsCloseAtUtc.UtcDateTime, out var mskTime))
             {
                 builder.AddField("Приём ставок до", $"{mskTime:dd.MM.yyyy HH:mm} по МСК", false);
+
+                var left = p.BetsCloseAtUtc - DateTimeOffset.UtcNow;
+                if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+                var leftSeconds = (int)Math.Ceiling(left.TotalSeconds);
+                var leftStr = leftSeconds <= 0
+                    ? "0с"
+                    : leftSeconds < 1
+                        ? "<1с"
+                        : leftSeconds >= 3600
+                            ? $"{leftSeconds / 3600}ч {(leftSeconds % 3600) / 60}м {leftSeconds % 60}с"
+                            : leftSeconds >= 60
+                                ? $"{leftSeconds / 60}м {leftSeconds % 60}с"
+                                : $"{leftSeconds}с";
+                builder.AddField("До окончания приёма ставок", leftStr, false);
             }
 
             builder.WithFooter(showLocked ? "Приём ставок завершён" : "Ставьте костяшки до указанного времени");
 
             return builder.Build();
+        }
+
+        private ComponentBuilder BuildComponents(ActivePrediction p, bool showLocked)
+        {
+            var mb = new ComponentBuilder();
+
+            if (!p.IsLocked && !p.IsResolved)
+            {
+                // Пока приём ставок открыт: кнопки сделать ставку и отменить (общая доступность; проверка прав на сервере при обработке)
+                mb.WithButton("Сделать ставку", customId: $"pred_bet:{p.GuildId}", style: ButtonStyle.Primary);
+                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
+            }
+            else if (p.IsLocked && !p.IsResolved)
+            {
+                // Приём завершён — показать выбор исхода и отмену
+                mb.WithButton("Выбрать исход 1", customId: $"pred_resolve:{p.GuildId}:1", style: ButtonStyle.Success);
+                mb.WithButton("Выбрать исход 2", customId: $"pred_resolve:{p.GuildId}:2", style: ButtonStyle.Success);
+                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
+            }
+
+            return mb;
         }
 
         private Embed BuildResultEmbed(
@@ -381,7 +718,9 @@ namespace RPBot
             double coef,
             long totalPool,
             ulong? topWinnerUserId,
-            long topWinnerProfit)
+            long topWinnerProfit,
+            long othersProfit,
+            int othersCount)
         {
             var builder = new EmbedBuilder()
                 .WithTitle($"Результат прогноза: {p.Title}")
@@ -393,9 +732,14 @@ namespace RPBot
             builder.AddField("Общий пул", totalPool.ToString(), false);
             builder.AddField("Коэффициент", Math.Max(0, coef).ToString("F2"), false);
 
-            if (topWinnerUserId.HasValue && topWinnerProfit > 0)
+            if (topWinnerUserId.HasValue)
             {
                 builder.AddField("Топ выигрыш", $"<@{topWinnerUserId}> заработал {topWinnerProfit} костяшек", false);
+            }
+
+            if (othersCount > 0 && othersProfit > 0)
+            {
+                builder.AddField("Остальные победители", $"Остальные участники заработали {othersProfit} костяшек ({othersCount} чел.)", false);
             }
 
             return builder.Build();
@@ -414,7 +758,19 @@ namespace RPBot
                     return;
 
                 var embed = BuildEmbed(p, showLocked);
-                await msg.ModifyAsync(props => props.Embed = embed).ConfigureAwait(false);
+                // Build components only if prediction is not resolved/cancelled
+                MessageComponent? comps = null;
+                if (!p.IsResolved)
+                {
+                    var cb = BuildComponents(p, showLocked);
+                    comps = cb?.Build();
+                }
+
+                await msg.ModifyAsync(props =>
+                {
+                    props.Embed = embed;
+                    props.Components = comps;
+                }).ConfigureAwait(false);
             }
             catch
             {
@@ -435,17 +791,38 @@ namespace RPBot
         {
             while (!token.IsCancellationRequested)
             {
+                var delaySeconds = 10;
                 try
                 {
                     var now = DateTimeOffset.UtcNow;
-                    foreach (var kv in _active)
+                    foreach (var kv in _active.ToArray())
                     {
                         var p = kv.Value;
-                        if (!p.IsLocked && now >= p.BetsCloseAtUtc)
+                        try
                         {
-                            p.IsLocked = true;
-                            await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
-                            await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}'");
+                            if (!p.IsLocked)
+                            {
+                                var toClose = p.BetsCloseAtUtc - now;
+                                if (toClose <= TimeSpan.FromSeconds(15) && toClose > TimeSpan.Zero)
+                                    delaySeconds = 1;
+                            }
+
+                            if (!p.IsLocked && now >= p.BetsCloseAtUtc)
+                            {
+                                p.IsLocked = true;
+                                await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
+                                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+                                await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}'");
+                            }
+                            else if (!p.IsResolved)
+                            {
+                                // Keep refreshing while active so the countdown stays up-to-date.
+                                await UpdateMessageAsync(p, showLocked: p.IsLocked).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await LogAsync($"MONITOR_ERROR guild={p.GuildId} msg={p.MessageId} err='{ex.Message}'").ConfigureAwait(false);
                         }
                     }
                 }
@@ -456,7 +833,7 @@ namespace RPBot
 
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(20), token).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token).ConfigureAwait(false);
                 }
                 catch (TaskCanceledException)
                 {

@@ -92,49 +92,50 @@ namespace RPBot
                         await command.RespondAsync("Создавать прогнозы могут только мастера НРИ или администраторы.", ephemeral: true);
                         return;
                     }
+                    // Open modal for creating prediction (friendly UI)
+                    // Require user to be in a voice channel and that channel has an active scheduled event
+                    var guildUser = command.User as SocketGuildUser;
+                    var userVoiceChannel = guildUser?.VoiceChannel;
 
-                    if (string.IsNullOrWhiteSpace(titleOpt) || string.IsNullOrWhiteSpace(outcome1Opt) || string.IsNullOrWhiteSpace(outcome2Opt))
+                    // Diagnostic logging to help understand why modal may be shown unexpectedly
+                    try
                     {
-                        await command.RespondAsync("Для создания прогноза укажите title, outcome1 и outcome2.", ephemeral: true);
+                        await LogInfo($"Prediction create invoked: guild={guildId} user={command.User.Id} action=create channel={command.Channel.Id} userVoiceChannelId={(userVoiceChannel?.Id.ToString() ?? "null")} ");
+                        var evs = guildChannel.Guild.Events.Select(e => new { e.Id, e.Name, e.Status, ChannelId = (e.Channel != null ? e.Channel.Id : 0UL), e.Location }).ToList();
+                        await LogInfo($"Guild events count: {evs.Count}");
+                        foreach (var ev in evs)
+                        {
+                            await LogInfo($"Event: id={ev.Id} name='{ev.Name}' status={ev.Status} channelId={ev.ChannelId} location='{ev.Location}'");
+                        }
+                    }
+                    catch { }
+
+                    if (userVoiceChannel == null || !IsActiveEventOnChannel(userVoiceChannel.Id))
+                    {
+                        await command.RespondAsync("Чтобы создать прогноз, вы должны находиться в голосовом канале с активным событием.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
-
-                    var hasActiveEventInChannel = guildChannel.Guild.Events.Any(e =>
-                        e.Status == GuildScheduledEventStatus.Active &&
-                        e.Channel != null &&
-                        e.Channel.Id == guildChannel.Id);
-
-                    if (!hasActiveEventInChannel)
-                    {
-                        await command.RespondAsync("Создать прогноз можно только при активном событии в этом канале.", ephemeral: true);
-                        return;
-                    }
-
-                    if (durationOpt == null || !int.TryParse(durationOpt.ToString(), out var parsed) || parsed <= 0)
-                    {
-                        await command.RespondAsync("Для создания прогноза укажите duration_minutes (> 0).", ephemeral: true);
-                        return;
-                    }
-
-                    var minutes = parsed;
 
                     var targetMessageChannel = command.Channel as ISocketMessageChannel;
                     if (targetMessageChannel == null)
                     {
                         await command.RespondAsync("Не удалось получить чат канала для публикации прогноза.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
-                    var (ok, error, _) = await _predictionService.CreateAsync(
-                        guildId,
-                        user.Id,
-                        targetMessageChannel,
-                        titleOpt,
-                        outcome1Opt,
-                        outcome2Opt,
-                        TimeSpan.FromMinutes(minutes));
+                    var modal = new ModalBuilder()
+                        .WithTitle("Создать прогноз")
+                        .WithCustomId($"pred_create_modal:{guildId}:{targetMessageChannel.Id}")
+                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза")
+                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1")
+                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2")
+                        .AddTextInput("Продолжительность сбора ставок (минуты)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
+                        .Build();
 
-                    await command.RespondAsync(ok ? $"Прогноз создан: {titleOpt}" : error, ephemeral: true);
+                    await command.RespondWithModalAsync(modal);
+                    // Defer deletion of the ephemeral confirmation that will be sent after modal submit (handled in modal handler)
                     break;
                 }
 
@@ -143,29 +144,34 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (outcomeNumberOpt == null || amountOpt == null)
                     {
                         await command.RespondAsync("Укажите outcome (1 или 2) и amount (количество костяшек).", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
                     {
                         await command.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (!long.TryParse(amountOpt.ToString(), out var amount) || amount <= 0)
                     {
                         await command.RespondAsync("Сумма должна быть положительным числом.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     var (ok, error) = await _predictionService.PlaceBetAsync(guildId, user.Id, outcomeNum, amount);
                     await command.RespondAsync(ok ? $"Ставка {amount} костяшек на исход {outcomeNum} принята." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -174,18 +180,21 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
                     {
                         await command.RespondAsync("Укажите outcome (1 или 2) для завершения прогноза.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     var isAdmin = user.GuildPermissions.Administrator;
                     var (ok, error) = await _predictionService.ResolveAsync(guildId, user.Id, isAdmin, outcomeNum);
                     await command.RespondAsync(ok ? "Прогноз завершён." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -194,12 +203,14 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     var isAdmin = user.GuildPermissions.Administrator;
                     var (ok, error) = await _predictionService.CancelAsync(guildId, user.Id, isAdmin);
                     await command.RespondAsync(ok ? "Прогноз отменён. Все ставки возвращены." : error, ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -208,6 +219,7 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -245,6 +257,7 @@ namespace RPBot
                     }
 
                     await command.RespondAsync(sb.ToString(), ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
@@ -253,6 +266,7 @@ namespace RPBot
                     if (user == null)
                     {
                         await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -260,12 +274,14 @@ namespace RPBot
                     if (!isAdmin)
                     {
                         await command.RespondAsync("Ручная корректировка баланса доступна только администраторам.", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
                     if (amountOpt == null || !long.TryParse(amountOpt.ToString(), out var delta) || delta == 0)
                     {
                         await command.RespondAsync("Укажите amount (целое число, можно отрицательное, но не 0).", ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         return;
                     }
 
@@ -275,11 +291,13 @@ namespace RPBot
 
                     var newBalance = _pointsService.GetBalance(guildId, targetUserId);
                     await command.RespondAsync($"Баланс пользователя <@{targetUserId}> изменён на {delta}. Текущий баланс: {newBalance}", ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
                 }
 
                 default:
                     await command.RespondAsync("Неизвестное действие для /prediction.", ephemeral: true);
+                    ScheduleDeleteOriginalResponse(command);
                     break;
             }
         }
