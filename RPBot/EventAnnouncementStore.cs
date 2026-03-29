@@ -94,6 +94,7 @@ namespace RPBot
 					if (!File.Exists(_path))
 					{
 						_state = new EventAnnouncementState();
+                     SaveLocked();
 						return;
 					}
 

@@ -90,6 +90,16 @@ namespace RPBot
             }
         }
 
+        public Dictionary<ulong, Dictionary<ulong, long>> GetSnapshot()
+        {
+            var snapshot = new Dictionary<ulong, Dictionary<ulong, long>>();
+            foreach (var g in _balances)
+            {
+                snapshot[g.Key] = new Dictionary<ulong, long>(g.Value);
+            }
+            return snapshot;
+        }
+
         public async Task SaveAsync()
         {
             await _ioLock.WaitAsync().ConfigureAwait(false);

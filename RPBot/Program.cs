@@ -1658,8 +1658,16 @@ namespace RPBot
             // Telegram
             try
             {
-                if (_telegramNotifier != null && entry.TelegramMessageId > 0)
+                if (_telegramNotifier != null)
                 {
+                    // Keep entry telegram routing synced with current server config.
+                    if (_serverConfigs.TryGetValue(guild.Id, out var liveCfg))
+                    {
+                        entry.TelegramChatId = liveCfg.TelegramChatId;
+                        entry.TelegramMessageThreadId = liveCfg.TelegramMessageThreadId;
+                        _eventAnnouncementStore.Upsert(entry);
+                    }
+
                     var tgText = $"{prefix} {statusText}: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
                         $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
@@ -1675,10 +1683,26 @@ namespace RPBot
                         tgText += $"\n\nОписание события:\n{desc}";
                     }
 
-                    var ok = entry.TelegramHasPhoto
-                        ? await _telegramNotifier.EditMessageCaptionAsync(guild.Id, entry.TelegramMessageId, tgText)
-                        : await _telegramNotifier.EditMessageTextAsync(guild.Id, entry.TelegramMessageId, tgText);
-                    try { Console.WriteLine($"[EVENT] status {status} telegram {(ok ? "ok" : "fail")} guild={guild.Id} event={guildEvent.Id} msg={entry.TelegramMessageId}"); } catch { }
+                    bool ok;
+                    if (entry.TelegramMessageId > 0)
+                    {
+                        ok = entry.TelegramHasPhoto
+                            ? await _telegramNotifier.EditMessageCaptionAsync(guild.Id, entry.TelegramMessageId, tgText)
+                            : await _telegramNotifier.EditMessageTextAsync(guild.Id, entry.TelegramMessageId, tgText);
+                        try { Console.WriteLine($"[EVENT] status {status} telegram {(ok ? "ok" : "fail")} guild={guild.Id} event={guildEvent.Id} msg={entry.TelegramMessageId}"); } catch { }
+                    }
+                    else
+                    {
+                        var sentId = await _telegramNotifier.SendMessageReturningMessageIdAsync(guild.Id, tgText);
+                        ok = sentId.HasValue;
+                        if (sentId.HasValue)
+                        {
+                            entry.TelegramMessageId = sentId.Value;
+                            entry.TelegramHasPhoto = false;
+                            _eventAnnouncementStore.Upsert(entry);
+                        }
+                        try { Console.WriteLine($"[EVENT] status {status} telegram {(ok ? "sent" : "skip/fail")} guild={guild.Id} event={guildEvent.Id} msg={(sentId ?? 0)}"); } catch { }
+                    }
                 }
             }
             catch (Exception ex)
@@ -1866,6 +1890,11 @@ namespace RPBot
                 entry.AnnounceChannelId = announceChannel.Id;
                 entry.AnnounceMessageId = announceMsg.Id;
                 entry.DmMessageIdsByUserId = dmMap;
+              if (_serverConfigs.TryGetValue(guild.Id, out var sc2))
+                {
+                    entry.TelegramChatId = sc2.TelegramChatId;
+                    entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
+                }
                 _eventAnnouncementStore.Upsert(entry);
             }
 		}
@@ -2306,6 +2335,65 @@ namespace RPBot
         {
             _readyTime = DateTime.UtcNow;
             _readyCompleted = true;
+
+            try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
+
+            try
+            {
+                var changed = false;
+                foreach (var g in _client.Guilds)
+                {
+                    if (!_serverConfigs.ContainsKey(g.Id))
+                    {
+                        _serverConfigs[g.Id] = new ServerConfig { GuildID = g.Id };
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                    SaveServerConfigs();
+            }
+            catch { }
+
+            // Best-effort: bootstrap points_users.json from points.json
+            try
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var any = false;
+                       var balancesByGuild = _pointsService.GetSnapshot();
+                        foreach (var guild in _client.Guilds)
+                        {
+                            if (!balancesByGuild.TryGetValue(guild.Id, out var guildBalances))
+                                continue;
+
+                            foreach (var kv in guildBalances)
+                            {
+                               var userId = kv.Key;
+                                if (!string.IsNullOrWhiteSpace(_pointsUserIndex.GetName(guild.Id, userId))) continue;
+
+                                var u = guild.GetUser(userId) as IUser;
+                                if (u == null)
+                                {
+                                    try { u = await _client.Rest.GetUserAsync(userId).ConfigureAwait(false); } catch { }
+                                }
+                                if (u != null)
+                                {
+                                    _pointsUserIndex.UpsertFromUser(guild.Id, u);
+                                    any = true;
+                                }
+                            }
+                        }
+
+                        if (any)
+                            await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
+                    }
+                    catch { }
+                });
+            }
+            catch { }
 
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
@@ -4570,7 +4658,8 @@ namespace RPBot
             }
 
             // Показываем результат броска (в любом случае)
-            var filePath = Path.Combine("Numbers", $"{result}.png");
+            var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
+            var filePath = Path.Combine(numbersDir, $"{result}.png");
             if (File.Exists(filePath))
             {
                 var embed = new EmbedBuilder()

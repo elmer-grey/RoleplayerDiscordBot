@@ -152,7 +152,12 @@ namespace RPBot
 				try
 				{
 					if (!File.Exists(_statePath))
+                 {
+						_subscriptionsByGuild.Clear();
+						_pausedUsers.Clear();
+						SaveSnapshot(BuildSnapshotLocked());
 						return;
+					}
 
 					var json = File.ReadAllText(_statePath);
 					var dto = JsonSerializer.Deserialize<EventNotificationStateDto>(json) ?? new EventNotificationStateDto();
