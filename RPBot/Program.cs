@@ -2455,6 +2455,19 @@ namespace RPBot
                 var predCreated = _predictionService != null && await _predictionService.EnsureStateFileAsync().ConfigureAwait(false);
                 Write(predCreated ? "predictions_state.json created" : "predictions_state.json already exists");
 
+                Write("Telegram startup probe: begin");
+                foreach (var guild in _client.Guilds)
+                {
+                    if (!_serverConfigs.TryGetValue(guild.Id, out var sc) || !sc.TelegramEnabled)
+                    {
+                        Write($"Telegram startup probe skipped for {guild.Name}: disabled or missing serverconfig");
+                        continue;
+                    }
+
+                    var probe = await _telegramNotifier.ProbeAsync(guild.Id).ConfigureAwait(false);
+                    Write($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
+                }
+
                 lines.Add("└─────────────────────────────────────────────────────────────────────┘");
                 foreach (var l in lines)
                 {
