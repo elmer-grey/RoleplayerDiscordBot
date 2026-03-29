@@ -152,12 +152,7 @@ namespace RPBot
 				try
 				{
 					if (!File.Exists(_statePath))
-                 {
-						_subscriptionsByGuild.Clear();
-						_pausedUsers.Clear();
-						SaveSnapshot(BuildSnapshotLocked());
-						return;
-					}
+                      return;
 
 					var json = File.ReadAllText(_statePath);
 					var dto = JsonSerializer.Deserialize<EventNotificationStateDto>(json) ?? new EventNotificationStateDto();
@@ -202,6 +197,16 @@ namespace RPBot
 			catch
 			{
 				// ignore
+			}
+		}
+
+		public bool EnsureFileExists()
+		{
+			lock (_lock)
+			{
+				if (File.Exists(_statePath)) return false;
+				SaveSnapshot(BuildSnapshotLocked());
+				return true;
 			}
 		}
 

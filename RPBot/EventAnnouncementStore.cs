@@ -92,11 +92,7 @@ namespace RPBot
 				lock (_lock)
 				{
 					if (!File.Exists(_path))
-					{
-						_state = new EventAnnouncementState();
-                     SaveLocked();
-						return;
-					}
+                      return;
 
 					var json = File.ReadAllText(_path);
 					_state = JsonSerializer.Deserialize<EventAnnouncementState>(json) ?? new EventAnnouncementState();
@@ -108,6 +104,17 @@ namespace RPBot
 				{
 					_state = new EventAnnouncementState();
 				}
+           }
+		}
+
+		public bool EnsureFileExists()
+		{
+			lock (_lock)
+			{
+				if (File.Exists(_path)) return false;
+				_state = new EventAnnouncementState();
+				SaveLocked();
+				return true;
 			}
 		}
 

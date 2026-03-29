@@ -104,6 +104,19 @@ namespace RPBot
             }
         }
 
+        public async Task<bool> EnsureStateFileAsync()
+        {
+            if (File.Exists(_stateFilePath)) return false;
+            await SaveStateAsync().ConfigureAwait(false);
+            if (!File.Exists(_stateFilePath))
+            {
+                var dir = Path.GetDirectoryName(_stateFilePath) ?? AppContext.BaseDirectory;
+                Directory.CreateDirectory(dir);
+                await File.WriteAllTextAsync(_stateFilePath, "{}", Encoding.UTF8).ConfigureAwait(false);
+            }
+            return true;
+        }
+
         private async Task LoadStateAsync()
         {
             try

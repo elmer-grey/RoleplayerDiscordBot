@@ -2338,72 +2338,144 @@ namespace RPBot
 
             try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
 
-            try
-            {
-                var changed = false;
-                foreach (var g in _client.Guilds)
-                {
-                    if (!_serverConfigs.ContainsKey(g.Id))
-                    {
-                        _serverConfigs[g.Id] = new ServerConfig { GuildID = g.Id };
-                        changed = true;
-                    }
-                }
-
-                if (changed)
-                    SaveServerConfigs();
-            }
-            catch { }
-
-            // Best-effort: bootstrap points_users.json from points.json
-            try
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var any = false;
-                       var balancesByGuild = _pointsService.GetSnapshot();
-                        foreach (var guild in _client.Guilds)
-                        {
-                            if (!balancesByGuild.TryGetValue(guild.Id, out var guildBalances))
-                                continue;
-
-                            foreach (var kv in guildBalances)
-                            {
-                               var userId = kv.Key;
-                                if (!string.IsNullOrWhiteSpace(_pointsUserIndex.GetName(guild.Id, userId))) continue;
-
-                                var u = guild.GetUser(userId) as IUser;
-                                if (u == null)
-                                {
-                                    try { u = await _client.Rest.GetUserAsync(userId).ConfigureAwait(false); } catch { }
-                                }
-                                if (u != null)
-                                {
-                                    _pointsUserIndex.UpsertFromUser(guild.Id, u);
-                                    any = true;
-                                }
-                            }
-                        }
-
-                        if (any)
-                            await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
-                    }
-                    catch { }
-                });
-            }
-            catch { }
-
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
             await Task.CompletedTask;
+        }
+
+        private void EnsureServerConfigsForConnectedGuilds()
+        {
+            var changed = false;
+            foreach (var g in _client.Guilds)
+            {
+                if (!_serverConfigs.ContainsKey(g.Id))
+                {
+                    _serverConfigs[g.Id] = new ServerConfig { GuildID = g.Id };
+                    changed = true;
+                }
+            }
+
+            // Ensure file exists even if dictionary is still empty at first ready tick.
+            if (changed || !File.Exists(_serverConfigsPath))
+                SaveServerConfigs();
+        }
+
+        private async Task BootstrapFirstRunSettingsAsync()
+        {
+            if (_currentStartupType != StartupType.FirstStart)
+                return;
+
+            var lines = new List<string>
+            {
+                "┌──────────── ЭТАП 0/4: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS ────────────┐"
+            };
+            void Write(string message)
+            {
+                var line = $"[BOOTSTRAP] {message}";
+                lines.Add($"│ {message}");
+                try { Console.WriteLine(line); } catch { }
+                try { _ui?.AddLog(line); } catch { }
+            }
+
+            try
+            {
+                var settingsDir = BotConfig.GetSettingsDirectory();
+                Directory.CreateDirectory(settingsDir);
+                Write($"Settings directory: {settingsDir}");
+
+                var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                Write(File.Exists(configPath) ? "config.json already exists" : "config.json created by BotConfig.Load");
+
+                var serverConfigsCreated = false;
+                var serverConfigsExisted = File.Exists(_serverConfigsPath);
+                EnsureServerConfigsForConnectedGuilds();
+                serverConfigsCreated = !serverConfigsExisted && File.Exists(_serverConfigsPath);
+                Write(serverConfigsCreated ? "serverconfigs.json created and seeded for connected guilds" : "serverconfigs.json already exists or was updated");
+
+                var pointsCreated = false;
+                if (!File.Exists(BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json"))))
+                {
+                    await _pointsService.SaveAsync().ConfigureAwait(false);
+                    pointsCreated = File.Exists(BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json")));
+                }
+                Write(pointsCreated ? "points.json created" : "points.json already exists");
+
+                var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points_users.json"));
+                var pointsUsersCreated = false;
+                if (!File.Exists(pointsUsersPath))
+                {
+                    await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
+                    pointsUsersCreated = File.Exists(pointsUsersPath);
+                }
+                Write(pointsUsersCreated ? "points_users.json created" : "points_users.json already exists");
+
+                var backfilledAnyNames = false;
+                try
+                {
+                    var balancesByGuild = _pointsService.GetSnapshot();
+                    foreach (var guild in _client.Guilds)
+                    {
+                        if (!balancesByGuild.TryGetValue(guild.Id, out var guildBalances))
+                            continue;
+
+                        foreach (var userId in guildBalances.Keys)
+                        {
+                            if (!string.IsNullOrWhiteSpace(_pointsUserIndex.GetName(guild.Id, userId)))
+                                continue;
+
+                            IUser? u = guild.GetUser(userId) as IUser;
+                            if (u == null)
+                            {
+                                try { u = await _client.Rest.GetUserAsync(userId).ConfigureAwait(false); } catch { }
+                            }
+
+                            if (u != null)
+                            {
+                                _pointsUserIndex.UpsertFromUser(guild.Id, u);
+                                backfilledAnyNames = true;
+                            }
+                        }
+                    }
+
+                    if (backfilledAnyNames)
+                        await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Write($"points_users.json backfill skipped: {ex.Message}");
+                }
+                Write(backfilledAnyNames ? "points_users.json backfilled from points.json" : "points_users.json backfill not needed");
+
+                var annCreated = _eventAnnouncementStore?.EnsureFileExists() == true;
+                Write(annCreated ? "event_announcements.json created" : "event_announcements.json already exists");
+
+                var notifCreated = _eventNotifications?.EnsureFileExists() == true;
+                Write(notifCreated ? "event-notify.json created" : "event-notify.json already exists");
+
+                var predCreated = _predictionService != null && await _predictionService.EnsureStateFileAsync().ConfigureAwait(false);
+                Write(predCreated ? "predictions_state.json created" : "predictions_state.json already exists");
+
+                lines.Add("└─────────────────────────────────────────────────────────────────────┘");
+                foreach (var l in lines)
+                {
+                    try { Console.WriteLine(l); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                try { Console.WriteLine($"[BOOTSTRAP] error: {ex.Message}"); } catch { }
+            }
         }
 
         private async Task InitializeBotWithProgress()
         {
             try
             {
+               if (_currentStartupType == StartupType.FirstStart)
+                {
+                    await BootstrapFirstRunSettingsAsync().ConfigureAwait(false);
+                }
+
 				// ЭТАП 1: Регистрация команд
 				var isDailyRestart =
 					_currentStartupType == StartupType.Restart &&
