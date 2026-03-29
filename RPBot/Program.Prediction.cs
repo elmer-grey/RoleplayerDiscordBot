@@ -223,6 +223,14 @@ namespace RPBot
                         return;
                     }
 
+                    try
+                    {
+                        var idx = _services.GetService(typeof(PointsUserIndex)) as PointsUserIndex;
+                        idx?.UpsertFromUser(guildId, user);
+                        if (idx != null) _ = Task.Run(() => idx.SaveAsync());
+                    }
+                    catch { }
+
                     var prediction = _predictionService.GetActive(guildId);
                     var balance = _pointsService.GetBalance(guildId, user.Id);
                     var sb = new StringBuilder();

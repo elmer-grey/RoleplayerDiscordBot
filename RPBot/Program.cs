@@ -89,6 +89,7 @@ namespace RPBot
         private ConnectionPredictor? _connectionPredictor;
         private StatusNotifier? _statusNotifier;
 		private PointsService _pointsService;
+      private PointsUserIndex _pointsUserIndex;
 		private PredictionService? _predictionService;
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
@@ -171,6 +172,12 @@ namespace RPBot
                 await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
                 return;
             }
+         try
+            {
+                _pointsUserIndex.UpsertFromUser(guildId, user);
+                _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+            }
+            catch { }
             // Show ephemeral balance and a confirm button before modal
             // Check active prediction exists to avoid showing intermediate UI when none
             var active = _predictionService.GetActive(guildId);
@@ -596,6 +603,10 @@ namespace RPBot
 			// Загрузка балансов костяшек из файла
 			_pointsService.LoadAsync().GetAwaiter().GetResult();
 
+            var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points_users.json"));
+            _pointsUserIndex = new PointsUserIndex(pointsUsersPath);
+            _pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
+
 			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
 			_predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
 			_voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
@@ -615,6 +626,7 @@ namespace RPBot
                 .AddSingleton(_connectionPredictor)
                 .AddSingleton(_statusNotifier)
 				.AddSingleton(_pointsService)
+               .AddSingleton(_pointsUserIndex)
 				.AddSingleton(_predictionService)
               .AddSingleton(_voicePointsService)
                 .AddSingleton<QueueModule>()
@@ -2609,6 +2621,12 @@ namespace RPBot
                     }
 
                     var userId = modal.User.Id;
+                  try
+                    {
+                        _pointsUserIndex.UpsertFromUser(guildId, modal.User);
+                        _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                    }
+                    catch { }
                     var res = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
                     await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
                     if (res.ok)
@@ -2682,6 +2700,12 @@ namespace RPBot
                     }
 
                     var outcomeNum = existingBet.OutcomeId;
+                  try
+                    {
+                        _pointsUserIndex.UpsertFromUser(guildId, modal.User);
+                        _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                    }
+                    catch { }
                     var res = await _predictionService!.PlaceBetAsync(guildId, modal.User.Id, outcomeNum, amount);
                     await LogInfo($"PlaceBet(add) result: ok={res.ok} error={res.error}");
                     if (res.ok)
