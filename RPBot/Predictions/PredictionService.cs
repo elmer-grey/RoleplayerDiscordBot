@@ -98,9 +98,9 @@ namespace RPBot
                 var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
                 await File.WriteAllTextAsync(_stateFilePath, json).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // best-effort
+                await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
             }
         }
 
@@ -174,7 +174,10 @@ namespace RPBot
                                 var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
                                 ch = fetched as ISocketMessageChannel;
                             }
-                            catch { }
+                catch (Exception ex)
+                {
+                    await PredictionErrorLogger.LogAsync("AutoCancelRestoredPredictionAsync:NotifyChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                }
                         }
 
                         if (ch == null || p.MessageId == 0)
@@ -219,7 +222,10 @@ namespace RPBot
 
                         await LogAsync($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}").ConfigureAwait(false);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("LoadStateAsync:entry", ex, $"guild={kv.Key}").ConfigureAwait(false);
+                    }
                 }
 
                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
@@ -231,11 +237,14 @@ namespace RPBot
                     var cleanedJson = System.Text.Json.JsonSerializer.Serialize(dict, options);
                     await File.WriteAllTextAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore
+                await PredictionErrorLogger.LogAsync("LoadStateAsync", ex).ConfigureAwait(false);
             }
         }
 
@@ -266,13 +275,16 @@ namespace RPBot
                         await channel.SendMessageAsync(embed: cancelEmbed).ConfigureAwait(false);
                     }
                 }
-                catch { }
+                            catch (Exception ex)
+                            {
+                                await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannelAsync", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                            }
 
                 await LogAsync($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'").ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore
+                await PredictionErrorLogger.LogAsync("AutoCancelRestoredPredictionAsync", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
             }
         }
 
@@ -543,7 +555,6 @@ namespace RPBot
                 var channel = GetActiveMessageChannel(p);
                 if (channel != null)
                 {
-                    // Удаляем исходное сообщение прогноза
                     if (p.MessageId != 0)
                     {
                         try
@@ -552,7 +563,10 @@ namespace RPBot
                             if (msg != null)
                                 await msg.DeleteAsync().ConfigureAwait(false);
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("ResolveAsync:DeleteMessage", ex, $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}").ConfigureAwait(false);
+                        }
                     }
 
                     var resultEmbed = BuildResultEmbed(
@@ -568,7 +582,10 @@ namespace RPBot
                     await channel.SendMessageAsync(embed: resultEmbed).ConfigureAwait(false);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("ResolveAsync:ResultPost", ex, $"guild={guildId} resolver={resolverId} win={winningOutcomeId}").ConfigureAwait(false);
+            }
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
@@ -864,9 +881,9 @@ namespace RPBot
                 var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
                 await File.AppendAllTextAsync(_logPath, line, Encoding.UTF8).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore
+                await PredictionErrorLogger.LogAsync("LogAsync", ex, message).ConfigureAwait(false);
             }
         }
 

@@ -108,19 +108,14 @@ namespace RPBot
 			if (cfg.TelegramChatId == 0)
 				return new TelegramProbeResult(false, "TelegramChatId = 0.");
 
-			var meUrl = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/getMe";
-			var (meOk, meBody) = await PostJsonAsync(meUrl, new Dictionary<string, object>(), ct).ConfigureAwait(false);
-			if (!meOk)
-				return new TelegramProbeResult(false, $"getMe failed: {meBody}");
-
 			var probeText = $"🔎 Telegram startup check: {DateTime.Now:dd.MM.yyyy HH:mm:ss}";
 			var sentId = await SendMessageReturningMessageIdAsync(guildId, probeText, ct).ConfigureAwait(false);
 			if (!sentId.HasValue)
-				return new TelegramProbeResult(false, "sendMessage failed (message_id не получен).");
+               return new TelegramProbeResult(false, "sendMessage failed (message_id не получен).");
 
 			var deleteOk = await DeleteMessageAsync(guildId, sentId.Value, ct).ConfigureAwait(false);
 			return new TelegramProbeResult(deleteOk, deleteOk
-				? $"Telegram OK: getMe успешен, test message_id={sentId.Value} отправлен и удалён."
+             ? $"Telegram OK: test message_id={sentId.Value} отправлен и удалён."
 				: $"Telegram message_id={sentId.Value} отправлен, но удалить не удалось.", sentId);
 		}
 
@@ -132,11 +127,22 @@ namespace RPBot
 				using var content = new StringContent(json, Encoding.UTF8, "application/json");
 				using var resp = await _httpClient.PostAsync(url, content, ct).ConfigureAwait(false);
 				var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-				return (resp.IsSuccessStatusCode && body.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase), body);
+                var ok = false;
+				try
+				{
+					using var doc = JsonDocument.Parse(body);
+					if (doc.RootElement.TryGetProperty("ok", out var okProp))
+						ok = okProp.GetBoolean();
+				}
+				catch
+				{
+					ok = resp.IsSuccessStatusCode;
+				}
+				return (ok, body);
 			}
 			catch (Exception ex)
 			{
-				return (false, ex.Message);
+             return (false, ex.ToString());
 			}
 		}
 

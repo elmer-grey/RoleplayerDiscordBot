@@ -62,6 +62,8 @@ namespace RPBot
         private int _lastCommandWidth = -1;
         private int _lastLogTopRow = 0;
         private int _lastCommandTopRow = 0;
+        private int _lastUiCols = -1;
+        private int _lastUiRows = -1;
 
         private readonly List<string> _pendingLogLines = new List<string>();
         private readonly List<string> _pendingCommandLines = new List<string>();
@@ -113,11 +115,43 @@ namespace RPBot
 
         private bool ResizeWatcher(MainLoop main)
         {
-            if (RewrapIfNeeded())
+            var layoutChanged = RefreshLayoutForTerminalSize();
+            if (layoutChanged || RewrapIfNeeded())
             {
                 try { Application.Refresh(); } catch { }
             }
             return true;
+        }
+
+        private bool RefreshLayoutForTerminalSize()
+        {
+            try
+            {
+                var cols = Application.Driver?.Cols ?? Console.WindowWidth;
+                var rows = Application.Driver?.Rows ?? Console.WindowHeight;
+                if (cols == _lastUiCols && rows == _lastUiRows)
+                    return false;
+
+                _lastUiCols = cols;
+                _lastUiRows = rows;
+
+                if (_mainWindow == null)
+                    return false;
+
+                _lastLogWidth = -1;
+                _lastCommandWidth = -1;
+
+                try { Application.Top?.LayoutSubviews(); } catch { }
+                try { _mainWindow.LayoutSubviews(); } catch { }
+                try { _logPanel?.SetNeedsDisplay(); } catch { }
+                try { _commandPanel?.SetNeedsDisplay(); } catch { }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                TryAppendErrorToFile($"RefreshLayoutForTerminalSize error: {ex}");
+                return false;
+            }
         }
 
         private bool RewrapIfNeeded()
@@ -1012,6 +1046,11 @@ namespace RPBot
         private void CreateMainWindow()
         {
             if (_isDisposed) return;
+
+            _lastUiCols = -1;
+            _lastUiRows = -1;
+            _lastLogWidth = -1;
+            _lastCommandWidth = -1;
 
             var displayVersion = BotConfig.Current?.GetDisplayVersion() ?? "v?";
             _mainWindow = new Window($"Discord Bot Control Panel {displayVersion} - {DateTime.Now:HH:mm:ss}")
@@ -2152,6 +2191,23 @@ namespace RPBot
             _statusNotifier = statusNotifier;
 
             AddLog(" Сервисы бота обновлены");
+
+            if (Application.MainLoop != null && !_isDisposed)
+            {
+                Application.MainLoop.Invoke(() =>
+                {
+                    try
+                    {
+                        RefreshLayoutForTerminalSize();
+                        RewrapIfNeeded();
+                        Application.Refresh();
+                    }
+                    catch (Exception ex)
+                    {
+                        TryAppendErrorToFile($"UpdateServices layout refresh error: {ex}");
+                    }
+                });
+            }
         }
 
         public void ClearForRestart()
@@ -2170,10 +2226,17 @@ namespace RPBot
                         _commandLogicalLines.Clear();
                         _lastLogTopRow = 0;
                         _lastCommandTopRow = 0;
+                        _lastUiCols = -1;
+                        _lastUiRows = -1;
+                        _lastLogWidth = -1;
+                        _lastCommandWidth = -1;
                         _logPanel?.SetNeedsDisplay();
                         _commandPanel?.SetNeedsDisplay();
 
                         AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Бот перезапускается..."), MaxLogLines);
+                        RefreshLayoutForTerminalSize();
+                        RewrapIfNeeded();
+                        Application.Refresh();
                     }
                     catch (Exception ex)
                     {

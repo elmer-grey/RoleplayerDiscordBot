@@ -47,7 +47,7 @@ namespace RPBot
         public bool TelegramEnabled { get; set; } = false;
         public string? TelegramBotToken { get; set; } = null;
         public long TelegramChatId { get; set; } = 0;
-       public int TelegramMessageThreadId { get; set; } = 0;
+           public int TelegramMessageThreadId { get; set; } = 0;
     }
 
         // Modal handling moved inside Program class
@@ -1239,7 +1239,9 @@ namespace RPBot
                 // Перенаправляем весь Console в UI-панель логов
                 if (_originalOut == null) _originalOut = Console.Out;
                 if (_originalErr == null) _originalErr = Console.Error;
-                var uiWriter = new UiTextWriter(() => _ui);
+                 var terminalLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(_config?.LogDirectory) ? "Logs" : _config!.LogDirectory);
+                    var terminalLogPath = Path.Combine(terminalLogDir, $"TerminalLog_{DateTime.Now:yyyyMMdd}.txt");
+                    var uiWriter = new UiTextWriter(() => _ui, terminalLogPath);
                 Console.SetOut(uiWriter);
                 Console.SetError(uiWriter);
             }
@@ -1540,8 +1542,13 @@ namespace RPBot
                         GuildScheduledEventStatus.Active => "started",
                         GuildScheduledEventStatus.Completed => "completed",
                         GuildScheduledEventStatus.Cancelled => "cancelled",
-                        _ => "updated"
+                          _ => "scheduled"
                     };
+
+                     if (status == "scheduled")
+                        {
+                            continue;
+                        }
 
                     await AnnounceGuildScheduledEventStatusChanged(guildEvent, status);
                     updated++;
@@ -1568,7 +1575,7 @@ namespace RPBot
             if (entry == null)
                 return;
 
-            var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
+                var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
             var imageUrl = guildEvent.GetCoverImageUrl();
 
@@ -1576,7 +1583,7 @@ namespace RPBot
             var isStarted = string.Equals(status, "started", StringComparison.OrdinalIgnoreCase);
             var isCompleted = string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase);
             var prefix = isCancelled ? "❌" : isStarted ? "▶️" : isCompleted ? "✅" : "ℹ️";
-            var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Статус события изменён";
+            var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
             var mark = $"{prefix} {statusText}: {DateTime.Now:dd.MM.yyyy HH:mm}";
 
             string whereText;
@@ -1611,7 +1618,7 @@ namespace RPBot
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-            embedBuilder.AddField("ℹ️", mark, false);
+               embedBuilder.AddField("Статус", mark, false);
             var embed = embedBuilder.Build();
 
             // Discord channel
@@ -1709,6 +1716,11 @@ namespace RPBot
             {
                 try { Console.WriteLine($"[EVENT] status {status} telegram error guild={guild.Id} event={guildEvent.Id}: {ex.Message}"); } catch { }
             }
+
+                if (isCancelled || isCompleted)
+                {
+                    try { _eventAnnouncementStore.Remove(guild.Id, guildEvent.Id); } catch { }
+                }
         }
 
 		private async Task AnnounceGuildScheduledEventCreated(SocketGuildEvent guildEvent)
@@ -1794,6 +1806,8 @@ namespace RPBot
             try { Console.WriteLine($"[EVENT] announce sent discord_channel guild={guild.Id} event={guildEvent.Id} channel={announceChannel.Id} msg={announceMsg.Id}"); } catch { }
 
            // Дублируем уведомление в Telegram (если включено в serverconfigs.json для этого сервера)
+         int? tgMessageId = null;
+            var tgHasPhoto = false;
             try
             {
                 if (_telegramNotifier != null)
@@ -1812,9 +1826,7 @@ namespace RPBot
                             tgText += $"\n\nОписание события:\n{desc}";
                     }
 
-                 int? tgMessageId = null;
-                    var tgHasPhoto = false;
-                   if (!string.IsNullOrWhiteSpace(imageUrl))
+                  if (!string.IsNullOrWhiteSpace(imageUrl))
                     {
                         tgMessageId = await _telegramNotifier.SendPhotoReturningMessageIdAsync(guild.Id, imageUrl, tgText);
                         tgHasPhoto = tgMessageId.HasValue;
@@ -1825,25 +1837,36 @@ namespace RPBot
                     }
                     try { Console.WriteLine($"[EVENT] announce sent telegram guild={guild.Id} event={guildEvent.Id} msg={(tgMessageId.HasValue ? tgMessageId.Value : 0)} hasPhoto={tgHasPhoto}"); } catch { }
 
-                    if (_eventAnnouncementStore != null && _serverConfigs.TryGetValue(guild.Id, out var sc) && tgMessageId.HasValue)
-                    {
-                        var entry = _eventAnnouncementStore.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
-                        {
-                            GuildId = guild.Id,
-                            EventId = guildEvent.Id
-                        };
-                        entry.TelegramChatId = sc.TelegramChatId;
-                        entry.TelegramMessageThreadId = sc.TelegramMessageThreadId;
-                        entry.TelegramMessageId = tgMessageId.Value;
-                        entry.TelegramHasPhoto = tgHasPhoto;
-                        _eventAnnouncementStore.Upsert(entry);
-                    }
                 }
             }
            catch (Exception ex)
             {
                 try { Console.WriteLine($"[EVENT] announce telegram error guild={guild.Id} event={guildEvent.Id}: {ex.Message}"); } catch { }
+                   try { await LogError($"[EVENT] announce telegram error guild={guild.Id} event={guildEvent.Id}: {ex}"); } catch { }
             }
+
+                if (_eventAnnouncementStore != null)
+                {
+                    var entry = _eventAnnouncementStore.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                    {
+                        GuildId = guild.Id,
+                        EventId = guildEvent.Id
+                    };
+                    entry.AnnounceChannelId = announceChannel.Id;
+                    entry.AnnounceMessageId = announceMsg.Id;
+                    if (_serverConfigs.TryGetValue(guild.Id, out var sc2))
+                    {
+                        entry.TelegramChatId = sc2.TelegramChatId;
+                        entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
+                    }
+                    if (entry.TelegramMessageId == 0 && tgMessageId.HasValue)
+                    {
+                        entry.TelegramMessageId = tgMessageId.Value;
+                        entry.TelegramHasPhoto = tgHasPhoto;
+                    }
+                    entry.DmMessageIdsByUserId ??= new Dictionary<ulong, ulong>();
+                    _eventAnnouncementStore.Upsert(entry);
+                }
 
 			var subscriberIds = _eventNotifications.GetActiveSubscribers(guild.Id);
 			if (subscriberIds.Count == 0)
@@ -1880,23 +1903,28 @@ namespace RPBot
 				}
 			}
 
-            if (_eventAnnouncementStore != null)
-            {
-                var entry = _eventAnnouncementStore.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                if (_eventAnnouncementStore != null)
                 {
-                    GuildId = guild.Id,
-                    EventId = guildEvent.Id
-                };
-                entry.AnnounceChannelId = announceChannel.Id;
-                entry.AnnounceMessageId = announceMsg.Id;
-                entry.DmMessageIdsByUserId = dmMap;
-              if (_serverConfigs.TryGetValue(guild.Id, out var sc2))
-                {
-                    entry.TelegramChatId = sc2.TelegramChatId;
-                    entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
+                    var entry = _eventAnnouncementStore.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                    {
+                        GuildId = guild.Id,
+                        EventId = guildEvent.Id
+                    };
+                    entry.AnnounceChannelId = announceChannel.Id;
+                    entry.AnnounceMessageId = announceMsg.Id;
+                    entry.DmMessageIdsByUserId = dmMap;
+                    if (_serverConfigs.TryGetValue(guild.Id, out var sc2))
+                    {
+                        entry.TelegramChatId = sc2.TelegramChatId;
+                        entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
+                    }
+                    if (tgMessageId.HasValue)
+                    {
+                        entry.TelegramMessageId = tgMessageId.Value;
+                        entry.TelegramHasPhoto = tgHasPhoto;
+                    }
+                    _eventAnnouncementStore.Upsert(entry);
                 }
-                _eventAnnouncementStore.Upsert(entry);
-            }
 		}
 
         private async Task AnnounceGuildScheduledEventUpdated(Cacheable<SocketGuildEvent, ulong> beforeCache, SocketGuildEvent guildEvent)
@@ -1941,7 +1969,7 @@ namespace RPBot
             }
             catch { }
 
-            var updatedMark = $"⚠️ Событие обновлено: {DateTime.Now:dd.MM.yyyy HH:mm}";
+             var updatedMark = $"Обновлено: {DateTime.Now:dd.MM.yyyy HH:mm}";
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
 
@@ -1992,7 +2020,7 @@ namespace RPBot
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
             if (changes.Count > 0)
                 embedBuilder.AddField("✏️ Изменения", string.Join("\n", changes.Take(10)), false);
-            embedBuilder.AddField("ℹ️", updatedMark, false);
+                embedBuilder.AddField("Статус", updatedMark, false);
             var embed = embedBuilder.Build();
 
             // Update announce message in channel
@@ -2043,6 +2071,7 @@ namespace RPBot
                catch (Exception ex)
                 {
                     try { Console.WriteLine($"[EVENT] update discord_dm error guild={guild.Id} event={guildEvent.Id} user={userId}: {ex.Message}"); } catch { }
+                       try { await LogError($"[EVENT] update discord_dm error guild={guild.Id} event={guildEvent.Id} user={userId}: {ex}"); } catch { }
                 }
             }
 
@@ -2077,6 +2106,7 @@ namespace RPBot
            catch (Exception ex)
             {
                 try { Console.WriteLine($"[EVENT] update telegram error guild={guild.Id} event={guildEvent.Id} msg={entry.TelegramMessageId}: {ex.Message}"); } catch { }
+                   try { await LogError($"[EVENT] update telegram error guild={guild.Id} event={guildEvent.Id} msg={entry.TelegramMessageId}: {ex}"); } catch { }
             }
         }
 
@@ -2360,37 +2390,74 @@ namespace RPBot
                 SaveServerConfigs();
         }
 
+        private const int StartupBoxContentWidth = 78;
+
+        private static string BuildStartupBoxTop(string title)
+        {
+            var normalized = NormalizeStartupBoxLine(title);
+            return $"┌{normalized.PadRight(StartupBoxContentWidth, '─')}┐";
+        }
+
+        private static string BuildStartupBoxBottom() => $"└{new string('─', StartupBoxContentWidth)}┘";
+
+        private static string BuildStartupBoxLine(string text)
+        {
+            var normalized = NormalizeStartupBoxLine(text);
+            return $"│{normalized.PadRight(StartupBoxContentWidth)}│";
+        }
+
+        private static string NormalizeStartupBoxLine(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return string.Empty;
+
+            var normalized = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (normalized.Length <= StartupBoxContentWidth)
+                return normalized;
+
+            return normalized.Substring(0, StartupBoxContentWidth - 1) + "…";
+        }
+
+        private static List<string> BuildStartupBox(string title, IEnumerable<string> lines)
+        {
+            var result = new List<string> { BuildStartupBoxTop(title) };
+            foreach (var line in lines)
+            {
+                result.Add(BuildStartupBoxLine(line));
+            }
+            result.Add(BuildStartupBoxBottom());
+            return result;
+        }
+
+        private async Task LogStartupBoxAsync(string title, IEnumerable<string> lines)
+        {
+            foreach (var line in BuildStartupBox(title, lines))
+            {
+                await LogStartup(line);
+            }
+        }
+
         private async Task BootstrapFirstRunSettingsAsync()
         {
             if (_currentStartupType != StartupType.FirstStart)
                 return;
 
-            var lines = new List<string>
-            {
-                "┌──────────── ЭТАП 0/4: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS ────────────┐"
-            };
             void Write(string message)
             {
-                var line = $"[BOOTSTRAP] {message}";
-                lines.Add($"│ {message}");
-                try { Console.WriteLine(line); } catch { }
-                try { _ui?.AddLog(line); } catch { }
+                try { Console.WriteLine(message); } catch { }
             }
 
             try
             {
                 var settingsDir = BotConfig.GetSettingsDirectory();
                 Directory.CreateDirectory(settingsDir);
-                Write($"Settings directory: {settingsDir}");
 
                 var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
-                Write(File.Exists(configPath) ? "config.json already exists" : "config.json created by BotConfig.Load");
 
                 var serverConfigsCreated = false;
                 var serverConfigsExisted = File.Exists(_serverConfigsPath);
                 EnsureServerConfigsForConnectedGuilds();
                 serverConfigsCreated = !serverConfigsExisted && File.Exists(_serverConfigsPath);
-                Write(serverConfigsCreated ? "serverconfigs.json created and seeded for connected guilds" : "serverconfigs.json already exists or was updated");
 
                 var pointsCreated = false;
                 if (!File.Exists(BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json"))))
@@ -2398,7 +2465,6 @@ namespace RPBot
                     await _pointsService.SaveAsync().ConfigureAwait(false);
                     pointsCreated = File.Exists(BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json")));
                 }
-                Write(pointsCreated ? "points.json created" : "points.json already exists");
 
                 var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points_users.json"));
                 var pointsUsersCreated = false;
@@ -2407,9 +2473,9 @@ namespace RPBot
                     await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
                     pointsUsersCreated = File.Exists(pointsUsersPath);
                 }
-                Write(pointsUsersCreated ? "points_users.json created" : "points_users.json already exists");
 
                 var backfilledAnyNames = false;
+                var backfillLine = string.Empty;
                 try
                 {
                     var balancesByGuild = _pointsService.GetSnapshot();
@@ -2439,44 +2505,56 @@ namespace RPBot
 
                     if (backfilledAnyNames)
                         await _pointsUserIndex.SaveAsync().ConfigureAwait(false);
+
+                    backfillLine = backfilledAnyNames
+                        ? "points_users.json backfilled from points.json"
+                        : "points_users.json backfill not needed";
                 }
                 catch (Exception ex)
                 {
-                    Write($"points_users.json backfill skipped: {ex.Message}");
+                    backfillLine = $"points_users.json backfill skipped: {ex.Message}";
                 }
-                Write(backfilledAnyNames ? "points_users.json backfilled from points.json" : "points_users.json backfill not needed");
 
                 var annCreated = _eventAnnouncementStore?.EnsureFileExists() == true;
-                Write(annCreated ? "event_announcements.json created" : "event_announcements.json already exists");
 
                 var notifCreated = _eventNotifications?.EnsureFileExists() == true;
-                Write(notifCreated ? "event-notify.json created" : "event-notify.json already exists");
 
                 var predCreated = _predictionService != null && await _predictionService.EnsureStateFileAsync().ConfigureAwait(false);
-                Write(predCreated ? "predictions_state.json created" : "predictions_state.json already exists");
 
-                Write("Telegram startup probe: begin");
+                var lines = new List<string>
+                {
+                    $"Settings directory: {settingsDir}",
+                    File.Exists(configPath) ? "config.json already exists" : "config.json created by BotConfig.Load",
+                    serverConfigsCreated ? "serverconfigs.json created and seeded for connected guilds" : "serverconfigs.json already exists or was updated",
+                    pointsCreated ? "points.json created" : "points.json already exists",
+                    pointsUsersCreated ? "points_users.json created" : "points_users.json already exists",
+                    backfillLine,
+                    annCreated ? "event_announcements.json created" : "event_announcements.json already exists",
+                    notifCreated ? "event-notify.json created" : "event-notify.json already exists",
+                    predCreated ? "predictions_state.json created" : "predictions_state.json already exists",
+                    "Telegram startup probe: begin"
+                };
+
                 foreach (var guild in _client.Guilds)
                 {
                     if (!_serverConfigs.TryGetValue(guild.Id, out var sc) || !sc.TelegramEnabled)
                     {
-                        Write($"Telegram startup probe skipped for {guild.Name}: disabled or missing serverconfig");
+                        lines.Add($"Telegram startup probe skipped for {guild.Name}: disabled or missing serverconfig");
                         continue;
                     }
 
                     var probe = await _telegramNotifier.ProbeAsync(guild.Id).ConfigureAwait(false);
-                    Write($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
+                    lines.Add($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
                 }
 
-                lines.Add("└─────────────────────────────────────────────────────────────────────┘");
-                foreach (var l in lines)
+                foreach (var line in BuildStartupBox("ЭТАП 0/4: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
                 {
-                    try { Console.WriteLine(l); } catch { }
+                    Write(line);
                 }
             }
             catch (Exception ex)
             {
-                try { Console.WriteLine($"[BOOTSTRAP] error: {ex.Message}"); } catch { }
+                try { Console.WriteLine($"[SETTINGS-BOOTSTRAP] error: {ex}"); } catch { }
             }
         }
 
@@ -2494,10 +2572,12 @@ namespace RPBot
 					_currentStartupType == StartupType.Restart &&
 					string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
 
+                var stage1Lines = new List<string>();
+
 				if (isDailyRestart)
 				{
 					// После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
-					_ui?.AddLog("Регистрация команд пропущена (ежедневная перезагрузка).");
+                 stage1Lines.Add("Регистрация команд пропущена (ежедневная перезагрузка).");
 					await _commandHandler.ListSlashCommandsAsync();
 				}
 				else
@@ -2510,24 +2590,28 @@ namespace RPBot
 					{
 						await _commandHandler.InitializeAsync();
 						await _commandHandler.ListSlashCommandsAsync();
-						
-						_ui?.AddLog("Команды зарегистрированы.");
+                        stage1Lines.Add("Команды зарегистрированы.");
 					}
 					else
 					{
-						_ui?.AddLog("Регистрация команд пропущена.");
+                       stage1Lines.Add("Регистрация команд пропущена.");
 						await _commandHandler.ListSlashCommandsAsync();
 					}
 				}
+                if (stage1Lines.Count == 0)
+                    stage1Lines.Add("Регистрация команд завершена.");
+                await LogStartupBoxAsync("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
 
                 // ЭТАП 2: Активация обработчиков
-                await LogStartup($"┌──────────── ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ ─────────┐");
                 await SetupDiscordEvents();
-                await LogStartup($"└───────────────────────────────────────────────────────┘");
+                await LogStartupBoxAsync("ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
+                {
+                    "Подписки на события Discord обновлены и активированы."
+                });
 
                 // ЭТАП 3: Синхронизация (эвенты/прогнозы)
-                await LogStartup($"┌──────────── ЭТАП 3/4: СИНХРОНИЗАЦИЯ ───────────────────┐");
                 await ResyncEventAnnouncementsOnStartupAsync();
+                var stage3Lines = new List<string>();
                 try
                 {
                     static string Trunc(string? s, int max)
@@ -2548,9 +2632,9 @@ namespace RPBot
                         anyPred = true;
                         var lockText = ap.IsLocked ? "LOCK" : "OPEN";
                         var closes = ap.BetsCloseAtUtc.ToLocalTime();
-                        await LogStartup($"│   [PRED] {lockText,-4} {g.Name,-22} | ставок: {ap.Bets.Count,-3} | пул: {ap.TotalPool,-6}│");
-                        await LogStartup($"│        title: {Trunc(ap.Title, 44),-44}│");
-                        await LogStartup($"│        closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} o2={ap.Outcome2.TotalStake}│");
+                        stage3Lines.Add($"[PRED] {lockText} | {g.Name} | ставок: {ap.Bets.Count} | пул: {ap.TotalPool}");
+                        stage3Lines.Add($"title: {Trunc(ap.Title, 60)}");
+                        stage3Lines.Add($"closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} | o2={ap.Outcome2.TotalStake}");
 
                         // Print up to N bets to keep startup log compact.
                         var betLines = ap.Bets.Values
@@ -2561,50 +2645,54 @@ namespace RPBot
 
                         if (betLines.Count == 0)
                         {
-                            await LogStartup($"│        bets: (нет ставок)                               │");
+                            stage3Lines.Add("bets: (нет ставок)");
                         }
                         else
                         {
                             var joined = string.Join(" | ", betLines);
-                            await LogStartup($"│        bets: {Trunc(joined, 52),-52}│");
+                            stage3Lines.Add($"bets: {Trunc(joined, 60)}");
                         }
                     }
 
                     if (!anyPred)
                     {
-                        await LogStartup($"│   [PRED] активных прогнозов не найдено                 │");
+                        stage3Lines.Add("[PRED] активных прогнозов не найдено");
                     }
                 }
                 catch { }
-                await LogStartup($"└───────────────────────────────────────────────────────┘");
+                if (stage3Lines.Count == 0)
+                    stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
+                await LogStartupBoxAsync("ЭТАП 3/4: СИНХРОНИЗАЦИЯ", stage3Lines);
 
                 // ЭТАП 4: Отправка статусов
-                await LogStartup($"┌──────────── ЭТАП 4/4: ОТПРАВКА СТАТУСОВ ──────────────┐");
+                var stage4Lines = new List<string>();
 
                 var guildsList = _client.Guilds.ToList();
                 for (int i = 0; i < guildsList.Count; i++)
                 {
                     var guild = guildsList[i];
-                    if (ServerConfigs.TryGetValue(guild.Id, out var config))
+                        if (_serverConfigs.TryGetValue(guild.Id, out var config))
                     {
                         if (config.ModerateChannelID == 0)
                         {
-                            await LogStartup($"│   Пропущено: канал уведомлений не задан для {guild.Name,-32}│");
+                            stage4Lines.Add($"Пропущено: канал уведомлений не задан для {guild.Name}");
                         }
                         else
                         {
                             var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
                                 $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.0.0.0"}");
                             if (ok)
-                                await LogStartup($"│   Статус отправлен на {guild.Name,-32}│");
+                                stage4Lines.Add($"Статус отправлен на {guild.Name}");
                             else
-                                await LogStartup($"│   Ошибка отправки статуса на {guild.Name,-32}│");
+                                stage4Lines.Add($"Ошибка отправки статуса на {guild.Name}");
                         }
                     }
                     await Task.Delay(200);
                 }
 
-                await LogStartup($"└───────────────────────────────────────────────────────┘");
+                if (stage4Lines.Count == 0)
+                    stage4Lines.Add("Нет серверов для отправки стартовых уведомлений.");
+                await LogStartupBoxAsync("ЭТАП 4/4: ОТПРАВКА СТАТУСОВ", stage4Lines);
 
                 // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
@@ -2942,6 +3030,8 @@ namespace RPBot
                         return;
                     }
 
+                    await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
+
                     var creatorId = modal.User.Id;
                     var createRes = await _predictionService.CreateAsync(guildId, creatorId, channelId, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
@@ -2961,6 +3051,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
+                try { await PredictionErrorLogger.LogAsync("HandleModalSubmitted", ex, $"customId={customId}").ConfigureAwait(false); } catch { }
                 try { await LogError($"HandleModalSubmitted exception for CustomId={customId}: {ex}"); } catch { }
                 try { await modal.FollowupAsync("Что-то пошло не так. Повторите попытку.", ephemeral: true).ConfigureAwait(false); } catch { }
                 try { ScheduleDeleteOriginalResponse(modal); } catch { }
@@ -2977,6 +3068,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
+                try { await PredictionErrorLogger.LogAsync("HandleButtonExecuted", ex, $"customId={component.Data.CustomId}").ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
                 try { await component.RespondAsync("Ошибка обработки", ephemeral: true); } catch { }
             }
@@ -5379,6 +5471,8 @@ namespace RPBot
         public ulong ChannelId { get; set; }
         public ulong? PauseReminderMessageId { get; set; }
         public ulong? ConfirmationMessageId { get; set; }
+        public bool StatsSent { get; set; }
+        public object StatsSync { get; } = new();
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
@@ -5464,6 +5558,9 @@ namespace RPBot
 
         private ComponentBuilder CreateControlButtons(GameSession session)
         {
+            if (session.IsStopped)
+                return new ComponentBuilder();
+
             var builder = new ComponentBuilder()
                 .WithButton(session.IsPaused ? "▶️ Продолжить" : "⏸ Пауза",
                     session.IsPaused ? $"resume_session:{session.SessionId}" : $"pause_session:{session.SessionId}",
@@ -5511,11 +5608,17 @@ namespace RPBot
                 var pauseTimeInfo = currentPause.Start != DateTime.MinValue ?
                     $"\nНа паузе с: {currentPause.Start:HH:mm}" : "";
 
+                var statusText = session.IsStopped
+                    ? "✅ Завершена"
+                    : session.IsPaused
+                        ? $"⏸ На паузе{pauseTimeInfo}"
+                        : "▶ В процессе";
+
                 var descriptionLines = new List<string>
                 {
                     $"Мастер: {session.MasterName}",
                     $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}",
-                    $"Статус: {(session.IsPaused ? $"⏸ На паузе{pauseTimeInfo}" : "▶ В процессе")}",
+                    $"Статус: {statusText}",
                     $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}",
                 };
 
@@ -5528,7 +5631,7 @@ namespace RPBot
                 var embed = new EmbedBuilder()
                     .WithTitle($"Сессия: \"{session.GameName}\"")
                     .WithDescription(string.Join("\n", descriptionLines))
-                    .WithColor(session.IsPaused ? Color.Orange : Color.Green)
+                    .WithColor(session.IsStopped ? Color.DarkGrey : session.IsPaused ? Color.Orange : Color.Green)
                     .Build();
 
                 await message.ModifyAsync(m =>
@@ -5957,46 +6060,33 @@ namespace RPBot
 
                 try
                 {
-                    await component.Message.DeleteAsync();
-                    Log($"Сообщение управления удалено");
+                    await UpdateControlMessage(session, component.Channel);
+                    Log($"Сообщение управления обновлено как завершённое");
                 }
                 catch (Exception ex)
                 {
-                    Log($"Ошибка удаления сообщения: {ex.Message}");
+                    Log($"Ошибка обновления сообщения управления: {ex.Message}");
                 }
-
-                await SendSessionStats(session, component.Channel);
-
-                /*if (session.Rolls.Count == 0)
-                {
-                    Log($"Сессия без бросков - удаление");
-                    RemoveSession(session);
-                }
-                else
-                {
-                    Log($"Сессия содержит броски - отложенное удаление");
-                }*/
 
                 if (session.EventId.HasValue)
                 {
-                    _ = Task.Run(async () =>
+                    try
                     {
-                        try
+                        var guild = _client.GetGuild(session.GuildId);
+                        var guildEvent = guild != null ? await guild.GetEventAsync(session.EventId.Value) : null;
+                        if (guildEvent?.Status == GuildScheduledEventStatus.Active)
                         {
-                            var guild = _client.GetGuild(session.GuildId);
-                            var guildEvent = await guild.GetEventAsync(session.EventId.Value);
-                            if (guildEvent?.Status == GuildScheduledEventStatus.Active)
-                            {
-                                await guildEvent.DeleteAsync();
-                                Log($"Связанное событие {session.EventId} завершено");
-                            }
+                            await guildEvent.ModifyAsync(props => props.Status = GuildScheduledEventStatus.Completed);
+                            Log($"Связанное событие {session.EventId} помечено как завершённое");
                         }
-                        catch (Exception ex)
-                        {
-                            Log($"Ошибка завершения события: {ex.Message}");
-                        }
-                    });
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка завершения события: {ex.Message}");
+                    }
                 }
+
+                await SendSessionStats(session, component.Channel);
             }
             finally
             {
@@ -6072,19 +6162,28 @@ namespace RPBot
                                         ? config.RecordChannelID
                                         : 0;
 
-                                    if (channelId != 0 && client.GetChannel(channelId) is ITextChannel controlChannel)
+                                    if (channelId != 0)
                                     {
-                                        await controlChannel.DeleteMessageAsync(session.ControlMessageId);
-                                        commands.Log($"Сообщение управления {session.ControlMessageId} удалено");
+                                        var controlChannel = client.GetChannel(channelId) as ITextChannel
+                                            ?? client.GetGuild(guildId)?.GetTextChannel(channelId);
+                                        if (controlChannel != null)
+                                        {
+                                            await commands.UpdateControlMessage(session, controlChannel);
+                                            commands.Log($"Сообщение управления {session.ControlMessageId} обновлено как завершённое");
+                                        }
+                                        else
+                                        {
+                                            commands.Log($"Не удалось найти канал для обновления сообщения управления");
+                                        }
                                     }
                                     else
                                     {
-                                        commands.Log($"Не удалось найти канал для удаления сообщения управления");
+                                        commands.Log($"Не удалось определить канал для обновления сообщения управления");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    commands.Log($"Ошибка при удалении сообщения управления: {ex.Message}");
+                                    commands.Log($"Ошибка при обновлении сообщения управления: {ex.Message}");
                                 }
                             }
 
@@ -6186,6 +6285,17 @@ namespace RPBot
 
         private async Task SendSessionStats(GameSession session, ISocketMessageChannel channel)
         {
+            lock (session.StatsSync)
+            {
+                if (session.StatsSent)
+                {
+                    Log($"Статистика для сессии {session.SessionId} уже была отправлена");
+                    return;
+                }
+
+                session.StatsSent = true;
+            }
+
           Log($"Формирование статистики для сессии {session.SessionId}...");
 
             try
