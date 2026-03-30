@@ -2402,8 +2402,7 @@ namespace RPBot
 
         private static string BuildStartupBoxLine(string text)
         {
-            var normalized = NormalizeStartupBoxLine(text);
-            return $"│{normalized.PadRight(StartupBoxContentWidth)}│";
+            return $"│{text.PadRight(StartupBoxContentWidth)}│";
         }
 
         private static string NormalizeStartupBoxLine(string? text)
@@ -2411,11 +2410,26 @@ namespace RPBot
             if (string.IsNullOrWhiteSpace(text))
                 return string.Empty;
 
-            var normalized = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
-            if (normalized.Length <= StartupBoxContentWidth)
-                return normalized;
+            return text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        }
 
-            return normalized.Substring(0, StartupBoxContentWidth - 1) + "…";
+        private static IEnumerable<string> WrapStartupBoxContent(string? text)
+        {
+            var normalized = NormalizeStartupBoxLine(text);
+            if (string.IsNullOrEmpty(normalized))
+            {
+                yield return string.Empty;
+                yield break;
+            }
+
+            var remaining = normalized;
+            while (remaining.Length > StartupBoxContentWidth)
+            {
+                yield return remaining.Substring(0, StartupBoxContentWidth);
+                remaining = remaining.Substring(StartupBoxContentWidth);
+            }
+
+            yield return remaining;
         }
 
         private static List<string> BuildStartupBox(string title, IEnumerable<string> lines)
@@ -2423,7 +2437,10 @@ namespace RPBot
             var result = new List<string> { BuildStartupBoxTop(title) };
             foreach (var line in lines)
             {
-                result.Add(BuildStartupBoxLine(line));
+                foreach (var wrapped in WrapStartupBoxContent(line))
+                {
+                    result.Add(BuildStartupBoxLine(wrapped));
+                }
             }
             result.Add(BuildStartupBoxBottom());
             return result;

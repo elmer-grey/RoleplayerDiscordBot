@@ -23,6 +23,7 @@ namespace RPBot
         private readonly ConcurrentDictionary<ulong, ISocketMessageChannel> _activeChannels = new();
         private readonly CancellationTokenSource _cts = new();
         private readonly string _stateFilePath;
+        private readonly SemaphoreSlim _stateFileGate = new(1, 1);
 
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
         {
@@ -75,6 +76,7 @@ namespace RPBot
 
         private async Task SaveStateAsync()
         {
+            await _stateFileGate.WaitAsync().ConfigureAwait(false);
             try
             {
                 var snapshot = _active.ToDictionary(kv => kv.Key, kv => new PersistentPrediction
@@ -102,6 +104,10 @@ namespace RPBot
             {
                 await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
             }
+            finally
+            {
+                _stateFileGate.Release();
+            }
         }
 
         public async Task<bool> EnsureStateFileAsync()
@@ -112,13 +118,22 @@ namespace RPBot
             {
                 var dir = Path.GetDirectoryName(_stateFilePath) ?? AppContext.BaseDirectory;
                 Directory.CreateDirectory(dir);
-                await File.WriteAllTextAsync(_stateFilePath, "{}", Encoding.UTF8).ConfigureAwait(false);
+                await _stateFileGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await File.WriteAllTextAsync(_stateFilePath, "{}", Encoding.UTF8).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _stateFileGate.Release();
+                }
             }
             return true;
         }
 
         private async Task LoadStateAsync()
         {
+            await _stateFileGate.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (!File.Exists(_stateFilePath)) return;
@@ -245,6 +260,10 @@ namespace RPBot
             catch (Exception ex)
             {
                 await PredictionErrorLogger.LogAsync("LoadStateAsync", ex).ConfigureAwait(false);
+            }
+            finally
+            {
+                _stateFileGate.Release();
             }
         }
 
@@ -908,6 +927,9 @@ namespace RPBot
         }
     }
 }
+
+
+
 
 
 

@@ -65,32 +65,8 @@ namespace RPBot
 
 		public async Task<int?> SendMessageReturningMessageIdAsync(ulong guildId, string text, CancellationToken ct = default)
 		{
-           var cfg = _serverConfigAccessor(guildId);
-			if (cfg == null || !cfg.TelegramEnabled)
-				return null;
-
-			if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
-				return null;
-
-			if (string.IsNullOrWhiteSpace(text))
-				return null;
-
-			var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/sendMessage";
-			var payload = new Dictionary<string, object>
-			{
-				["chat_id"] = cfg.TelegramChatId,
-				["text"] = EscapeHtml(text),
-				["parse_mode"] = "HTML",
-				["disable_web_page_preview"] = true
-			};
-
-			if (cfg.TelegramMessageThreadId > 0)
-			{
-				payload["message_thread_id"] = cfg.TelegramMessageThreadId;
-			}
-
-           var sendResult = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);
-			return sendResult.ok ? TryParseTelegramMessageId(sendResult.body) : null;
+			var send = await SendMessageInternalReturningMessageIdAsync(guildId, text, ct).ConfigureAwait(false);
+			return send.messageId;
 		}
 
 		public async Task<TelegramProbeResult> ProbeAsync(ulong guildId, CancellationToken ct = default)
@@ -109,14 +85,92 @@ namespace RPBot
 				return new TelegramProbeResult(false, "TelegramChatId = 0.");
 
 			var probeText = $"🔎 Telegram startup check: {DateTime.Now:dd.MM.yyyy HH:mm:ss}";
-			var sentId = await SendMessageReturningMessageIdAsync(guildId, probeText, ct).ConfigureAwait(false);
-			if (!sentId.HasValue)
-               return new TelegramProbeResult(false, "sendMessage failed (message_id не получен).");
+			var send = await SendMessageInternalReturningMessageIdAsync(guildId, probeText, ct).ConfigureAwait(false);
+			if (!send.messageId.HasValue)
+				return new TelegramProbeResult(false, $"sendMessage failed: {send.error ?? "message_id не получен"}.");
 
-			var deleteOk = await DeleteMessageAsync(guildId, sentId.Value, ct).ConfigureAwait(false);
+			var deleteOk = await DeleteMessageAsync(guildId, send.messageId.Value, ct).ConfigureAwait(false);
 			return new TelegramProbeResult(deleteOk, deleteOk
-             ? $"Telegram OK: test message_id={sentId.Value} отправлен и удалён."
-				: $"Telegram message_id={sentId.Value} отправлен, но удалить не удалось.", sentId);
+             ? $"Telegram OK: test message_id={send.messageId.Value} отправлен и удалён."
+				: $"Telegram message_id={send.messageId.Value} отправлен, но удалить не удалось.", send.messageId);
+		}
+
+		private async Task<(int? messageId, string? error)> SendMessageInternalReturningMessageIdAsync(ulong guildId, string text, CancellationToken ct = default)
+		{
+			var cfg = _serverConfigAccessor(guildId);
+			if (cfg == null || !cfg.TelegramEnabled)
+				return (null, "Telegram отключён или ServerConfig не найден");
+
+			if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
+				return (null, "TelegramBotToken пуст или TelegramChatId = 0");
+
+			if (string.IsNullOrWhiteSpace(text))
+				return (null, "пустой текст сообщения");
+
+			var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/sendMessage";
+			var payload = BuildSendMessagePayload(cfg, text);
+			var sendResult = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);
+
+			if (!sendResult.ok)
+				return (null, FormatTelegramFailure(sendResult.body));
+
+			var messageId = TryParseTelegramMessageId(sendResult.body);
+			return messageId.HasValue
+				? (messageId, null)
+				: (null, "Telegram вернул ok, но message_id отсутствует");
+		}
+
+		private static Dictionary<string, object> BuildSendMessagePayload(ServerConfig cfg, string text)
+		{
+			var payload = new Dictionary<string, object>
+			{
+				["chat_id"] = cfg.TelegramChatId,
+				["text"] = EscapeHtml(text),
+				["parse_mode"] = "HTML",
+				["disable_web_page_preview"] = true
+			};
+
+			if (cfg.TelegramMessageThreadId > 0)
+			{
+				payload["message_thread_id"] = cfg.TelegramMessageThreadId;
+			}
+
+			return payload;
+		}
+
+		private static string FormatTelegramFailure(string? body)
+		{
+			if (string.IsNullOrWhiteSpace(body))
+				return "пустой ответ";
+
+			try
+			{
+				using var doc = JsonDocument.Parse(body);
+				string? codePart = null;
+				string? descriptionPart = null;
+
+				if (doc.RootElement.TryGetProperty("error_code", out var errorCode))
+					codePart = $"code={errorCode.GetInt32()}".Trim();
+
+				if (doc.RootElement.TryGetProperty("description", out var description))
+					descriptionPart = description.GetString()?.Trim();
+
+				if (!string.IsNullOrWhiteSpace(codePart) && !string.IsNullOrWhiteSpace(descriptionPart))
+					return $"{codePart} | {descriptionPart}";
+
+				if (!string.IsNullOrWhiteSpace(descriptionPart))
+					return descriptionPart;
+
+				if (!string.IsNullOrWhiteSpace(codePart))
+					return codePart;
+			}
+			catch
+			{
+				// leave raw body below
+			}
+
+			var singleLine = body.Replace('\r', ' ').Replace('\n', ' ').Trim();
+			return singleLine.Length <= 500 ? singleLine : singleLine.Substring(0, 499) + "…";
 		}
 
 		private async Task<(bool ok, string body)> PostJsonAsync(string url, Dictionary<string, object> payload, CancellationToken ct)
@@ -270,45 +324,8 @@ namespace RPBot
 
        public async Task<bool> SendMessageAsync(ulong guildId, string text, CancellationToken ct = default)
 		{
-            var cfg = _serverConfigAccessor(guildId);
-			if (cfg == null || !cfg.TelegramEnabled)
-				return false;
-
-			if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
-				return false;
-
-			if (string.IsNullOrWhiteSpace(text))
-				return false;
-
-			var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/sendMessage";
-
-			// Используем HTML parse_mode, т.к. он менее капризный, чем MarkdownV2.
-			// Текст ожидается уже как plain text; экранируем спецсимволы.
-			var payload = new Dictionary<string, object>
-			{
-				["chat_id"] = cfg.TelegramChatId,
-				["text"] = EscapeHtml(text),
-				["parse_mode"] = "HTML",
-				["disable_web_page_preview"] = true
-			};
-
-			if (cfg.TelegramMessageThreadId > 0)
-			{
-				payload["message_thread_id"] = cfg.TelegramMessageThreadId;
-			}
-
-			var json = JsonSerializer.Serialize(payload);
-			using var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-			try
-			{
-				using var resp = await _httpClient.PostAsync(url, content, ct).ConfigureAwait(false);
-				return resp.IsSuccessStatusCode;
-			}
-			catch
-			{
-				return false;
-			}
+			var send = await SendMessageInternalReturningMessageIdAsync(guildId, text, ct).ConfigureAwait(false);
+			return send.messageId.HasValue;
 		}
 
 		private static string EscapeHtml(string text)
