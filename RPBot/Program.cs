@@ -50,6 +50,186 @@ namespace RPBot
            public int TelegramMessageThreadId { get; set; } = 0;
     }
 
+        private IMessageChannel? ResolveControlChannel(GameSession session, IMessageChannel? overrideChannel = null)
+        {
+            if (overrideChannel != null)
+                return overrideChannel;
+
+            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) && config.RecordChannelID != 0)
+            {
+                var channel = _client.GetChannel(config.RecordChannelID) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(config.RecordChannelID);
+                if (channel != null)
+                    return channel;
+            }
+
+            if (session.ChannelId != 0)
+            {
+                var channel = _client.GetChannel(session.ChannelId) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(session.ChannelId);
+                if (channel != null)
+                    return channel;
+            }
+
+            return null;
+        }
+
+        private async Task DeleteControlMessageAsync(GameSession session, IMessageChannel? channel = null)
+        {
+            if (session.ControlMessageId == 0)
+                return;
+
+            var targetChannel = ResolveControlChannel(session, channel);
+            if (targetChannel == null)
+            {
+                Log($"Не удалось определить канал управления для удаления message_id={session.ControlMessageId}");
+                session.ControlMessageId = 0;
+                return;
+            }
+
+            try
+            {
+                var message = await targetChannel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
+                if (message != null)
+                {
+                    await message.DeleteAsync().ConfigureAwait(false);
+                    Log($"Сообщение управления {session.ControlMessageId} удалено");
+                }
+                else
+                {
+                    Log($"Сообщение управления {session.ControlMessageId} не найдено в канале при удалении");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка удаления сообщения управления: {ex.Message}");
+            }
+            finally
+            {
+                session.ControlMessageId = 0;
+            }
+        }
+
+        private IMessageChannel? ResolveControlChannel(GameSession session, IMessageChannel? overrideChannel = null)
+        {
+            if (overrideChannel != null)
+                return overrideChannel;
+
+            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) && config.RecordChannelID != 0)
+            {
+                var channel = _client.GetChannel(config.RecordChannelID) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(config.RecordChannelID);
+                if (channel != null)
+                    return channel;
+            }
+
+            if (session.ChannelId != 0)
+            {
+                var channel = _client.GetChannel(session.ChannelId) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(session.ChannelId);
+                if (channel != null)
+                    return channel;
+            }
+
+            return null;
+        }
+
+        private async Task DeleteControlMessageAsync(GameSession session, IMessageChannel? channel = null)
+        {
+            if (session.ControlMessageId == 0)
+                return;
+
+            var targetChannel = ResolveControlChannel(session, channel);
+            if (targetChannel == null)
+            {
+                Log($"Не удалось определить канал управления для удаления message_id={session.ControlMessageId}");
+                session.ControlMessageId = 0;
+                return;
+            }
+
+            try
+            {
+                var message = await targetChannel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
+                if (message != null)
+                {
+                    await message.DeleteAsync().ConfigureAwait(false);
+                    Log($"Сообщение управления {session.ControlMessageId} удалено");
+                }
+                else
+                {
+                    Log($"Сообщение управления {session.ControlMessageId} не найдено в канале при удалении");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка удаления сообщения управления: {ex.Message}");
+            }
+            finally
+            {
+                session.ControlMessageId = 0;
+            }
+        }
+
+        private IMessageChannel? ResolveControlChannel(GameSession session, IMessageChannel? overrideChannel = null)
+        {
+            if (overrideChannel != null)
+                return overrideChannel;
+
+            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) && config.RecordChannelID != 0)
+            {
+                var channel = _client.GetChannel(config.RecordChannelID) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(config.RecordChannelID);
+                if (channel != null)
+                    return channel;
+            }
+
+            if (session.ChannelId != 0)
+            {
+                var channel = _client.GetChannel(session.ChannelId) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(session.ChannelId);
+                if (channel != null)
+                    return channel;
+            }
+
+            return null;
+        }
+
+        private async Task DeleteControlMessageAsync(GameSession session, IMessageChannel? channel = null)
+        {
+            if (session.ControlMessageId == 0)
+                return;
+
+            var targetChannel = ResolveControlChannel(session, channel);
+            if (targetChannel == null)
+            {
+                Log($"Не удалось определить канал управления для удаления message_id={session.ControlMessageId}");
+                session.ControlMessageId = 0;
+                return;
+            }
+
+            try
+            {
+                var message = await targetChannel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
+                if (message != null)
+            {
+                    await message.DeleteAsync().ConfigureAwait(false);
+                    Log($"Сообщение управления {session.ControlMessageId} удалено");
+                }
+                else
+                {
+                    Log($"Сообщение управления {session.ControlMessageId} не найдено в канале при удалении");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка удаления сообщения управления: {ex.Message}");
+            }
+            finally
+            {
+                session.ControlMessageId = 0;
+            }
+        }
+
         // Modal handling moved inside Program class
 
     public enum StartupType
@@ -6075,15 +6255,6 @@ namespace RPBot
                 session.EndTime = DateTime.Now;
                 Log($"Время окончания установлено: {session.EndTime}");
 
-                try
-                {
-                    await UpdateControlMessage(session, component.Channel);
-                    Log($"Сообщение управления обновлено как завершённое");
-                }
-                catch (Exception ex)
-                {
-                    Log($"Ошибка обновления сообщения управления: {ex.Message}");
-                }
 
                 if (session.EventId.HasValue)
                 {
@@ -6104,6 +6275,7 @@ namespace RPBot
                 }
 
                 await SendSessionStats(session, component.Channel);
+                await DeleteControlMessageAsync(session, component.Channel);
             }
             finally
             {
@@ -6171,39 +6343,6 @@ namespace RPBot
                             session.EndTime = DateTime.Now;
                             commands.Log($"Установлено время окончания для сессии {session.SessionId}");
 
-                            if (session.ControlMessageId != 0)
-                            {
-                                try
-                                {
-                                    var channelId = Program.ServerConfigs.TryGetValue(guildId, out var config)
-                                        ? config.RecordChannelID
-                                        : 0;
-
-                                    if (channelId != 0)
-                                    {
-                                        var controlChannel = client.GetChannel(channelId) as ITextChannel
-                                            ?? client.GetGuild(guildId)?.GetTextChannel(channelId);
-                                        if (controlChannel != null)
-                                        {
-                                            await commands.UpdateControlMessage(session, controlChannel);
-                                            commands.Log($"Сообщение управления {session.ControlMessageId} обновлено как завершённое");
-                                        }
-                                        else
-                                        {
-                                            commands.Log($"Не удалось найти канал для обновления сообщения управления");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        commands.Log($"Не удалось определить канал для обновления сообщения управления");
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    commands.Log($"Ошибка при обновлении сообщения управления: {ex.Message}");
-                                }
-                            }
-
                             var channel = client.GetChannel(Program.ServerConfigs[guildId].RecordChannelID) as SocketTextChannel;
                             if (channel != null)
                             {
@@ -6214,6 +6353,7 @@ namespace RPBot
                             {
                                 commands.Log($"Канал для статистики не найден");
                             }
+                            await commands.DeleteControlMessageAsync(session);
                         }
                         else
                         {
