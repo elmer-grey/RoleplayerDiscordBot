@@ -3829,11 +3829,8 @@ namespace RPBot
             var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
             var input = inputOption?.Value?.ToString() ?? string.Empty;
 
-            var diceTypeOption = command.Data.Options.FirstOrDefault(o => o.Name == "dice_type");
-            var diceType = diceTypeOption?.Value?.ToString() ?? "d6"; // По умолчанию d6
-
             var diceModule = _services.GetRequiredService<RollDiceCommands>();
-            await diceModule.RollDice(command, input, diceType);
+            await diceModule.RollDice(command, input);
         }
 
         private async Task Roll20Command(SocketSlashCommand command)
@@ -4749,8 +4746,32 @@ namespace RPBot
             return null;
         }
 
+        /// <summary>
+        /// Извлекает тип куба из строки ввода (например, из "2d6" получает "d6", из "3d20" получает "d20")
+        /// </summary>
+        private string ExtractDiceType(string input)
+        {
+            try
+            {
+                // Ищем паттерн "dX" где X - число
+                var match = Regex.Match(input, @"d(\d+)", RegexOptions.IgnoreCase);
+                if (match.Success)
+                {
+                    var diceValue = match.Groups[1].Value; // Извлекаем число после "d"
+                    return $"d{diceValue}"; // Возвращаем "d6", "d20", и т.д.
+                }
+
+                // Если паттерн не найден, возвращаем "d6" по умолчанию
+                return "d6";
+            }
+            catch
+            {
+                return "d6"; // По умолчанию d6 при любой ошибке
+            }
+        }
+
         [Command("roll")]
-        public async Task RollDice(SocketSlashCommand command, string input, string diceType = "d6")
+        public async Task RollDice(SocketSlashCommand command, string input)
         {
             await command.DeferAsync();
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
@@ -4783,6 +4804,10 @@ namespace RPBot
                 Console.WriteLine($"Предупреждение: Был введён неверный формат. Ошибка: {errorMessage}");
                 return;
             }
+
+            // АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ТИПА КУБА ИЗ INPUT
+            // Извлекаем тип куба (например, из "2d6" получаем "d6", из "1d20" получаем "d20")
+            string diceType = ExtractDiceType(_input);
 
             var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?$)", RegexOptions.IgnoreCase);
 
@@ -4898,14 +4923,16 @@ namespace RPBot
                 {
                     var result = results[0];
                     var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-                    // Определяем подпапку по типу куба (d4, d6, d8, d10, d12, d20)
+
+                    // Автоматически определяем подпапку по типу куба из input
                     var diceSubfolder = Path.Combine(numbersDir, diceType);
                     var filePath = Path.Combine(diceSubfolder, $"{result}.png");
                     Color embedColor = GetGradientColor(result, 1, max);
 
                     Console.WriteLine($"Результат броска: {result}, тип куба: {diceType}, путь: {filePath}");
 
-                    if (File.Exists(filePath))
+                    // Проверяем существование папки и файла
+                    if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
                     {
                         var embed = new EmbedBuilder()
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
@@ -4915,7 +4942,8 @@ namespace RPBot
                     }
                     else
                     {
-                        await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено по пути {filePath})");
+                        // Если папки или файла нет - выводим текстом
+                        await command.FollowupAsync($"Выпало: **{result}**");
                     }
                     return;
                 }
@@ -4923,17 +4951,20 @@ namespace RPBot
                 {
                     var embeds = new List<Embed>();
                     var files = new List<FileAttachment>();
+                    var textResults = new List<string>(); // Для текстового вывода если нет картинок
 
                     for (int i = 0; i < results.Count; i++)
                     {
                         var result = results[i];
                         Console.WriteLine($"Результат броска: {result}");
                         var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-                        // Определяем подпапку по типу куба
+
+                        // Автоматически определяем подпапку по типу куба из input
                         var diceSubfolder = Path.Combine(numbersDir, diceType);
                         var filePath = Path.Combine(diceSubfolder, $"{result}.png");
 
-                        if (File.Exists(filePath))
+                        // Проверяем существование папки и файла
+                        if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
                         {
                             var uniqueFileName = $"{result}_{i + 1}.png";
                             files.Add(new FileAttachment(filePath, uniqueFileName));
@@ -4944,7 +4975,9 @@ namespace RPBot
                         }
                         else
                         {
-                            Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\" по пути {filePath}!");
+                            // Если папки или файла нет - сохраняем для текстового вывода
+                            textResults.Add(result.ToString());
+                            Console.WriteLine($"Папка или файл не найдены для {diceType}/{result}.png - будет текстовый вывод");
                         }
                     }
 
@@ -4956,6 +4989,12 @@ namespace RPBot
                             _ => $"Результаты {files.Count} бросков:"
                         };
 
+                        // Добавляем текстовые результаты к сообщению, если есть
+                        if (textResults.Count > 0)
+                        {
+                            combinedMessage += $"\n(Без картинок: {string.Join(", ", textResults)})";
+                        }
+
                         await command.FollowupWithFilesAsync(
                             attachments: files,
                             text: combinedMessage,
@@ -4963,8 +5002,9 @@ namespace RPBot
                     }
                     else
                     {
+                        // Если картинок нет совсем - выводим все результаты текстом
                         var resultsText = string.Join(", ", results);
-                        await command.FollowupAsync($"Результаты бросков: {resultsText}");
+                        await command.FollowupAsync($"Результаты бросков: **{resultsText}**");
                     }
                     return;
                 }

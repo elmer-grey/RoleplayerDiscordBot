@@ -259,18 +259,7 @@ namespace RPBot
                 new SlashCommandBuilder()
                     .WithName("roll")
                     .WithDescription("Выполняет бросок кубика с заданными условиями. Подробнее в команде /help_r.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true)
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("dice_type")
-                        .WithDescription("Тип куба (для картинок)")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .AddChoice("d4", "d4")
-                        .AddChoice("d6", "d6")
-                        .AddChoice("d8", "d8")
-                        .AddChoice("d10", "d10")
-                        .AddChoice("d12", "d12")
-                        .AddChoice("d20", "d20")
-                        .WithRequired(false)),
+                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true),
 
                 new SlashCommandBuilder()
                     .WithName("roll20")
