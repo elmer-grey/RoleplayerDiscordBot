@@ -874,12 +874,14 @@ namespace RPBot
                 // Устанавливаем размер консоли, если нужно
                 try
                 {
-                    if (Console.WindowWidth < 100 || Console.WindowHeight < 30)
+                    // Минимальные требования: 160x45
+                    // 120 символов для логов (70% от 160 ≈ 112) + 48 для панели команд
+                    if (Console.WindowWidth < 160 || Console.WindowHeight < 45)
                     {
                         if (OperatingSystem.IsWindows())
                         {
-                            Console.SetWindowSize(120, 35);
-                            Console.SetBufferSize(120, 1000);
+                            Console.SetWindowSize(160, 45);
+                            Console.SetBufferSize(160, 2000);
                         }
                     }
                 }

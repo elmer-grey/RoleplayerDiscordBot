@@ -79,7 +79,7 @@ namespace RPBot
         /// <summary>
         /// Отправляет сообщение о запуске систем на конкретный сервер
         /// </summary>
-        public async Task<bool> SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string reason)
+        public async Task<bool> SendSystemsActiveToGuild(SocketGuild guild, ServerConfig config, string reason, List<SystemHealthCheck>? healthChecks = null)
         {
             try
             {
@@ -89,11 +89,16 @@ namespace RPBot
                 var startupType = GetStartupTypeDisplay();
                 var startupReason = GetStartupReasonDisplay(reason);
 
+                // Определяем цвет на основе результатов проверки
+                var allHealthy = healthChecks == null || healthChecks.All(c => c.IsHealthy);
+                var embedColor = allHealthy ? Color.Green : Color.Orange;
+                var title = allHealthy ? "🟢 ВСЕ СИСТЕМЫ АКТИВНЫ" : "🟡 СИСТЕМЫ ЗАПУЩЕНЫ С ПРЕДУПРЕЖДЕНИЯМИ";
+
                 var embed = new EmbedBuilder()
-                    .WithTitle("🟢 ВСЕ СИСТЕМЫ АКТИВНЫ")
-                    .WithColor(Color.Green)
-                    .WithDescription($"Бот {_client.CurrentUser.Username} успешно запущен и работает в штатном режиме.")
-                    .AddField("📊 Статус", "✅ Онлайн", true)
+                    .WithTitle(title)
+                    .WithColor(embedColor)
+                    .WithDescription($"Бот {_client.CurrentUser.Username} запущен.")
+                    .AddField("📊 Статус", allHealthy ? "✅ Онлайн" : "⚠️ Онлайн (есть проблемы)", true)
                     .AddField("⏱️ Время", DateTime.Now.ToString("HH:mm:ss"), true)
                     .AddField("📶 Задержка", $"{_client.Latency} мс", true)
                     .AddField("🔄 Версия", BotConfig.Current?.BotVersion ?? "?", true)
@@ -105,6 +110,24 @@ namespace RPBot
                 if (!string.IsNullOrWhiteSpace(startupReason))
                 {
                     embed.AddField("📋 Причина", startupReason, true);
+                }
+
+                // Добавляем результаты проверки систем
+                if (healthChecks != null && healthChecks.Count > 0)
+                {
+                    var healthSummary = new StringBuilder();
+                    foreach (var check in healthChecks)
+                    {
+                        var icon = check.IsHealthy ? "✅" : "❌";
+                        // Берём только первую строку для краткости
+                        var msg = check.Message.Split('\n')[0];
+                        // Ограничиваем длину для красивого отображения
+                        if (msg.Length > 50)
+                            msg = msg.Substring(0, 47) + "...";
+                        healthSummary.AppendLine($"{icon} {check.SystemName}");
+                    }
+
+                    embed.AddField("🔍 Проверка систем", healthSummary.ToString(), false);
                 }
 
                 await channel.SendMessageAsync(embed: embed.Build());

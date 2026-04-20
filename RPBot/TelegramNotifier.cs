@@ -84,15 +84,80 @@ namespace RPBot
 			if (cfg.TelegramChatId == 0)
 				return new TelegramProbeResult(false, "TelegramChatId = 0.");
 
-			var probeText = $"🔎 Telegram startup check: {DateTime.Now:dd.MM.yyyy HH:mm:ss}";
-			var send = await SendMessageInternalReturningMessageIdAsync(guildId, probeText, ct).ConfigureAwait(false);
-			if (!send.messageId.HasValue)
-				return new TelegramProbeResult(false, $"sendMessage failed: {send.error ?? "message_id не получен"}.");
+			// Сначала проверим токен через getMe (без отправки сообщений в канал)
+			var getMeUrl = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/getMe";
+			try
+			{
+				using var resp = await _httpClient.GetAsync(getMeUrl, ct).ConfigureAwait(false);
+				var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
-			var deleteOk = await DeleteMessageAsync(guildId, send.messageId.Value, ct).ConfigureAwait(false);
-			return new TelegramProbeResult(deleteOk, deleteOk
-             ? $"Telegram OK: test message_id={send.messageId.Value} отправлен и удалён."
-				: $"Telegram message_id={send.messageId.Value} отправлен, но удалить не удалось.", send.messageId);
+				bool ok = false;
+				long? botUserId = null;
+				try
+				{
+					using var doc = JsonDocument.Parse(body);
+					if (doc.RootElement.TryGetProperty("ok", out var okProp))
+						ok = okProp.GetBoolean();
+
+					if (ok && doc.RootElement.TryGetProperty("result", out var result))
+					{
+						if (result.TryGetProperty("id", out var idProp))
+							botUserId = idProp.GetInt64();
+					}
+				}
+				catch
+				{
+					return new TelegramProbeResult(false, "Ошибка парсинга ответа getMe.");
+				}
+
+				if (!ok)
+					return new TelegramProbeResult(false, $"getMe вернул ok=false: {body}");
+
+				if (!botUserId.HasValue)
+					return new TelegramProbeResult(false, "Не удалось получить ID бота из getMe.");
+
+				// Проверяем доступ к чату через getChat (без отправки сообщений)
+				var getChatUrl = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/getChat";
+				var getChatPayload = new Dictionary<string, object>
+				{
+					["chat_id"] = cfg.TelegramChatId
+				};
+
+				try
+				{
+					var getChatResult = await PostJsonAsync(getChatUrl, getChatPayload, ct).ConfigureAwait(false);
+					if (!getChatResult.ok)
+					{
+						return new TelegramProbeResult(false, $"Не удалось получить информацию о чате: {FormatTelegramFailure(getChatResult.body)}");
+					}
+
+					// Извлекаем название чата для красивого отображения
+					string? chatTitle = null;
+					try
+					{
+						using var doc = JsonDocument.Parse(getChatResult.body);
+						if (doc.RootElement.TryGetProperty("result", out var result))
+						{
+							if (result.TryGetProperty("title", out var titleProp))
+								chatTitle = titleProp.GetString();
+						}
+					}
+					catch { }
+
+					var chatInfo = string.IsNullOrWhiteSpace(chatTitle) ? $"chat_id={cfg.TelegramChatId}" : $"{chatTitle} (id={cfg.TelegramChatId})";
+					return new TelegramProbeResult(true, 
+						$"Telegram OK: токен валиден, доступ к чату проверен ({chatInfo})", 
+						null);
+				}
+				catch (Exception ex)
+				{
+					return new TelegramProbeResult(false, $"Ошибка проверки доступа к чату: {ex.Message}");
+				}
+			}
+			catch (Exception ex)
+			{
+				return new TelegramProbeResult(false, $"Исключение при проверке: {ex.Message}");
+			}
 		}
 
 		private async Task<(int? messageId, string? error)> SendMessageInternalReturningMessageIdAsync(ulong guildId, string text, CancellationToken ct = default)

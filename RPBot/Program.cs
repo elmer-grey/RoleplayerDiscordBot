@@ -59,20 +59,30 @@ namespace RPBot
         Reconnect
     }
 
-    public interface IBotController
-    {
-        bool ShouldExit { get; }
-        bool ShouldRestart { get; }
-        Task RestartAsync();
-        Task StopAsync();
+	public interface IBotController
+	{
+		bool ShouldExit { get; }
+		bool ShouldRestart { get; }
+		Task RestartAsync();
+		Task StopAsync();
 
-        // Управление конфигурациями серверов (доступно из UI)
-        Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync();
-        Task<ServerConfig?> GetServerConfigAsync(ulong guildId);
-        Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null);
-        Task ResetServerConfigAsync(ulong guildId);
+		// Управление конфигурациями серверов (доступно из UI)
+		Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync();
+		Task<ServerConfig?> GetServerConfigAsync(ulong guildId);
+		Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null);
+		Task ResetServerConfigAsync(ulong guildId);
 		Task ReloadServerConfigsAsync();
-    }
+	}
+
+	/// <summary>
+	/// Результат проверки здоровья системы
+	/// </summary>
+	public class SystemHealthCheck
+	{
+		public string SystemName { get; set; } = string.Empty;
+		public bool IsHealthy { get; set; }
+		public string Message { get; set; } = string.Empty;
+	}
  public partial class Program : IDisposable, IBotController
     {
         private DiscordSocketClient _client;
@@ -2390,7 +2400,11 @@ namespace RPBot
                 SaveServerConfigs();
         }
 
-        private const int StartupBoxContentWidth = 78;
+        // Фиксированная ширина логов для стабильного форматирования
+        // 118 символов контента + 2 рамки = 120 символов итого
+        // При консоли 160x45 и Logs Panel 70% (112 символов) логи прокручиваются горизонтально
+        // См. Docs/UI_Layout_Sizes.md для деталей
+        private const int StartupBoxContentWidth = 118;
 
         private static string BuildStartupBoxTop(string title)
         {
@@ -2422,14 +2436,41 @@ namespace RPBot
                 yield break;
             }
 
-            var remaining = normalized;
-            while (remaining.Length > StartupBoxContentWidth)
+            // Если строка влезает - возвращаем как есть
+            if (normalized.Length <= StartupBoxContentWidth)
             {
-                yield return remaining.Substring(0, StartupBoxContentWidth);
-                remaining = remaining.Substring(StartupBoxContentWidth);
+                yield return normalized;
+                yield break;
             }
 
-            yield return remaining;
+            // Перенос длинных строк с сохранением слов
+            var remaining = normalized;
+            var firstLine = true;
+
+            while (remaining.Length > 0)
+            {
+                var maxLen = firstLine ? StartupBoxContentWidth : StartupBoxContentWidth - 2; // отступ для переноса
+
+                if (remaining.Length <= maxLen)
+                {
+                    // Последняя часть
+                    yield return firstLine ? remaining : "  " + remaining;
+                    break;
+                }
+
+                // Ищем позицию для разрыва по пробелу
+                var breakPos = maxLen;
+                var lastSpace = remaining.LastIndexOf(' ', maxLen - 1, maxLen);
+
+                if (lastSpace > maxLen / 2) // Если пробел найден не слишком близко к началу
+                    breakPos = lastSpace;
+
+                var chunk = remaining.Substring(0, breakPos).TrimEnd();
+                yield return firstLine ? chunk : "  " + chunk;
+
+                remaining = remaining.Substring(breakPos).TrimStart();
+                firstLine = false;
+            }
         }
 
         private static List<string> BuildStartupBox(string title, IEnumerable<string> lines)
@@ -2437,9 +2478,18 @@ namespace RPBot
             var result = new List<string> { BuildStartupBoxTop(title) };
             foreach (var line in lines)
             {
-                foreach (var wrapped in WrapStartupBoxContent(line))
+                // Если строка уже содержит рамки (вложенный блок), добавляем как есть
+                if (line.TrimStart().StartsWith("┌") || line.TrimStart().StartsWith("└") || line.TrimStart().StartsWith("│"))
                 {
-                    result.Add(BuildStartupBoxLine(wrapped));
+                    result.Add(BuildStartupBoxLine(line));
+                }
+                else
+                {
+                    // Обычная строка - оборачиваем
+                    foreach (var wrapped in WrapStartupBoxContent(line))
+                    {
+                        result.Add(BuildStartupBoxLine(wrapped));
+                    }
                 }
             }
             result.Add(BuildStartupBoxBottom());
@@ -2681,27 +2731,68 @@ namespace RPBot
                     stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
                 await LogStartupBoxAsync("ЭТАП 3/4: СИНХРОНИЗАЦИЯ", stage3Lines);
 
-                // ЭТАП 4: Отправка статусов
+                // ЭТАП 4: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
                 var stage4Lines = new List<string>();
 
+                // Выполняем проверку здоровья систем
+                var healthChecks = await PerformSystemHealthCheckAsync();
+
+                stage4Lines.Add("═══ ПРОВЕРКА СИСТЕМ ═══");
+                foreach (var check in healthChecks)
+                {
+                    var icon = check.IsHealthy ? "✅" : "❌";
+                    var firstLine = check.Message.Split('\n')[0];
+                    var systemNamePart = $"{icon} {check.SystemName}: ";
+
+                    // Не обрезаем - пусть WrapStartupBoxContent сам переносит
+                    stage4Lines.Add($"{systemNamePart}{firstLine}");
+
+                    // Если сообщение многострочное (Telegram), добавляем только первые 2 детальные строки
+                    if (check.Message.Contains("\n"))
+                    {
+                        var lines = check.Message.Split('\n').Skip(1).Take(2);
+                        foreach (var line in lines)
+                        {
+                            if (!string.IsNullOrWhiteSpace(line))
+                            {
+                                // Добавляем с отступом, WrapStartupBoxContent обработает
+                                stage4Lines.Add($"  {line.Trim()}");
+                            }
+                        }
+                    }
+                }
+
+                // Определяем, все ли системы здоровы
+                var allHealthy = healthChecks.All(c => c.IsHealthy);
+                var overallStatus = allHealthy ? "✅ ВСЕ СИСТЕМЫ РАБОТАЮТ" : "⚠️ ОБНАРУЖЕНЫ ПРОБЛЕМЫ";
+
+                stage4Lines.Add("");
+                stage4Lines.Add($"═══ ИТОГ: {overallStatus} ═══");
+                stage4Lines.Add("");
+
+                // Отправляем статусы на серверы
+                stage4Lines.Add("═══ ОТПРАВКА СТАТУСОВ ═══");
                 var guildsList = _client.Guilds.ToList();
                 for (int i = 0; i < guildsList.Count; i++)
                 {
                     var guild = guildsList[i];
-                        if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                    if (_serverConfigs.TryGetValue(guild.Id, out var config))
                     {
                         if (config.ModerateChannelID == 0)
                         {
-                            stage4Lines.Add($"Пропущено: канал уведомлений не задан для {guild.Name}");
+                            stage4Lines.Add($"⊘ {guild.Name}: канал не настроен");
                         }
                         else
                         {
+                            // Передаём результаты проверки в StatusNotifier
                             var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                                $" Первичный запуск. Версия: {_config?.BotVersion ?? "0.0.0.0"}");
+                                $"Тип запуска: {GetStartupTypeDisplay()}",
+                                healthChecks);
+
                             if (ok)
-                                stage4Lines.Add($"Статус отправлен на {guild.Name}");
+                                stage4Lines.Add($"✅ {guild.Name}");
                             else
-                                stage4Lines.Add($"Ошибка отправки статуса на {guild.Name}");
+                                stage4Lines.Add($"❌ {guild.Name}: ошибка отправки");
                         }
                     }
                     await Task.Delay(200);
@@ -2709,7 +2800,8 @@ namespace RPBot
 
                 if (stage4Lines.Count == 0)
                     stage4Lines.Add("Нет серверов для отправки стартовых уведомлений.");
-                await LogStartupBoxAsync("ЭТАП 4/4: ОТПРАВКА СТАТУСОВ", stage4Lines);
+
+                await LogStartupBoxAsync("ЭТАП 4/4: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
 
                 // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
@@ -3273,8 +3365,8 @@ namespace RPBot
                 return;
             }
 
-            // Обработка сообщений, начинающихся с "!"
-            if (message.Content.StartsWith("!"))
+            // Обработка сообщений, начинающихся с "!" (только если после ! сразу идёт буква)
+            if (message.Content.StartsWith("!") && message.Content.Length > 1 && !char.IsWhiteSpace(message.Content[1]))
             {
                 var key = message.Content.Split(' ')[0].ToLower();
 
@@ -4202,6 +4294,130 @@ namespace RPBot
 
         private readonly SemaphoreSlim _logSemaphore = new SemaphoreSlim(1, 1);
 
+        /// <summary>
+        /// Выполняет комплексную проверку всех систем бота
+        /// </summary>
+        private async Task<List<SystemHealthCheck>> PerformSystemHealthCheckAsync()
+        {
+            var checks = new List<SystemHealthCheck>();
+
+            // 1. Проверка подключения к Discord
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Discord Gateway",
+                IsHealthy = _client?.ConnectionState == Discord.ConnectionState.Connected,
+                Message = _client?.ConnectionState == Discord.ConnectionState.Connected 
+                    ? $"Подключено ({_client.Latency}мс)" 
+                    : $"Не подключено ({_client?.ConnectionState})"
+            });
+
+            // 2. Проверка доступности гильдий
+            var guildsCount = _client?.Guilds?.Count ?? 0;
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Серверы Discord",
+                IsHealthy = guildsCount > 0,
+                Message = guildsCount > 0 
+                    ? $"Доступно: {guildsCount}" 
+                    : "Нет доступных серверов"
+            });
+
+            // 3. Проверка конфигурации серверов
+            var configuredServers = _serverConfigs?.Count ?? 0;
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Конфигурация",
+                IsHealthy = configuredServers > 0,
+                Message = configuredServers > 0 
+                    ? $"Настроено: {configuredServers}" 
+                    : "Не настроено"
+            });
+
+            // 4. Проверка системы прогнозов
+            var predEnabled = _predictionService != null;
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Прогнозы",
+                IsHealthy = predEnabled,
+                Message = predEnabled 
+                    ? "Активна" 
+                    : "Не инициализирована"
+            });
+
+            // 5. Проверка Telegram для каждого сервера
+            if (_telegramNotifier != null && _serverConfigs != null)
+            {
+                var telegramChecks = new List<string>();
+                var anyEnabled = false;
+
+                foreach (var config in _serverConfigs.Values)
+                {
+                    if (config.TelegramEnabled)
+                    {
+                        anyEnabled = true;
+                        var guild = _client?.GetGuild(config.GuildID);
+                        var guildName = guild?.Name ?? $"Guild{config.GuildID}";
+
+                        try
+                        {
+                            var probeResult = await _telegramNotifier.ProbeAsync(config.GuildID, default);
+                            // Сокращаем название сервера если слишком длинное
+                            var shortName = guildName.Length > 20 ? guildName.Substring(0, 17) + "..." : guildName;
+
+                            if (probeResult.Success)
+                                telegramChecks.Add($"  • {shortName}: OK");
+                            else
+                            {
+                                // Берём только первые 40 символов сообщения об ошибке
+                                var errMsg = probeResult.Message.Length > 40 
+                                    ? probeResult.Message.Substring(0, 37) + "..." 
+                                    : probeResult.Message;
+                                telegramChecks.Add($"  • {shortName}: {errMsg}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            var shortName = guildName.Length > 20 ? guildName.Substring(0, 17) + "..." : guildName;
+                            var errMsg = ex.Message.Length > 30 ? ex.Message.Substring(0, 27) + "..." : ex.Message;
+                            telegramChecks.Add($"  • {shortName}: Err: {errMsg}");
+                        }
+                    }
+                }
+
+                var telegramOverallHealthy = !anyEnabled || telegramChecks.Any(c => c.Contains("OK"));
+                checks.Add(new SystemHealthCheck
+                {
+                    SystemName = "Telegram",
+                    IsHealthy = telegramOverallHealthy,
+                    Message = telegramChecks.Count == 0 
+                        ? "Не настроено" 
+                        : string.Join("\n", telegramChecks)
+                });
+            }
+
+            // 6. Проверка голосовой системы начисления поинтов
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Голосовые поинты",
+                IsHealthy = _voicePointsService != null,
+                Message = _voicePointsService != null 
+                    ? "Активна" 
+                    : "Не инициализирована"
+            });
+
+            // 7. Проверка хранилища поинтов
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Хранилище поинтов",
+                IsHealthy = _pointsService != null,
+                Message = _pointsService != null 
+                    ? "Активно" 
+                    : "Не инициализировано"
+            });
+
+            return checks;
+        }
+
         private async Task LogStartup(string message)
         {
             var logDirRaw = _config?.LogDirectory;
@@ -4248,6 +4464,19 @@ namespace RPBot
                 : $"Бот завершил работу. Режим: {mode}. Инициатор: {initiator}. Версия: {version}";
 
             await LogStartup(message);
+        }
+
+        /// <summary>
+        /// Возвращает отображаемый текст типа запуска
+        /// </summary>
+        private string GetStartupTypeDisplay()
+        {
+            return _currentStartupType switch
+            {
+                StartupType.Restart => "Перезапуск",
+                StartupType.Reconnect => "Переподключение",
+                _ => "Первичный запуск"
+            };
         }
 
         private async Task LogError(string errorMessage)
@@ -4366,14 +4595,13 @@ namespace RPBot
                                              "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
                                              "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")*/
                             .WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
-                                            "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
-                                            "На сервере помимо команд через `/` в соответствующих чатах, также действует несколько команд через `!`:\n" +
-                                            "1. В двух чатах (**флудилка** и **общий-ролевой-чат**) они с важной информацией:\n" +
-                                            "   • `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
-                                            "   • `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
-                                            "   • `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.\n" +
-                                            "2. А также есть `!команды` — здесь указаны все пасты, которые можно использовать в голосовых каналах.\n\n" +
-                                            "*При возникновении вопросов по серверу обратитесь к @domen_ или @perekrestok_mirov *")
+                                                "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                                "На сервере помимо команд через `/` также действует несколько команд через `!` с важной информацией:\n" +
+                                                "   • `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                                "   • `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                                "   • `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи;\n" +
+                                                "   • `!команды` — здесь указаны все дополнительные пасты.\n\n" +
+                                                "*При возникновении вопросов по серверу обратитесь к @domen_ или @perekrestok_mirov *")
                             .WithColor(new Color(0xE67E22)) // Оранжевый цвет, как у огня
                             .WithImageUrl("https://media.discordapp.net/attachments/710469293996769405/1241392720883482674/fe5ff45b6397f151c147b890c29eaa26af6741f60a592d7baf3594ff7b424f24.gif?ex=664a0890&is=6648b710&hm=4b766b8801c0ad863731c4f3")
                             .WithFooter(new EmbedFooterBuilder()
