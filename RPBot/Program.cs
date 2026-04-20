@@ -3829,8 +3829,11 @@ namespace RPBot
             var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
             var input = inputOption?.Value?.ToString() ?? string.Empty;
 
+            var diceTypeOption = command.Data.Options.FirstOrDefault(o => o.Name == "dice_type");
+            var diceType = diceTypeOption?.Value?.ToString() ?? "d6"; // По умолчанию d6
+
             var diceModule = _services.GetRequiredService<RollDiceCommands>();
-            await diceModule.RollDice(command, input);
+            await diceModule.RollDice(command, input, diceType);
         }
 
         private async Task Roll20Command(SocketSlashCommand command)
@@ -4747,7 +4750,7 @@ namespace RPBot
         }
 
         [Command("roll")]
-        public async Task RollDice(SocketSlashCommand command, string input)
+        public async Task RollDice(SocketSlashCommand command, string input, string diceType = "d6")
         {
             await command.DeferAsync();
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
@@ -4895,10 +4898,12 @@ namespace RPBot
                 {
                     var result = results[0];
                     var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-                    var filePath = Path.Combine(numbersDir, $"{result}.png");
+                    // Определяем подпапку по типу куба (d4, d6, d8, d10, d12, d20)
+                    var diceSubfolder = Path.Combine(numbersDir, diceType);
+                    var filePath = Path.Combine(diceSubfolder, $"{result}.png");
                     Color embedColor = GetGradientColor(result, 1, max);
 
-                    Console.WriteLine($"Результат броска: {result}");
+                    Console.WriteLine($"Результат броска: {result}, тип куба: {diceType}, путь: {filePath}");
 
                     if (File.Exists(filePath))
                     {
@@ -4910,7 +4915,7 @@ namespace RPBot
                     }
                     else
                     {
-                        await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено)");
+                        await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено по пути {filePath})");
                     }
                     return;
                 }
@@ -4924,7 +4929,10 @@ namespace RPBot
                         var result = results[i];
                         Console.WriteLine($"Результат броска: {result}");
                         var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-                        var filePath = Path.Combine(numbersDir, $"{result}.png");
+                        // Определяем подпапку по типу куба
+                        var diceSubfolder = Path.Combine(numbersDir, diceType);
+                        var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+
                         if (File.Exists(filePath))
                         {
                             var uniqueFileName = $"{result}_{i + 1}.png";
@@ -4936,7 +4944,7 @@ namespace RPBot
                         }
                         else
                         {
-                            Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\"!");
+                            Console.WriteLine($"Ошибка: Не найдено изображение для значения \"{result}\" по пути {filePath}!");
                         }
                     }
 
@@ -6279,6 +6287,9 @@ namespace RPBot
 
         private async Task HandleConfirmStop(SocketMessageComponent component, GameSession session)
         {
+            // Добавляем DeferAsync чтобы избежать ошибки "Cannot respond to an interaction after 3 seconds"
+            await component.DeferAsync();
+
             Log($"Попытка подтверждения остановки сессии {session.SessionId}. Текущий счётчик семафора: {_sessionSemaphore.CurrentCount}");
 
             try
@@ -6302,7 +6313,7 @@ namespace RPBot
                 }
 
                 session.EndTime = DateTime.Now;
-                Log($"Время окончания установлено: {session.EndTime}");
+                Log($"Время окончания установлено: {session.EndTime}, сессия помечена как остановленная (IsStopped={session.IsStopped})");
 
 
                 if (session.EventId.HasValue)
@@ -6323,8 +6334,16 @@ namespace RPBot
                     }
                 }
 
+                // ВАЖНО: Сначала выводим статистику
                 await SendSessionStats(session, component.Channel);
+
+                // ПОТОМ удаляем контрольное сообщение
                 await DeleteControlMessageAsync(session, component.Channel);
+
+                // Очистка сессии происходит:
+                // 1. В SendSessionStats → RemoveSession() если нет бросков (строка 6621)
+                // 2. В обработке кнопок статистики (no_stats, general_stats, detailed_stats)
+                //    после вывода статистики - там вызывается RemoveSession()
             }
             finally
             {
