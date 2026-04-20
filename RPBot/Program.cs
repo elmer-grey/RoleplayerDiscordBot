@@ -4929,7 +4929,9 @@ namespace RPBot
                     var filePath = Path.Combine(diceSubfolder, $"{result}.png");
                     Color embedColor = GetGradientColor(result, 1, max);
 
-                    Console.WriteLine($"Результат броска: {result}, тип куба: {diceType}, путь: {filePath}");
+                    // Сокращённый путь для лога (только Numbers/d6/5.png)
+                    var shortPath = Path.Combine("Numbers", diceType, $"{result}.png");
+                    Console.WriteLine($"Результат броска: {result}, тип куба: {diceType}, путь: {shortPath}");
 
                     // Проверяем существование папки и файла
                     if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
@@ -4977,7 +4979,7 @@ namespace RPBot
                         {
                             // Если папки или файла нет - сохраняем для текстового вывода
                             textResults.Add(result.ToString());
-                            Console.WriteLine($"Папка или файл не найдены для {diceType}/{result}.png - будет текстовый вывод");
+                            Console.WriteLine($"Папка или файл не найдены для Numbers/{diceType}/{result}.png - будет текстовый вывод");
                         }
                     }
 
