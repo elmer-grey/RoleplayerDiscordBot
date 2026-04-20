@@ -5130,8 +5130,10 @@ namespace RPBot
 
             // Показываем результат броска (в любом случае)
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-            var filePath = Path.Combine(numbersDir, $"{result}.png");
-            if (File.Exists(filePath))
+            var diceSubfolder = Path.Combine(numbersDir, "d20");
+            var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+
+            if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
             {
                 var embed = new EmbedBuilder()
                     .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
@@ -5141,7 +5143,7 @@ namespace RPBot
             }
             else
             {
-                await command.FollowupAsync($"Выпало: **{result}** (изображение не найдено)");
+                await command.FollowupAsync($"Выпало: **{result}**");
             }
             Console.WriteLine($"Результат броска (d20): {result}");
         }
