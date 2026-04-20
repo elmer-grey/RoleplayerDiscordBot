@@ -43,7 +43,7 @@ namespace RPBot
         public double RawOdds1 => Outcome1.TotalStake <= 0 ? 1.0 : (double)TotalPool / Outcome1.TotalStake;
         public double RawOdds2 => Outcome2.TotalStake <= 0 ? 1.0 : (double)TotalPool / Outcome2.TotalStake;
 
-        public double Coef1 => RawOdds1 - 1.0; // надбавка к ставке
-        public double Coef2 => RawOdds2 - 1.0;
+        public double Coef1 => Math.Round(RawOdds1 - 1.0, 2, MidpointRounding.AwayFromZero); // надбавка к ставке
+        public double Coef2 => Math.Round(RawOdds2 - 1.0, 2, MidpointRounding.AwayFromZero);
     }
 }

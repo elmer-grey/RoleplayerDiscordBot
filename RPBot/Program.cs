@@ -1211,14 +1211,15 @@ namespace RPBot
         {
             _startupTime = DateTime.UtcNow;
 
-            if (_ui == null)
-            {
+			if (_ui == null)
+			{
 				_ui = new BotUI(
 					_client,
 					this,
 					_reconnectionService!,
 					_connectionPredictor!,
-					_statusNotifier!
+					_statusNotifier!,
+					_pointsService
 				);
 
                 // Запускаем UI в отдельном потоке

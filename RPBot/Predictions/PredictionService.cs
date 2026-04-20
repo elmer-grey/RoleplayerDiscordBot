@@ -531,7 +531,7 @@ namespace RPBot
 
             double rawOdds = winningPool <= 0 ? 1.0 : (double)totalPool / winningPool;
             double coef = rawOdds - 1.0;
-            double coefRounded = Math.Round(coef, 1, MidpointRounding.AwayFromZero);
+            double coefRounded = Math.Round(coef, 2, MidpointRounding.AwayFromZero);
 
             long topWinnerUserId = 0;
             long topWinnerProfit = 0;
@@ -540,6 +540,19 @@ namespace RPBot
 
             // Ensure thread-safety when distributing payouts
             await p.Sync.WaitAsync().ConfigureAwait(false);
+
+            // Список для логирования выплат
+            var payoutLogs = new List<string>();
+            payoutLogs.Add($"=== ВЫПЛАТА ПОИНТОВ ===");
+            payoutLogs.Add($"Прогноз: {p.Title}");
+            payoutLogs.Add($"Сервер: {guildId}");
+            payoutLogs.Add($"Победивший исход: {winningOutcome.Name} (ID={winningOutcomeId})");
+            payoutLogs.Add($"Коэффициент: {coefRounded:F2}");
+            payoutLogs.Add($"Общий пул: {totalPool}");
+            payoutLogs.Add($"Дата: {DateTime.Now:dd.MM.yyyy HH:mm:ss}");
+            payoutLogs.Add($"");
+            payoutLogs.Add($"ДЕТАЛИ ВЫПЛАТ:");
+
             try
             {
                 foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
@@ -558,7 +571,20 @@ namespace RPBot
                         topWinnerProfit = profit;
                         topWinnerUserId = (long)bet.UserId;
                     }
+
+                    // Логируем каждую выплату
+                    payoutLogs.Add($"  UserID {bet.UserId}: ставка {bet.Amount}, прибыль {profit}, итого {totalReturn}");
                 }
+
+                payoutLogs.Add($"");
+                payoutLogs.Add($"ИТОГО:");
+                payoutLogs.Add($"  Победителей: {winnersCount}");
+                payoutLogs.Add($"  Общая прибыль: {winnersProfitTotal}");
+                payoutLogs.Add($"  Топовый участник: UserID {topWinnerUserId}, прибыль {topWinnerProfit}");
+                payoutLogs.Add($"======================");
+
+                // Записываем в отдельный файл
+                await LogPayoutsAsync(payoutLogs);
             }
             finally
             {
@@ -609,7 +635,7 @@ namespace RPBot
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
             _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-            await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F1}");
+            await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F2}");
             return (true, string.Empty);
         }
 
@@ -781,14 +807,22 @@ namespace RPBot
             builder.AddField("Общий пул", totalPool.ToString(), false);
             builder.AddField("Коэффициент", Math.Max(0, coef).ToString("F2"), false);
 
-            if (topWinnerUserId.HasValue)
+            // Всегда показываем информацию о выигрыше, даже если победитель один
+            if (topWinnerUserId.HasValue && topWinnerProfit > 0)
             {
                 builder.AddField("Топ выигрыш", $"<@{topWinnerUserId}> заработал {topWinnerProfit} костяшек", false);
-            }
 
-            if (othersCount > 0 && othersProfit > 0)
+                // Показываем остальных только если их больше одного
+                if (othersCount > 0 && othersProfit > 0)
+                {
+                    builder.AddField("Остальные победители", $"Ещё {othersCount} участников заработали {othersProfit} костяшек", false);
+                }
+            }
+            else if (winningOutcome.TotalStake > 0)
             {
-                builder.AddField("Остальные победители", $"Остальные участники заработали {othersProfit} костяшек ({othersCount} чел.)", false);
+                // Если нет топового участника, но были ставки - показываем общую сумму
+                var totalWinnings = (long)Math.Round(winningOutcome.TotalStake * coef, MidpointRounding.AwayFromZero);
+                builder.AddField("Выплаты победителям", $"Все участники получили {totalWinnings} костяшек прибыли", false);
             }
 
             return builder.Build();
@@ -903,6 +937,26 @@ namespace RPBot
             catch (Exception ex)
             {
                 await PredictionErrorLogger.LogAsync("LogAsync", ex, message).ConfigureAwait(false);
+            }
+        }
+
+        private async Task LogPayoutsAsync(List<string> payoutLines)
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(_logPath) ?? AppContext.BaseDirectory;
+                Directory.CreateDirectory(dir);
+
+                // Создаём отдельный файл для выплат с датой
+                var payoutsFileName = $"PredictionPayouts_{DateTime.Now:yyyyMMdd}.log";
+                var payoutsPath = Path.Combine(dir, payoutsFileName);
+
+                var content = string.Join(Environment.NewLine, payoutLines) + Environment.NewLine + Environment.NewLine;
+                await File.AppendAllTextAsync(payoutsPath, content, Encoding.UTF8).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("LogPayoutsAsync", ex, "Failed to log payouts").ConfigureAwait(false);
             }
         }
 

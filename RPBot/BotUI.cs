@@ -17,6 +17,7 @@ namespace RPBot
         private ReconnectionService _reconnectionService;
         private ConnectionPredictor _connectionPredictor;
         private StatusNotifier _statusNotifier;
+        private PointsService? _pointsService;
 
         // Элементы интерфейса
         private Window? _mainWindow;
@@ -76,13 +77,15 @@ namespace RPBot
             IBotController botController,
             ReconnectionService reconnectionService,
             ConnectionPredictor connectionPredictor,
-            StatusNotifier statusNotifier)
+            StatusNotifier statusNotifier,
+            PointsService? pointsService = null)
         {
             _client = client;
             _botController = botController;
             _reconnectionService = reconnectionService;
             _connectionPredictor = connectionPredictor;
             _statusNotifier = statusNotifier;
+            _pointsService = pointsService;
         }
 
         private void RewrapLogicalToDisplay(List<string> logical, List<string> display, int availWidth, int maxLines)
@@ -1837,6 +1840,42 @@ namespace RPBot
                         }
                         break;
 
+                    case "points":
+                        if (args.Length == 0)
+                        {
+                            AddCommandOutput("Использование: points reload - перезагрузить баланс из файла");
+                            break;
+                        }
+
+                        var pointsSub = args[0].ToLowerInvariant();
+                        switch (pointsSub)
+                        {
+                            case "reload":
+                                try
+                                {
+                                    if (_pointsService != null)
+                                    {
+                                        await _pointsService.LoadAsync();
+                                        AddCommandOutput("✅ Баланс костяшек успешно перезагружен из файла.");
+                                    }
+                                    else
+                                    {
+                                        AddCommandOutput("❌ PointsService не инициализирован.");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    AddCommandOutput($"❌ Ошибка при перезагрузке: {ex.Message}");
+                                    TryAppendErrorToFile($"Points reload error: {ex}");
+                                }
+                                break;
+
+                            default:
+                                AddCommandOutput($"Неизвестная подкоманда points: {pointsSub}. Доступно: reload");
+                                break;
+                        }
+                        break;
+
                     default:
                         AddCommandOutput($"Неизвестная команда: {cmd}. Введите 'help' для списка команд.");
                         break;
@@ -2138,6 +2177,7 @@ namespace RPBot
             AddCommandOutput("reconnect - Принудительный реконнект");
             AddCommandOutput("restart  - Перезапуск бота");
             AddCommandOutput("stop     - Остановка бота");
+            AddCommandOutput("points reload - Перезагрузить баланс костяшек из файла");
             AddCommandOutput("==========================");
         }
 
