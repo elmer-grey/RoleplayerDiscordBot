@@ -6366,9 +6366,7 @@ namespace RPBot
 
         private async Task HandleConfirmStop(SocketMessageComponent component, GameSession session)
         {
-            // Добавляем DeferAsync чтобы избежать ошибки "Cannot respond to an interaction after 3 seconds"
-            await component.DeferAsync();
-
+            // ✅ DeferAsync уже вызван в HandleControlButton (строка 6079), не дублируем!
             Log($"Попытка подтверждения остановки сессии {session.SessionId}. Текущий счётчик семафора: {_sessionSemaphore.CurrentCount}");
 
             try
@@ -6423,6 +6421,12 @@ namespace RPBot
                 // 1. В SendSessionStats → RemoveSession() если нет бросков (строка 6621)
                 // 2. В обработке кнопок статистики (no_stats, general_stats, detailed_stats)
                 //    после вывода статистики - там вызывается RemoveSession()
+            }
+            catch (Exception ex)
+            {
+                // ✅ ДОБАВЛЕНО: логирование ошибки
+                Log($"КРИТИЧЕСКАЯ ОШИБКА в HandleConfirmStop для сессии {session.SessionId}: {ex.Message}");
+                Log($"StackTrace: {ex.StackTrace}");
             }
             finally
             {
