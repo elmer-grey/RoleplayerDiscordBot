@@ -230,7 +230,10 @@ namespace RPBot
             Modal modal;
             if (hasExistingBet && existingBet != null)
             {
-                var existingOutcomeName = existingBet!.OutcomeId == 1 ? active!.Outcome1.Name : active!.Outcome2.Name;
+                // ✅ Обновлено: динамический поиск имени исхода
+                var existingOutcome = active!.GetOutcomeById(existingBet!.OutcomeId);
+                var existingOutcomeName = existingOutcome?.Name ?? $"Исход {existingBet.OutcomeId}";
+
                 modal = new ModalBuilder()
                     .WithTitle("Увеличить ставку")
                     .WithCustomId($"pred_bet_add_modal:{guildId}")
@@ -239,10 +242,14 @@ namespace RPBot
             }
             else
             {
+                // ✅ Обновлено: динамическая подсказка по количеству исходов
+                var outcomeCount = active?.Outcomes.Count ?? 2;
+                var outcomePlaceholder = outcomeCount == 2 ? "1 или 2" : $"От 1 до {outcomeCount}";
+
                 modal = new ModalBuilder()
                     .WithTitle("Сделать ставку")
                     .WithCustomId($"pred_bet_modal:{guildId}")
-                    .AddTextInput("Исход (1 или 2)", "outcome", TextInputStyle.Short, placeholder: "1 или 2")
+                    .AddTextInput($"Исход ({outcomePlaceholder})", "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder)
                     .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
                     .Build();
             }
@@ -2977,9 +2984,19 @@ namespace RPBot
                         if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
                     }
 
-                    if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                    if (!int.TryParse(outcomeStr, out var outcomeNum) || outcomeNum < 1)
                     {
-                        await modal.FollowupAsync("Исход должен быть 1 или 2.", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Неверный номер исхода.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    // ✅ Проверка: исход существует в активном прогнозе
+                    var activePrediction = _predictionService.GetActive(guildId);
+                    if (activePrediction == null || activePrediction.GetOutcomeById(outcomeNum) == null)
+                    {
+                        var maxOutcome = activePrediction?.Outcomes.Count ?? 2;
+                        await modal.FollowupAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
@@ -3114,21 +3131,23 @@ namespace RPBot
                         return;
                     }
 
-                    string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, durationStr = string.Empty;
+                    // ✅ Обновлено: поддержка до 3 исходов
+                    string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, durationStr = string.Empty;
                     foreach (var comp in modal.Data.Components)
                     {
                         try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
                         if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
                     }
 
-                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' duration='{durationStr}' user={modal.User.Id}");
+                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' oc3='{oc3}' duration='{durationStr}' user={modal.User.Id}");
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
                     {
-                        await modal.FollowupAsync("Заполните заголовок и оба исхода.", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Заполните заголовок и минимум 2 исхода.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
@@ -3143,7 +3162,23 @@ namespace RPBot
                     await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
 
                     var creatorId = modal.User.Id;
-                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channelId, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
+
+                    // ✅ Обновлено: создание прогноза с N исходами
+                    var outcomeNames = new List<string> { oc1, oc2 };
+                    if (!string.IsNullOrWhiteSpace(oc3))
+                    {
+                        outcomeNames.Add(oc3);
+                    }
+
+                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    if (channel == null)
+                    {
+                        await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                     if (createRes.ok)
                     {

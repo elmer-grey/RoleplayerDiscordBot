@@ -155,13 +155,15 @@ namespace RPBot
                             return;
                         }
 
+                        // ✅ Обновлённый модал: поддержка до 4 исходов
                         var modal = new ModalBuilder()
                             .WithTitle("Создать прогноз")
                             .WithCustomId($"pred_create_modal:{guildId}:{targetMessageChannel.Id}")
-                            .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза")
-                            .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1")
-                            .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2")
-                            .AddTextInput("Продолжительность сбора ставок (минуты)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
+                            .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                            .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
+                            .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
+                            .AddTextInput("Исход 3 (опционально)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
+                            .AddTextInput("Длительность (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30", value: "30")
                             .Build();
 
                         await command.RespondWithModalAsync(modal);
@@ -179,14 +181,24 @@ namespace RPBot
 
                         if (outcomeNumberOpt == null || amountOpt == null)
                         {
-                            await command.RespondAsync("Укажите outcome (1 или 2) и amount (количество костяшек).", ephemeral: true);
+                            await command.RespondAsync("Укажите outcome (номер исхода) и amount (количество костяшек).", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
 
-                        if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                        if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || outcomeNum < 1)
                         {
-                            await command.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                            await command.RespondAsync("Неверный номер исхода.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
+
+                        // ✅ Проверка: исход существует
+                        var activePred = _predictionService.GetActive(guildId);
+                        if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
+                        {
+                            var maxOutcome = activePred?.Outcomes.Count ?? 2;
+                            await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
@@ -213,9 +225,19 @@ namespace RPBot
                             return;
                         }
 
-                        if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                        if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || outcomeNum < 1)
                         {
-                            await command.RespondAsync("Укажите outcome (1 или 2) для завершения прогноза.", ephemeral: true);
+                            await command.RespondAsync("Укажите корректный номер исхода для завершения прогноза.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
+
+                        // ✅ Проверка: исход существует
+                        var activePred = _predictionService.GetActive(guildId);
+                        if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
+                        {
+                            var maxOutcome = activePred?.Outcomes.Count ?? 2;
+                            await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
