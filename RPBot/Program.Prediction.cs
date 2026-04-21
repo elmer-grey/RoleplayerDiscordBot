@@ -155,18 +155,13 @@ namespace RPBot
                             return;
                         }
 
-                        // ✅ Обновлённый модал: поддержка до 4 исходов
-                        var modal = new ModalBuilder()
-                            .WithTitle("Создать прогноз")
-                            .WithCustomId($"pred_create_modal:{guildId}:{targetMessageChannel.Id}")
-                            .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
-                            .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
-                            .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
-                            .AddTextInput("Исход 3 (опционально)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
-                            .AddTextInput("Длительность (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30", value: "30")
-                            .Build();
+                        // ✅ НОВОЕ: Показываем кнопки выбора количества исходов
+                        var buttonsBuilder = new ComponentBuilder()
+                            .WithButton("До трёх исходов", customId: $"pred_outcomes:3:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Primary)
+                            .WithButton("До пяти исходов", customId: $"pred_outcomes:5:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Success);
 
-                        await command.RespondWithModalAsync(modal);
+                        await command.RespondAsync("Сколько исходов вы хотите создать?", components: buttonsBuilder.Build(), ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
                         break;
                     }
 

@@ -242,20 +242,62 @@ namespace RPBot
             }
             else
             {
-                // ✅ Обновлено: динамическая подсказка по количеству исходов
+                // ✅ Обновлено: показываем список исходов с названиями
                 var outcomeCount = active?.Outcomes.Count ?? 2;
-                var outcomePlaceholder = outcomeCount == 2 ? "1 или 2" : $"От 1 до {outcomeCount}";
+                var outcomesList = active != null 
+                    ? string.Join(", ", active.Outcomes.Select(o => $"{o.Id}: {o.Name}"))
+                    : "1: Исход 1, 2: Исход 2";
+
+                var outcomePlaceholder = outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
 
                 modal = new ModalBuilder()
                     .WithTitle("Сделать ставку")
                     .WithCustomId($"pred_bet_modal:{guildId}")
-                    .AddTextInput($"Исход ({outcomePlaceholder})", "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder)
+                    .AddTextInput($"Исход ({outcomesList})", "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
                     .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
                     .Build();
             }
 
             await component.RespondWithModalAsync(modal);
             // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
+        }
+
+        private async Task HandlePredictionOutcomesButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_outcomes:<count>:<guildId>:<channelId>
+            // count: 3 или 5
+            if (parts.Length < 4) return;
+            if (!int.TryParse(parts[1], out var outcomesCount)) return;
+            if (!ulong.TryParse(parts[2], out var guildId)) return;
+            if (!ulong.TryParse(parts[3], out var channelId)) return;
+
+            if (outcomesCount == 3)
+            {
+                // ✅ Модал для 3 исходов (обновлённый)
+                var modal = new ModalBuilder()
+                    .WithTitle("Создать прогноз")
+                    .WithCustomId($"pred_create_modal_3:{guildId}:{channelId}")
+                    .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                    .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
+                    .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
+                    .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
+                    .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                    .Build();
+
+                await component.RespondWithModalAsync(modal);
+            }
+            else if (outcomesCount == 5)
+            {
+                // ✅ Первый модал для 5 исходов (название + время)
+                var modal = new ModalBuilder()
+                    .WithTitle("Создать прогноз (шаг 1/2)")
+                    .WithCustomId($"pred_create_step1:{guildId}:{channelId}")
+                    .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                    .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                    .Build();
+
+                await component.RespondWithModalAsync(modal);
+            }
         }
 
         private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
@@ -3109,8 +3151,8 @@ namespace RPBot
                     return;
                 }
 
-                // Handle create modal: pred_create_modal:<guildId>:<channelId>
-                if (parts[0] == "pred_create_modal")
+                // Handle create modal (3 outcomes): pred_create_modal_3:<guildId>:<channelId>
+                if (parts[0] == "pred_create_modal_3")
                 {
                     if (parts.Length < 3)
                     {
@@ -3152,9 +3194,9 @@ namespace RPBot
                         return;
                     }
 
-                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
+                    if (!int.TryParse(durationStr, out var minutes) || minutes < 1 || minutes > 60)
                     {
-                        await modal.FollowupAsync("Неверная длительность (минут).", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Время должно быть от 1 до 60 минут. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
@@ -3169,6 +3211,145 @@ namespace RPBot
                     {
                         outcomeNames.Add(oc3);
                     }
+
+                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    if (channel == null)
+                    {
+                        await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                    await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
+                    if (createRes.ok)
+                    {
+                        await modal.FollowupAsync($"Прогноз создан: {title}", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
+                    else
+                    {
+                        await modal.FollowupAsync(createRes.error, ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
+
+                    return;
+                }
+
+                // ✅ НОВОЕ: Handle step 1 modal (5 outcomes): pred_create_step1:<guildId>:<channelId>
+                if (parts[0] == "pred_create_step1")
+                {
+                    if (parts.Length < 3)
+                    {
+                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.FollowupAsync("Неверный guildId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[2], out var channelId))
+                    {
+                        await modal.FollowupAsync("Неверный channelId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    string title = string.Empty, durationStr = string.Empty;
+                    foreach (var comp in modal.Data.Components)
+                    {
+                        if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(title))
+                    {
+                        await modal.FollowupAsync("Заполните заголовок.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    if (!int.TryParse(durationStr, out var minutes) || minutes < 1 || minutes > 60)
+                    {
+                        await modal.FollowupAsync("Время должно быть от 1 до 60 минут. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    // Показываем второй модал с 5 исходами
+                    var step2Modal = new ModalBuilder()
+                        .WithTitle($"Прогноз: {(title.Length > 20 ? title.Substring(0, 20) + "..." : title)} (2/2)")
+                        .WithCustomId($"pred_create_step2:{guildId}:{channelId}:{title}:{minutes}")
+                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
+                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
+                        .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                        .AddTextInput("Исход 4 (опц.)", "outcome4", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                        .AddTextInput("Исход 5 (опц.)", "outcome5", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                        .Build();
+
+                    await modal.RespondWithModalAsync(step2Modal);
+                    return;
+                }
+
+                // ✅ НОВОЕ: Handle step 2 modal (5 outcomes): pred_create_step2:<guildId>:<channelId>:<title>:<minutes>
+                if (parts[0] == "pred_create_step2")
+                {
+                    if (parts.Length < 5)
+                    {
+                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[1], out var guildId))
+                    {
+                        await modal.FollowupAsync("Неверный guildId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    if (!ulong.TryParse(parts[2], out var channelId))
+                    {
+                        await modal.FollowupAsync("Неверный channelId.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var title = parts[3];
+                    if (!int.TryParse(parts[4], out var minutes))
+                    {
+                        await modal.FollowupAsync("Неверная длительность.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    string oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, oc4 = string.Empty, oc5 = string.Empty;
+                    foreach (var comp in modal.Data.Components)
+                    {
+                        if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome4", StringComparison.OrdinalIgnoreCase)) oc4 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome5", StringComparison.OrdinalIgnoreCase)) oc5 = comp.Value ?? string.Empty;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
+                    {
+                        await modal.FollowupAsync("Заполните минимум 2 исхода.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
+
+                    var creatorId = modal.User.Id;
+
+                    // Собираем исходы
+                    var outcomeNames = new List<string> { oc1, oc2 };
+                    if (!string.IsNullOrWhiteSpace(oc3)) outcomeNames.Add(oc3);
+                    if (!string.IsNullOrWhiteSpace(oc4)) outcomeNames.Add(oc4);
+                    if (!string.IsNullOrWhiteSpace(oc5)) outcomeNames.Add(oc5);
 
                     var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
                     if (channel == null)
@@ -3226,6 +3407,9 @@ namespace RPBot
 
             switch (buttonType)
             {
+                case "pred_outcomes":
+                    await HandlePredictionOutcomesButton(component, parts);
+                    break;
                 case "pred_bet":
                     await HandlePredictionBetButton(component, parts);
                     break;

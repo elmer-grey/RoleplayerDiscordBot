@@ -759,7 +759,7 @@ namespace RPBot
         {
             var totalRefund = p.Bets.Values.Sum(b => b.Amount);
             var description = string.IsNullOrWhiteSpace(cancelReason)
-                ? "Оба исхода не сыграли. Все ставки возвращены участникам в полном объёме."
+                ? "Все исходы не сыграли. Все ставки возвращены участникам в полном объёме."
                 : cancelReason;
 
             return new EmbedBuilder()
