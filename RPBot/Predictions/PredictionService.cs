@@ -64,8 +64,14 @@ namespace RPBot
             public ulong ChannelId { get; set; }
             public ulong MessageId { get; set; }
             public string Title { get; set; } = string.Empty;
-            public PredictionOutcome Outcome1 { get; set; } = new PredictionOutcome { Id = 1 };
-            public PredictionOutcome Outcome2 { get; set; } = new PredictionOutcome { Id = 2 };
+
+            // ✅ Новое поле для поддержки N исходов
+            public List<PredictionOutcome>? Outcomes { get; set; }
+
+            // Старые поля для обратной совместимости
+            public PredictionOutcome? Outcome1 { get; set; }
+            public PredictionOutcome? Outcome2 { get; set; }
+
             public DateTimeOffset CreatedAtUtc { get; set; }
             public DateTimeOffset BetsCloseAtUtc { get; set; }
             public bool IsLocked { get; set; }
@@ -86,8 +92,7 @@ namespace RPBot
                     ChannelId = kv.Value.ChannelId,
                     MessageId = kv.Value.MessageId,
                     Title = kv.Value.Title,
-                    Outcome1 = kv.Value.Outcome1,
-                    Outcome2 = kv.Value.Outcome2,
+                    Outcomes = kv.Value.Outcomes, // ✅ Сохраняем новый формат
                     CreatedAtUtc = kv.Value.CreatedAtUtc,
                     BetsCloseAtUtc = kv.Value.BetsCloseAtUtc,
                     IsLocked = kv.Value.IsLocked,
@@ -158,8 +163,6 @@ namespace RPBot
                             ChannelId = p.ChannelId,
                             MessageId = p.MessageId,
                             Title = p.Title,
-                            Outcome1 = p.Outcome1 ?? new PredictionOutcome{Id=1},
-                            Outcome2 = p.Outcome2 ?? new PredictionOutcome{Id=2},
                             CreatedAtUtc = p.CreatedAtUtc,
                             BetsCloseAtUtc = p.BetsCloseAtUtc,
                             IsLocked = p.IsLocked,
@@ -168,13 +171,32 @@ namespace RPBot
                             Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
                         };
 
+                        // ✅ Обновлено: загрузка исходов (поддержка старого и нового формата)
+                        if (p.Outcomes != null && p.Outcomes.Count > 0)
+                        {
+                            // Новый формат: используем Outcomes
+                            ap.Outcomes = p.Outcomes;
+                        }
+                        else
+                        {
+                            // Старый формат: используем Outcome1 и Outcome2
+                            ap.Outcomes.Add(p.Outcome1 ?? new PredictionOutcome { Id = 1 });
+                            ap.Outcomes.Add(p.Outcome2 ?? new PredictionOutcome { Id = 2 });
+                        }
+
                         // Normalize: recompute totals from bets to avoid zeroed pools after restart.
-                        ap.Outcome1.TotalStake = 0;
-                        ap.Outcome2.TotalStake = 0;
+                        foreach (var outcome in ap.Outcomes)
+                        {
+                            outcome.TotalStake = 0;
+                        }
+
                         foreach (var b in ap.Bets.Values)
                         {
-                            if (b.OutcomeId == 1) ap.Outcome1.TotalStake += b.Amount;
-                            else if (b.OutcomeId == 2) ap.Outcome2.TotalStake += b.Amount;
+                            var outcome = ap.GetOutcomeById(b.OutcomeId);
+                            if (outcome != null)
+                            {
+                                outcome.TotalStake += b.Amount;
+                            }
                         }
 
                         // Validate message existence. If the original message is gone, auto-cancel and refund.
@@ -327,8 +349,29 @@ namespace RPBot
             string outcome2Name,
             TimeSpan duration)
         {
+            // Используем новую перегрузку с 2 исходами
+            return await CreateAsync(guildId, creatorId, targetChannel, title, new[] { outcome1Name, outcome2Name }, duration).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// ✅ НОВАЯ ПЕРЕГРУЗКА: Создание прогноза с произвольным количеством исходов
+        /// </summary>
+        public async Task<(bool ok, string error, ActivePrediction? prediction)> CreateAsync(
+            ulong guildId,
+            ulong creatorId,
+            ISocketMessageChannel targetChannel,
+            string title,
+            string[] outcomeNames,
+            TimeSpan duration)
+        {
             if (_active.ContainsKey(guildId))
                 return (false, "Уже есть активный прогноз на этом сервере.", null);
+
+            if (outcomeNames == null || outcomeNames.Length < 2)
+                return (false, "Должно быть минимум 2 исхода.", null);
+
+            if (outcomeNames.Length > 10)
+                return (false, "Максимум 10 исходов.", null);
 
             if (duration <= TimeSpan.Zero)
                 duration = TimeSpan.FromMinutes(1);
@@ -360,13 +403,21 @@ namespace RPBot
                 CreatorId = creatorId,
                 ChannelId = channelId,
                 Title = title,
-                Outcome1 = new PredictionOutcome { Id = 1, Name = outcome1Name },
-                Outcome2 = new PredictionOutcome { Id = 2, Name = outcome2Name },
                 CreatedAtUtc = now,
                 BetsCloseAtUtc = closeAt,
                 IsLocked = false,
                 IsResolved = false
             };
+
+            // Создаём исходы из массива названий
+            for (int i = 0; i < outcomeNames.Length; i++)
+            {
+                prediction.Outcomes.Add(new PredictionOutcome
+                {
+                    Id = i + 1,
+                    Name = outcomeNames[i].Trim()
+                });
+            }
 
             var embed = BuildEmbed(prediction, showLocked: false);
             var components = BuildComponents(prediction, showLocked: false);
@@ -378,11 +429,10 @@ namespace RPBot
                 _activeChannels[guildId] = targetChannel;
 
                 var totalPool = prediction.TotalPool;
-                var outcome1Stake = prediction.Outcome1.TotalStake;
-                var outcome2Stake = prediction.Outcome2.TotalStake;
+                var outcomesInfo = string.Join("; ", prediction.Outcomes.Select(o => $"{o.Id}:'{o.Name}'"));
 
                 await LogAsync(
-                    $"CREATE guild={guildId}({guildName}) channel={channelId}({channelName}) creator={creatorId}({creatorName}) title='{title}' dur={duration} outcomes=[1:'{outcome1Name}';2:'{outcome2Name}'] pool={totalPool} dist=1:{outcome1Stake} 2:{outcome2Stake}");
+                    $"CREATE guild={guildId}({guildName}) channel={channelId}({channelName}) creator={creatorId}({creatorName}) title='{title}' dur={duration} outcomes=[{outcomesInfo}] pool={totalPool}");
 
                 // Persist prediction state so it survives bot restarts
                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
@@ -454,7 +504,11 @@ namespace RPBot
 
                     existing.Amount += amount;
 
-                    var outcome = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                    // ✅ Обновлено: поиск исхода по ID
+                    var outcome = p.GetOutcomeById(outcomeId);
+                    if (outcome == null)
+                        return (false, "Неверный ID исхода.");
+
                     outcome.TotalStake += amount;
                     if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
                     {
@@ -480,7 +534,11 @@ namespace RPBot
 
                 p.Bets[userId] = bet;
 
-                var outcomeNew = outcomeId == 1 ? p.Outcome1 : p.Outcome2;
+                // ✅ Обновлено: поиск исхода по ID
+                var outcomeNew = p.GetOutcomeById(outcomeId);
+                if (outcomeNew == null)
+                    return (false, "Неверный ID исхода.");
+
                 outcomeNew.TotalStake += amount;
                 if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
                 {
@@ -523,8 +581,10 @@ namespace RPBot
             p.WinningOutcomeId = winningOutcomeId;
             p.IsLocked = true;
 
-            var winningOutcome = winningOutcomeId == 1 ? p.Outcome1 : p.Outcome2;
-            var losingOutcome = winningOutcomeId == 1 ? p.Outcome2 : p.Outcome1;
+            // ✅ Обновлено: получение победившего исхода динамически
+            var winningOutcome = p.GetOutcomeById(winningOutcomeId);
+            if (winningOutcome == null)
+                return (false, $"Неверный ID исхода: {winningOutcomeId}");
 
             var totalPool = p.TotalPool;
             var winningPool = winningOutcome.TotalStake;
@@ -617,7 +677,6 @@ namespace RPBot
                     var resultEmbed = BuildResultEmbed(
                         p,
                         winningOutcome,
-                        losingOutcome,
                         coef,
                         totalPool,
                         topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId,
@@ -719,24 +778,19 @@ namespace RPBot
 
             var totalPool = p.TotalPool;
 
-            var field1 = new StringBuilder();
-            field1.AppendLine($"Ставок всего: {p.Outcome1.TotalStake}");
-            field1.AppendLine($"Коэффициент: {Math.Max(0, p.Coef1):F2}");
-            if (p.Outcome1.TopUserId.HasValue)
+            // ✅ Обновлено: динамическое отображение всех исходов
+            foreach (var outcome in p.Outcomes)
             {
-                field1.AppendLine($"Топ ставка: <@{p.Outcome1.TopUserId}> — {p.Outcome1.TopUserStake}");
-            }
+                var field = new StringBuilder();
+                field.AppendLine($"Ставок всего: {outcome.TotalStake}");
+                field.AppendLine($"Коэффициент: {Math.Max(0, p.GetCoefficient(outcome.Id)):F2}");
+                if (outcome.TopUserId.HasValue)
+                {
+                    field.AppendLine($"Топ ставка: <@{outcome.TopUserId}> — {outcome.TopUserStake}");
+                }
 
-            var field2 = new StringBuilder();
-            field2.AppendLine($"Ставок всего: {p.Outcome2.TotalStake}");
-            field2.AppendLine($"Коэффициент: {Math.Max(0, p.Coef2):F2}");
-            if (p.Outcome2.TopUserId.HasValue)
-            {
-                field2.AppendLine($"Топ ставка: <@{p.Outcome2.TopUserId}> — {p.Outcome2.TopUserStake}");
+                builder.AddField($"Исход {outcome.Id}: {outcome.Name}", field.ToString(), true);
             }
-
-            builder.AddField($"Исход 1: {p.Outcome1.Name}", field1.ToString(), true);
-            builder.AddField($"Исход 2: {p.Outcome2.Name}", field2.ToString(), true);
 
             builder.AddField("Общий пул", totalPool.ToString(), false);
 
@@ -771,15 +825,21 @@ namespace RPBot
 
             if (!p.IsLocked && !p.IsResolved)
             {
-                // Пока приём ставок открыт: кнопки сделать ставку и отменить (общая доступность; проверка прав на сервере при обработке)
+                // Пока приём ставок открыт: кнопки сделать ставку и отменить
                 mb.WithButton("Сделать ставку", customId: $"pred_bet:{p.GuildId}", style: ButtonStyle.Primary);
                 mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
             }
             else if (p.IsLocked && !p.IsResolved)
             {
-                // Приём завершён — показать выбор исхода и отмену
-                mb.WithButton("Выбрать исход 1", customId: $"pred_resolve:{p.GuildId}:1", style: ButtonStyle.Success);
-                mb.WithButton("Выбрать исход 2", customId: $"pred_resolve:{p.GuildId}:2", style: ButtonStyle.Success);
+                // ✅ Обновлено: динамические кнопки для всех исходов
+                foreach (var outcome in p.Outcomes.Take(5)) // Discord позволяет макс 5 кнопок в ряду
+                {
+                    mb.WithButton(
+                        $"Выбрать: {outcome.Name}", 
+                        customId: $"pred_resolve:{p.GuildId}:{outcome.Id}", 
+                        style: ButtonStyle.Success);
+                }
+
                 mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
             }
 
@@ -789,7 +849,6 @@ namespace RPBot
         private Embed BuildResultEmbed(
             ActivePrediction p,
             PredictionOutcome winningOutcome,
-            PredictionOutcome losingOutcome,
             double coef,
             long totalPool,
             ulong? topWinnerUserId,
@@ -803,7 +862,19 @@ namespace RPBot
 
             builder.AddField("Победивший исход", winningOutcome.Name, false);
             builder.AddField("Ставки на победивший исход", winningOutcome.TotalStake.ToString(), true);
-            builder.AddField("Ставки на другой исход", losingOutcome.TotalStake.ToString(), true);
+
+            // ✅ Обновлено: показываем все проигравшие исходы
+            var losingOutcomes = p.Outcomes.Where(o => o.Id != winningOutcome.Id).ToList();
+            if (losingOutcomes.Count == 1)
+            {
+                builder.AddField("Ставки на другой исход", losingOutcomes[0].TotalStake.ToString(), true);
+            }
+            else if (losingOutcomes.Count > 1)
+            {
+                var losingStakes = string.Join(", ", losingOutcomes.Select(o => $"{o.Name}: {o.TotalStake}"));
+                builder.AddField("Ставки на проигравшие исходы", losingStakes, false);
+            }
+
             builder.AddField("Общий пул", totalPool.ToString(), false);
             builder.AddField("Коэффициент", Math.Max(0, coef).ToString("F2"), false);
 
