@@ -429,7 +429,7 @@ namespace RPBot
                 else if (entry.WinningOutcomeName != null)
                 {
                     var winners = entry.Bets.Count(b => b.Won);
-                    sb.AppendLine($"✅ **Победитель:** {entry.WinningOutcomeName}");
+                    sb.AppendLine($"✅ **Победивший исход:** {entry.WinningOutcomeName}");
                     sb.AppendLine($"💰 **Выигрыш:** {entry.TotalPayout:N0} костяшек");
                     sb.AppendLine($"💎 **Общий банк:** {entry.TotalPool:N0} костяшек");
                     sb.AppendLine($"👥 **Участников:** {entry.Bets.Count} ({winners} выиграли)");
