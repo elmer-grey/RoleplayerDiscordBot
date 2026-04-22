@@ -350,6 +350,32 @@ namespace RPBot
             }
         }
 
+        private async Task HandlePredictionHistoryPageButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_history_page:<guildId>:<page>
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            if (!int.TryParse(parts[2], out var page)) return;
+
+            try
+            {
+                // Используем метод из Program.Prediction.cs (partial class)
+                var embed = BuildHistoryEmbed(guildId, page);
+                var components = BuildHistoryComponents(guildId, page);
+
+                await component.UpdateAsync(msg =>
+                {
+                    msg.Embed = embed;
+                    msg.Components = components?.Build();
+                });
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}").ConfigureAwait(false);
+                try { await component.RespondAsync("Ошибка при переключении страницы.", ephemeral: true); } catch { }
+            }
+        }
+
         private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
         {
             _ = Task.Run(async () =>
@@ -3505,6 +3531,9 @@ namespace RPBot
                     break;
                 case "pred_resolve":
                     await HandlePredictionResolveButton(component, parts);
+                    break;
+                case "pred_history_page":
+                    await HandlePredictionHistoryPageButton(component, parts);
                     break;
                 case "pause_session":
                 case "resume_session":
