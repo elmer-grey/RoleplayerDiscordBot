@@ -1186,11 +1186,85 @@ namespace RPBot
                 }
 
                 await SaveHistoryAsync();
+
+                // ✅ НОВОЕ: Обновляем статистику и проверяем достижения
+                if (!wasCancelled)
+                {
+                    await UpdateUserStatsAndAchievements(pred.GuildId, entry);
+                }
+
                 await LogAsync($"HISTORY_ADDED guild={pred.GuildId} title='{pred.Title}' cancelled={wasCancelled}");
             }
             catch (Exception ex)
             {
                 await LogAsync($"HISTORY_ADD_ERROR: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Обновляет статистику всех участников и проверяет достижения
+        /// </summary>
+        private async Task UpdateUserStatsAndAchievements(ulong guildId, PredictionHistoryEntry prediction)
+        {
+            try
+            {
+                foreach (var betResult in prediction.Bets)
+                {
+                    var key = $"{guildId}:{betResult.UserId}";
+
+                    // Получаем или создаём статистику
+                    if (!_achievementsStore.Users.TryGetValue(key, out var stats))
+                    {
+                        stats = new UserBettingStats
+                        {
+                            UserId = betResult.UserId,
+                            GuildId = guildId,
+                            MonthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1),
+                            DayStart = DateTime.UtcNow.Date
+                        };
+                        _achievementsStore.Users[key] = stats;
+                    }
+
+                    // Обновляем статистику
+                    AchievementSystem.UpdateStatsAfterResolve(stats, prediction, betResult);
+
+                    // Проверяем достижения
+                    var newAchievements = AchievementSystem.CheckAndAwardAchievements(stats, prediction, betResult);
+
+                    // Логируем новые достижения
+                    if (newAchievements.Count > 0)
+                    {
+                        await LogAsync($"ACHIEVEMENTS user={betResult.UserId} new={newAchievements.Count}: {string.Join(", ", newAchievements.Select(a => a.achievementId))}");
+                    }
+                }
+
+                // Обновляем статистику создателя
+                var creatorKey = $"{guildId}:{prediction.CreatorId}";
+                if (!_achievementsStore.Users.TryGetValue(creatorKey, out var creatorStats))
+                {
+                    creatorStats = new UserBettingStats
+                    {
+                        UserId = prediction.CreatorId,
+                        GuildId = guildId,
+                        MonthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1),
+                        DayStart = DateTime.UtcNow.Date
+                    };
+                    _achievementsStore.Users[creatorKey] = creatorStats;
+                }
+
+                AchievementSystem.UpdateStatsAfterCreate(creatorStats);
+                var creatorNewAchievements = AchievementSystem.CheckAndAwardAchievements(creatorStats);
+
+                if (creatorNewAchievements.Count > 0)
+                {
+                    await LogAsync($"ACHIEVEMENTS creator={prediction.CreatorId} new={creatorNewAchievements.Count}: {string.Join(", ", creatorNewAchievements.Select(a => a.achievementId))}");
+                }
+
+                await SaveAchievementsAsync();
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"UPDATE_STATS_ERROR: {ex.Message}");
             }
         }
 
@@ -1260,6 +1334,35 @@ namespace RPBot
         {
             var key = $"{guildId}:{userId}";
             return _achievementsStore.Users.TryGetValue(key, out var stats) ? stats : null;
+        }
+
+        /// <summary>
+        /// Получает новые достижения всех участников последнего прогноза для отображения
+        /// </summary>
+        public Dictionary<ulong, List<(string achievementId, int count)>> GetRecentAchievements(ulong guildId)
+        {
+            // Возвращаем достижения, полученные за последние 5 секунд
+            var recent = new Dictionary<ulong, List<(string, int)>>();
+            var cutoff = DateTime.UtcNow.AddSeconds(-5);
+
+            foreach (var kvp in _achievementsStore.Users)
+            {
+                if (!kvp.Key.StartsWith($"{guildId}:"))
+                    continue;
+
+                var userId = kvp.Value.UserId;
+                var recentAchievements = kvp.Value.Achievements
+                    .Where(a => a.UnlockedAt >= cutoff)
+                    .Select(a => (a.AchievementId, a.Count))
+                    .ToList();
+
+                if (recentAchievements.Count > 0)
+                {
+                    recent[userId] = recentAchievements;
+                }
+            }
+
+            return recent;
         }
 
         public void Shutdown()
