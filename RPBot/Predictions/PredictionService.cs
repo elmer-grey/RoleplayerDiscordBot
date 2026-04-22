@@ -1209,7 +1209,8 @@ namespace RPBot
                     });
                 }
 
-                entry.TotalPayout = entry.Bets.Where(b => b.Won).Sum(b => b.Payout);
+                // ✅ ИСПРАВЛЕНО: TotalPayout = чистый выигрыш (прибыль без возврата ставки)
+                entry.TotalPayout = entry.Bets.Where(b => b.Won).Sum(b => b.Payout - b.Amount);
 
                 // Добавляем в начало списка (новые сверху)
                 _history.History[pred.GuildId].Insert(0, entry);
