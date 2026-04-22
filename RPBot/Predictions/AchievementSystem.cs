@@ -250,8 +250,8 @@ namespace RPBot.Predictions
             {
                 stats.Wins++;
                 var profit = userBet.Payout - userBet.Amount;
-                stats.TotalWon += profit;  // ✅ ИСПРАВЛЕНО: только чистая прибыль
-                stats.NetProfit += profit;
+                stats.TotalWon += userBet.Payout;  // ✅ ИСПРАВЛЕНО: полная выплата (ставка + прибыль)
+                stats.NetProfit += profit;          // ✅ Чистая прибыль накапливается отдельно
 
                 // Серии
                 if (stats.CurrentStreak > 0)
