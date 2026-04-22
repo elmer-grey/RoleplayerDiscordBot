@@ -250,7 +250,7 @@ namespace RPBot.Predictions
             {
                 stats.Wins++;
                 var profit = userBet.Payout - userBet.Amount;
-                stats.TotalWon += userBet.Payout;  // ✅ ПРАВИЛЬНО: полная выплата (ставка + прибыль)
+                stats.TotalWon += userBet.Payout;  // ✅ ИСПРАВЛЕНО ОБРАТНО: полная выплата (включая возврат ставки)
                 stats.NetProfit += profit;
 
                 // Серии
