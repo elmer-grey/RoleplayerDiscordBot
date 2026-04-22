@@ -376,6 +376,14 @@ namespace RPBot
                         break;
                     }
 
+                    case "achievements":
+                    {
+                        var embed = BuildAchievementsListEmbed(guildId);
+                        await command.RespondAsync(embed: embed, ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command);
+                        break;
+                    }
+
                     default:
                         await command.RespondAsync("Неизвестное действие для /prediction.", ephemeral: true);
                         ScheduleDeleteOriginalResponse(command);
@@ -416,12 +424,14 @@ namespace RPBot
                 if (entry.WasCancelled)
                 {
                     sb.AppendLine("❌ **Отменён** (все ставки возвращены)");
+                    sb.AppendLine($"💎 Общий банк: {entry.TotalPool:N0} костяшек");
                 }
                 else if (entry.WinningOutcomeName != null)
                 {
                     var winners = entry.Bets.Count(b => b.Won);
                     sb.AppendLine($"✅ **Победитель:** {entry.WinningOutcomeName}");
                     sb.AppendLine($"💰 **Выигрыш:** {entry.TotalPayout:N0} костяшек");
+                    sb.AppendLine($"💎 **Общий банк:** {entry.TotalPool:N0} костяшек");
                     sb.AppendLine($"👥 **Участников:** {entry.Bets.Count} ({winners} выиграли)");
                 }
 
@@ -522,7 +532,7 @@ namespace RPBot
             var achievements = stats.Achievements.OrderBy(a => a.UnlockedAt).ToList();
             if (achievements.Count > 0)
             {
-                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ ({achievements.Count}/30):**");
+                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ ({achievements.Count}/29):**");
                 sb.AppendLine();
 
                 var grouped = achievements
@@ -540,23 +550,76 @@ namespace RPBot
                         sb.AppendLine();
                     }
                 }
-
-                var unlocked = achievements.Select(a => a.AchievementId).ToHashSet();
-                var locked = RPBot.Predictions.AchievementDefinitions.All.Keys.Except(unlocked).Take(5).ToList();
-
-                if (locked.Count > 0)
-                {
-                    sb.AppendLine($"**🔒 Ещё не получено ({30 - achievements.Count}):**");
-                    sb.Append("  ");
-                    sb.AppendLine(string.Join(", ", locked.Select(id => 
-                        RPBot.Predictions.AchievementDefinitions.All[id].Name)));
-                }
             }
             else
             {
-                sb.AppendLine("**🏅 ДОСТИЖЕНИЯ (0/30):**");
+                sb.AppendLine("**🏅 ДОСТИЖЕНИЯ (0/29):**");
                 sb.AppendLine("Участвуйте в прогнозах чтобы получать достижения!");
             }
+
+            eb.WithDescription(sb.ToString());
+            return eb.Build();
+        }
+
+        private Embed BuildAchievementsListEmbed(ulong guildId)
+        {
+            var eb = new EmbedBuilder()
+                .WithTitle("🏅 Все достижения (29)")
+                .WithColor(Color.Purple);
+
+            var sb = new StringBuilder();
+
+            // Группируем по типам
+            var grouped = RPBot.Predictions.AchievementDefinitions.All.Values
+                .GroupBy(a => a.Type)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in grouped)
+            {
+                // Заголовок категории
+                var categoryName = group.Key switch
+                {
+                    RPBot.Predictions.AchievementType.Beginner => "🌟 НОВИЧКОВЫЕ",
+                    RPBot.Predictions.AchievementType.Financial => "💰 ФИНАНСОВЫЕ",
+                    RPBot.Predictions.AchievementType.Accuracy => "🎯 ТОЧНОСТЬ",
+                    RPBot.Predictions.AchievementType.Risk => "🚀 РИСК",
+                    RPBot.Predictions.AchievementType.Strategy => "📈 СТРАТЕГИЯ",
+                    RPBot.Predictions.AchievementType.Special => "⭐ СПЕЦИАЛЬНЫЕ",
+                    _ => "ДРУГОЕ"
+                };
+
+                sb.AppendLine($"**{categoryName}**");
+                sb.AppendLine();
+
+                foreach (var def in group.OrderBy(a => a.Rarity))
+                {
+                    var rarityIcon = RPBot.Predictions.AchievementDefinitions.GetRarityIcon(def.Rarity);
+
+                    // Считаем сколько людей получили
+                    int ownersCount = 0;
+                    foreach (var userStats in _predictionService.GetAllUserStats(guildId))
+                    {
+                        if (userStats.Achievements.Any(a => a.AchievementId == def.Id))
+                        {
+                            ownersCount++;
+                        }
+                    }
+
+                    var repeatableStr = def.Repeatable ? " 🔄" : "";
+                    var ownersStr = ownersCount > 0 
+                        ? $"({ownersCount} {(ownersCount == 1 ? "игрок" : ownersCount < 5 ? "игрока" : "игроков")})"
+                        : "_(Это достижение ещё никому не поддалось)_";
+
+                    sb.AppendLine($"{rarityIcon} {def.Icon} **{def.Name}**{repeatableStr}");
+                    sb.AppendLine($"   {def.Description}");
+                    sb.AppendLine($"   {ownersStr}");
+                    sb.AppendLine();
+                }
+            }
+
+            sb.AppendLine("**Легенда:**");
+            sb.AppendLine("⚪ Обычное | 🟢 Редкое | 🔵 Эпик | 🟣 Легендарное");
+            sb.AppendLine("🔄 - можно получить многократно");
 
             eb.WithDescription(sb.ToString());
             return eb.Build();

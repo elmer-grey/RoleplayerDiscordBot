@@ -161,8 +161,8 @@ namespace RPBot.Predictions
                 newAchievements.Add(("legend", count));
             }
             
-            // 🌪️ Ураган - 5 побед на аутсайдерах за день
-            if (stats.DayHighCoeffWins >= 5 && !HasAchievement(stats, "hurricane"))
+            // 🌪️ Ураган - 3 побед на аутсайдерах за неделю
+            if (stats.WeekHighCoeffWins >= 3 && !HasAchievement(stats, "hurricane"))
             {
                 AddAchievement(stats, "hurricane");
                 newAchievements.Add(("hurricane", 1));
@@ -184,8 +184,8 @@ namespace RPBot.Predictions
                 }
             }
             
-            // 📈 Стратег - прибыль >10,000 за месяц
-            if (stats.MonthProfit > 10000 && !HasAchievement(stats, "strategist"))
+            // 📈 Стратег - прибыль >50,000 за месяц
+            if (stats.MonthProfit > 50000 && !HasAchievement(stats, "strategist"))
             {
                 AddAchievement(stats, "strategist");
                 newAchievements.Add(("strategist", 1));
@@ -273,7 +273,7 @@ namespace RPBot.Predictions
                 if (userBet.Coefficient > 10)
                 {
                     stats.HighCoeffWins++;
-                    
+
                     // За день
                     if (DateTime.UtcNow.Date == stats.DayStart.Date)
                     {
@@ -283,6 +283,19 @@ namespace RPBot.Predictions
                     {
                         stats.DayStart = DateTime.UtcNow.Date;
                         stats.DayHighCoeffWins = 1;
+                    }
+
+                    // За неделю
+                    var weekStart = DateTime.UtcNow.Date.AddDays(-(int)DateTime.UtcNow.DayOfWeek);
+                    if (stats.WeekStart == default || weekStart == stats.WeekStart)
+                    {
+                        stats.WeekStart = weekStart;
+                        stats.WeekHighCoeffWins++;
+                    }
+                    else if (weekStart > stats.WeekStart)
+                    {
+                        stats.WeekStart = weekStart;
+                        stats.WeekHighCoeffWins = 1;
                     }
                 }
                 

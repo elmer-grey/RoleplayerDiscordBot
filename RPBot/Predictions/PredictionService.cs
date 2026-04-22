@@ -838,7 +838,7 @@ namespace RPBot
                 field.AppendLine($"{progressBar} {percentage:F1}%");
                 field.AppendLine($"💰 {outcome.TotalStake:N0} костяшек ({betCount} ставок)");
 
-                var coef = Math.Max(1.0, p.GetCoefficient(outcome.Id));
+                var coef = p.GetRawOdds(outcome.Id);
                 field.AppendLine($"📈 Коэффициент: **{coef:F2}x**");
                 field.AppendLine($"└─ На 100 → вернётся {(100 * coef):N0}");
 
@@ -1369,6 +1369,14 @@ namespace RPBot
         {
             var key = $"{guildId}:{userId}";
             return _achievementsStore.Users.TryGetValue(key, out var stats) ? stats : null;
+        }
+
+        /// <summary>
+        /// Получает статистику всех пользователей гильдии
+        /// </summary>
+        public IEnumerable<UserBettingStats> GetAllUserStats(ulong guildId)
+        {
+            return _achievementsStore.Users.Values.Where(s => s.GuildId == guildId);
         }
 
         /// <summary>

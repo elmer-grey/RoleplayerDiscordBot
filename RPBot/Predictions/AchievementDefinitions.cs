@@ -242,22 +242,12 @@ namespace RPBot.Predictions
                 Id = "hurricane",
                 Icon = "🌪️",
                 Name = "Ураган",
-                Description = "5 побед на аутсайдерах (>10x) за день",
+                Description = "3 победы на аутсайдерах (>10x) за неделю",
                 Type = AchievementType.Risk,
                 Rarity = 3,
                 Repeatable = false
             },
-            ["casino"] = new()
-            {
-                Id = "casino",
-                Icon = "🎪",
-                Name = "Казино",
-                Description = "Поставил на все исходы одного прогноза",
-                Type = AchievementType.Risk,
-                Rarity = 2,
-                Repeatable = true
-            },
-            
+
             // ==================== СТРАТЕГИЯ (4) ====================
             ["analyst"] = new()
             {
@@ -274,9 +264,9 @@ namespace RPBot.Predictions
                 Id = "strategist",
                 Icon = "📈",
                 Name = "Стратег",
-                Description = "Прибыль >10,000 за месяц",
+                Description = "Прибыль >50,000 за месяц",
                 Type = AchievementType.Strategy,
-                Rarity = 2,
+                Rarity = 3,
                 Repeatable = false
             },
             ["mathematician"] = new()

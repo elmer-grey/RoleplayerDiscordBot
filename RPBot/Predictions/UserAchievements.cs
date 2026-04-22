@@ -52,7 +52,11 @@ namespace RPBot.Predictions
         // За день (для урагана)
         public DateTime DayStart { get; set; }
         public int DayHighCoeffWins { get; set; }  // Побед на аутсайдерах за день
-        
+
+        // За неделю (для урагана)
+        public DateTime WeekStart { get; set; }
+        public int WeekHighCoeffWins { get; set; }  // Побед на аутсайдерах за неделю
+
         // Для аналитика
         public int FavoriteWins { get; set; }      // Побед на фаворитах (коэфф <2x)
         public int FavoriteBets { get; set; }      // Ставок на фаворитов
