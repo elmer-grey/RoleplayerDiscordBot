@@ -1610,6 +1610,8 @@ namespace RPBot
                 {
                     _historyIndex--;
                     _inputField.Text = _commandHistory[_historyIndex];
+                    // ✅ Перемещаем курсор в конец строки
+                    _inputField.CursorPosition = _inputField.Text.Length;
                 }
                 args.Handled = true;
             }
@@ -1619,11 +1621,14 @@ namespace RPBot
                 {
                     _historyIndex++;
                     _inputField.Text = _commandHistory[_historyIndex];
+                    // ✅ Перемещаем курсор в конец строки
+                    _inputField.CursorPosition = _inputField.Text.Length;
                 }
                 else if (_historyIndex == _commandHistory.Count - 1)
                 {
                     _historyIndex = _commandHistory.Count;
                     _inputField.Text = "";
+                    _inputField.CursorPosition = 0;
                 }
                 args.Handled = true;
             }
