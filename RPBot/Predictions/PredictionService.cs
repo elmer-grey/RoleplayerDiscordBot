@@ -701,6 +701,24 @@ namespace RPBot
                         othersProfit,
                         othersCount);
                     await channel.SendMessageAsync(embed: resultEmbed).ConfigureAwait(false);
+
+                    // ✅ НОВОЕ: Отправляем сообщение о достижениях (после небольшой задержки для обновления статистики)
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1));
+                        try
+                        {
+                            var achievementsEmbed = BuildAchievementsEmbed(guildId, p.Title);
+                            if (achievementsEmbed != null)
+                            {
+                                await channel.SendMessageAsync(embed: achievementsEmbed).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("ResolveAsync:AchievementsPost", ex, $"guild={guildId}").ConfigureAwait(false);
+                        }
+                    });
                 }
             }
             catch (Exception ex)
@@ -796,32 +814,47 @@ namespace RPBot
         private Embed BuildEmbed(ActivePrediction p, bool showLocked)
         {
             var builder = new EmbedBuilder()
-                .WithTitle($"Прогноз: {p.Title}")
+                .WithTitle($"🎯 Прогноз: {p.Title}")
                 .WithColor(showLocked ? Color.Orange : Color.Blue);
 
             var totalPool = p.TotalPool;
 
-            // ✅ Обновлено: динамическое отображение всех исходов
+            // ✅ ОБНОВЛЕНО: Прогресс-бары и коэффициенты
             foreach (var outcome in p.Outcomes)
             {
                 var field = new StringBuilder();
-                field.AppendLine($"Ставок всего: {outcome.TotalStake}");
-                field.AppendLine($"Коэффициент: {Math.Max(0, p.GetCoefficient(outcome.Id)):F2}");
+
+                // Процент от общего банка
+                var percentage = totalPool > 0 ? (double)outcome.TotalStake / totalPool * 100 : 0;
+
+                // Прогресс-бар (20 блоков = 100%)
+                var filledBlocks = (int)(percentage / 5);
+                var emptyBlocks = 20 - filledBlocks;
+                var progressBar = new string('█', Math.Max(0, filledBlocks)) + new string('░', Math.Max(0, emptyBlocks));
+
+                // Количество ставок на этот исход
+                var betCount = p.Bets.Values.Count(b => b.OutcomeId == outcome.Id);
+
+                field.AppendLine($"{progressBar} {percentage:F1}%");
+                field.AppendLine($"💰 {outcome.TotalStake:N0} костяшек ({betCount} ставок)");
+
+                var coef = Math.Max(1.0, p.GetCoefficient(outcome.Id));
+                field.AppendLine($"📈 Коэффициент: **{coef:F2}x**");
+                field.AppendLine($"└─ На 100 → вернётся {(100 * coef):N0}");
+
                 if (outcome.TopUserId.HasValue)
                 {
-                    field.AppendLine($"Топ ставка: <@{outcome.TopUserId}> — {outcome.TopUserStake}");
+                    field.AppendLine($"🏆 Топ: <@{outcome.TopUserId}> — {outcome.TopUserStake:N0}");
                 }
 
-                builder.AddField($"Исход {outcome.Id}: {outcome.Name}", field.ToString(), true);
+                builder.AddField($"📊 Исход {outcome.Id}: {outcome.Name}", field.ToString(), inline: p.Outcomes.Count <= 3);
             }
 
-            builder.AddField("Общий пул", totalPool.ToString(), false);
+            builder.AddField("💎 Общий банк", $"{totalPool:N0} костяшек", false);
 
             // Время окончания показываем только пока приём ставок открыт
             if (!showLocked && TryGetMoscowTime(p.BetsCloseAtUtc.UtcDateTime, out var mskTime))
             {
-                builder.AddField("Приём ставок до", $"{mskTime:dd.MM.yyyy HH:mm} по МСК", false);
-
                 var left = p.BetsCloseAtUtc - DateTimeOffset.UtcNow;
                 if (left < TimeSpan.Zero) left = TimeSpan.Zero;
                 var leftSeconds = (int)Math.Ceiling(left.TotalSeconds);
@@ -834,10 +867,12 @@ namespace RPBot
                             : leftSeconds >= 60
                                 ? $"{leftSeconds / 60}м {leftSeconds % 60}с"
                                 : $"{leftSeconds}с";
-                builder.AddField("До окончания приёма ставок", leftStr, false);
+
+                builder.AddField("⏱️ До закрытия", leftStr, true);
+                builder.AddField("📅 Закрытие", $"{mskTime:HH:mm} МСК", true);
             }
 
-            builder.WithFooter(showLocked ? "Приём ставок завершён" : "Ставьте костяшки до указанного времени");
+            builder.WithFooter(showLocked ? "⏸️ Приём ставок завершён — ожидание результата" : "💰 Ставьте костяшки до указанного времени");
 
             return builder.Build();
         }
@@ -1363,6 +1398,49 @@ namespace RPBot
             }
 
             return recent;
+        }
+
+        /// <summary>
+        /// Создаёт Embed с новыми достижениями участников
+        /// </summary>
+        private Embed? BuildAchievementsEmbed(ulong guildId, string predictionTitle)
+        {
+            var recentAchievements = GetRecentAchievements(guildId);
+
+            if (recentAchievements.Count == 0)
+                return null;
+
+            var eb = new EmbedBuilder()
+                .WithTitle("🎖️ НОВЫЕ ДОСТИЖЕНИЯ!")
+                .WithColor(Color.Gold)
+                .WithDescription($"Прогноз: **{predictionTitle}**\n");
+
+            var sb = new StringBuilder();
+
+            foreach (var kvp in recentAchievements.Take(10)) // Максимум 10 пользователей
+            {
+                var userId = kvp.Key;
+                var achievements = kvp.Value;
+
+                sb.AppendLine($"👤 <@{userId}>:");
+
+                foreach (var (achievementId, count) in achievements)
+                {
+                    if (AchievementDefinitions.All.TryGetValue(achievementId, out var def))
+                    {
+                        var countStr = count > 1 ? $" (×{count})" : "";
+                        var rarityIcon = AchievementDefinitions.GetRarityIcon(def.Rarity);
+                        sb.AppendLine($"  {rarityIcon} {def.Icon} **{def.Name}**{countStr}");
+                        sb.AppendLine($"     _{def.Description}_");
+                        sb.AppendLine();
+                    }
+                }
+            }
+
+            eb.WithDescription(eb.Description + sb.ToString());
+            eb.WithFooter($"Всего участников с достижениями: {recentAchievements.Count}");
+
+            return eb.Build();
         }
 
         public void Shutdown()
