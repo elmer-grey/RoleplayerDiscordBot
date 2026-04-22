@@ -107,6 +107,9 @@ namespace RPBot
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
+        // ✅ НОВОЕ: Хранение промежуточных данных для двухшагового создания прогноза
+        private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
+
         private Task? _backgroundMonitoringTask;
 		private CancellationTokenSource? _dailyRestartCts;
 		private Task? _dailyRestartTask;
@@ -3279,10 +3282,14 @@ namespace RPBot
                         return;
                     }
 
+                    // ✅ Сохраняем данные в словарь для второго шага
+                    var key = $"{guildId}:{channelId}:{modal.User.Id}";
+                    _pendingPredictionCreate[key] = (title, minutes);
+
                     // Показываем второй модал с 5 исходами
                     var step2Modal = new ModalBuilder()
                         .WithTitle($"Прогноз: {(title.Length > 20 ? title.Substring(0, 20) + "..." : title)} (2/2)")
-                        .WithCustomId($"pred_create_step2:{guildId}:{channelId}:{title}:{minutes}")
+                        .WithCustomId($"pred_create_step2:{guildId}:{channelId}")
                         .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
                         .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
                         .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
@@ -3294,10 +3301,10 @@ namespace RPBot
                     return;
                 }
 
-                // ✅ НОВОЕ: Handle step 2 modal (5 outcomes): pred_create_step2:<guildId>:<channelId>:<title>:<minutes>
+                // ✅ НОВОЕ: Handle step 2 modal (5 outcomes): pred_create_step2:<guildId>:<channelId>
                 if (parts[0] == "pred_create_step2")
                 {
-                    if (parts.Length < 5)
+                    if (parts.Length < 3)
                     {
                         await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
@@ -3316,13 +3323,17 @@ namespace RPBot
                         return;
                     }
 
-                    var title = parts[3];
-                    if (!int.TryParse(parts[4], out var minutes))
+                    // ✅ Читаем данные из словаря
+                    var key = $"{guildId}:{channelId}:{modal.User.Id}";
+                    if (!_pendingPredictionCreate.TryRemove(key, out var data))
                     {
-                        await modal.FollowupAsync("Неверная длительность.", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Данные первого шага не найдены. Начните сначала.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
+
+                    var title = data.title;
+                    var minutes = data.minutes;
 
                     string oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, oc4 = string.Empty, oc5 = string.Empty;
                     foreach (var comp in modal.Data.Components)
