@@ -1,5 +1,6 @@
 using Discord;
 using Discord.WebSocket;
+using RPBot.Predictions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -25,6 +26,14 @@ namespace RPBot
         private readonly string _stateFilePath;
         private readonly SemaphoreSlim _stateFileGate = new(1, 1);
 
+        // ✅ НОВОЕ: История прогнозов и достижения
+        private PredictionHistoryStore _history = new();
+        private UserAchievementsStore _achievementsStore = new();
+        private readonly string _historyFilePath;
+        private readonly string _achievementsFilePath;
+        private readonly SemaphoreSlim _historyGate = new(1, 1);
+        private readonly SemaphoreSlim _achievementsGate = new(1, 1);
+
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
         {
             _client = client;
@@ -36,11 +45,19 @@ namespace RPBot
                 var settingsDir = BotConfig.ResolvePath(BotConfig.SettingsFolderName);
                 Directory.CreateDirectory(settingsDir);
                 _stateFilePath = Path.Combine(settingsDir, "predictions_state.json");
+                _historyFilePath = Path.Combine(settingsDir, "predictions_history.json");
+                _achievementsFilePath = Path.Combine(settingsDir, "user_achievements.json");
             }
             catch
             {
                 _stateFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_state.json");
+                _historyFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_history.json");
+                _achievementsFilePath = Path.Combine(AppContext.BaseDirectory, "user_achievements.json");
             }
+
+            // Загружаем историю и достижения
+            _ = Task.Run(() => LoadHistoryAsync());
+            _ = Task.Run(() => LoadAchievementsAsync());
 
             // Фоновая задача для авто-блокировки ставок по истечении времени
             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
@@ -691,6 +708,9 @@ namespace RPBot
                 await PredictionErrorLogger.LogAsync("ResolveAsync:ResultPost", ex, $"guild={guildId} resolver={resolverId} win={winningOutcomeId}").ConfigureAwait(false);
             }
 
+            // ✅ НОВОЕ: Добавляем в историю
+            await AddToHistoryAsync(p, winningOutcomeId, wasCancelled: false);
+
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
             _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
@@ -748,6 +768,9 @@ namespace RPBot
                 }
             }
             catch { }
+
+            // ✅ НОВОЕ: Добавляем в историю
+            await AddToHistoryAsync(p, winningOutcomeId: null, wasCancelled: true);
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
@@ -1044,6 +1067,199 @@ namespace RPBot
                 msk = utc;
                 return false;
             }
+        }
+
+        // ==================== ИСТОРИЯ ПРОГНОЗОВ ====================
+
+        private async Task LoadHistoryAsync()
+        {
+            await _historyGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!File.Exists(_historyFilePath))
+                {
+                    _history = new PredictionHistoryStore();
+                    return;
+                }
+
+                var json = await File.ReadAllTextAsync(_historyFilePath).ConfigureAwait(false);
+                _history = System.Text.Json.JsonSerializer.Deserialize<PredictionHistoryStore>(json) ?? new();
+                await LogAsync($"HISTORY_LOADED entries={_history.History.Sum(kv => kv.Value.Count)}");
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"HISTORY_LOAD_ERROR: {ex.Message}");
+                _history = new PredictionHistoryStore();
+            }
+            finally
+            {
+                _historyGate.Release();
+            }
+        }
+
+        private async Task SaveHistoryAsync()
+        {
+            await _historyGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(_history, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(_historyFilePath, json).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"HISTORY_SAVE_ERROR: {ex.Message}");
+            }
+            finally
+            {
+                _historyGate.Release();
+            }
+        }
+
+        private async Task AddToHistoryAsync(ActivePrediction pred, int? winningOutcomeId, bool wasCancelled)
+        {
+            try
+            {
+                if (!_history.History.ContainsKey(pred.GuildId))
+                {
+                    _history.History[pred.GuildId] = new List<PredictionHistoryEntry>();
+                }
+
+                var entry = new PredictionHistoryEntry
+                {
+                    GuildId = pred.GuildId,
+                    Title = pred.Title,
+                    StartTime = pred.CreatedAtUtc.DateTime,
+                    EndTime = DateTime.UtcNow,
+                    Outcomes = pred.Outcomes,
+                    WinningOutcomeId = winningOutcomeId,
+                    WinningOutcomeName = winningOutcomeId.HasValue ? pred.GetOutcomeById(winningOutcomeId.Value)?.Name : null,
+                    TotalPool = pred.Bets.Values.Sum(b => b.Amount),
+                    WasCancelled = wasCancelled,
+                    CreatorId = pred.CreatorId,
+                    Bets = new List<BetResult>()
+                };
+
+                // Рассчитываем результаты ставок
+                foreach (var bet in pred.Bets.Values)
+                {
+                    long payout = 0;
+                    bool won = false;
+                    double coefficient = 1.0;
+
+                    if (wasCancelled)
+                    {
+                        payout = bet.Amount; // Возврат
+                    }
+                    else if (winningOutcomeId.HasValue && bet.OutcomeId == winningOutcomeId.Value)
+                    {
+                        var outcome = pred.GetOutcomeById(bet.OutcomeId);
+                        if (outcome != null)
+                        {
+                            var totalOnWinner = pred.Bets.Values.Where(b => b.OutcomeId == bet.OutcomeId).Sum(b => b.Amount);
+                            var totalPool = pred.Bets.Values.Sum(b => b.Amount);
+                            coefficient = totalOnWinner > 0 ? (double)totalPool / totalOnWinner : 1.0;
+                            payout = (long)(bet.Amount * coefficient);
+                            won = true;
+                        }
+                    }
+
+                    entry.Bets.Add(new BetResult
+                    {
+                        UserId = bet.UserId,
+                        OutcomeId = bet.OutcomeId,
+                        Amount = bet.Amount,
+                        Payout = payout,
+                        Won = won,
+                        Coefficient = coefficient
+                    });
+                }
+
+                entry.TotalPayout = entry.Bets.Where(b => b.Won).Sum(b => b.Payout);
+
+                // Добавляем в начало списка (новые сверху)
+                _history.History[pred.GuildId].Insert(0, entry);
+
+                // Ограничиваем размер истории
+                if (_history.History[pred.GuildId].Count > PredictionHistoryStore.MaxHistoryPerGuild)
+                {
+                    _history.History[pred.GuildId].RemoveAt(_history.History[pred.GuildId].Count - 1);
+                }
+
+                await SaveHistoryAsync();
+                await LogAsync($"HISTORY_ADDED guild={pred.GuildId} title='{pred.Title}' cancelled={wasCancelled}");
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"HISTORY_ADD_ERROR: {ex.Message}");
+            }
+        }
+
+        public List<PredictionHistoryEntry> GetHistory(ulong guildId, int page = 0, int pageSize = 10)
+        {
+            if (!_history.History.TryGetValue(guildId, out var entries))
+                return new List<PredictionHistoryEntry>();
+
+            return entries.Skip(page * pageSize).Take(pageSize).ToList();
+        }
+
+        public int GetHistoryPageCount(ulong guildId, int pageSize = 10)
+        {
+            if (!_history.History.TryGetValue(guildId, out var entries))
+                return 0;
+
+            return (int)Math.Ceiling((double)entries.Count / pageSize);
+        }
+
+        // ==================== ДОСТИЖЕНИЯ ====================
+
+        private async Task LoadAchievementsAsync()
+        {
+            await _achievementsGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!File.Exists(_achievementsFilePath))
+                {
+                    _achievementsStore = new UserAchievementsStore();
+                    return;
+                }
+
+                var json = await File.ReadAllTextAsync(_achievementsFilePath).ConfigureAwait(false);
+                _achievementsStore = System.Text.Json.JsonSerializer.Deserialize<UserAchievementsStore>(json) ?? new();
+                await LogAsync($"ACHIEVEMENTS_LOADED users={_achievementsStore.Users.Count}");
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"ACHIEVEMENTS_LOAD_ERROR: {ex.Message}");
+                _achievementsStore = new UserAchievementsStore();
+            }
+            finally
+            {
+                _achievementsGate.Release();
+            }
+        }
+
+        private async Task SaveAchievementsAsync()
+        {
+            await _achievementsGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(_achievementsStore, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(_achievementsFilePath, json).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"ACHIEVEMENTS_SAVE_ERROR: {ex.Message}");
+            }
+            finally
+            {
+                _achievementsGate.Release();
+            }
+        }
+
+        public UserBettingStats? GetUserStats(ulong guildId, ulong userId)
+        {
+            var key = $"{guildId}:{userId}";
+            return _achievementsStore.Users.TryGetValue(key, out var stats) ? stats : null;
         }
 
         public void Shutdown()
