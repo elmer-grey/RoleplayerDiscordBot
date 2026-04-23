@@ -376,13 +376,13 @@ namespace RPBot
             }
         }
 
-        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
+        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction, int delaySeconds = 30)
         {
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
                     try { await interaction.DeleteOriginalResponseAsync(); } catch { }
                 }
                 catch { }
@@ -4300,10 +4300,10 @@ namespace RPBot
 						sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с числовым ID канала.");
 						sb.AppendLine("  Если указаны оба, приоритет у channel.");
 						sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
-                        sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
-                        sb.AppendLine("- для логических переключателей (swear_filter, predictions) используйте toggle:true/false или value:true/false.");
-                        sb.AppendLine("- Для event_voice_channel укажите ID голосового канала в value.");
-                        sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+						sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
+						sb.AppendLine("- для логических переключателей (swear_filter, predictions) используйте toggle:true/false или value:true/false.");
+						sb.AppendLine("- Для event_voice_channel укажите ID голосового канала в value.");
+						sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
 						sb.AppendLine();
 						sb.AppendLine("Примеры:");
 						sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
@@ -4312,6 +4312,7 @@ namespace RPBot
 						sb.AppendLine("/settings action:set key:swear_filter toggle:true");
 						sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
 						await command.RespondAsync(sb.ToString(), ephemeral: true);
+						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
 					}
 					break;
 
@@ -4322,27 +4323,28 @@ namespace RPBot
 					}
 					break;
 
-                case "list":
-                    {
-                        var sb = new StringBuilder();
-                        sb.AppendLine($"Настройки для сервера {guildId}:");
-                        sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
-                        sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
-                        sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
-                        sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
-                        sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
-                        sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
-                        sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
-                        sb.AppendLine($"line_message: {sconfig.LineMessage}");
-                        sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+				case "list":
+					{
+						var sb = new StringBuilder();
+						sb.AppendLine($"Настройки для сервера {guildId}:");
+						sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
+						sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
+						sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
+						sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
+						sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
+						sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
+						sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
+						sb.AppendLine($"line_message: {sconfig.LineMessage}");
+						sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
 						sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
 						sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
 						sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
 						sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
-                        sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
-                        await command.RespondAsync(sb.ToString(), ephemeral: true);
-                    }
-                    break;
+						sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
+						await command.RespondAsync(sb.ToString(), ephemeral: true);
+						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
+					}
+					break;
 
                 case "get":
 					{

@@ -362,7 +362,7 @@ namespace RPBot
                         var components = BuildHistoryComponents(guildId, page);
 
                         await command.RespondAsync(embed: embed, components: components?.Build(), ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения истории
                         break;
                     }
 
@@ -380,7 +380,7 @@ namespace RPBot
                     {
                         var embed = BuildAchievementsListEmbed(guildId);
                         await command.RespondAsync(embed: embed, ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения достижений
                         break;
                     }
 
