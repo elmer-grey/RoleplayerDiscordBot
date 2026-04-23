@@ -71,6 +71,33 @@ namespace RPBot
             // Попробуем загрузить ранее сохранённые прогнозы после готовности клиента,
             // иначе кэш каналов/гильдий может быть пустым и мы получим ложные RESTORE_FAIL.
             _client.Ready += OnClientReadyForRestore;
+
+            // ✅ БАГ 6: Обновляем сообщения при отключении бота
+            _client.Disconnected += OnClientDisconnected;
+        }
+
+        private Task OnClientDisconnected(Exception exception)
+        {
+            // Обновляем все активные прогнозы с пометкой "Бот неактивен"
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var kv in _active.ToArray())
+                    {
+                        var p = kv.Value;
+                        if (!p.IsResolved)
+                        {
+                            await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
+                }
+            });
+            return Task.CompletedTask;
         }
 
         private Task OnClientReadyForRestore()
@@ -193,6 +220,9 @@ namespace RPBot
                             WinningOutcomeId = p.WinningOutcomeId,
                             Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
                         };
+
+                        // ✅ БАГ 7: Логируем для диагностики потери ставок
+                        await LogAsync($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}").ConfigureAwait(false);
 
                         // ✅ Обновлено: загрузка исходов (поддержка старого и нового формата)
                         if (p.Outcomes != null && p.Outcomes.Count > 0)
@@ -829,11 +859,17 @@ namespace RPBot
                 .Build();
         }
 
-        private Embed BuildEmbed(ActivePrediction p, bool showLocked)
+        private Embed BuildEmbed(ActivePrediction p, bool showLocked, bool botOffline = false)
         {
             var builder = new EmbedBuilder()
                 .WithTitle($"🎯 Прогноз: {p.Title}")
-                .WithColor(showLocked ? Color.Orange : Color.Blue);
+                .WithColor(botOffline ? Color.Red : (showLocked ? Color.Orange : Color.Blue));
+
+            // ✅ БАГ 6: Показываем предупреждение если бот offline
+            if (botOffline)
+            {
+                builder.WithDescription("⚠️ **БОТ НЕАКТИВЕН** — таймер может отставать");
+            }
 
             var totalPool = p.TotalPool;
 
@@ -890,7 +926,10 @@ namespace RPBot
                 builder.AddField("📅 Закрытие", $"{mskTime:HH:mm} МСК", true);
             }
 
-            builder.WithFooter(showLocked ? "⏸️ Приём ставок завершён — ожидание результата" : "💰 Ставьте костяшки до указанного времени");
+            builder.WithFooter(
+                botOffline ? "⚠️ Бот неактивен — таймер может отставать" :
+                showLocked ? "⏸️ Приём ставок завершён — ожидание результата" : 
+                "💰 Ставьте костяшки до указанного времени");
 
             return builder.Build();
         }
@@ -975,7 +1014,7 @@ namespace RPBot
             return builder.Build();
         }
 
-        private async Task UpdateMessageAsync(ActivePrediction p, bool showLocked)
+        private async Task UpdateMessageAsync(ActivePrediction p, bool showLocked, bool botOffline = false)
         {
             try
             {
@@ -987,10 +1026,10 @@ namespace RPBot
                 if (msg == null)
                     return;
 
-                var embed = BuildEmbed(p, showLocked);
+                var embed = BuildEmbed(p, showLocked, botOffline);
                 // Build components only if prediction is not resolved/cancelled
                 MessageComponent? comps = null;
-                if (!p.IsResolved)
+                if (!p.IsResolved && !botOffline) // ✅ Отключаем кнопки при offline
                 {
                     var cb = BuildComponents(p, showLocked);
                     comps = cb?.Build();
