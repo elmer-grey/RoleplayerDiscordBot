@@ -83,11 +83,12 @@ namespace RPBot
         [JsonIgnore]
         public double RawOdds2 => Outcome2.TotalStake <= 0 ? 1.0 : (double)TotalPool / Outcome2.TotalStake;
 
+        // ✅ ИСПРАВЛЕНО: Coef1 и Coef2 теперь возвращают rawOdds (не вычитают 1)
         [JsonIgnore]
-        public double Coef1 => Math.Round(RawOdds1 - 1.0, 2, MidpointRounding.AwayFromZero);
+        public double Coef1 => Math.Round(RawOdds1, 2, MidpointRounding.AwayFromZero);
 
         [JsonIgnore]
-        public double Coef2 => Math.Round(RawOdds2 - 1.0, 2, MidpointRounding.AwayFromZero);
+        public double Coef2 => Math.Round(RawOdds2, 2, MidpointRounding.AwayFromZero);
 
         // ✅ НОВОЕ: Методы для работы с N исходами
         public PredictionOutcome? GetOutcomeById(int id) => Outcomes.FirstOrDefault(o => o.Id == id);
@@ -99,10 +100,12 @@ namespace RPBot
             return (double)TotalPool / outcome.TotalStake;
         }
 
+        // ✅ ИСПРАВЛЕНО: GetCoefficient теперь возвращает rawOdds (не вычитает 1)
+        // Коэффициент показывает сколько вернётся за каждую поставленную костяшку
         public double GetCoefficient(int outcomeId)
         {
             var rawOdds = GetRawOdds(outcomeId);
-            return Math.Round(rawOdds - 1.0, 2, MidpointRounding.AwayFromZero);
+            return Math.Round(rawOdds, 2, MidpointRounding.AwayFromZero);
         }
     }
 }

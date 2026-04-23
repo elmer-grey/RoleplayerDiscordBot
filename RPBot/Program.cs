@@ -290,6 +290,17 @@ namespace RPBot
                         .Build();
 
                     await component.RespondWithModalAsync(modal);
+
+                    // ✅ БАГ 4: Удаляем кнопки после нажатия
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(500); // Небольшая задержка
+                            await component.Message.DeleteAsync();
+                        }
+                        catch { }
+                    });
                 }
                 else if (outcomesCount == 5)
                 {
@@ -302,6 +313,17 @@ namespace RPBot
                         .Build();
 
                     await component.RespondWithModalAsync(modal);
+
+                    // ✅ БАГ 4: Удаляем кнопки после нажатия
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(500); // Небольшая задержка
+                            await component.Message.DeleteAsync();
+                        }
+                        catch { }
+                    });
                 }
             }
             catch (Exception ex)
@@ -5640,7 +5662,7 @@ namespace RPBot
                 .WithColor(Color.DarkTeal)
                 .WithDescription("Прогнозы позволяют ставить **костяшки** на один из 2-5 исходов. Создание — через модал, ставки — через кнопки.")
                 .AddField("✅ Где работает",
-                    "`create/bet/resolve/cancel` доступны **только в чате голосового канала**.\n" +
+                    "Создание, ставки, завершение и отмена доступны **только в чате голосового канала**.\n" +
                     "Для создания прогноза нужно: **быть в голосовом канале** и чтобы на нём было **активное событие**.")
                 .AddField("🧩 Основные команды",
                     "> `/prediction action:create` — создать прогноз с 2-5 исходами (мастер НРИ/админ)\n" +

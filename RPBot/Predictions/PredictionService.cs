@@ -606,8 +606,8 @@ namespace RPBot
             var totalPool = p.TotalPool;
             var winningPool = winningOutcome.TotalStake;
 
-            double rawOdds = winningPool <= 0 ? 1.0 : (double)totalPool / winningPool;
-            double coef = rawOdds - 1.0;
+            // ✅ ИСПРАВЛЕНО: коэффициент = totalPool / winningPool (не вычитаем 1!)
+            double coef = winningPool <= 0 ? 1.0 : (double)totalPool / winningPool;
             double coefRounded = Math.Round(coef, 2, MidpointRounding.AwayFromZero);
 
             long topWinnerUserId = 0;
@@ -634,10 +634,11 @@ namespace RPBot
             {
                 foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
                 {
-                    // ставка + ставка * coef
-                    var profitDouble = bet.Amount * coefRounded;
-                    var profit = (long)Math.Round(profitDouble, MidpointRounding.AwayFromZero);
-                    var totalReturn = bet.Amount + profit;
+                    // ✅ ИСПРАВЛЕНО: выигрыш = ставка × коэффициент, прибыль = выигрыш - ставка
+                    var totalReturnDouble = bet.Amount * coefRounded;
+                    var totalReturn = (long)Math.Round(totalReturnDouble, MidpointRounding.AwayFromZero);
+                    var profit = totalReturn - bet.Amount; // Чистая прибыль (без ставки)
+
                     _points.Add(guildId, bet.UserId, totalReturn);
 
                     winnersProfitTotal += profit;
