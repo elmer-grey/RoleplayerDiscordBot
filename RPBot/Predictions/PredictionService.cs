@@ -26,12 +26,15 @@ namespace RPBot
         private readonly string _stateFilePath;
         private readonly SemaphoreSlim _stateFileGate = new(1, 1);
 
-        // ✅ НОВОЕ: История прогнозов и достижения
+        // ✅ НОВОЕ: История прогнозов, статистика и достижения
         private PredictionHistoryStore _history = new();
-        private UserAchievementsStore _achievementsStore = new();
+        private readonly ConcurrentDictionary<ulong, Dictionary<ulong, UserPredictionStats>> _userStats = new(); // guildId -> userId -> stats
+        private readonly ConcurrentDictionary<ulong, List<UserAchievement>> _userAchievements = new(); // guildId -> achievements
         private readonly string _historyFilePath;
+        private readonly string _statsFilePath;
         private readonly string _achievementsFilePath;
         private readonly SemaphoreSlim _historyGate = new(1, 1);
+        private readonly SemaphoreSlim _statsGate = new(1, 1);
         private readonly SemaphoreSlim _achievementsGate = new(1, 1);
 
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
@@ -46,17 +49,20 @@ namespace RPBot
                 Directory.CreateDirectory(settingsDir);
                 _stateFilePath = Path.Combine(settingsDir, "predictions_state.json");
                 _historyFilePath = Path.Combine(settingsDir, "predictions_history.json");
-                _achievementsFilePath = Path.Combine(settingsDir, "user_achievements.json");
+                _statsFilePath = Path.Combine(settingsDir, "predictions_stats.json");
+                _achievementsFilePath = Path.Combine(settingsDir, "predictions_achievements.json");
             }
             catch
             {
                 _stateFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_state.json");
                 _historyFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_history.json");
-                _achievementsFilePath = Path.Combine(AppContext.BaseDirectory, "user_achievements.json");
+                _statsFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_stats.json");
+                _achievementsFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_achievements.json");
             }
 
-            // Загружаем историю и достижения
+            // Загружаем историю, статистику и достижения
             _ = Task.Run(() => LoadHistoryAsync());
+            _ = Task.Run(() => LoadStatsAsync());
             _ = Task.Run(() => LoadAchievementsAsync());
 
             // Фоновая задача для авто-блокировки ставок по истечении времени
@@ -703,6 +709,17 @@ namespace RPBot
                         othersCount);
                     await channel.SendMessageAsync(embed: resultEmbed).ConfigureAwait(false);
 
+                    // ✅ НОВОЕ: Обновляем статистику и достижения
+                    try
+                    {
+                        await UpdateUserStatsAfterResolution(guildId, p, winningOutcomeId, coef).ConfigureAwait(false);
+                        await UpdateAchievementsAsync(guildId, p).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("ResolveAsync:UpdateStats", ex, $"guild={guildId}").ConfigureAwait(false);
+                    }
+
                     // ✅ НОВОЕ: Отправляем сообщение о достижениях (после небольшой задержки для обновления статистики)
                     _ = Task.Run(async () =>
                     {
@@ -1224,84 +1241,11 @@ namespace RPBot
 
                 await SaveHistoryAsync();
 
-                // ✅ НОВОЕ: Обновляем статистику и проверяем достижения
-                if (!wasCancelled)
-                {
-                    await UpdateUserStatsAndAchievements(pred.GuildId, entry);
-                }
-
                 await LogAsync($"HISTORY_ADDED guild={pred.GuildId} title='{pred.Title}' cancelled={wasCancelled}");
             }
             catch (Exception ex)
             {
                 await LogAsync($"HISTORY_ADD_ERROR: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Обновляет статистику всех участников и проверяет достижения
-        /// </summary>
-        private async Task UpdateUserStatsAndAchievements(ulong guildId, PredictionHistoryEntry prediction)
-        {
-            try
-            {
-                foreach (var betResult in prediction.Bets)
-                {
-                    var key = $"{guildId}:{betResult.UserId}";
-
-                    // Получаем или создаём статистику
-                    if (!_achievementsStore.Users.TryGetValue(key, out var stats))
-                    {
-                        stats = new UserBettingStats
-                        {
-                            UserId = betResult.UserId,
-                            GuildId = guildId,
-                            MonthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1),
-                            DayStart = DateTime.UtcNow.Date
-                        };
-                        _achievementsStore.Users[key] = stats;
-                    }
-
-                    // Обновляем статистику
-                    AchievementSystem.UpdateStatsAfterResolve(stats, prediction, betResult);
-
-                    // Проверяем достижения
-                    var newAchievements = AchievementSystem.CheckAndAwardAchievements(stats, prediction, betResult);
-
-                    // Логируем новые достижения
-                    if (newAchievements.Count > 0)
-                    {
-                        await LogAsync($"ACHIEVEMENTS user={betResult.UserId} new={newAchievements.Count}: {string.Join(", ", newAchievements.Select(a => a.achievementId))}");
-                    }
-                }
-
-                // Обновляем статистику создателя
-                var creatorKey = $"{guildId}:{prediction.CreatorId}";
-                if (!_achievementsStore.Users.TryGetValue(creatorKey, out var creatorStats))
-                {
-                    creatorStats = new UserBettingStats
-                    {
-                        UserId = prediction.CreatorId,
-                        GuildId = guildId,
-                        MonthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1),
-                        DayStart = DateTime.UtcNow.Date
-                    };
-                    _achievementsStore.Users[creatorKey] = creatorStats;
-                }
-
-                AchievementSystem.UpdateStatsAfterCreate(creatorStats);
-                var creatorNewAchievements = AchievementSystem.CheckAndAwardAchievements(creatorStats);
-
-                if (creatorNewAchievements.Count > 0)
-                {
-                    await LogAsync($"ACHIEVEMENTS creator={prediction.CreatorId} new={creatorNewAchievements.Count}: {string.Join(", ", creatorNewAchievements.Select(a => a.achievementId))}");
-                }
-
-                await SaveAchievementsAsync();
-            }
-            catch (Exception ex)
-            {
-                await LogAsync($"UPDATE_STATS_ERROR: {ex.Message}");
             }
         }
 
@@ -1321,7 +1265,33 @@ namespace RPBot
             return (int)Math.Ceiling((double)entries.Count / pageSize);
         }
 
-        // ==================== ДОСТИЖЕНИЯ ====================
+        // ✅ НОВОЕ: Загрузка/сохранение статистики пользователей
+        private async Task LoadStatsAsync()
+        {
+            await _statsGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (!File.Exists(_statsFilePath))
+                    return;
+
+                var json = await File.ReadAllTextAsync(_statsFilePath).ConfigureAwait(false);
+                var loaded = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, Dictionary<ulong, UserPredictionStats>>>(json);
+                if (loaded != null)
+                {
+                    _userStats.Clear();
+                    foreach (var kvp in loaded)
+                        _userStats[kvp.Key] = kvp.Value;
+                }
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("LoadStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
+            }
+            finally
+            {
+                _statsGate.Release();
+            }
+        }
 
         private async Task LoadAchievementsAsync()
         {
@@ -1329,23 +1299,196 @@ namespace RPBot
             try
             {
                 if (!File.Exists(_achievementsFilePath))
-                {
-                    _achievementsStore = new UserAchievementsStore();
                     return;
-                }
 
                 var json = await File.ReadAllTextAsync(_achievementsFilePath).ConfigureAwait(false);
-                _achievementsStore = System.Text.Json.JsonSerializer.Deserialize<UserAchievementsStore>(json) ?? new();
-                await LogAsync($"ACHIEVEMENTS_LOADED users={_achievementsStore.Users.Count}");
+                var loaded = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, List<UserAchievement>>>(json);
+                if (loaded != null)
+                {
+                    _userAchievements.Clear();
+                    foreach (var kvp in loaded)
+                        _userAchievements[kvp.Key] = kvp.Value;
+                }
             }
             catch (Exception ex)
             {
-                await LogAsync($"ACHIEVEMENTS_LOAD_ERROR: {ex.Message}");
-                _achievementsStore = new UserAchievementsStore();
+                await PredictionErrorLogger.LogAsync("LoadAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
             }
             finally
             {
                 _achievementsGate.Release();
+            }
+        }
+
+        private async Task SaveStatsAsync()
+        {
+            await _statsGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var snapshot = _userStats.ToDictionary(kv => kv.Key, kv => kv.Value);
+                var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(_statsFilePath, json).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("SaveStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
+            }
+            finally
+            {
+                _statsGate.Release();
+            }
+        }
+
+        // ✅ НОВОЕ: Обновление статистики пользователя после завершения прогноза
+        private async Task UpdateUserStatsAfterResolution(
+            ulong guildId,
+            ActivePrediction prediction,
+            int winningOutcomeId,
+            double coef)
+        {
+            if (!_userStats.TryGetValue(guildId, out var guildStats))
+            {
+                guildStats = new Dictionary<ulong, UserPredictionStats>();
+                _userStats[guildId] = guildStats;
+            }
+
+            // Обрабатываем всех участников прогноза
+            foreach (var bet in prediction.Bets.Values)
+            {
+                if (!guildStats.TryGetValue(bet.UserId, out var stats))
+                {
+                    stats = new UserPredictionStats { UserId = bet.UserId };
+                    guildStats[bet.UserId] = stats;
+                }
+
+                stats.TotalBets++;
+                stats.TotalWagered += bet.Amount;
+                stats.TotalParticipation++;
+
+                if (bet.OutcomeId == winningOutcomeId)
+                {
+                    // Победитель
+                    stats.WonBets++;
+
+                    // Прибыль = (ставка * коэфф) - ставка
+                    var totalReturn = (long)Math.Round(bet.Amount * coef, MidpointRounding.AwayFromZero);
+                    var profit = totalReturn - bet.Amount;
+
+                    stats.TotalWon += profit;
+                    stats.NetProfit += profit;
+
+                    if (profit > stats.HighestSingleWin)
+                        stats.HighestSingleWin = profit;
+
+                    // Обновление серии
+                    if (stats.CurrentStreak >= 0)
+                        stats.CurrentStreak++;
+                    else
+                        stats.CurrentStreak = 1;
+
+                    if (stats.CurrentStreak > stats.BestStreak)
+                        stats.BestStreak = stats.CurrentStreak;
+                }
+                else
+                {
+                    // Проигравший
+                    stats.LostBets++;
+                    stats.TotalLost += bet.Amount;
+                    stats.NetProfit -= bet.Amount;
+
+                    // Обновление серии
+                    if (stats.CurrentStreak <= 0)
+                        stats.CurrentStreak--;
+                    else
+                        stats.CurrentStreak = -1;
+                }
+            }
+
+            await SaveStatsAsync().ConfigureAwait(false);
+        }
+
+        // ✅ НОВОЕ: Обновление достижений после завершения прогноза
+        private async Task UpdateAchievementsAsync(ulong guildId, ActivePrediction prediction)
+        {
+            if (!_userStats.TryGetValue(guildId, out var guildStats))
+                return;
+
+            if (!_userAchievements.TryGetValue(guildId, out var guildAchievements))
+            {
+                guildAchievements = new List<UserAchievement>();
+                _userAchievements[guildId] = guildAchievements;
+            }
+
+            var newAchievements = new List<UserAchievement>();
+
+            // Проверяем достижения для каждого участника
+            foreach (var bet in prediction.Bets.Values)
+            {
+                if (!guildStats.TryGetValue(bet.UserId, out var stats))
+                    continue;
+
+                var userAchievementIds = guildAchievements
+                    .Where(a => a.UserId == bet.UserId)
+                    .Select(a => a.AchievementId)
+                    .ToHashSet();
+
+                // Проверка каждого достижения
+                CheckAchievement("newcomer", stats.TotalBets >= 1);
+                CheckAchievement("student", stats.TotalParticipation >= 5);
+                CheckAchievement("experienced", stats.TotalParticipation >= 25);
+                CheckAchievement("versatile", stats.TotalParticipation >= 50);
+                CheckAchievement("veteran", stats.TotalParticipation >= 100);
+
+                CheckAchievement("first_blood", stats.TotalWon > 0);
+                CheckAchievement("earner", stats.NetProfit >= 1000);
+                CheckAchievement("rich", stats.NetProfit >= 10000);
+                CheckAchievement("magnate", stats.NetProfit >= 50000);
+                CheckAchievement("tycoon", stats.NetProfit >= 100000);
+                CheckAchievement("jackpot", stats.HighestSingleWin >= 5000);
+                CheckAchievement("mega_win", stats.HighestSingleWin >= 25000);
+
+                CheckAchievement("marksman", stats.WinRate >= 65 && stats.TotalBets >= 10);
+                CheckAchievement("expert", stats.WinRate >= 75 && stats.TotalBets >= 20);
+                CheckAchievement("perfect", stats.WinRate >= 90 && stats.TotalBets >= 30);
+                CheckAchievement("lucky_streak", stats.BestStreak >= 5);
+                CheckAchievement("unstoppable", stats.BestStreak >= 10);
+
+                CheckAchievement("risk_taker", false); // Требует данных о коэффициентах
+                CheckAchievement("mad", false); // Требует данных о коэффициентах
+                CheckAchievement("underdog_hunter", false); // Требует данных
+                CheckAchievement("fortune", false); // Требует данных
+
+                CheckAchievement("creator", false); // Требует данных о создании прогнозов
+                CheckAchievement("organizer", false); // Требует данных о создании прогнозов
+                CheckAchievement("mathematician", stats.ROI > 50 && stats.TotalBets >= 15);
+                CheckAchievement("profitable", stats.NetProfit >= 15000);
+
+                CheckAchievement("phoenix", false); // Требует сложной логики
+                CheckAchievement("persistent", false); // Требует данных о сериях
+                CheckAchievement("universal", false); // Требует данных о типах ставок
+                CheckAchievement("marathon", stats.TotalParticipation >= 50);
+                CheckAchievement("collector", false); // Рекурсивно - требует подсчёта других достижений
+
+                void CheckAchievement(string achievementId, bool condition)
+                {
+                    if (condition && !userAchievementIds.Contains(achievementId))
+                    {
+                        var newAch = new UserAchievement
+                        {
+                            UserId = bet.UserId,
+                            AchievementId = achievementId,
+                            EarnedAt = DateTimeOffset.UtcNow
+                        };
+                        guildAchievements.Add(newAch);
+                        newAchievements.Add(newAch);
+                        userAchievementIds.Add(achievementId);
+                    }
+                }
+            }
+
+            if (newAchievements.Count > 0)
+            {
+                await SaveAchievementsAsync().ConfigureAwait(false);
             }
         }
 
@@ -1354,12 +1497,13 @@ namespace RPBot
             await _achievementsGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                var json = System.Text.Json.JsonSerializer.Serialize(_achievementsStore, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                var snapshot = _userAchievements.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+                var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(_achievementsFilePath, json).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                await LogAsync($"ACHIEVEMENTS_SAVE_ERROR: {ex.Message}");
+                await PredictionErrorLogger.LogAsync("SaveAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
             }
             finally
             {
@@ -1367,55 +1511,21 @@ namespace RPBot
             }
         }
 
-        public UserBettingStats? GetUserStats(ulong guildId, ulong userId)
-        {
-            var key = $"{guildId}:{userId}";
-            return _achievementsStore.Users.TryGetValue(key, out var stats) ? stats : null;
-        }
-
-        /// <summary>
-        /// Получает статистику всех пользователей гильдии
-        /// </summary>
-        public IEnumerable<UserBettingStats> GetAllUserStats(ulong guildId)
-        {
-            return _achievementsStore.Users.Values.Where(s => s.GuildId == guildId);
-        }
-
-        /// <summary>
-        /// Получает новые достижения всех участников последнего прогноза для отображения
-        /// </summary>
-        public Dictionary<ulong, List<(string achievementId, int count)>> GetRecentAchievements(ulong guildId)
-        {
-            // Возвращаем достижения, полученные за последние 5 секунд
-            var recent = new Dictionary<ulong, List<(string, int)>>();
-            var cutoff = DateTime.UtcNow.AddSeconds(-5);
-
-            foreach (var kvp in _achievementsStore.Users)
-            {
-                if (!kvp.Key.StartsWith($"{guildId}:"))
-                    continue;
-
-                var userId = kvp.Value.UserId;
-                var recentAchievements = kvp.Value.Achievements
-                    .Where(a => a.UnlockedAt >= cutoff)
-                    .Select(a => (a.AchievementId, a.Count))
-                    .ToList();
-
-                if (recentAchievements.Count > 0)
-                {
-                    recent[userId] = recentAchievements;
-                }
-            }
-
-            return recent;
-        }
-
-        /// <summary>
-        /// Создаёт Embed с новыми достижениями участников
-        /// </summary>
+        // ✅ НОВОЕ: Создаёт Embed с новыми достижениями участников
         private Embed? BuildAchievementsEmbed(ulong guildId, string predictionTitle)
         {
-            var recentAchievements = GetRecentAchievements(guildId);
+            if (!_userAchievements.TryGetValue(guildId, out var guildAchievements))
+                return null;
+
+            // Получаем достижения за последние 10 секунд
+            var cutoff = DateTimeOffset.UtcNow.AddSeconds(-10);
+            var recentAchievements = guildAchievements
+                .Where(a => a.EarnedAt >= cutoff)
+                .GroupBy(a => a.UserId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(a => a.AchievementId).ToList()
+                );
 
             if (recentAchievements.Count == 0)
                 return null;
@@ -1423,24 +1533,22 @@ namespace RPBot
             var eb = new EmbedBuilder()
                 .WithTitle("🎖️ НОВЫЕ ДОСТИЖЕНИЯ!")
                 .WithColor(Color.Gold)
-                .WithDescription($"Прогноз: **{predictionTitle}**\n");
+                .WithDescription($"Прогноз: **{predictionTitle}**\n\n");
 
             var sb = new StringBuilder();
 
             foreach (var kvp in recentAchievements.Take(10)) // Максимум 10 пользователей
             {
                 var userId = kvp.Key;
-                var achievements = kvp.Value;
+                var achievementIds = kvp.Value;
 
                 sb.AppendLine($"👤 <@{userId}>:");
 
-                foreach (var (achievementId, count) in achievements)
+                foreach (var achievementId in achievementIds)
                 {
                     if (AchievementDefinitions.All.TryGetValue(achievementId, out var def))
                     {
-                        var countStr = count > 1 ? $" (×{count})" : "";
-                        var rarityIcon = AchievementDefinitions.GetRarityIcon(def.Rarity);
-                        sb.AppendLine($"  {rarityIcon} {def.Icon} **{def.Name}**{countStr}");
+                        sb.AppendLine($"  {def.Icon} **{def.Name}**");
                         sb.AppendLine($"     _{def.Description}_");
                         sb.AppendLine();
                     }
@@ -1448,9 +1556,34 @@ namespace RPBot
             }
 
             eb.WithDescription(eb.Description + sb.ToString());
-            eb.WithFooter($"Всего участников с достижениями: {recentAchievements.Count}");
+            eb.WithFooter($"Всего участников с новыми достижениями: {recentAchievements.Count}");
 
             return eb.Build();
+        }
+
+        // ✅ НОВОЕ: Публичные методы доступа к статистике
+        public UserPredictionStats? GetUserStats(ulong guildId, ulong userId)
+        {
+            if (!_userStats.TryGetValue(guildId, out var guildStats))
+                return null;
+
+            return guildStats.TryGetValue(userId, out var stats) ? stats : null;
+        }
+
+        public IEnumerable<UserPredictionStats> GetAllUserStats(ulong guildId)
+        {
+            if (!_userStats.TryGetValue(guildId, out var guildStats))
+                return Enumerable.Empty<UserPredictionStats>();
+
+            return guildStats.Values;
+        }
+
+        public List<UserAchievement> GetUserAchievements(ulong guildId, ulong userId)
+        {
+            if (!_userAchievements.TryGetValue(guildId, out var guildAchievements))
+                return new List<UserAchievement>();
+
+            return guildAchievements.Where(a => a.UserId == userId).ToList();
         }
 
         public void Shutdown()

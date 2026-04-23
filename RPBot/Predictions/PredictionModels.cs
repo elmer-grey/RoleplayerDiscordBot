@@ -108,4 +108,41 @@ namespace RPBot
             return Math.Round(rawOdds, 2, MidpointRounding.AwayFromZero);
         }
     }
+
+    // ✅ НОВОЕ: Статистика пользователя по прогнозам
+    public class UserPredictionStats
+    {
+        public ulong UserId { get; set; }
+        public int TotalBets { get; set; }              // Всего ставок сделано
+        public int WonBets { get; set; }                // Выигранных ставок
+        public int LostBets { get; set; }               // Проигранных ставок
+        public long TotalWagered { get; set; }          // Всего поставлено
+        public long TotalWon { get; set; }              // Всего выиграно (чистая прибыль)
+        public long TotalLost { get; set; }             // Всего проиграно
+        public long NetProfit { get; set; }             // Чистая прибыль (TotalWon - TotalLost)
+        public int CurrentStreak { get; set; }          // Текущая серия (+ выигрыши, - проигрыши)
+        public int BestStreak { get; set; }             // Лучшая серия выигрышей
+        public long HighestSingleWin { get; set; }      // Самый большой выигрыш за раз
+        public int TotalParticipation { get; set; }     // Участий в прогнозах
+        public double WinRate => TotalBets > 0 ? (double)WonBets / TotalBets * 100 : 0;
+        public double ROI => TotalWagered > 0 ? (double)NetProfit / TotalWagered * 100 : 0;
+    }
+
+    // ✅ НОВОЕ: Достижение
+    public class Achievement
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Emoji { get; set; } = string.Empty;
+    }
+
+    // ✅ НОВОЕ: Полученное достижение пользователя
+    public class UserAchievement
+    {
+        public ulong UserId { get; set; }
+        public string AchievementId { get; set; } = string.Empty;
+        public DateTimeOffset EarnedAt { get; set; }
+    }
 }
