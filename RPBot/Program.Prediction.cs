@@ -155,13 +155,22 @@ namespace RPBot
                             return;
                         }
 
+                        // ✅ БАГ 8: Проверка наличия активного прогноза ПЕРЕД показом кнопок
+                        var existingPrediction = _predictionService.GetActive(guildId);
+                        if (existingPrediction != null)
+                        {
+                            await command.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
+
                         // ✅ НОВОЕ: Показываем кнопки выбора количества исходов
                         var buttonsBuilder = new ComponentBuilder()
                             .WithButton("До трёх исходов", customId: $"pred_outcomes:3:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Primary)
                             .WithButton("До пяти исходов", customId: $"pred_outcomes:5:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Success);
 
                         await command.RespondAsync("Сколько исходов вы хотите создать?", components: buttonsBuilder.Build(), ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для выбора
                         break;
                     }
 
@@ -506,8 +515,8 @@ namespace RPBot
             // Финансы
             sb.AppendLine("**💰 Финансы:**");
             sb.AppendLine($"  📥 Поставлено: {stats.TotalWagered:N0} костяшек");
-            sb.AppendLine($"  📤 Выиграно: {stats.TotalWon:N0} костяшек");
-            sb.AppendLine($"  💔 Проиграно: {stats.TotalLost:N0} костяшек");
+            sb.AppendLine($"  📤 Прибыль от выигрышей: {stats.TotalWon:N0} костяшек");
+            sb.AppendLine($"  💔 Потеряно на проигрышах: {stats.TotalLost:N0} костяшек");
 
             var profitSign = stats.NetProfit >= 0 ? "+" : "";
             var profitEmoji = stats.NetProfit >= 0 ? "💎" : "💔";
@@ -579,7 +588,8 @@ namespace RPBot
                 sb.AppendLine($"**{categoryName}**");
                 sb.AppendLine();
 
-                foreach (var def in group.OrderBy(a => a.Rarity))
+                // ✅ Сортировка по Order, затем по Rarity
+                foreach (var def in group.OrderBy(a => a.Order).ThenBy(a => a.Rarity))
                 {
                     // Считаем сколько людей получили это достижение
                     int ownersCount = 0;

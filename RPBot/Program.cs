@@ -276,6 +276,14 @@ namespace RPBot
 
             try
             {
+                // ✅ БАГ 8: Двойная проверка наличия активного прогноза
+                var existingPrediction = _predictionService.GetActive(guildId);
+                if (existingPrediction != null)
+                {
+                    await component.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                    return;
+                }
+
                 if (outcomesCount == 3)
                 {
                     // ✅ Модал для 3 исходов (обновлённый)
@@ -290,17 +298,6 @@ namespace RPBot
                         .Build();
 
                     await component.RespondWithModalAsync(modal);
-
-                    // ✅ БАГ 4: Удаляем кнопки после нажатия
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await Task.Delay(500); // Небольшая задержка
-                            await component.Message.DeleteAsync();
-                        }
-                        catch { }
-                    });
                 }
                 else if (outcomesCount == 5)
                 {
@@ -313,18 +310,10 @@ namespace RPBot
                         .Build();
 
                     await component.RespondWithModalAsync(modal);
-
-                    // ✅ БАГ 4: Удаляем кнопки после нажатия
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await Task.Delay(500); // Небольшая задержка
-                            await component.Message.DeleteAsync();
-                        }
-                        catch { }
-                    });
                 }
+
+                // ✅ БАГ 4 ИСПРАВЛЕН: Кнопки удаляются автоматически через ScheduleDeleteOriginalResponse(60 сек)
+                // Не нужно вручную удалять ephemeral сообщение
             }
             catch (Exception ex)
             {

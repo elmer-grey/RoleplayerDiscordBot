@@ -26,7 +26,8 @@ namespace RPBot.Predictions
         public string Description { get; set; } = string.Empty;
         public AchievementType Type { get; set; }
         public int Rarity { get; set; } // 1=обычное, 2=редкое, 3=эпик, 4=легендарное
-        
+        public int Order { get; set; } // Порядок отображения внутри группы
+
         /// <summary>
         /// Может быть получено многократно
         /// </summary>
@@ -49,6 +50,7 @@ namespace RPBot.Predictions
                 Description = "Сделал первую ставку",
                 Type = AchievementType.Beginner,
                 Rarity = 1,
+                Order = 1,
                 Repeatable = false
             },
             ["student"] = new()
@@ -59,6 +61,7 @@ namespace RPBot.Predictions
                 Description = "Участвовал в 5 прогнозах",
                 Type = AchievementType.Beginner,
                 Rarity = 1,
+                Order = 2,
                 Repeatable = false
             },
             ["experienced"] = new()
@@ -69,6 +72,7 @@ namespace RPBot.Predictions
                 Description = "Участвовал в 25 прогнозах",
                 Type = AchievementType.Beginner,
                 Rarity = 2,
+                Order = 3,
                 Repeatable = false
             },
             ["versatile"] = new()
@@ -79,6 +83,7 @@ namespace RPBot.Predictions
                 Description = "Участвовал в 50 прогнозах",
                 Type = AchievementType.Beginner,
                 Rarity = 2,
+                Order = 4,
                 Repeatable = false
             },
             ["veteran"] = new()
@@ -89,6 +94,7 @@ namespace RPBot.Predictions
                 Description = "Участвовал в 100 прогнозах",
                 Type = AchievementType.Beginner,
                 Rarity = 3,
+                Order = 5,
                 Repeatable = false
             },
             
@@ -163,6 +169,7 @@ namespace RPBot.Predictions
                 Description = "5 ставок с коэфф. >10x",
                 Type = AchievementType.Accuracy,
                 Rarity = 2,
+                Order = 1,
                 Repeatable = false
             },
             ["accurate"] = new()
@@ -173,6 +180,7 @@ namespace RPBot.Predictions
                 Description = "Процент побед >70% (мин. 20 ставок)",
                 Type = AchievementType.Accuracy,
                 Rarity = 3,
+                Order = 2,
                 Repeatable = false
             },
             ["lucky"] = new()
@@ -183,6 +191,7 @@ namespace RPBot.Predictions
                 Description = "10 выигрышей подряд",
                 Type = AchievementType.Accuracy,
                 Rarity = 2,
+                Order = 3,
                 Repeatable = false
             },
             ["on_fire"] = new()
@@ -193,6 +202,7 @@ namespace RPBot.Predictions
                 Description = "20 выигрышей подряд",
                 Type = AchievementType.Accuracy,
                 Rarity = 4,
+                Order = 4,
                 Repeatable = false
             },
             ["lightning"] = new()
@@ -203,6 +213,7 @@ namespace RPBot.Predictions
                 Description = "3 победы подряд с коэфф. >5x",
                 Type = AchievementType.Accuracy,
                 Rarity = 3,
+                Order = 5,
                 Repeatable = false
             },
             
@@ -215,6 +226,7 @@ namespace RPBot.Predictions
                 Description = "Выиграл с коэфф. >10x",
                 Type = AchievementType.Risk,
                 Rarity = 2,
+                Order = 1,
                 Repeatable = true
             },
             ["madman"] = new()
@@ -225,6 +237,7 @@ namespace RPBot.Predictions
                 Description = "Выиграл с коэфф. >20x",
                 Type = AchievementType.Risk,
                 Rarity = 3,
+                Order = 2,
                 Repeatable = true
             },
             ["legend"] = new()
@@ -235,6 +248,7 @@ namespace RPBot.Predictions
                 Description = "Выиграл с коэфф. >50x",
                 Type = AchievementType.Risk,
                 Rarity = 4,
+                Order = 3,
                 Repeatable = true
             },
             ["hurricane"] = new()
@@ -245,6 +259,7 @@ namespace RPBot.Predictions
                 Description = "3 победы на аутсайдерах (>10x) за неделю",
                 Type = AchievementType.Risk,
                 Rarity = 3,
+                Order = 4,
                 Repeatable = false
             },
 
@@ -257,6 +272,7 @@ namespace RPBot.Predictions
                 Description = "Процент побед на фаворитах >80%",
                 Type = AchievementType.Strategy,
                 Rarity = 3,
+                Order = 1,
                 Repeatable = false
             },
             ["strategist"] = new()
@@ -267,6 +283,7 @@ namespace RPBot.Predictions
                 Description = "Прибыль >50,000 за месяц",
                 Type = AchievementType.Strategy,
                 Rarity = 3,
+                Order = 2,
                 Repeatable = false
             },
             ["mathematician"] = new()
@@ -277,6 +294,7 @@ namespace RPBot.Predictions
                 Description = "Создал 10 прогнозов",
                 Type = AchievementType.Strategy,
                 Rarity = 2,
+                Order = 3,
                 Repeatable = false
             },
             ["prediction_king"] = new()
@@ -287,6 +305,7 @@ namespace RPBot.Predictions
                 Description = "Создал 50 прогнозов",
                 Type = AchievementType.Strategy,
                 Rarity = 3,
+                Order = 4,
                 Repeatable = false
             },
             
@@ -299,6 +318,7 @@ namespace RPBot.Predictions
                 Description = "Первым поставил в прогнозе",
                 Type = AchievementType.Special,
                 Rarity = 1,
+                Order = 1,
                 Repeatable = true
             },
             ["early_bird"] = new()
@@ -309,6 +329,7 @@ namespace RPBot.Predictions
                 Description = "10 раз ставил первым",
                 Type = AchievementType.Special,
                 Rarity = 2,
+                Order = 2,
                 Repeatable = false
             },
             ["loner"] = new()
@@ -319,6 +340,7 @@ namespace RPBot.Predictions
                 Description = "Выиграл прогноз будучи единственным на исходе",
                 Type = AchievementType.Special,
                 Rarity = 3,
+                Order = 3,
                 Repeatable = true
             },
             ["trickster"] = new()
@@ -329,6 +351,7 @@ namespace RPBot.Predictions
                 Description = "Выиграл на исходе где было <10% банка",
                 Type = AchievementType.Special,
                 Rarity = 2,
+                Order = 4,
                 Repeatable = true
             },
             ["perfectionist"] = new()
@@ -339,6 +362,7 @@ namespace RPBot.Predictions
                 Description = "50 ставок подряд без проигрышей",
                 Type = AchievementType.Special,
                 Rarity = 4,
+                Order = 5,
                 Repeatable = false
             }
         };
