@@ -289,9 +289,9 @@ namespace RPBot
 
                             if (prediction.Bets.TryGetValue(user.Id, out var bet))
                             {
-                                var outcomeName = bet.OutcomeId == 1 ? prediction.Outcome1.Name : prediction.Outcome2.Name;
-                                sb.AppendLine($"Ваша ставка: {bet.Amount} костяшек на исход '" +
-                                              $"{outcomeName}' (#{bet.OutcomeId})");
+                                var outcome = prediction.GetOutcomeById(bet.OutcomeId);
+                                var outcomeName = outcome?.Name ?? $"Исход {bet.OutcomeId}";
+                                sb.AppendLine($"Ваша ставка: {bet.Amount} костяшек на исход '{outcomeName}' (#{bet.OutcomeId})");
                             }
                             else
                             {
