@@ -260,7 +260,7 @@ namespace RPBot
                         break;
                     }
 
-                    case "status":
+                    case "info": // Баланс и текущий прогноз
                     {
                         if (user == null)
                         {
@@ -366,7 +366,7 @@ namespace RPBot
                         break;
                     }
 
-                    case "stats":
+                    case "profile": // Профиль игрока с полной статистикой
                     {
                         var targetUser = userOpt ?? command.User;
                         var embed = BuildStatsEmbed(guildId, targetUser.Id, targetUser.Username);
