@@ -535,6 +535,7 @@ namespace RPBot
             {
                 p.IsLocked = true;
                 await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
                 return (false, "Время приёма ставок истекло.");
             }
 
@@ -570,6 +571,10 @@ namespace RPBot
                     }
 
                     await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                    // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после увеличения ставки
+                    _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
                     await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
                     return (true, string.Empty);
             }
@@ -600,6 +605,10 @@ namespace RPBot
                 }
 
                 await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после новой ставки
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
                 await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
                 return (true, string.Empty);
             }
