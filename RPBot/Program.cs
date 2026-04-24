@@ -1604,6 +1604,12 @@ namespace RPBot
                 }
                 catch { }
 
+                // ✅ НОВОЕ: Автоматическая отмена прогноза при отмене события
+                if (guildEvent.Guild != null)
+                {
+                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие было отменено");
+                }
+
                 await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "cancelled");
             }
             catch (Exception ex)
@@ -1642,11 +1648,50 @@ namespace RPBot
                 }
                 catch { }
 
+                // ✅ НОВОЕ: Автоматическая отмена прогноза при завершении события
+                if (guildEvent.Guild != null)
+                {
+                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие завершено");
+                }
+
                 await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "completed");
             }
             catch (Exception ex)
             {
                 await LogError($"Ошибка в OnGuildScheduledEventCompleted: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Автоматическая отмена активного прогноза при завершении/отмене события
+        /// </summary>
+        private async Task AutoCancelPredictionOnEventEnd(ulong guildId, string reason)
+        {
+            try
+            {
+                var prediction = _predictionService.GetActive(guildId);
+                if (prediction != null && !prediction.IsResolved)
+                {
+                    // Отменяем прогноз от имени системы с административным доступом
+                    var (ok, error) = await _predictionService.CancelAsync(
+                        guildId,
+                        resolverId: prediction.CreatorId, // используем ID создателя
+                        isAdminOverride: true, // административная отмена
+                        cancelReason: $"⚠️ {reason}. Все ставки возвращены.");
+
+                    if (ok)
+                    {
+                        Console.WriteLine($"[PREDICTION] Auto-cancelled prediction for guild={guildId} reason='{reason}'");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[PREDICTION] Failed to auto-cancel prediction for guild={guildId}: {error}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка в AutoCancelPredictionOnEventEnd: {ex.Message}");
             }
         }
 

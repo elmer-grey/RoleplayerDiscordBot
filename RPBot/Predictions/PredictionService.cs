@@ -1005,19 +1005,31 @@ namespace RPBot
             // Всегда показываем информацию о выигрыше, даже если победитель один
             if (topWinnerUserId.HasValue && topWinnerProfit > 0)
             {
-                builder.AddField("Топ выигрыш", $"<@{topWinnerUserId}> заработал {topWinnerProfit} костяшек", false);
+                var topWinnerBet = p.Bets.Values.FirstOrDefault(b => b.UserId == (ulong)topWinnerUserId && b.OutcomeId == winningOutcome.Id);
+                var topWinnerReturn = topWinnerBet != null ? (long)Math.Round(topWinnerBet.Amount * coef, MidpointRounding.AwayFromZero) : 0;
+
+                builder.AddField("🏆 Топ выигрыш", 
+                    $"<@{topWinnerUserId}>:\n" +
+                    $"  💰 Ставка: {topWinnerBet?.Amount ?? 0:N0}\n" +
+                    $"  📈 Возврат: {topWinnerReturn:N0} ({coef:F2}x)\n" +
+                    $"  💎 Прибыль: **+{topWinnerProfit:N0}**", 
+                    false);
 
                 // Показываем остальных только если их больше одного
                 if (othersCount > 0 && othersProfit > 0)
                 {
-                    builder.AddField("Остальные победители", $"Ещё {othersCount} участников заработали {othersProfit} костяшек", false);
+                    builder.AddField("Остальные победители", $"Ещё {othersCount} участников заработали {othersProfit:N0} костяшек прибыли", false);
                 }
             }
             else if (winningOutcome.TotalStake > 0)
             {
                 // Если нет топового участника, но были ставки - показываем общую сумму
                 var totalWinnings = (long)Math.Round(winningOutcome.TotalStake * coef, MidpointRounding.AwayFromZero);
-                builder.AddField("Выплаты победителям", $"Все участники получили {totalWinnings} костяшек прибыли", false);
+                var totalProfit = totalWinnings - winningOutcome.TotalStake;
+                builder.AddField("Выплаты победителям", 
+                    $"Всего возвращено: {totalWinnings:N0} костяшек\n" +
+                    $"Общая прибыль: **+{totalProfit:N0}**", 
+                    false);
             }
 
             return builder.Build();
