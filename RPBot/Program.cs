@@ -253,10 +253,22 @@ namespace RPBot
 
                 var outcomePlaceholder = outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
 
+                // ✅ ИСПРАВЛЕНО БАГ: Если список исходов слишком длинный (>45 символов), не вставляем в label
+                string label = "Исход";
+                if ($"Исход ({outcomesList})".Length <= 45)
+                {
+                    label = $"Исход ({outcomesList})";
+                }
+                else
+                {
+                    // Если список слишком длинный, добавляем подсказку в placeholder
+                    outcomePlaceholder = $"Выберите 1-{outcomeCount}";
+                }
+
                 modal = new ModalBuilder()
                     .WithTitle("Сделать ставку")
                     .WithCustomId($"pred_bet_modal:{guildId}")
-                    .AddTextInput($"Исход ({outcomesList})", "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
+                    .AddTextInput(label, "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
                     .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
                     .Build();
             }
