@@ -6483,13 +6483,15 @@ namespace RPBot
             {
                 if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
                 {
-                    await SendTemporaryEphemeralResponse(component, "Активные сессии не найдены.");
+                    Log($"[RESTART] Сессии для сервера {guildId} не найдены (вероятно бот был перезагружен)");
+                    await SendTemporaryEphemeralResponse(component, "❌ Сессия больше не активна. Это может произойти если бот был перезагружен.\n\nПожалуйста, создайте новую сессию командой `/start`");
                     return;
                 }
 
                 if (!guildSessions.TryGetValue(sessionId, out var session))
                 {
-                    await SendTemporaryEphemeralResponse(component, "Сессия не найдена.");
+                    Log($"[RESTART] Сессия {sessionId} не найдена (вероятно бот был перезагружен)");
+                    await SendTemporaryEphemeralResponse(component, "❌ Эта сессия больше не активна. Это может произойти если бот был перезагружен.\n\nПожалуйста, создайте новую сессию командой `/start`");
                     return;
                 }
 
@@ -7205,16 +7207,16 @@ namespace RPBot
 
                 if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
                 {
-                    Log($"Активные сессии для гильдии {guildId} не найдены");
-                    await component.RespondAsync("Активные сессии не найдены.", ephemeral: true);
+                    Log($"[RESTART] Активные сессии для гильдии {guildId} не найдены (вероятно бот был перезагружен)");
+                    await component.RespondAsync("❌ Сессия больше не активна.\n\nЭто может произойти если бот был перезагружен. Статистика была потеряна.", ephemeral: true);
                     return;
                 }
 
                 var session = guildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
                 if (session == null)
                 {
-                    Log($"Сессия для сообщения статистики {component.Message.Id} не найдена");
-                    await component.RespondAsync("Сессия не найдена.", ephemeral: true);
+                    Log($"[RESTART] Сессия для сообщения статистики {component.Message.Id} не найдена");
+                    await component.RespondAsync("❌ Сессия не найдена.\n\nЭто может произойти если бот был перезагружен.", ephemeral: true);
                     return;
                 }
 
