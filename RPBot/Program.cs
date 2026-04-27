@@ -5321,7 +5321,8 @@ namespace RPBot
                                 session.Value.Rolls.Add(new RollStatistic
                                 {
                                     PlayerName = command.User.GlobalName,
-                                    RollValue = result
+                                    RollValue = result,
+                                    DiceType = diceType  // ✅ ДОБАВЛЕНО: Тип куба
                                 });
                             }
                         }
@@ -5505,7 +5506,8 @@ namespace RPBot
                                 session.Value.Rolls.Add(new RollStatistic
                                 {
                                     PlayerName = command.User.GlobalName,
-                                    RollValue = result
+                                    RollValue = result,
+                                    DiceType = "d20"  // ✅ Roll20 всегда d20
                                 });
                             }
                         }
@@ -6149,6 +6151,7 @@ namespace RPBot
     {
         public string PlayerName { get; set; }
         public int RollValue { get; set; }
+        public string DiceType { get; set; }  // ✅ НОВОЕ: Тип куба (d6, d12, d20 и т.д.)
     }
 
     public class GameSession
@@ -7231,19 +7234,53 @@ namespace RPBot
         {
             Log($"Формирование общей статистики для сессии {session.SessionId}");
 
-            var rolls = session.Rolls
-                .GroupBy(r => r.RollValue)
-                .Select(g => new { Value = g.Key, Count = g.Count() })
-                .OrderBy(g => g.Value);
-
-            var averageValue = session.Rolls.Any() ? session.Rolls.Average(r => r.RollValue) : 0;
+            // ✅ УЛУЧШЕНО: Группируем по типам кубиков
+            var rollsByDiceType = session.Rolls
+                .GroupBy(r => r.DiceType ?? "unknown")
+                .OrderBy(g => g.Key)
+                .ToList();
 
             var message = new StringBuilder("**Общая статистика бросков:**\n");
-            foreach (var roll in rolls)
+
+            // Если только один тип куба - показываем просто по значениям
+            if (rollsByDiceType.Count == 1)
             {
-                message.AppendLine($"- {roll.Value}: {roll.Count} раз");
+                var diceType = rollsByDiceType[0].Key;
+                var rolls = rollsByDiceType[0]
+                    .GroupBy(r => r.RollValue)
+                    .Select(g => new { Value = g.Key, Count = g.Count() })
+                    .OrderBy(g => g.Value);
+
+                var averageValue = rollsByDiceType[0].Average(r => r.RollValue);
+
+                message.AppendLine($"**{diceType}:**\n");
+                foreach (var roll in rolls)
+                {
+                    message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                }
+                message.AppendLine($"  **Среднее:** {averageValue:F2}\n");
             }
-            message.AppendLine($"**Среднее значение:** {averageValue:F2}"); // Форматируем до 2 знаков после запятой
+            else
+            {
+                // Если несколько типов - группируем по типам
+                foreach (var diceGroup in rollsByDiceType)
+                {
+                    var diceType = diceGroup.Key;
+                    var rolls = diceGroup
+                        .GroupBy(r => r.RollValue)
+                        .Select(g => new { Value = g.Key, Count = g.Count() })
+                        .OrderBy(g => g.Value);
+
+                    var averageValue = diceGroup.Average(r => r.RollValue);
+
+                    message.AppendLine($"**{diceType}:**");
+                    foreach (var roll in rolls)
+                    {
+                        message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                    }
+                    message.AppendLine($"  Среднее: {averageValue:F2}\n");
+                }
+            }
 
             await component.Channel.SendMessageAsync(message.ToString());
             await component.Message.DeleteAsync();
@@ -7253,25 +7290,54 @@ namespace RPBot
         {
             Log($"Формирование детальной статистики для сессии {session.SessionId}");
 
+            // ✅ УЛУЧШЕНО: Группируем по типам кубиков для каждого игрока
             var players = session.Rolls
                 .GroupBy(r => r.PlayerName)
                 .Select(g => new {
                     Player = g.Key,
-                    Rolls = g.GroupBy(r => r.RollValue)
-                        .Select(r => new { Value = r.Key, Count = r.Count() })
+                    RollsByDiceType = g.GroupBy(r => r.DiceType ?? "unknown")
+                        .OrderBy(dg => dg.Key)
+                        .Select(dg => new {
+                            DiceType = dg.Key,
+                            Rolls = dg.GroupBy(r => r.RollValue)
+                                .Select(r => new { Value = r.Key, Count = r.Count() })
+                                .OrderBy(r => r.Value)
+                                .ToList(),
+                            Average = dg.Average(r => r.RollValue)
+                        })
                         .ToList(),
-                    Average = g.Average(r => r.RollValue)
+                    OverallAverage = g.Average(r => r.RollValue)
                 });
 
             var message = new StringBuilder("**Подробная статистика бросков:**\n");
             foreach (var player in players)
             {
                 message.AppendLine($"*{player.Player}:*");
-                foreach (var roll in player.Rolls.OrderBy(r => r.Value))
+
+                // Если только один тип куба - не показываем тип
+                if (player.RollsByDiceType.Count == 1)
                 {
-                    message.AppendLine($"- {roll.Value}: {roll.Count} раз");
+                    var diceStats = player.RollsByDiceType[0];
+                    foreach (var roll in diceStats.Rolls)
+                    {
+                        message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                    }
+                    message.AppendLine($"  **Среднее:** {diceStats.Average:F2}\n");
                 }
-                message.AppendLine($"**Среднее значение:** {player.Average:F2}");
+                else
+                {
+                    // Если несколько типов - показываем с разделением
+                    foreach (var diceStats in player.RollsByDiceType)
+                    {
+                        message.AppendLine($"  **{diceStats.DiceType}:**");
+                        foreach (var roll in diceStats.Rolls)
+                        {
+                            message.AppendLine($"    - {roll.Value}: {roll.Count} раз");
+                        }
+                        message.AppendLine($"    Среднее: {diceStats.Average:F2}");
+                    }
+                    message.AppendLine($"  **Общее среднее:** {player.OverallAverage:F2}\n");
+                }
             }
 
             await component.Channel.SendMessageAsync(message.ToString());
