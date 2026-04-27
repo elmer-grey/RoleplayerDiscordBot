@@ -2599,6 +2599,10 @@ namespace RPBot
 
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+
+            // ✅ НОВОЕ: Загружаем сохранённые сессии игр
+            _ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
+
             await Task.CompletedTask;
         }
 
@@ -6204,11 +6208,200 @@ namespace RPBot
         public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
 
+        // ✅ НОВОЕ: Сохранение/восстановление сессий
+        private static readonly string _sessionsStatePath = Path.Combine(AppContext.BaseDirectory, "Data", "sessions_state.json");
+
         public GameSessionCommands(DiscordSocketClient client) => _client = client;
 
         private async void Log(string message)
         {
             Program.CommandLogSink?.Invoke(message);
+        }
+
+        // ✅ НОВОЕ: Сохранение активных сессий в файл
+        private static async Task SaveSessionsAsync()
+        {
+            try
+            {
+                var dataDir = Path.GetDirectoryName(_sessionsStatePath);
+                if (!Directory.Exists(dataDir))
+                    Directory.CreateDirectory(dataDir);
+
+                var sessionsToSave = new Dictionary<string, object>();
+
+                foreach (var guild in _sessions)
+                {
+                    foreach (var session in guild.Value.Values.Where(s => !s.IsStopped))
+                    {
+                        var key = $"{guild.Key}:{session.SessionId}";
+                        sessionsToSave[key] = new
+                        {
+                            session.SessionId,
+                            session.GuildId,
+                            session.ChannelId,
+                            session.GameName,
+                            session.MasterName,
+                            session.MasterId,
+                            session.StartTime,
+                            session.EventDescription,
+                            session.GameComment,
+                            session.EventId,
+                            session.ControlMessageId,
+                            session.IsPaused
+                        };
+                    }
+                }
+
+                var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
+
+                if (sessionsToSave.Count > 0)
+                    Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SESSIONS] Ошибка при сохранении сессий: {ex.Message}");
+            }
+        }
+
+        // ✅ НОВОЕ: Загрузка сессий из файла при рестарте
+        public static async Task LoadSessionsAsync(DiscordSocketClient client)
+        {
+            try
+            {
+                if (!File.Exists(_sessionsStatePath))
+                {
+                    Console.WriteLine("[SESSIONS] Файл сохранённых сессий не найден");
+                    return;
+                }
+
+                var json = await File.ReadAllTextAsync(_sessionsStatePath).ConfigureAwait(false);
+                var doc = System.Text.Json.JsonDocument.Parse(json);
+
+                var commands = new GameSessionCommands(client);
+                int restorCount = 0;
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    try
+                    {
+                        var elem = prop.Value;
+                        var sessionId = elem.GetProperty("SessionId").GetUInt64();
+                        var guildId = elem.GetProperty("GuildId").GetUInt64();
+                        var gameName = elem.GetProperty("GameName").GetString() ?? "Unknown";
+                        var masterName = elem.GetProperty("MasterName").GetString() ?? "Unknown";
+                        var masterId = elem.GetProperty("MasterId").GetUInt64();
+                        var startTime = DateTime.Parse(elem.GetProperty("StartTime").GetString() ?? DateTime.Now.ToString());
+                        var eventDescription = elem.TryGetProperty("EventDescription", out var ed) ? ed.GetString() : null;
+                        var gameComment = elem.TryGetProperty("GameComment", out var gc) ? gc.GetString() : null;
+                        var eventId = elem.TryGetProperty("EventId", out var eid) && eid.ValueKind != System.Text.Json.JsonValueKind.Null ? (ulong?)eid.GetUInt64() : null;
+                        var controlMessageId = elem.GetProperty("ControlMessageId").GetUInt64();
+                        var channelId = elem.GetProperty("ChannelId").GetUInt64();
+                        var isPaused = elem.TryGetProperty("IsPaused", out var ip) && ip.GetBoolean();
+
+                        var session = new GameSession
+                        {
+                            SessionId = sessionId,
+                            GuildId = guildId,
+                            ChannelId = channelId,
+                            GameName = gameName,
+                            MasterName = masterName,
+                            MasterId = masterId,
+                            StartTime = startTime,
+                            EventDescription = eventDescription,
+                            GameComment = gameComment,
+                            EventId = eventId,
+                            ControlMessageId = controlMessageId,
+                            IsPaused = isPaused,
+                            TrackRolls = false
+                        };
+
+                        if (!_sessions.TryGetValue(guildId, out var guildSessions))
+                        {
+                            guildSessions = new ConcurrentDictionary<ulong, GameSession>();
+                            _sessions[guildId] = guildSessions;
+                        }
+
+                        if (guildSessions.TryAdd(sessionId, session))
+                        {
+                            restorCount++;
+                            Console.WriteLine($"[SESSIONS] Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SESSIONS] Ошибка при восстановлении сессии из {prop.Name}: {ex.Message}");
+                    }
+                }
+
+                if (restorCount > 0)
+                {
+                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий");
+
+                    // Пересоздаём сообщения управления
+                    _ = Task.Run(async () => await RecreateControlMessagesAsync(client));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SESSIONS] Ошибка при загрузке сессий: {ex.Message}");
+            }
+        }
+
+        // ✅ НОВОЕ: Пересоздание сообщений управления для восстановленных сессий
+        private static async Task RecreateControlMessagesAsync(DiscordSocketClient client)
+        {
+            try
+            {
+                var commands = new GameSessionCommands(client);
+                int recreatedCount = 0;
+
+                foreach (var guild in _sessions)
+                {
+                    foreach (var session in guild.Value.Values.ToList())
+                    {
+                        if (session.ControlMessageId != 0)
+                            continue; // Уже есть сообщение
+
+                        try
+                        {
+                            var channel = client.GetChannel(session.ChannelId) as ITextChannel
+                                ?? client.GetGuild(session.GuildId)?.GetTextChannel(session.ChannelId);
+
+                            if (channel == null)
+                                continue;
+
+                            var embed = new EmbedBuilder()
+                                .WithTitle($"Сессия: \"{session.GameName}\"")
+                                .WithDescription($"Мастер: {session.MasterName}\n" +
+                                               $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                                               $"Статус: {(session.IsPaused ? "⏸ На паузе" : "▶ В процессе")}\n" +
+                                               $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}\n" +
+                                               $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
+                                .WithColor(session.IsPaused ? Color.Orange : Color.Green)
+                                .Build();
+
+                            var buttons = commands.CreateControlButtons(session);
+                            var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
+                            session.ControlMessageId = message.Id;
+
+                            recreatedCount++;
+                            Console.WriteLine($"[SESSIONS] Пересоздано сообщение управления для сессии {session.SessionId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[SESSIONS] Ошибка при пересоздании сообщения для сессии {session.SessionId}: {ex.Message}");
+                        }
+                    }
+                }
+
+                if (recreatedCount > 0)
+                    Console.WriteLine($"[SESSIONS] Пересоздано {recreatedCount} сообщений управления");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SESSIONS] Ошибка при пересоздании сообщений: {ex.Message}");
+            }
         }
 
         private async Task<GameSession> StartSessionInternal(
@@ -6556,6 +6749,9 @@ namespace RPBot
             await UpdateControlMessage(session, component.Channel);
             await SendTemporaryEphemeralResponse(component, $"Игра приостановлена в {pauseStartTime:HH:mm}");
 
+            // ✅ НОВОЕ: Сохраняем состояние
+            _ = Task.Run(() => SaveSessionsAsync());
+
             var channel = component.Channel;
             var userId = component.User.Id;
 
@@ -6638,6 +6834,9 @@ namespace RPBot
 
             await UpdateControlMessage(session, component.Channel);
             await SendTemporaryEphemeralResponse(component, "Игра продолжена.");
+
+            // ✅ НОВОЕ: Сохраняем состояние
+            _ = Task.Run(() => SaveSessionsAsync());
         }
 
         private async Task HandleEditSession(SocketMessageComponent component, GameSession session)
@@ -6909,6 +7108,9 @@ namespace RPBot
             session.TrackRolls = !session.TrackRolls;
             await UpdateControlMessage(session, component.Channel);
             await SendTemporaryEphemeralResponse(component, $"Сбор статистики бросков {(session.TrackRolls ? "включен" : "выключен")}.");
+
+            // ✅ НОВОЕ: Сохраняем состояние
+            _ = Task.Run(() => SaveSessionsAsync());
         }
 
         public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client)
