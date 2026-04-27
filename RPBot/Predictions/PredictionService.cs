@@ -789,7 +789,12 @@ namespace RPBot
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
             _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-            await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F2}");
+
+            // ✅ УЛУЧШЕНО: Логируем с информацией о ставках и победителях
+            var totalBets = p.Bets.Count;
+            var winningBets = p.Bets.Values.Count(b => b.OutcomeId == winningOutcomeId);
+            var losingBets = totalBets - winningBets;
+            await LogAsync($"RESOLVE guild={guildId} resolver={resolverId} win={winningOutcomeId} coef={coefRounded:F2} totalBets={totalBets} winners={winningBets} losers={losingBets}");
             return (true, string.Empty);
         }
 
@@ -849,7 +854,11 @@ namespace RPBot
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
-            await LogAsync($"CANCEL guild={guildId} resolver={resolverId} refundedBets={p.Bets.Count} reason='{cancelReason ?? "manual"}'");
+
+            // ✅ УЛУЧШЕНО: Логируем с информацией о возвращённых ставках
+            var totalBets = p.Bets.Count;
+            var totalAmount = p.Bets.Values.Sum(b => b.Amount);
+            await LogAsync($"CANCEL guild={guildId} resolver={resolverId} totalBets={totalBets} refundedAmount={totalAmount} reason='{cancelReason ?? "manual"}'");
             return (true, string.Empty);
         }
 
