@@ -5294,89 +5294,75 @@ namespace RPBot
                 .Select(_ => random.Next(1, max + 1))
                 .ToList();
 
-            // Обработка бросков d20 без модификатора
-            if (max == 20 && modifier == 0)
-            {
-                // Если бросок в канале статистики и есть активные сессии - записываем результаты
-                if (isStatsChannel)
-                {
-                    await _sessionSemaphore.WaitAsync();
-                    try
-                    {
-                        if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
-                        {
-                            var activeSessions = sessions.Where(s =>
-                                !s.Value.IsStopped &&
-                                !s.Value.IsPaused &&
-                                s.Value.TrackRolls).ToList();
+            // ✅ УЛУЧШЕНО: Попытка найти картинку для ЛЮБОГО куба (не только d20)
+            // Сначала пытаемся вывести с картинками, если не найдём - fallback на plaintext
 
-                            foreach (var session in activeSessions)
+            var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
+            var diceSubfolder = Path.Combine(numbersDir, diceType);
+            bool hasImages = Directory.Exists(diceSubfolder);
+
+            // Если бросок в канале статистики, проверяем активные сессии и записываем броски
+            if (isStatsChannel)
+            {
+                await _sessionSemaphore.WaitAsync();
+                try
+                {
+                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
+                    {
+                        var activeSessions = sessions.Where(s =>
+                            !s.Value.IsStopped &&
+                            !s.Value.IsPaused &&
+                            s.Value.TrackRolls).ToList();
+
+                        foreach (var session in activeSessions)
+                        {
+                            foreach (var result in results)
                             {
-                                foreach (var result in results)
+                                session.Value.Rolls.Add(new RollStatistic
                                 {
-                                    session.Value.Rolls.Add(new RollStatistic
-                                    {
-                                        PlayerName = command.User.GlobalName,
-                                        RollValue = result
-                                    });
-                                }
+                                    PlayerName = command.User.GlobalName,
+                                    RollValue = result
+                                });
                             }
                         }
                     }
-                    finally
-                    {
-                        _sessionSemaphore.Release();
-                    }
                 }
+                finally
+                {
+                    _sessionSemaphore.Release();
+                }
+            }
 
+            // ✅ НОВОЕ: Попытка вывести с картинками для ЛЮБОГО куба
+            if (hasImages && modifier == 0)  // Картинки только для чистых бросков без модификаторов
+            {
                 if (count == 1)
                 {
                     var result = results[0];
-                    var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-
-                    // Автоматически определяем подпапку по типу куба из input
-                    var diceSubfolder = Path.Combine(numbersDir, diceType);
                     var filePath = Path.Combine(diceSubfolder, $"{result}.png");
-                    Color embedColor = GetGradientColor(result, 1, max);
 
-                    // Сокращённый путь для лога (только Numbers/d6/5.png)
-                    var shortPath = Path.Combine("Numbers", diceType, $"{result}.png");
-                    Console.WriteLine($"Результат броска: {result}, тип куба: {diceType}, путь: {shortPath}");
-
-                    // Проверяем существование папки и файла
-                    if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
+                    if (File.Exists(filePath))
                     {
                         var embed = new EmbedBuilder()
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
-                            .WithColor(embedColor)
+                            .WithColor(GetGradientColor(result, 1, max))
                             .Build();
                         await command.FollowupWithFileAsync(filePath, embed: embed);
+                        return;
                     }
-                    else
-                    {
-                        // Если папки или файла нет - выводим текстом
-                        await command.FollowupAsync($"Выпало: **{result}**");
-                    }
-                    return;
                 }
                 else
                 {
                     var embeds = new List<Embed>();
                     var files = new List<FileAttachment>();
-                    var textResults = new List<string>(); // Для текстового вывода если нет картинок
+                    var textResults = new List<string>();
 
                     for (int i = 0; i < results.Count; i++)
                     {
                         var result = results[i];
-                        Console.WriteLine($"Результат броска: {result}");
-                        var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-
-                        // Автоматически определяем подпапку по типу куба из input
-                        var diceSubfolder = Path.Combine(numbersDir, diceType);
                         var filePath = Path.Combine(diceSubfolder, $"{result}.png");
 
-                        // Проверяем существование папки и файла
-                        if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
+                        if (File.Exists(filePath))
                         {
                             var uniqueFileName = $"{result}_{i + 1}.png";
                             files.Add(new FileAttachment(filePath, uniqueFileName));
@@ -5387,9 +5373,7 @@ namespace RPBot
                         }
                         else
                         {
-                            // Если папки или файла нет - сохраняем для текстового вывода
                             textResults.Add(result.ToString());
-                            Console.WriteLine($"Папка или файл не найдены для Numbers/{diceType}/{result}.png - будет текстовый вывод");
                         }
                     }
 
@@ -5401,7 +5385,6 @@ namespace RPBot
                             _ => $"Результаты {files.Count} бросков:"
                         };
 
-                        // Добавляем текстовые результаты к сообщению, если есть
                         if (textResults.Count > 0)
                         {
                             combinedMessage += $"\n(Без картинок: {string.Join(", ", textResults)})";
@@ -5411,18 +5394,12 @@ namespace RPBot
                             attachments: files,
                             text: combinedMessage,
                             embeds: embeds.ToArray());
+                        return;
                     }
-                    else
-                    {
-                        // Если картинок нет совсем - выводим все результаты текстом
-                        var resultsText = string.Join(", ", results);
-                        await command.FollowupAsync($"Результаты бросков: **{resultsText}**");
-                    }
-                    return;
                 }
             }
 
-            // Обработка всех остальных бросков (не d20 или с модификатором)
+            // ✅ Fallback: Plaintext вывод (если нет картинок или есть модификатор)
             var resultMessage = new StringBuilder();
             var consoleMessage = new StringBuilder();
 
