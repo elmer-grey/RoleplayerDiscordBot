@@ -255,14 +255,19 @@ namespace RPBot
 
                 // ✅ ИСПРАВЛЕНО БАГ: Если список исходов слишком длинный (>45 символов), не вставляем в label
                 string label = "Исход";
-                if ($"Исход ({outcomesList})".Length <= 45)
+                var fullLabelLength = $"Исход ({outcomesList})".Length;
+
+                if (fullLabelLength <= 45)
                 {
                     label = $"Исход ({outcomesList})";
+                    Console.WriteLine($"[PREDICTION] Bet modal label: {fullLabelLength} символов - вмещается");
                 }
                 else
                 {
                     // Если список слишком длинный, добавляем подсказку в placeholder
                     outcomePlaceholder = $"Выберите 1-{outcomeCount}";
+                    Console.WriteLine($"[PREDICTION] Bet modal label: {fullLabelLength} символов - СЛИШКОМ ДЛИННЫЙ, используем компактный формат");
+                    Console.WriteLine($"[PREDICTION] Outcomes list: {outcomesList}");
                 }
 
                 modal = new ModalBuilder()
