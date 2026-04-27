@@ -6247,7 +6247,9 @@ namespace RPBot
                             session.GameComment,
                             session.EventId,
                             session.ControlMessageId,
-                            session.IsPaused
+                            session.IsPaused,
+                            // ✅ НОВОЕ: Сохраняем броски
+                            Rolls = session.Rolls
                         };
                     }
                 }
@@ -6256,7 +6258,10 @@ namespace RPBot
                 await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
 
                 if (sessionsToSave.Count > 0)
-                    Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий");
+                {
+                    var totalRolls = _sessions.Values.SelectMany(g => g.Values.Where(s => !s.IsStopped)).Sum(s => s.Rolls.Count);
+                    Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
+                }
             }
             catch (Exception ex)
             {
@@ -6299,6 +6304,26 @@ namespace RPBot
                         var channelId = elem.GetProperty("ChannelId").GetUInt64();
                         var isPaused = elem.TryGetProperty("IsPaused", out var ip) && ip.GetBoolean();
 
+                        // ✅ НОВОЕ: Загружаем броски
+                        var rolls = new List<RollStatistic>();
+                        if (elem.TryGetProperty("Rolls", out var rollsElem) && rollsElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        {
+                            foreach (var rollElem in rollsElem.EnumerateArray())
+                            {
+                                try
+                                {
+                                    var roll = new RollStatistic
+                                    {
+                                        PlayerName = rollElem.GetProperty("PlayerName").GetString() ?? "Unknown",
+                                        RollValue = rollElem.GetProperty("RollValue").GetInt32(),
+                                        DiceType = rollElem.TryGetProperty("DiceType", out var dt) ? dt.GetString() : "unknown"
+                                    };
+                                    rolls.Add(roll);
+                                }
+                                catch { }
+                            }
+                        }
+
                         var session = new GameSession
                         {
                             SessionId = sessionId,
@@ -6313,7 +6338,8 @@ namespace RPBot
                             EventId = eventId,
                             ControlMessageId = controlMessageId,
                             IsPaused = isPaused,
-                            TrackRolls = false
+                            TrackRolls = false,
+                            Rolls = rolls  // ✅ НОВОЕ: Добавляем загруженные броски
                         };
 
                         if (!_sessions.TryGetValue(guildId, out var guildSessions))
@@ -6325,7 +6351,8 @@ namespace RPBot
                         if (guildSessions.TryAdd(sessionId, session))
                         {
                             restorCount++;
-                            Console.WriteLine($"[SESSIONS] Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName})");
+                            // ✅ НОВОЕ: Логируем также количество восстановленных бросков
+                            Console.WriteLine($"[SESSIONS] Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName}, бросков: {rolls.Count})");
                         }
                     }
                     catch (Exception ex)
@@ -6336,7 +6363,8 @@ namespace RPBot
 
                 if (restorCount > 0)
                 {
-                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий");
+                    var totalRestorRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
+                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков)");
 
                     // Пересоздаём сообщения управления
                     _ = Task.Run(async () => await RecreateControlMessagesAsync(client));
