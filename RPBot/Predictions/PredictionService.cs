@@ -536,6 +536,11 @@ namespace RPBot
                 p.IsLocked = true;
                 await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                // ✅ НОВОЕ: Логируем закрытие приёма ставок
+                var betsDuration = DateTimeOffset.UtcNow - p.CreatedAtUtc;
+                await LogAsync($"LOCK guild={guildId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
+
                 return (false, "Время приёма ставок истекло.");
             }
 
@@ -1112,7 +1117,10 @@ namespace RPBot
                                 p.IsLocked = true;
                                 await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
                                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-                                await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}'");
+
+                                // ✅ УЛУЧШЕНО: Расширенное логирование закрытия приёма ставок
+                                var betsDuration = now - p.CreatedAtUtc;
+                                await LogAsync($"LOCK guild={p.GuildId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
                             }
                             else if (!p.IsResolved)
                             {
