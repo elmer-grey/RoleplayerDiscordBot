@@ -936,8 +936,9 @@ namespace RPBot
             }
 
             builder.WithFooter(
-                botOffline ? "⚠️ Бот неактивен — таймер может отставать" :
-                showLocked ? "⏸️ Приём ставок завершён — ожидание результата" : 
+                showLocked ? "⏸️ Приём ставок завершён — ожидание результата" :
+                (botOffline && !showLocked) ? "⚠️ Бот неактивен — таймер может отставать" :
+                botOffline && showLocked ? "⚠️ Бот неактивен" :
                 "💰 Ставьте костяшки до указанного времени");
 
             return builder.Build();

@@ -265,6 +265,20 @@ namespace RPBot
             // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
         }
 
+        /// <summary>
+        /// Проверяет наличие активного события на указанном голосовом канале
+        /// </summary>
+        private bool IsActiveEventOnChannel(ulong guildId, ulong channelId)
+        {
+            var guild = _client.GetGuild(guildId);
+            if (guild == null) return false;
+
+            return guild.Events.Any(e =>
+                e.Status == GuildScheduledEventStatus.Active &&
+                e.Channel != null &&
+                e.Channel.Id == channelId);
+        }
+
         private async Task HandlePredictionOutcomesButton(SocketMessageComponent component, string[] parts)
         {
             // customId: pred_outcomes:<count>:<guildId>:<channelId>
@@ -276,6 +290,13 @@ namespace RPBot
 
             try
             {
+                // ✅ НОВОЕ: Проверка наличия активного события на голосовом канале
+                if (!IsActiveEventOnChannel(guildId, channelId))
+                {
+                    await component.RespondAsync("⚠️ Активное событие в этом голосовом канале завершено или отсутствует. Создание прогноза невозможно.", ephemeral: true);
+                    return;
+                }
+
                 // ✅ БАГ 8: Двойная проверка наличия активного прогноза
                 var existingPrediction = _predictionService.GetActive(guildId);
                 if (existingPrediction != null)
@@ -312,8 +333,7 @@ namespace RPBot
                     await component.RespondWithModalAsync(modal);
                 }
 
-                // ✅ БАГ 4 ИСПРАВЛЕН: Кнопки удаляются автоматически через ScheduleDeleteOriginalResponse(60 сек)
-                // Не нужно вручную удалять ephemeral сообщение
+                // ✅ Modal отправлен, ephemeral кнопки будут автоматически удалены через 20 сек
             }
             catch (Exception ex)
             {

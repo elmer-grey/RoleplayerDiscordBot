@@ -170,7 +170,7 @@ namespace RPBot
                             .WithButton("До пяти исходов", customId: $"pred_outcomes:5:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Success);
 
                         await command.RespondAsync("Сколько исходов вы хотите создать?", components: buttonsBuilder.Build(), ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для выбора
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 20); // ✅ Уменьшено до 20 сек (быстрое исчезание при отмене события)
                         break;
                     }
 
