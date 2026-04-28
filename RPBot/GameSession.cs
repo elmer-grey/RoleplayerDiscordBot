@@ -477,8 +477,6 @@ namespace RPBot
                 var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                 session.ControlMessageId = message.Id;
 
-                // Сохраняем состояние сразу после создания
-                _ = Task.Run(() => SaveSessionsAsync());
                 commands.Log($"Создано сообщение управления для сессии {session.SessionId} (ID сообщения: {message.Id})");
             }
             else
@@ -532,9 +530,6 @@ namespace RPBot
             var buttons = CreateControlButtons(session);
             var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
             session.ControlMessageId = message.Id;
-
-            // Сохраняем состояние сразу после создания
-            _ = Task.Run(() => SaveSessionsAsync());
         }
 
         public async Task HandleControlButton(SocketMessageComponent component)
@@ -853,9 +848,7 @@ namespace RPBot
                 if (session.IsPaused)
                 {
                     Log($"Снятие паузы для сессии {session.SessionId}...");
-                    try { session.PauseReminderCTS?.Cancel(); } catch { }
-                    try { session.PauseReminderCTS?.Dispose(); } catch { }
-                    session.PauseReminderCTS = null;
+                    session.PauseReminderCTS?.Cancel();
                     var lastPause = session.PausePeriods.Last();
                     session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
                     session.IsPaused = false;
@@ -896,8 +889,14 @@ namespace RPBot
             }
             catch (Exception ex)
             {
+                // ✅ ДОБАВЛЕНО: логирование ошибки
                 Log($"КРИТИЧЕСКАЯ ОШИБКА в HandleConfirmStop для сессии {session.SessionId}: {ex.Message}");
                 Log($"StackTrace: {ex.StackTrace}");
+            }
+            finally
+            {
+                //_sessionSemaphore.Release();
+                //Log($"Семафор освобожден. Текущий счётчик: {_sessionSemaphore.CurrentCount}");
             }
         }
 

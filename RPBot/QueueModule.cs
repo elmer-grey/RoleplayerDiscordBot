@@ -14,9 +14,9 @@ using System.Threading.Tasks;
 namespace RPBot
 {
     /// <summary>
-    /// Состояние очереди для одной гильдии.
-    /// Ранее всё хранилось в static-полях — один экземпляр на все гильдии.
-    /// Теперь каждая гильдия получает изолированный GuildQueueState.
+    /// Изолированное состояние очереди бросков для одной гильдии.
+    /// Ранее все поля были static — один общий экземпляр на все гильдии,
+    /// что приводило к конфликтам при одновременных очередях на разных серверах.
     /// </summary>
     internal sealed class GuildQueueState : IDisposable
     {
@@ -49,7 +49,7 @@ namespace RPBot
 
     public class QueueModule : ModuleBase<SocketCommandContext>
     {
-        // Изолированное состояние очереди по guild
+        // Per-guild изолированное состояние — потокобезопасный словарь
         private static readonly ConcurrentDictionary<ulong, GuildQueueState> _guildQueues = new();
 
         private static Task Log(string message)
@@ -86,13 +86,15 @@ namespace RPBot
 
             if (state.IsActive)
             {
-                await command.RespondAsync($"Очередь уже создана на {state.MaxRolls} бросков. Чтобы остановить: `/stop_q`.", ephemeral: true);
+                Console.WriteLine("Предупреждение: Попытка создания новой очереди, когда одна уже активна.");
+                await command.RespondAsync($"Очередь уже создана на {state.MaxRolls} бросков. Если вы хотите её остановить принудительно, введите `/stop_q`.", ephemeral: true);
                 return;
             }
 
             if (count <= 0)
             {
                 await command.RespondAsync("Пожалуйста, укажите положительное число.");
+                Console.WriteLine($"Ошибка: при создании очереди указано не положительное число ({count})!");
                 return;
             }
 
@@ -103,12 +105,13 @@ namespace RPBot
             state.IsActive = true;
 
             await command.RespondAsync(
-                "Вы запустили создание очереди. Уведомьте об этом своих игроков.\nДанное сообщение удалится автоматически.",
+                "Вы запустили создание очереди. Уведомьте об этом своих игроков. Бот остальную информацию уже сообщил.\nДанное сообщение можно скрыть или оно удалится автоматически.",
                 ephemeral: true);
+
             _ = Task.Run(async () =>
             {
                 await Task.Delay(7000);
-                try { await command.DeleteOriginalResponseAsync(); } catch { }
+                await command.DeleteOriginalResponseAsync();
             });
 
             state.Channel = (ITextChannel)command.Channel;
@@ -116,13 +119,15 @@ namespace RPBot
                 $"Очередь активирована. Ожидаем {count} бросков. Вводите значения в формате `/q dY`. Таймер на минуту ожидания запущен.");
             state.MessagesToDelete.Add(state.StartMessage);
 
+            // Захватываем guildId в замыкание для async-таймера
+            var capturedGuildId = guildId.Value;
             state.RollTimer = new Timer(
-                async _ => await ResetQueueAsync(guildId.Value),
+                async _ => await ResetQueueAsync(capturedGuildId),
                 null,
                 TimeSpan.FromMinutes(1),
                 Timeout.InfiniteTimeSpan);
 
-            await Log($"Очередь создана на {count} участников для гильдии {guildId}.");
+            await Log($"Очередь создана: {count} бросков, гильдия {guildId}. Таймер запущен.");
         }
 
         [Command("q")]
@@ -135,22 +140,24 @@ namespace RPBot
 
             if (!state.IsActive)
             {
+                await Log("Предупреждение: Очередь не активна.");
                 await command.RespondAsync("Пожалуйста, запустите очередь перед выполнением этой команды.", ephemeral: true);
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(2000);
-                    try { await command.DeleteOriginalResponseAsync(); } catch { }
+                    await command.DeleteOriginalResponseAsync();
                 });
                 return;
             }
 
             if (!input.StartsWith("d") || !int.TryParse(input[1..], out int y) || y <= 0)
             {
+                await Log("Ошибка: Введены некорректные данные.");
                 await command.RespondAsync("Пожалуйста, укажите корректные данные.", ephemeral: true);
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(1500);
-                    try { await command.DeleteOriginalResponseAsync(); } catch { }
+                    await command.DeleteOriginalResponseAsync();
                 });
                 return;
             }
@@ -159,6 +166,7 @@ namespace RPBot
             if (user == null || (state.UserRolls.ContainsKey(user) && state.UserRolls[user].Count >= state.MaxRolls))
                 return;
 
+            // Сбрасываем таймер при каждом броске
             state.RollTimer?.Change(TimeSpan.FromMinutes(1), Timeout.InfiniteTimeSpan);
 
             int result = new Random().Next(1, y + 1);
@@ -172,14 +180,14 @@ namespace RPBot
             _ = Task.Run(async () =>
             {
                 await Task.Delay(1000);
-                try { await command.DeleteOriginalResponseAsync(); } catch { }
+                await command.DeleteOriginalResponseAsync();
             });
 
             var waitingMessage = await state.Channel!.SendMessageAsync(
-                $"{user.DisplayName}, ваш бросок d{y}: {result}. Ещё {state.MaxRolls - state.RollCount} бросков.");
+                $"{user.DisplayName}, ваш бросок d{y}: {result}. Ещё {state.MaxRolls - state.RollCount} бросков. Ожидание следующего броска...");
             state.MessagesToDelete.Add(waitingMessage);
 
-            await Log($"Бросок пользователя {user.DisplayName}: {result} (гильдия {guildId}).");
+            await Log($"Бросок: {user.DisplayName} → {result}. Таймер обновлён.");
 
             if (state.RollCount >= state.MaxRolls)
                 await DisplayResultsAsync(guildId.Value);
@@ -194,10 +202,25 @@ namespace RPBot
 
             foreach (var msg in state.MessagesToDelete)
             {
-                try { await msg.DeleteAsync(); await Task.Delay(100); } catch { }
+                try
+                {
+                    if (msg != null)
+                    {
+                        await msg.DeleteAsync();
+                        await Task.Delay(100);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await Log($"Ошибка удаления сообщения: {ex.Message}");
+                }
             }
 
-            if (state.UserRolls.Count == 0) return;
+            if (state.UserRolls == null || state.UserRolls.Count == 0)
+            {
+                await Log("UserRolls пуст — нечего отображать.");
+                return;
+            }
 
             var embed = new EmbedBuilder()
                 .WithTitle("Последовательность ходов")
@@ -208,21 +231,22 @@ namespace RPBot
                 .OrderByDescending(x => x.Roll)
                 .ToList();
 
-            var sb = new StringBuilder();
+            var resultString = new StringBuilder();
             int seq = 1;
             foreach (var res in sortedResults)
             {
                 var nick = res.User.DisplayName;
-                sb.AppendLine(sortedResults.Count(r => r.User == res.User) > 1
+                var line = sortedResults.Count(r => r.User == res.User) > 1
                     ? $"{seq} - {nick} - {res.Roll} (# {res.Index})"
-                    : $"{seq} - {nick} - {res.Roll}");
+                    : $"{seq} - {nick} - {res.Roll}";
+                resultString.AppendLine(line);
                 seq++;
             }
 
-            embed.AddField("Результаты", sb.ToString(), false);
+            embed.AddField("Результаты", resultString.ToString(), false);
             await state.Channel!.SendMessageAsync(embed: embed.Build());
+            await Log("Результаты выведены. Очередь завершена.");
 
-            await Log($"Результаты очереди выведены для гильдии {guildId}.");
             state.Reset();
         }
 
@@ -240,12 +264,13 @@ namespace RPBot
             {
                 foreach (var msg in state.MessagesToDelete)
                 {
-                    try { await msg.DeleteAsync(); } catch { }
+                    try { await msg.DeleteAsync(); }
+                    catch (Exception ex) { await Log($"Ошибка очистки: {ex.Message}"); }
                 }
                 state.Reset();
             });
 
-            await Log($"Таймер очереди истёк для гильдии {guildId}.");
+            await Log($"Таймер истёк для гильдии {guildId}. Очередь сброшена.");
         }
 
         [Command("stop_q")]
@@ -273,7 +298,7 @@ namespace RPBot
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(7000);
-                    try { await command.DeleteOriginalResponseAsync(); } catch { }
+                    await command.DeleteOriginalResponseAsync();
                 });
                 return;
             }
@@ -283,15 +308,17 @@ namespace RPBot
 
             foreach (var msg in state.MessagesToDelete)
             {
-                try { await msg.DeleteAsync(); } catch { }
+                try { await msg.DeleteAsync(); }
+                catch (Exception ex) { Console.WriteLine($"Ошибка (остановка очереди): {ex.Message}"); }
             }
+
             state.Reset();
 
             await command.RespondAsync("Запись очереди принудительно отменена мастером.");
             _ = Task.Run(async () =>
             {
                 await Task.Delay(5000);
-                try { await command.DeleteOriginalResponseAsync(); } catch { }
+                await command.DeleteOriginalResponseAsync();
             });
         }
 
