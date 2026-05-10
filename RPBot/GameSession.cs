@@ -53,13 +53,14 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
+        private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
         // ✅ НОВОЕ: Сохранение/восстановление сессий
         private static readonly string _sessionsStatePath = Path.Combine(AppContext.BaseDirectory, "Data", "sessions_state.json");
 
         public GameSessionCommands(DiscordSocketClient client) => _client = client;
 
-        private async void Log(string message)
+        private void Log(string message)
         {
             Program.CommandLogSink?.Invoke(message);
         }
@@ -73,40 +74,49 @@ namespace RPBot
                 if (!Directory.Exists(dataDir))
                     Directory.CreateDirectory(dataDir);
 
-                var sessionsToSave = new Dictionary<string, object>();
-
-                foreach (var guild in _sessions)
+                await _saveSessionsSemaphore.WaitAsync().ConfigureAwait(false);
+                try
                 {
-                    foreach (var session in guild.Value.Values.Where(s => !s.IsStopped))
+                    var sessionsToSave = new Dictionary<string, object>();
+
+                    foreach (var guild in _sessions)
                     {
-                        var key = $"{guild.Key}:{session.SessionId}";
-                        sessionsToSave[key] = new
+                        foreach (var session in guild.Value.Values.Where(s => !s.IsStopped))
                         {
-                            session.SessionId,
-                            session.GuildId,
-                            session.ChannelId,
-                            session.GameName,
-                            session.MasterName,
-                            session.MasterId,
-                            session.StartTime,
-                            session.EventDescription,
-                            session.GameComment,
-                            session.EventId,
-                            session.ControlMessageId,
-                            session.IsPaused,
-                            // ✅ НОВОЕ: Сохраняем броски
-                            Rolls = session.Rolls
-                        };
+                            var key = $"{guild.Key}:{session.SessionId}";
+                            sessionsToSave[key] = new
+                            {
+                                session.SessionId,
+                                session.GuildId,
+                                session.ChannelId,
+                                session.GameName,
+                                session.MasterName,
+                                session.MasterId,
+                                session.StartTime,
+                                session.EventDescription,
+                                session.GameComment,
+                                session.EventId,
+                                session.ControlMessageId,
+                                session.IsPaused,
+                                session.TrackRolls,
+                                // ✅ НОВОЕ: Сохраняем броски
+                                Rolls = session.Rolls
+                            };
+                        }
+                    }
+
+                    var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                    await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
+
+                    if (sessionsToSave.Count > 0)
+                    {
+                        var totalRolls = _sessions.Values.SelectMany(g => g.Values.Where(s => !s.IsStopped)).Sum(s => s.Rolls.Count);
+                        Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
                     }
                 }
-
-                var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
-
-                if (sessionsToSave.Count > 0)
+                finally
                 {
-                    var totalRolls = _sessions.Values.SelectMany(g => g.Values.Where(s => !s.IsStopped)).Sum(s => s.Rolls.Count);
-                    Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
+                    _saveSessionsSemaphore.Release();
                 }
             }
             catch (Exception ex)
@@ -149,6 +159,7 @@ namespace RPBot
                         var controlMessageId = elem.GetProperty("ControlMessageId").GetUInt64();
                         var channelId = elem.GetProperty("ChannelId").GetUInt64();
                         var isPaused = elem.TryGetProperty("IsPaused", out var ip) && ip.GetBoolean();
+                        var trackRolls = elem.TryGetProperty("TrackRolls", out var tr) && tr.GetBoolean();
 
                         // ✅ НОВОЕ: Загружаем броски
                         var rolls = new List<RollStatistic>();
@@ -184,7 +195,7 @@ namespace RPBot
                             EventId = eventId,
                             ControlMessageId = controlMessageId,
                             IsPaused = isPaused,
-                            TrackRolls = false,
+                            TrackRolls = trackRolls,
                             Rolls = rolls  // ✅ НОВОЕ: Добавляем загруженные броски
                         };
 
@@ -213,7 +224,7 @@ namespace RPBot
                     Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков)");
 
                     // Пересоздаём сообщения управления
-                    _ = Task.Run(async () => await RecreateControlMessagesAsync(client));
+                    _ = RecreateControlMessagesAsync(client);
                 }
             }
             catch (Exception ex)
@@ -234,9 +245,6 @@ namespace RPBot
                 {
                     foreach (var session in guild.Value.Values.ToList())
                     {
-                        if (session.ControlMessageId != 0)
-                            continue; // Уже есть сообщение
-
                         try
                         {
                             var channel = client.GetChannel(session.ChannelId) as ITextChannel
@@ -244,6 +252,19 @@ namespace RPBot
 
                             if (channel == null)
                                 continue;
+
+                            if (session.ControlMessageId != 0)
+                            {
+                                try
+                                {
+                                    var existingMessage = await channel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
+                                    if (existingMessage != null)
+                                        continue;
+                                }
+                                catch
+                                {
+                                }
+                            }
 
                             var embed = new EmbedBuilder()
                                 .WithTitle($"Сессия: \"{session.GameName}\"")
@@ -261,6 +282,7 @@ namespace RPBot
 
                             recreatedCount++;
                             Console.WriteLine($"[SESSIONS] Пересоздано сообщение управления для сессии {session.SessionId}");
+                            await SaveSessionsAsync().ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -497,7 +519,10 @@ namespace RPBot
             if (guildId == null) return;
 
             var user = command.User as SocketGuildUser;
-            if (!user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase)))
+            var config = Program.ServerConfigResolver?.Invoke(guildId.Value);
+            var hasMasterRole = config?.MasterRoleId.HasValue == true && user != null && user.Roles.Any(r => r.Id == config.MasterRoleId.Value);
+            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+            if (!isAdmin && !hasMasterRole)
             {
                 await SendTemporaryEphemeralResponse(command, "Только мастера могут запускать игру.");
                 return;
@@ -1022,7 +1047,8 @@ namespace RPBot
                             session.EndTime = DateTime.Now;
                             commands.Log($"Установлено время окончания для сессии {session.SessionId}");
 
-                            var channel = client.GetChannel(Program.ServerConfigs[guildId].RecordChannelID) as SocketTextChannel;
+                    var recordChannelId = Program.ServerConfigResolver?.Invoke(guildId)?.RecordChannelID ?? 0;
+                    var channel = client.GetChannel(recordChannelId) as SocketTextChannel;
                             if (channel != null)
                             {
                                 commands.Log($"Отправка статистики для сессии {session.SessionId}...");
@@ -1226,7 +1252,7 @@ namespace RPBot
                     var guild = _client.GetGuild(session.GuildId);
                     if (guild == null) return;
 
-                    var channelId = Program.ServerConfigs[session.GuildId].RecordChannelID;
+                    var channelId = Program.ServerConfigResolver?.Invoke(session.GuildId)?.RecordChannelID ?? 0;
                     var channel = guild.GetTextChannel(channelId);
                     if (channel == null) return;
 

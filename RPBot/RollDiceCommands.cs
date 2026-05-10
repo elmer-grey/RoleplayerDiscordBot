@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace RPBot
@@ -73,6 +74,36 @@ namespace RPBot
             }
         }
 
+        private static string BuildRollResponse(IReadOnlyList<int> results, int modifier)
+        {
+            if (modifier == 0)
+                return $"Выпало: **{string.Join(", ", results)}**";
+
+            var parts = results.Select(r => $"{r} ({(modifier >= 0 ? "+" : string.Empty)}{modifier}={(r + modifier)})");
+            return $"Результат броска: **{string.Join("; ", parts)}**";
+        }
+
+        private static string BuildConsoleRollLog(string input, IReadOnlyList<int> results, int modifier)
+        {
+            if (modifier == 0)
+                return $"Условие броска: {input} | Результат: {string.Join(", ", results)}";
+
+            var parts = results.Select(r => $"{r} ({(modifier >= 0 ? "+" : string.Empty)}{modifier}={r + modifier})");
+            return $"Условие броска: {input} | Результат: {string.Join("; ", parts)}";
+        }
+
+        private static async Task DeleteOriginalResponseSafeAsync(SocketSlashCommand command, int delayMs)
+        {
+            try
+            {
+                await Task.Delay(delayMs).ConfigureAwait(false);
+                await command.DeleteOriginalResponseAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
+
         [Command("roll")]
         public async Task RollDice(SocketSlashCommand command, string input)
         {
@@ -80,11 +111,17 @@ namespace RPBot
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
             var channelId = command.Channel.Id;
 
+            if (guildId == null)
+            {
+                await command.FollowupAsync("Команда доступна только на сервере.", ephemeral: true);
+                return;
+            }
+
             // Получаем ID канала статистики из конфига
            // Получаем ID канала статистики из конфига
-            var statsChannelId = Program.ServerConfigs.TryGetValue(guildId.Value, out var cfg)
-                ? cfg.StatsChannelID
-                : 0UL;
+            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
+            var statsChannelId = statsConfig?.StatsChannelID ?? 0UL;
+            var rollPicturesEnabled = statsConfig?.RollPicturesEnabled ?? true;
 
           // Проверяем, сделан ли бросок в канале статистики
             bool isStatsChannel = channelId == statsChannelId && statsChannelId != 0;
@@ -170,7 +207,7 @@ namespace RPBot
                                 await command.FollowupAsync(
                                     $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
                                     ephemeral: false);
-                                _ = Task.Delay(5000).ContinueWith(async _ => await command.DeleteOriginalResponseAsync());
+                                 _ = DeleteOriginalResponseSafeAsync(command, 5000);
                                 return;
                             }
                         }
@@ -188,7 +225,7 @@ namespace RPBot
                 .ToList();
 
             // ✅ УЛУЧШЕНО: Попытка найти картинку для ЛЮБОГО куба (не только d20)
-            // Сначала пытаемся вывести с картинками, если не найдём - fallback на plaintext
+            // Сначала пытаемся вывести с картинками, если не найдём — fallback на обычный текстовый вывод
 
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
             var diceSubfolder = Path.Combine(numbersDir, diceType);
@@ -228,7 +265,7 @@ namespace RPBot
             }
 
             // ✅ НОВОЕ: Попытка вывести с картинками для ЛЮБОГО куба
-            if (hasImages && modifier == 0)  // Картинки только для чистых бросков без модификаторов
+            if (rollPicturesEnabled && hasImages && modifier == 0)  // Картинки только для чистых бросков без модификаторов
             {
                 if (count == 1)
                 {
@@ -293,53 +330,9 @@ namespace RPBot
                 }
             }
 
-            // ✅ Fallback: Plaintext вывод (если нет картинок или есть модификатор)
-            var resultMessage = new StringBuilder();
-            var consoleMessage = new StringBuilder();
-
-            if (count == 1)
-            {
-                var rolledValue = results[0];
-                int finalValue = rolledValue + modifier;
-
-                resultMessage.AppendLine("__**Результат броска**__");
-                resultMessage.AppendLine("```plaintext");
-                if (modifier != 0)
-                {
-                    resultMessage.AppendLine($"Выпавшее значение: {rolledValue}");
-                    resultMessage.AppendLine($"Модификатор: {modifier}");
-                    resultMessage.AppendLine($"Полученное значение: {finalValue}\n");
-                }
-                else
-                {
-                    resultMessage.AppendLine($"Полученное значение: {rolledValue}\n");
-                }
-                resultMessage.Append("```");
-            }
-            else
-            {
-                resultMessage.AppendLine("__**Результаты бросков**__");
-                resultMessage.AppendLine("```plaintext");
-                for (int i = 0; i < results.Count; i++)
-                {
-                    var rolledValue = results[i];
-                    int finalValue = rolledValue + modifier;
-                    if (modifier != 0)
-                    {
-                        resultMessage.AppendLine($"Бросок {i + 1}: Выпавшее значение: {rolledValue}");
-                        resultMessage.AppendLine($"Модификатор: {modifier}");
-                        resultMessage.AppendLine($"Полученное значение: {finalValue} \n");
-                    }
-                    else
-                    {
-                        resultMessage.AppendLine($"Бросок {i + 1}: Полученное значение: {rolledValue}\n");
-                    }
-                }
-                resultMessage.Append("```");
-            }
-
-            await command.FollowupAsync(resultMessage.ToString());
-            Console.WriteLine(resultMessage.ToString());
+            var resultMessage = BuildRollResponse(results, modifier);
+            await command.FollowupAsync(resultMessage);
+            Console.WriteLine(BuildConsoleRollLog(_input, results, modifier));
         }
 
         [Command("roll20")]
@@ -356,9 +349,9 @@ namespace RPBot
             }
 
             // Получаем ID канала статистики из конфига
-            var statsChannelId = Program.ServerConfigs.TryGetValue(guildId.Value, out var config)
-                ? config.StatsChannelID
-                : 0;
+            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
+            var statsChannelId = statsConfig?.StatsChannelID ?? 0;
+            var rollPicturesEnabled = statsConfig?.RollPicturesEnabled ?? true;
 
             // Если бросок сделан в канале статистики
             bool isStatsChannel = channelId == statsChannelId;
@@ -390,7 +383,7 @@ namespace RPBot
                                     $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
                                     ephemeral: false
                                 );
-                                _ = Task.Delay(5000).ContinueWith(async _ => await command.DeleteOriginalResponseAsync());
+                                 _ = DeleteOriginalResponseSafeAsync(command, 5000);
                                 return;
                             }
 
@@ -417,7 +410,7 @@ namespace RPBot
             var diceSubfolder = Path.Combine(numbersDir, "d20");
             var filePath = Path.Combine(diceSubfolder, $"{result}.png");
 
-            if (Directory.Exists(diceSubfolder) && File.Exists(filePath))
+            if (rollPicturesEnabled && Directory.Exists(diceSubfolder) && File.Exists(filePath))
             {
                 var embed = new EmbedBuilder()
                     .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
@@ -429,7 +422,7 @@ namespace RPBot
             {
                 await command.FollowupAsync($"Выпало: **{result}**");
             }
-            Console.WriteLine($"Результат броска (d20): {result}");
+            Console.WriteLine($"Условие броска: d20 | Результат: {result}");
         }
 
         private Color GetGradientColor(int value, int minValue, int maxValue)

@@ -12,6 +12,18 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
 
+        private static bool CanUseSuperUserActions(SocketGuildUser? user)
+        {
+            if (user == null)
+                return false;
+
+            if (user.GuildPermissions.Administrator)
+                return true;
+
+            var config = Program.ServerConfigResolver?.Invoke(user.Guild.Id);
+            return config?.SuperUserRoleId.HasValue == true && user.Roles.Any(r => r.Id == config.SuperUserRoleId.Value);
+        }
+
         private static Task LogStartup(string message)
         {
             Program.CommandLogSink?.Invoke(message);
@@ -31,11 +43,9 @@ namespace RPBot
 
             await LogStartup($"Команда '/close_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 
-            // Проверяем, что команду выполняет "perekrestok_mirov" или "domen_"
-            var allowedUsers = new[] { "perekrestok_mirov", "domen_" };
             var user = command.User as SocketGuildUser;
 
-            if (user == null || !allowedUsers.Contains(user.Username))
+            if (!CanUseSuperUserActions(user))
             {
                 await LogStartup($"Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
                 await command.FollowupAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
@@ -185,11 +195,9 @@ namespace RPBot
 
             await LogStartup($"Команда '/open_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 
-            // Проверяем, что команду выполняет "perekrestok_mirov" или "domen_"
-            var allowedUsers = new[] { "perekrestok_mirov", "domen_" };
             var user = command.User as SocketGuildUser;
 
-            if (user == null || !allowedUsers.Contains(user.Username))
+            if (!CanUseSuperUserActions(user))
             {
                 await LogStartup($"Отказ в доступе: пользователь {command.User.Username} не имеет прав на выполнение команды.");
                 await command.FollowupAsync("У вас нет прав на выполнение этой команды. Администратор оповещён.", ephemeral: true);
@@ -291,20 +299,17 @@ namespace RPBot
         {
             var user = command.User as SocketGuildUser;
 
-            var rolesToCheck = new List<string> { "Технический гуру", "Модератор", "Хранители" };
-            var hasRole = user.Roles.Any(role => rolesToCheck.Contains(role.Name, StringComparer.OrdinalIgnoreCase));
-
-            if (user == null || !hasRole)
+            if (!CanUseSuperUserActions(user))
             {
                 await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
-                await LogStartup($"Ошибка: У пользователя {user.DisplayName} недостаточно прав для выполнения команды");
+                await LogStartup($"Ошибка: У пользователя {user?.DisplayName ?? command.User.Username} недостаточно прав для выполнения команды");
                 return;
             }
 
             if (count < 1 || count > 100)
             {
                 await command.RespondAsync("Пожалуйста, укажите число от 1 до 100.", ephemeral: true);
-                await LogStartup($"Ошибка: Пользователь {user.DisplayName} ввёл некорректное число сообщений - {count}");
+                await LogStartup($"Ошибка: Пользователь {user?.DisplayName ?? command.User.Username} ввёл некорректное число сообщений - {count}");
                 return;
             }
 

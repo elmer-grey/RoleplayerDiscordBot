@@ -16,6 +16,8 @@ namespace RPBot
         public string WelcomeMessage { get; set; } = string.Empty;
         public string LineMessage { get; set; } = string.Empty;
         public ulong DefaultRoleID { get; set; }
+      // Роль мастера на сервере, имеющая доступ к управлению игровыми сессиями и очередью
+        public ulong? MasterRoleId { get; set; } = null;
 		// Роль "суперпользователя" на сервере, имеющая расширенные права управления ботом
 		public ulong? SuperUserRoleId { get; set; } = null;
         // Включить фильтр мата для этого сервера
@@ -24,6 +26,8 @@ namespace RPBot
         public List<string> SwearWords { get; set; } = new List<string>();
 		// Включены ли игровые прогнозы/ставки и начисление костяшек на этом сервере
 		public bool PredictionsEnabled { get; set; } = true;
+      // Использовать ли картинки при выводе бросков, если они доступны
+        public bool RollPicturesEnabled { get; set; } = true;
 		// Голосовой канал события (event), в котором начисляются костяшки
 		public ulong EventVoiceChannelID { get; set; }
 

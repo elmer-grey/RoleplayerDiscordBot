@@ -196,15 +196,22 @@ namespace RPBot
 						.AddChoice("Сообщение-линия", "line_message")
 						.AddChoice("Общий ролевой канал", "general_rg_channel")
 						.AddChoice("Роль по умолчанию", "default_role")
+                 .AddChoice("Роль мастера", "master_role")
 						.AddChoice("Роль суперпользователя", "super_user_role")
 						.AddChoice("Фильтр мата (вкл/выкл)", "swear_filter")
 						.AddChoice("Список матерных слов", "swear_words")
 						.AddChoice("Прогнозы (вкл/выкл)", "predictions")
+                        .AddChoice("Картинки для бросков (вкл/выкл)", "roll_pictures")
 						.AddChoice("Голосовой канал события", "event_voice_channel")
 						.WithRequired(false))
 					.AddOption("value", ApplicationCommandOptionType.String, "Новое значение настройки")
 					.AddOption("channel", ApplicationCommandOptionType.Channel, "Выбор канала из списка")
 					.AddOption("toggle", ApplicationCommandOptionType.Boolean, "Переключатель включения/выключения") ,
+
+				new SlashCommandBuilder()
+					.WithName("roll_pictures")
+					.WithDescription("Включает или выключает картинки для бросков кубиков")
+					.AddOption("enabled", ApplicationCommandOptionType.Boolean, "Включить картинки для бросков", isRequired: false),
 
 				new SlashCommandBuilder()
 					.WithName("prediction")

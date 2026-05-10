@@ -73,8 +73,9 @@ namespace RPBot
 
             if (command.User is SocketGuildUser guildUser)
             {
-                var hasRole = guildUser.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase));
-                if (!hasRole)
+                var config = Program.ServerConfigResolver?.Invoke(guildId.Value);
+                var hasMasterRole = config?.MasterRoleId.HasValue == true && guildUser.Roles.Any(r => r.Id == config.MasterRoleId.Value);
+                if (!guildUser.GuildPermissions.Administrator && !hasMasterRole)
                 {
                     await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
                     Console.WriteLine($"Ошибка: У пользователя {guildUser.DisplayName} недостаточно прав");
@@ -260,17 +261,26 @@ namespace RPBot
                 ":exclamation: Время ожидания истекло, введите команду для создания очереди по новой. :exclamation:");
             state.MessagesToDelete.Add(timeoutMsg);
 
-            _ = Task.Delay(TimeSpan.FromSeconds(6)).ContinueWith(async _ =>
-            {
-                foreach (var msg in state.MessagesToDelete)
-                {
-                    try { await msg.DeleteAsync(); }
-                    catch (Exception ex) { await Log($"Ошибка очистки: {ex.Message}"); }
-                }
-                state.Reset();
-            });
+            _ = CleanupQueueMessagesAsync(state, TimeSpan.FromSeconds(6));
 
             await Log($"Таймер истёк для гильдии {guildId}. Очередь сброшена.");
+        }
+
+        private static async Task CleanupQueueMessagesAsync(GuildQueueState state, TimeSpan delay)
+        {
+            try
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                foreach (var msg in state.MessagesToDelete)
+                {
+                    try { await msg.DeleteAsync().ConfigureAwait(false); }
+                    catch (Exception ex) { await Log($"Ошибка очистки: {ex.Message}").ConfigureAwait(false); }
+                }
+            }
+            finally
+            {
+                state.Reset();
+            }
         }
 
         [Command("stop_q")]
@@ -281,8 +291,9 @@ namespace RPBot
 
             if (command.User is SocketGuildUser guildUser)
             {
-                var hasRole = guildUser.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase));
-                if (!hasRole)
+                var config = Program.ServerConfigResolver?.Invoke(guildId.Value);
+                var hasMasterRole = config?.MasterRoleId.HasValue == true && guildUser.Roles.Any(r => r.Id == config.MasterRoleId.Value);
+                if (!guildUser.GuildPermissions.Administrator && !hasMasterRole)
                 {
                     await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
                     await Log($"Ошибка: У пользователя {guildUser.DisplayName} недостаточно прав");
