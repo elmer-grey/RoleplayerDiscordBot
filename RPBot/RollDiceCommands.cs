@@ -118,12 +118,11 @@ namespace RPBot
             }
 
             // Получаем ID канала статистики из конфига
-           // Получаем ID канала статистики из конфига
             var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
             var statsChannelId = statsConfig?.StatsChannelID ?? 0UL;
             var rollPicturesEnabled = statsConfig?.RollPicturesEnabled ?? true;
 
-          // Проверяем, сделан ли бросок в канале статистики
+            // Проверяем, сделан ли бросок в канале статистики
             bool isStatsChannel = channelId == statsChannelId && statsChannelId != 0;
 
             Console.WriteLine($"\nБыло введено условие: {input}");
@@ -145,8 +144,6 @@ namespace RPBot
                 return;
             }
 
-            // АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ТИПА КУБА ИЗ INPUT
-            // Извлекаем тип куба (например, из "2d6" получаем "d6", из "1d20" получаем "d20")
             string diceType = ExtractDiceType(_input);
 
             var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?$)", RegexOptions.IgnoreCase);
@@ -185,7 +182,6 @@ namespace RPBot
                 return;
             }
 
-            // Если бросок в канале статистики, проверяем активные сессии
             if (isStatsChannel)
             {
                 await _sessionSemaphore.WaitAsync();
@@ -193,14 +189,12 @@ namespace RPBot
                 {
                     if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
                     {
-                        // Находим все сессии с включенной записью бросков
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
                             s.Value.TrackRolls).ToList();
 
                         if (activeSessions.Any())
                         {
-                            // Проверяем, есть ли сессии на паузе
                             var pausedSessions = activeSessions.Where(s => s.Value.IsPaused).ToList();
                             if (pausedSessions.Any())
                             {
@@ -224,14 +218,10 @@ namespace RPBot
                 .Select(_ => random.Next(1, max + 1))
                 .ToList();
 
-            // ✅ УЛУЧШЕНО: Попытка найти картинку для ЛЮБОГО куба (не только d20)
-            // Сначала пытаемся вывести с картинками, если не найдём — fallback на обычный текстовый вывод
-
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
             var diceSubfolder = Path.Combine(numbersDir, diceType);
             bool hasImages = Directory.Exists(diceSubfolder);
 
-            // Если бросок в канале статистики, проверяем активные сессии и записываем броски
             if (isStatsChannel)
             {
                 await _sessionSemaphore.WaitAsync();
@@ -252,7 +242,7 @@ namespace RPBot
                                 {
                                     PlayerName = command.User.GlobalName,
                                     RollValue = result,
-                                    DiceType = diceType  // ✅ ДОБАВЛЕНО: Тип куба
+                                    DiceType = diceType
                                 });
                             }
                         }
@@ -264,8 +254,7 @@ namespace RPBot
                 }
             }
 
-            // ✅ НОВОЕ: Попытка вывести с картинками для ЛЮБОГО куба
-            if (rollPicturesEnabled && hasImages && modifier == 0)  // Картинки только для чистых бросков без модификаторов
+            if (rollPicturesEnabled && hasImages && modifier == 0)
             {
                 if (count == 1)
                 {

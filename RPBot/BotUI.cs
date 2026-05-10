@@ -1972,19 +1972,6 @@ namespace RPBot
 
         public void ShowSystemReady(string botName, int serverCount, double initTime)
         {
-            string initTimeStr;
-            if (initTime < 1)
-                initTimeStr = $"{(initTime * 1000):F0} мс";
-            else if (initTime < 60)
-                initTimeStr = $"{initTime:F1} сек";
-            else
-            {
-                int minutes = (int)initTime / 60;
-                double seconds = initTime % 60;
-                initTimeStr = $"{minutes} мин {seconds:F0} сек";
-            }
-
-            // Показываем только краткое уведомление о готовности консоли
             var readyShort = "Консоль готова к приёму команд. Введите 'help'";
 
             if (Application.MainLoop == null || _isDisposed || _logPanel == null)

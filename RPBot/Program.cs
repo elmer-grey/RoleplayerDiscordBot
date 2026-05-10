@@ -44,7 +44,6 @@ namespace RPBot
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
-        // ✅ НОВОЕ: Хранение промежуточных данных для двухшагового создания прогноза
         private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
 
         private Task? _backgroundMonitoringTask;
@@ -58,7 +57,6 @@ namespace RPBot
         public static Action<string>? CommandLogSink { get; private set; }
         public static Func<ulong, ServerConfig?>? ServerConfigResolver { get; private set; }
 
-        // Centralized cleanup for services to avoid leaks when recreating
         private void CleanupServices()
         {
             try
@@ -109,8 +107,38 @@ namespace RPBot
             }
         }
 
+        private Task SetupDiscordEvents()
+        {
+            _client.Ready -= OnReady;
+            _client.Disconnected -= OnDisconnected;
+            _client.UserJoined -= UserJoined;
+            _client.MessageReceived -= HandleCommandAsync;
+            _client.SlashCommandExecuted -= OnSlashCommandExecuted;
+            _client.SlashCommandExecuted -= BwonkCommand;
+            _client.ModalSubmitted -= HandleModalSubmitted;
+            _client.ButtonExecuted -= HandleButtonExecuted;
+            _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
+            _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
+            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
+            _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
+            _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
 
+            _client.Ready += OnReady;
+            _client.Disconnected += OnDisconnected;
+            _client.UserJoined += UserJoined;
+            _client.MessageReceived += HandleCommandAsync;
+            _client.SlashCommandExecuted += OnSlashCommandExecuted;
+            _client.SlashCommandExecuted += BwonkCommand;
+            _client.ModalSubmitted += HandleModalSubmitted;
+            _client.ButtonExecuted += HandleButtonExecuted;
+            _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
+            _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
+            _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
+            _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
+            _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
 
+            return LogStartup("│   События Discord настроены    │");
+        }
         private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
         {
             // customId: pred_bet:<guildId>
@@ -129,8 +157,6 @@ namespace RPBot
                 _ = Task.Run(() => _pointsUserIndex.SaveAsync());
             }
             catch { }
-            // Show ephemeral balance and a confirm button before modal
-            // Check active prediction exists to avoid showing intermediate UI when none
             var active = _predictionService.GetActive(guildId);
             if (active == null || active.IsResolved)
             {
@@ -160,7 +186,6 @@ namespace RPBot
                 return;
             }
 
-            // Remember the ephemeral balance interaction so we can delete it as soon as the modal is submitted.
             _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
 
             var active = _predictionService?.GetActive(guildId);
@@ -217,7 +242,6 @@ namespace RPBot
             }
 
             await component.RespondWithModalAsync(modal);
-            // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
         }
 
         /// <summary>
@@ -245,14 +269,12 @@ namespace RPBot
 
             try
             {
-                // ✅ НОВОЕ: Проверка наличия активного события на голосовом канале
                 if (!IsActiveEventOnChannel(guildId, channelId))
                 {
                     await component.RespondAsync("⚠️ Активное событие в этом голосовом канале завершено или отсутствует. Создание прогноза невозможно.", ephemeral: true);
                     return;
                 }
 
-                // ✅ БАГ 8: Двойная проверка наличия активного прогноза
                 var existingPrediction = _predictionService.GetActive(guildId);
                 if (existingPrediction != null)
                 {
@@ -262,7 +284,6 @@ namespace RPBot
 
                 if (outcomesCount == 3)
                 {
-                    // ✅ Модал для 3 исходов (обновлённый)
                     var modal = new ModalBuilder()
                         .WithTitle("Создать прогноз")
                         .WithCustomId($"pred_create_modal_3:{guildId}:{channelId}")
@@ -277,7 +298,6 @@ namespace RPBot
                 }
                 else if (outcomesCount == 5)
                 {
-                    // ✅ Первый модал для 5 исходов (название + время)
                     var modal = new ModalBuilder()
                         .WithTitle("Создать прогноз (шаг 1/2)")
                         .WithCustomId($"pred_create_step1:{guildId}:{channelId}")
@@ -287,8 +307,6 @@ namespace RPBot
 
                     await component.RespondWithModalAsync(modal);
                 }
-
-                // ✅ Modal отправлен, ephemeral кнопки будут автоматически удалены через 20 сек
             }
             catch (Exception ex)
             {
@@ -1046,11 +1064,9 @@ namespace RPBot
 				return new DateTimeOffset(nextUtc, TimeSpan.Zero);
 			}
 
-			// Время перезагрузки берём только из config.json
 			if (!TryParseTime(_config?.DailyRestartLocalTime, out var localTarget))
 				throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
 
-			// Если локальная TZ = Москва и включено предпочтение московского времени — используем его.
 			if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
 				TryGetMoscowTimeZone(out var mskTz) && mskTz != null &&
 				string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
@@ -1083,7 +1099,6 @@ namespace RPBot
 			return false;
 		}
 
-		// Утилита для перевода UTC-времени в локальное время по МСК.
 		private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
 		{
 			if (TryGetMoscowTimeZone(out var tz) && tz != null)
@@ -1111,8 +1126,6 @@ namespace RPBot
 			return Task.FromResult<ServerConfig?>(null);
         }
 
-		// Вспомогательный метод для внутренних сервисов (VoicePointsService, PredictionCommand)
-		// для получения ServerConfig без копирования словаря.
 		private ServerConfig? GetServerConfigInternal(ulong guildId)
 		{
 			if (_serverConfigs.TryGetValue(guildId, out var cfg))
@@ -1122,7 +1135,6 @@ namespace RPBot
 
 		public Task ReloadServerConfigsAsync()
 		{
-			// Перечитываем serverconfigs.json и пересобираем эффективные ServerConfigs
 			LoadServerConfigs();
 			return Task.CompletedTask;
 		}
@@ -1230,10 +1242,8 @@ namespace RPBot
 					break;
 			}
 
-			// Сразу сохраняем изменения serverconfig и пересобираем эффективные ServerConfigs
 			SaveServerConfigs();
 
-			// Валидация: если указаны channel/role - проверим, что они есть на сервере и залогируем предупреждения
             try
             {
                 var validationGuild = _client.GetGuild(guildId);
@@ -1459,10 +1469,8 @@ namespace RPBot
                         _client?.Dispose();
                         _client = CreateDiscordClient();
 
-                        // Корректно очистим старые сервисы (отпишем, shutdown, dispose)
                         CleanupServices();
 
-                        // ПЕРЕСОЗДАЕМ СЕРВИСЫ С НОВЫМ КЛИЕНТОМ
                         _reconnectionService = new ReconnectionService(_client)
                         {
                             LogSink = msg => _ui?.AddLog(msg)
@@ -1477,15 +1485,11 @@ namespace RPBot
                         var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
                         _predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
                         _voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
-
-
-                        // ПЕРЕПОДПИСЫВАЕМСЯ
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
                         _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
-                        // ОБНОВЛЯЕМ UI С НОВЫМ КЛИЕНТОМ
                         _ui?.UpdateServices(
                             _client,
                             _reconnectionService,
@@ -1551,42 +1555,6 @@ namespace RPBot
             }
         }
 
-        private async Task SetupDiscordEvents()
-        {
-            // Отписываемся от всего
-            _client.Ready -= OnReady;
-            _client.Disconnected -= OnDisconnected;
-            _client.UserJoined -= UserJoined;
-            _client.MessageReceived -= HandleCommandAsync;
-            _client.SlashCommandExecuted -= OnSlashCommandExecuted;
-            _client.SlashCommandExecuted -= BwonkCommand;
-            _client.ModalSubmitted -= HandleModalSubmitted;
-            _client.ButtonExecuted -= HandleButtonExecuted;
-         _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
-
-            // Подписываемся заново
-            _client.Ready += OnReady;
-            _client.Disconnected += OnDisconnected;
-            _client.UserJoined += UserJoined;
-            _client.MessageReceived += HandleCommandAsync;
-            _client.SlashCommandExecuted += OnSlashCommandExecuted;
-            _client.SlashCommandExecuted += BwonkCommand;
-            _client.ModalSubmitted += HandleModalSubmitted;
-            _client.ButtonExecuted += HandleButtonExecuted;
-         _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
-
-            await LogStartup($"│   События Discord настроены    │");
-        }
-
-        // Отдельные обработчики для событий
         private async Task OnGuildScheduledEventCreated(SocketGuildEvent guildEvent)
         {
             try
@@ -2337,21 +2305,42 @@ namespace RPBot
 
             Task OnReadyOnce()
             {
-                _client.Ready -= OnReadyOnce;
                 readyTcs.TrySetResult(true);
                 return Task.CompletedTask;
             }
 
             _client.Ready += OnReadyOnce;
 
-            await Task.WhenAny(readyTcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+            try
+            {
+                if (_client.CurrentUser != null)
+                {
+                    readyTcs.TrySetResult(true);
+                }
+
+                var completedTask = await Task.WhenAny(readyTcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+                if (completedTask == readyTcs.Task)
+                    return;
+
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (DateTime.UtcNow < deadline && !_shouldExit)
+                {
+                    if (_client.CurrentUser != null)
+                        return;
+
+                    await Task.Delay(250);
+                }
+            }
+            finally
+            {
+                _client.Ready -= OnReadyOnce;
+            }
         }
 
         private async Task BackgroundMonitoringLoop()
         {
             while (!_shouldExit)
             {
-                // Ожидание между итерациями; прерываемся, если приложение завершает работу.
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(30));
@@ -2367,18 +2356,15 @@ namespace RPBot
                     continue;
                 }
 
-                // Локальные копии ссылок — чтобы избежать гонок с очищением полей в другом потоке
                 var predictor = _connectionPredictor;
                 var client = _client;
                 var recon = _reconnectionService;
 
-                // Анализ/прогноз — только если predictor доступен
                 if (predictor != null)
                 {
                     try
                     {
-                        var prediction = await predictor.AnalyzeAndPredict();
-                        // TODO: использовать prediction при необходимости
+                        await predictor.AnalyzeAndPredict();
                     }
                     catch (Exception ex)
                     {
@@ -2390,7 +2376,6 @@ namespace RPBot
                     await LogStartup("⚠️ BackgroundMonitoring: predictor is null, skipping prediction");
                 }
 
-                // Проверка состояния клиента — только если client доступен
                 if (client != null)
                 {
                     try
@@ -3028,9 +3013,15 @@ namespace RPBot
 
                 _ui?.EnableInput();
 
-                // УВЕДОМЛЕНИЕ В UI
+                var botName = _client.CurrentUser?.Username;
+                if (string.IsNullOrWhiteSpace(botName))
+                {
+                    await LogStartup("⚠️ UI startup: имя бота недоступно после инициализации клиента.");
+                    botName = "Discord Bot";
+                }
+
                 _ui?.ShowSystemReady(
-                    _client.CurrentUser.Username,
+                    botName,
                     _client.Guilds.Count,
                     initTime
                 );

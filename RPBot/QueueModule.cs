@@ -15,8 +15,6 @@ namespace RPBot
 {
     /// <summary>
     /// Изолированное состояние очереди бросков для одной гильдии.
-    /// Ранее все поля были static — один общий экземпляр на все гильдии,
-    /// что приводило к конфликтам при одновременных очередях на разных серверах.
     /// </summary>
     internal sealed class GuildQueueState : IDisposable
     {
@@ -49,7 +47,6 @@ namespace RPBot
 
     public class QueueModule : ModuleBase<SocketCommandContext>
     {
-        // Per-guild изолированное состояние — потокобезопасный словарь
         private static readonly ConcurrentDictionary<ulong, GuildQueueState> _guildQueues = new();
 
         private static Task Log(string message)

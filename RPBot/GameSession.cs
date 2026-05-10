@@ -18,7 +18,7 @@ namespace RPBot
     {
         public string PlayerName { get; set; }
         public int RollValue { get; set; }
-        public string DiceType { get; set; }  // ✅ НОВОЕ: Тип куба (d6, d12, d20 и т.д.)
+        public string DiceType { get; set; }
     }
 
     public class GameSession
@@ -55,7 +55,6 @@ namespace RPBot
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
-        // ✅ НОВОЕ: Сохранение/восстановление сессий
         private static readonly string _sessionsStatePath = Path.Combine(AppContext.BaseDirectory, "Data", "sessions_state.json");
 
         public GameSessionCommands(DiscordSocketClient client) => _client = client;
@@ -65,7 +64,6 @@ namespace RPBot
             Program.CommandLogSink?.Invoke(message);
         }
 
-        // ✅ НОВОЕ: Сохранение активных сессий в файл
         private static async Task SaveSessionsAsync()
         {
             try
@@ -99,7 +97,6 @@ namespace RPBot
                                 session.ControlMessageId,
                                 session.IsPaused,
                                 session.TrackRolls,
-                                // ✅ НОВОЕ: Сохраняем броски
                                 Rolls = session.Rolls
                             };
                         }
@@ -125,7 +122,6 @@ namespace RPBot
             }
         }
 
-        // ✅ НОВОЕ: Загрузка сессий из файла при рестарте
         public static async Task LoadSessionsAsync(DiscordSocketClient client)
         {
             try
@@ -161,7 +157,6 @@ namespace RPBot
                         var isPaused = elem.TryGetProperty("IsPaused", out var ip) && ip.GetBoolean();
                         var trackRolls = elem.TryGetProperty("TrackRolls", out var tr) && tr.GetBoolean();
 
-                        // ✅ НОВОЕ: Загружаем броски
                         var rolls = new List<RollStatistic>();
                         if (elem.TryGetProperty("Rolls", out var rollsElem) && rollsElem.ValueKind == System.Text.Json.JsonValueKind.Array)
                         {
@@ -196,7 +191,7 @@ namespace RPBot
                             ControlMessageId = controlMessageId,
                             IsPaused = isPaused,
                             TrackRolls = trackRolls,
-                            Rolls = rolls  // ✅ НОВОЕ: Добавляем загруженные броски
+                            Rolls = rolls
                         };
 
                         if (!_sessions.TryGetValue(guildId, out var guildSessions))
@@ -208,7 +203,6 @@ namespace RPBot
                         if (guildSessions.TryAdd(sessionId, session))
                         {
                             restorCount++;
-                            // ✅ НОВОЕ: Логируем также количество восстановленных бросков
                             Console.WriteLine($"[SESSIONS] Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName}, бросков: {rolls.Count})");
                         }
                     }
@@ -223,7 +217,6 @@ namespace RPBot
                     var totalRestorRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
                     Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков)");
 
-                    // Пересоздаём сообщения управления
                     _ = RecreateControlMessagesAsync(client);
                 }
             }
@@ -233,7 +226,6 @@ namespace RPBot
             }
         }
 
-        // ✅ НОВОЕ: Пересоздание сообщений управления для восстановленных сессий
         private static async Task RecreateControlMessagesAsync(DiscordSocketClient client)
         {
             try
