@@ -214,24 +214,14 @@ namespace RPBot
                     ? string.Join(", ", active.Outcomes.Select(o => $"{o.Id}: {o.Name}"))
                     : "1: Исход 1, 2: Исход 2";
 
-                var outcomePlaceholder = outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
+                var useCompactOutcomeLabels = active?.UseCompactOutcomeLabels ?? false;
+                var outcomePlaceholder = useCompactOutcomeLabels
+                    ? $"Выберите 1-{outcomeCount}"
+                    : outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
 
-                // ✅ ИСПРАВЛЕНО БАГ: Если список исходов слишком длинный (>45 символов), не вставляем в label
-                string label = "Исход";
-                var fullLabelLength = $"Исход ({outcomesList})".Length;
-
-                if (fullLabelLength <= 45)
-                {
-                    label = $"Исход ({outcomesList})";
-                    Console.WriteLine($"[PREDICTION] Bet modal label: {fullLabelLength} символов - вмещается");
-                }
-                else
-                {
-                    // Если список слишком длинный, добавляем подсказку в placeholder
-                    outcomePlaceholder = $"Выберите 1-{outcomeCount}";
-                    Console.WriteLine($"[PREDICTION] Bet modal label: {fullLabelLength} символов - СЛИШКОМ ДЛИННЫЙ, используем компактный формат");
-                    Console.WriteLine($"[PREDICTION] Outcomes list: {outcomesList}");
-                }
+                var label = useCompactOutcomeLabels
+                    ? "Исход"
+                    : $"Исход ({outcomesList})";
 
                 modal = new ModalBuilder()
                     .WithTitle("Сделать ставку")
@@ -1488,6 +1478,7 @@ namespace RPBot
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
+                        _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
                         _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
                         _ui?.UpdateServices(

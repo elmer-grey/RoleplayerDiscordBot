@@ -28,6 +28,8 @@ namespace RPBot
         public ulong ChannelId { get; set; }
         public ulong MessageId { get; set; }
         public string Title { get; set; } = string.Empty;
+        public bool UseCompactOutcomeLabels { get; set; }
+        public bool UseInlineOutcomeFields { get; set; } = true;
 
         // ✅ НОВОЕ: Список исходов для поддержки N вариантов
         public List<PredictionOutcome> Outcomes { get; set; } = new();
@@ -122,8 +124,20 @@ namespace RPBot
         public long NetProfit { get; set; }             // Чистая прибыль (TotalWon - TotalLost)
         public int CurrentStreak { get; set; }          // Текущая серия (+ выигрыши, - проигрыши)
         public int BestStreak { get; set; }             // Лучшая серия выигрышей
+        public int CurrentHighCoeffStreak { get; set; } // Серия побед с коэфф. >5x
         public long HighestSingleWin { get; set; }      // Самый большой выигрыш за раз
+        public double HighestCoeffWin { get; set; }     // Самый высокий коэффициент выигравшей ставки
+        public long LargestBet { get; set; }            // Самая крупная ставка
         public int TotalParticipation { get; set; }     // Участий в прогнозах
+        public int FirstBets { get; set; }              // Сколько раз пользователь был первым, кто поставил в прогнозе
+        public int CreatedPredictions { get; set; }     // Сколько прогнозов создал пользователь
+        public int HighCoeffWins { get; set; }          // Победы с коэфф. >10x
+        public int FavoriteWins { get; set; }           // Победы на фаворитах
+        public int FavoriteBets { get; set; }           // Ставки на фаворитов
+        public DateTime WeekStartUtc { get; set; }      // Начало календарной недели (понедельник, UTC)
+        public int WeekHighCoeffWins { get; set; }      // Победы с коэфф. >10x за текущую неделю
+        public DateTime MonthStartUtc { get; set; }     // Начало календарного месяца (UTC)
+        public long MonthProfit { get; set; }           // Прибыль за текущий календарный месяц
         public double WinRate => TotalBets > 0 ? (double)WonBets / TotalBets * 100 : 0;
         public double ROI => TotalWagered > 0 ? (double)NetProfit / TotalWagered * 100 : 0;
     }

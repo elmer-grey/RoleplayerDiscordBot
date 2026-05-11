@@ -88,10 +88,10 @@ namespace RPBot
                         }
 
                         var isAdmin = user.GuildPermissions.Administrator;
-                        var isMaster = user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase));
+                        var isMaster = sconfig.MasterRoleId.HasValue && sconfig.MasterRoleId.Value != 0 && user.Roles.Any(r => r.Id == sconfig.MasterRoleId.Value);
                         if (!isAdmin && !isMaster)
                         {
-                            await command.RespondAsync("Создавать прогнозы могут только мастера НРИ или администраторы.", ephemeral: true);
+                            await command.RespondAsync("Создавать прогнозы могут только мастера или администраторы.", ephemeral: true);
                             return;
                         }
 
@@ -479,6 +479,7 @@ namespace RPBot
         {
             var stats = _predictionService.GetUserStats(guildId, userId);
             var achievements = _predictionService.GetUserAchievements(guildId, userId);
+            var totalAchievements = RPBot.Predictions.AchievementDefinitions.All.Count;
 
             var eb = new EmbedBuilder()
                 .WithTitle($"📊 Статистика игрока: {username}")
@@ -530,7 +531,7 @@ namespace RPBot
             // Достижения
             if (achievements.Count > 0)
             {
-                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ ({achievements.Count}/29):**");
+                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ ({achievements.Count}/{totalAchievements}):**");
                 sb.AppendLine();
 
                 var grouped = achievements
@@ -550,7 +551,7 @@ namespace RPBot
             }
             else
             {
-                sb.AppendLine("**🏅 ДОСТИЖЕНИЯ (0/29):**");
+                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ (0/{totalAchievements}):**");
                 sb.AppendLine("Участвуйте в прогнозах чтобы получать достижения!");
             }
 
@@ -561,7 +562,7 @@ namespace RPBot
         private Embed BuildAchievementsListEmbed(ulong guildId)
         {
             var eb = new EmbedBuilder()
-                .WithTitle("🏅 Все достижения (29)")
+                .WithTitle($"🏅 Все достижения ({RPBot.Predictions.AchievementDefinitions.All.Count})")
                 .WithColor(Color.Purple);
 
             var sb = new StringBuilder();

@@ -252,6 +252,11 @@ namespace RPBot
                             }
                         }
 
+                        var restoredOutcomesList = string.Join(", ", ap.Outcomes.Select(o => $"{o.Id}: {o.Name}"));
+                        ap.UseCompactOutcomeLabels = $"Исход ({restoredOutcomesList})".Length > 45;
+                        ap.UseInlineOutcomeFields = ap.Outcomes.Count <= 3
+                            && ap.Outcomes.All(o => $"📊 Исход {o.Id}: {o.Name}".Length <= 256);
+
                         // Validate message existence. If the original message is gone, auto-cancel and refund.
                         ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
                             ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
@@ -472,6 +477,11 @@ namespace RPBot
                 });
             }
 
+            var outcomesList = string.Join(", ", prediction.Outcomes.Select(o => $"{o.Id}: {o.Name}"));
+            prediction.UseCompactOutcomeLabels = $"Исход ({outcomesList})".Length > 45;
+            prediction.UseInlineOutcomeFields = prediction.Outcomes.Count <= 3
+                && prediction.Outcomes.All(o => $"📊 Исход {o.Id}: {o.Name}".Length <= 256);
+
             var embed = BuildEmbed(prediction, showLocked: false);
             var components = BuildComponents(prediction, showLocked: false);
             var message = await targetChannel.SendMessageAsync(embed: embed, components: components.Build()).ConfigureAwait(false);
@@ -481,6 +491,20 @@ namespace RPBot
             {
                 _activeChannels[guildId] = targetChannel;
 
+                if (!_userStats.TryGetValue(guildId, out var guildStats))
+                {
+                    guildStats = new Dictionary<ulong, UserPredictionStats>();
+                    _userStats[guildId] = guildStats;
+                }
+
+                if (!guildStats.TryGetValue(creatorId, out var creatorStats))
+                {
+                    creatorStats = new UserPredictionStats { UserId = creatorId };
+                    guildStats[creatorId] = creatorStats;
+                }
+
+                creatorStats.CreatedPredictions++;
+
                 var totalPool = prediction.TotalPool;
                 var outcomesInfo = string.Join("; ", prediction.Outcomes.Select(o => $"{o.Id}:'{o.Name}'"));
 
@@ -489,6 +513,7 @@ namespace RPBot
 
                 // Persist prediction state so it survives bot restarts
                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+                _ = Task.Run(async () => await SaveStatsAsync().ConfigureAwait(false));
 
                 return (true, string.Empty, prediction);
             }
@@ -597,6 +622,23 @@ namespace RPBot
 
                 p.Bets[userId] = bet;
 
+                if (!_userStats.TryGetValue(guildId, out var guildStats))
+                {
+                    guildStats = new Dictionary<ulong, UserPredictionStats>();
+                    _userStats[guildId] = guildStats;
+                }
+
+                if (!guildStats.TryGetValue(userId, out var userStats))
+                {
+                    userStats = new UserPredictionStats { UserId = userId };
+                    guildStats[userId] = userStats;
+                }
+
+                if (p.Bets.Count == 1)
+                {
+                    userStats.FirstBets++;
+                }
+
                 // ✅ Обновлено: поиск исхода по ID
                 var outcomeNew = p.GetOutcomeById(outcomeId);
                 if (outcomeNew == null)
@@ -656,9 +698,9 @@ namespace RPBot
             var totalPool = p.TotalPool;
             var winningPool = winningOutcome.TotalStake;
 
-            // ✅ ИСПРАВЛЕНО: коэффициент = totalPool / winningPool (не вычитаем 1!)
-            double coef = winningPool <= 0 ? 1.0 : (double)totalPool / winningPool;
-            double coefRounded = Math.Round(coef, 2, MidpointRounding.AwayFromZero);
+            // Коэффициент показа округляем для пользователя, но выплаты считаем по тому же отображаемому значению.
+            double coefRaw = winningPool <= 0 ? 1.0 : (double)totalPool / winningPool;
+            double coefRounded = Math.Round(coefRaw, 2, MidpointRounding.AwayFromZero);
 
             long topWinnerUserId = 0;
             long topWinnerProfit = 0;
@@ -685,8 +727,7 @@ namespace RPBot
                 foreach (var bet in p.Bets.Values.Where(b => b.OutcomeId == winningOutcomeId))
                 {
                     // ✅ ИСПРАВЛЕНО: выигрыш = ставка × коэффициент, прибыль = выигрыш - ставка
-                    var totalReturnDouble = bet.Amount * coefRounded;
-                    var totalReturn = (long)Math.Round(totalReturnDouble, MidpointRounding.AwayFromZero);
+                    var totalReturn = CalculatePayout(bet.Amount, coefRounded);
                     var profit = totalReturn - bet.Amount; // Чистая прибыль (без ставки)
 
                     _points.Add(guildId, bet.UserId, totalReturn);
@@ -745,7 +786,7 @@ namespace RPBot
                     var resultEmbed = BuildResultEmbed(
                         p,
                         winningOutcome,
-                        coef,
+                        coefRounded,
                         totalPool,
                         topWinnerUserId == 0 ? (ulong?)null : (ulong)topWinnerUserId,
                         topWinnerProfit,
@@ -756,7 +797,7 @@ namespace RPBot
                     // ✅ НОВОЕ: Обновляем статистику и достижения
                     try
                     {
-                        await UpdateUserStatsAfterResolution(guildId, p, winningOutcomeId, coef).ConfigureAwait(false);
+                        await UpdateUserStatsAfterResolution(guildId, p, winningOutcomeId, coefRounded).ConfigureAwait(false);
                         await UpdateAchievementsAsync(guildId, p).ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -915,7 +956,7 @@ namespace RPBot
                 field.AppendLine($"{progressBar} {percentage:F1}%");
                 field.AppendLine($"💰 {outcome.TotalStake:N0} костяшек ({betCount} ставок)");
 
-                var coef = p.GetRawOdds(outcome.Id);
+                var coef = p.GetCoefficient(outcome.Id);
                 field.AppendLine($"📈 Коэффициент: **{coef:F2}x**");
                 field.AppendLine($"└─ На 100 → вернётся {(100 * coef):N0}");
 
@@ -924,7 +965,7 @@ namespace RPBot
                     field.AppendLine($"🏆 Топ: <@{outcome.TopUserId}> — {outcome.TopUserStake:N0}");
                 }
 
-                builder.AddField($"📊 Исход {outcome.Id}: {outcome.Name}", field.ToString(), inline: p.Outcomes.Count <= 3);
+                builder.AddField($"📊 Исход {outcome.Id}: {outcome.Name}", field.ToString(), inline: p.UseInlineOutcomeFields);
             }
 
             builder.AddField("💎 Общий банк", $"{totalPool:N0} костяшек", false);
@@ -1021,7 +1062,7 @@ namespace RPBot
             if (topWinnerUserId.HasValue && topWinnerProfit > 0)
             {
                 var topWinnerBet = p.Bets.Values.FirstOrDefault(b => b.UserId == (ulong)topWinnerUserId && b.OutcomeId == winningOutcome.Id);
-                var topWinnerReturn = topWinnerBet != null ? (long)Math.Round(topWinnerBet.Amount * coef, MidpointRounding.AwayFromZero) : 0;
+                var topWinnerReturn = topWinnerBet != null ? CalculatePayout(topWinnerBet.Amount, coef) : 0;
 
                 builder.AddField("🏆 Топ выигрыш", 
                     $"<@{topWinnerUserId}>:\n" +
@@ -1039,7 +1080,7 @@ namespace RPBot
             else if (winningOutcome.TotalStake > 0)
             {
                 // Если нет топового участника, но были ставки - показываем общую сумму
-                var totalWinnings = (long)Math.Round(winningOutcome.TotalStake * coef, MidpointRounding.AwayFromZero);
+                var totalWinnings = CalculatePayout(winningOutcome.TotalStake, coef);
                 var totalProfit = totalWinnings - winningOutcome.TotalStake;
                 builder.AddField("Выплаты победителям", 
                     $"Всего возвращено: {totalWinnings:N0} костяшек\n" +
@@ -1048,6 +1089,11 @@ namespace RPBot
             }
 
             return builder.Build();
+        }
+
+        private static long CalculatePayout(long amount, double coefficient)
+        {
+            return (long)Math.Round(amount * coefficient, MidpointRounding.AwayFromZero);
         }
 
         private async Task UpdateMessageAsync(ActivePrediction p, bool showLocked, bool botOffline = false)
@@ -1276,20 +1322,20 @@ namespace RPBot
                     long payout = 0;
                     bool won = false;
                     double coefficient = 1.0;
+                    var outcomeCoefficient = pred.GetCoefficient(bet.OutcomeId);
 
                     if (wasCancelled)
                     {
                         payout = bet.Amount; // Возврат
+                        coefficient = outcomeCoefficient;
                     }
                     else if (winningOutcomeId.HasValue && bet.OutcomeId == winningOutcomeId.Value)
                     {
                         var outcome = pred.GetOutcomeById(bet.OutcomeId);
                         if (outcome != null)
                         {
-                            var totalOnWinner = pred.Bets.Values.Where(b => b.OutcomeId == bet.OutcomeId).Sum(b => b.Amount);
-                            var totalPool = pred.Bets.Values.Sum(b => b.Amount);
-                            coefficient = totalOnWinner > 0 ? (double)totalPool / totalOnWinner : 1.0;
-                            payout = (long)(bet.Amount * coefficient);
+                            coefficient = pred.GetCoefficient(bet.OutcomeId);
+                            payout = CalculatePayout(bet.Amount, coefficient);
                             won = true;
                         }
                     }
@@ -1301,7 +1347,9 @@ namespace RPBot
                         Amount = bet.Amount,
                         Payout = payout,
                         Won = won,
-                        Coefficient = coefficient
+                        Coefficient = coefficient,
+                        WasFavorite = outcomeCoefficient < 2,
+                        WasUnderdog = outcomeCoefficient > 10
                     });
                 }
 
@@ -1385,7 +1433,11 @@ namespace RPBot
                 {
                     _userAchievements.Clear();
                     foreach (var kvp in loaded)
-                        _userAchievements[kvp.Key] = kvp.Value;
+                    {
+                        _userAchievements[kvp.Key] = kvp.Value
+                            .Where(a => AchievementDefinitions.All.ContainsKey(a.AchievementId))
+                            .ToList();
+                    }
                 }
             }
             catch (Exception ex)
@@ -1443,6 +1495,29 @@ namespace RPBot
                 stats.TotalWagered += bet.Amount;
                 stats.TotalParticipation++;
 
+                var betCoefficient = prediction.GetCoefficient(bet.OutcomeId);
+                var currentUtcDate = DateTime.UtcNow.Date;
+                var currentWeekStart = GetWeekStartUtc(currentUtcDate);
+                var currentMonthStart = new DateTime(currentUtcDate.Year, currentUtcDate.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+
+                if (stats.WeekStartUtc != currentWeekStart)
+                {
+                    stats.WeekStartUtc = currentWeekStart;
+                    stats.WeekHighCoeffWins = 0;
+                }
+
+                if (stats.MonthStartUtc != currentMonthStart)
+                {
+                    stats.MonthStartUtc = currentMonthStart;
+                    stats.MonthProfit = 0;
+                }
+
+                if (bet.Amount > stats.LargestBet)
+                    stats.LargestBet = bet.Amount;
+
+                if (betCoefficient < 2)
+                    stats.FavoriteBets++;
+
                 if (bet.OutcomeId == winningOutcomeId)
                 {
                     // Победитель
@@ -1454,9 +1529,27 @@ namespace RPBot
 
                     stats.TotalWon += profit;
                     stats.NetProfit += profit;
+                    stats.MonthProfit += profit;
 
                     if (profit > stats.HighestSingleWin)
                         stats.HighestSingleWin = profit;
+
+                    if (betCoefficient > stats.HighestCoeffWin)
+                        stats.HighestCoeffWin = betCoefficient;
+
+                    if (betCoefficient > 10)
+                    {
+                        stats.HighCoeffWins++;
+                        stats.WeekHighCoeffWins++;
+                    }
+
+                    if (betCoefficient > 5)
+                        stats.CurrentHighCoeffStreak++;
+                    else
+                        stats.CurrentHighCoeffStreak = 0;
+
+                    if (betCoefficient < 2)
+                        stats.FavoriteWins++;
 
                     // Обновление серии
                     if (stats.CurrentStreak >= 0)
@@ -1473,6 +1566,8 @@ namespace RPBot
                     stats.LostBets++;
                     stats.TotalLost += bet.Amount;
                     stats.NetProfit -= bet.Amount;
+                    stats.MonthProfit -= bet.Amount;
+                    stats.CurrentHighCoeffStreak = 0;
 
                     // Обновление серии
                     if (stats.CurrentStreak <= 0)
@@ -1483,6 +1578,12 @@ namespace RPBot
             }
 
             await SaveStatsAsync().ConfigureAwait(false);
+        }
+
+        private static DateTime GetWeekStartUtc(DateTime utcDate)
+        {
+            var diff = ((int)utcDate.DayOfWeek + 6) % 7;
+            return utcDate.AddDays(-diff);
         }
 
         // ✅ НОВОЕ: Обновление достижений после завершения прогноза
@@ -1510,6 +1611,19 @@ namespace RPBot
                     .Select(a => a.AchievementId)
                     .ToHashSet();
 
+                var wonCurrentBet = bet.OutcomeId == prediction.WinningOutcomeId;
+                var totalReturn = wonCurrentBet
+                    ? (long)Math.Round(bet.Amount * prediction.GetCoefficient(bet.OutcomeId), MidpointRounding.AwayFromZero)
+                    : 0;
+                var currentProfit = wonCurrentBet ? totalReturn - bet.Amount : 0;
+                var currentWinningOutcomePool = prediction.WinningOutcomeId.HasValue
+                    ? prediction.GetOutcomeById(prediction.WinningOutcomeId.Value)?.TotalStake ?? 0
+                    : 0;
+                var currentWinningBetsCount = prediction.WinningOutcomeId.HasValue
+                    ? prediction.Bets.Values.Count(b => b.OutcomeId == prediction.WinningOutcomeId.Value)
+                    : 0;
+                var isSingleWinnerOnOutcome = wonCurrentBet && currentWinningBetsCount == 1;
+
                 // Проверка каждого достижения
                 CheckAchievement("newcomer", stats.TotalBets >= 1);
                 CheckAchievement("student", stats.TotalParticipation >= 5);
@@ -1518,38 +1632,37 @@ namespace RPBot
                 CheckAchievement("veteran", stats.TotalParticipation >= 100);
 
                 CheckAchievement("first_blood", stats.TotalWon > 0);
-                CheckAchievement("earner", stats.NetProfit >= 1000);
-                CheckAchievement("rich", stats.NetProfit >= 10000);
-                CheckAchievement("magnate", stats.NetProfit >= 50000);
-                CheckAchievement("tycoon", stats.NetProfit >= 100000);
-                CheckAchievement("jackpot", stats.HighestSingleWin >= 5000);
-                CheckAchievement("mega_win", stats.HighestSingleWin >= 25000);
+                CheckAchievement("first_place", stats.TotalBets >= 1 && stats.FirstBets >= 1);
+                CheckAchievement("rich", wonCurrentBet && currentProfit > 10000);
+                CheckAchievement("millionaire", wonCurrentBet && currentProfit > 50000);
+                CheckAchievement("banker", stats.NetProfit > 100000);
+                CheckAchievement("highroller", bet.Amount > 1000);
+                CheckAchievement("whale", bet.Amount > 10000);
 
-                CheckAchievement("marksman", stats.WinRate >= 65 && stats.TotalBets >= 10);
-                CheckAchievement("expert", stats.WinRate >= 75 && stats.TotalBets >= 20);
-                CheckAchievement("perfect", stats.WinRate >= 90 && stats.TotalBets >= 30);
-                CheckAchievement("lucky_streak", stats.BestStreak >= 5);
-                CheckAchievement("unstoppable", stats.BestStreak >= 10);
+                CheckAchievement("accurate", stats.WinRate > 70 && stats.TotalBets >= 20);
+                CheckAchievement("lucky", stats.BestStreak >= 10);
+                CheckAchievement("on_fire", stats.BestStreak >= 20);
+                CheckAchievement("sniper", stats.HighCoeffWins >= 5);
+                CheckAchievement("lightning", stats.CurrentHighCoeffStreak >= 3);
 
-                CheckAchievement("risk_taker", false); // Требует данных о коэффициентах
-                CheckAchievement("mad", false); // Требует данных о коэффициентах
-                CheckAchievement("underdog_hunter", false); // Требует данных
-                CheckAchievement("fortune", false); // Требует данных
+                CheckAchievement("risky", wonCurrentBet && prediction.GetCoefficient(bet.OutcomeId) > 10);
+                CheckAchievement("madman", wonCurrentBet && prediction.GetCoefficient(bet.OutcomeId) > 20);
+                CheckAchievement("legend", wonCurrentBet && prediction.GetCoefficient(bet.OutcomeId) > 50);
+                CheckAchievement("hurricane", stats.WeekHighCoeffWins >= 3);
 
-                CheckAchievement("creator", false); // Требует данных о создании прогнозов
-                CheckAchievement("organizer", false); // Требует данных о создании прогнозов
-                CheckAchievement("mathematician", stats.ROI > 50 && stats.TotalBets >= 15);
-                CheckAchievement("profitable", stats.NetProfit >= 15000);
+                CheckAchievement("analyst", stats.FavoriteBets >= 10 && stats.FavoriteWins > 0 && ((double)stats.FavoriteWins / stats.FavoriteBets * 100) > 80);
+                CheckAchievement("strategist", stats.MonthProfit > 50000);
+                CheckAchievement("mathematician", stats.CreatedPredictions >= 10);
+                CheckAchievement("prediction_king", stats.CreatedPredictions >= 50);
 
-                CheckAchievement("phoenix", false); // Требует сложной логики
-                CheckAchievement("persistent", false); // Требует данных о сериях
-                CheckAchievement("universal", false); // Требует данных о типах ставок
-                CheckAchievement("marathon", stats.TotalParticipation >= 50);
-                CheckAchievement("collector", false); // Рекурсивно - требует подсчёта других достижений
+                CheckAchievement("early_bird", stats.FirstBets >= 10);
+                CheckAchievement("loner", isSingleWinnerOnOutcome);
+                CheckAchievement("trickster", wonCurrentBet && prediction.TotalPool > 0 && currentWinningOutcomePool * 10 < prediction.TotalPool);
+                CheckAchievement("perfectionist", stats.BestStreak >= 50);
 
                 void CheckAchievement(string achievementId, bool condition)
                 {
-                    if (condition && !userAchievementIds.Contains(achievementId))
+                    if (condition && AchievementDefinitions.All.ContainsKey(achievementId) && !userAchievementIds.Contains(achievementId))
                     {
                         var newAch = new UserAchievement
                         {
@@ -1661,7 +1774,9 @@ namespace RPBot
             if (!_userAchievements.TryGetValue(guildId, out var guildAchievements))
                 return new List<UserAchievement>();
 
-            return guildAchievements.Where(a => a.UserId == userId).ToList();
+            return guildAchievements
+                .Where(a => a.UserId == userId && AchievementDefinitions.All.ContainsKey(a.AchievementId))
+                .ToList();
         }
 
         public void Shutdown()

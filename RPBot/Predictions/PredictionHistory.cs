@@ -62,6 +62,8 @@ namespace RPBot.Predictions
         public long Payout { get; set; } // 0 если проиграл, Amount если отменён, Amount * коэфф если выиграл
         public bool Won { get; set; }
         public double Coefficient { get; set; } // Коэффициент на момент завершения
+        public bool WasFavorite { get; set; }
+        public bool WasUnderdog { get; set; }
     }
     
     /// <summary>
