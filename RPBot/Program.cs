@@ -765,23 +765,26 @@ namespace RPBot
             _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
             _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
-            _services = new ServiceCollection()
-                .AddSingleton(_client)
-                .AddSingleton(_commandService)
-                .AddSingleton(_reconnectionService)
-                .AddSingleton(_connectionPredictor)
-                .AddSingleton(_statusNotifier)
+			var serviceCollection = new ServiceCollection()
+				.AddSingleton(_client)
+				.AddSingleton(_commandService)
+				.AddSingleton(_reconnectionService)
+				.AddSingleton(_connectionPredictor)
+				.AddSingleton(_statusNotifier)
 				.AddSingleton(_pointsService)
-               .AddSingleton(_pointsUserIndex)
+				.AddSingleton(_pointsUserIndex)
 				.AddSingleton(_predictionService)
-			  .AddSingleton(_voicePointsService)
-				.AddSingleton(_googleSheetsService)
+				.AddSingleton(_voicePointsService)
 				.AddSingleton<QueueModule>()
-                .AddSingleton<InfoCommands>()
-                .AddSingleton<RollDiceCommands>()
-                .AddSingleton<GameSessionCommands>()
-                .AddSingleton<ModerationCommands>()
-                .BuildServiceProvider();
+				.AddSingleton<InfoCommands>()
+				.AddSingleton<RollDiceCommands>()
+				.AddSingleton<GameSessionCommands>()
+				.AddSingleton<ModerationCommands>();
+
+			if (_googleSheetsService != null)
+				serviceCollection.AddSingleton(_googleSheetsService);
+
+			_services = serviceCollection.BuildServiceProvider();
             // Load persisted bwonk counts
             try
             {
@@ -4829,6 +4832,50 @@ namespace RPBot
                     ? "Активно" 
                     : "Не инициализировано"
             });
+
+            // 8. Проверка Google Sheets
+            {
+                if (_config?.GoogleSheetsEnabled != true)
+                {
+                    checks.Add(new SystemHealthCheck
+                    {
+                        SystemName = "Google Sheets",
+                        IsHealthy = true,
+                        Message = "Отключено в конфиге"
+                    });
+                }
+                else if (_googleSheetsService == null)
+                {
+                    checks.Add(new SystemHealthCheck
+                    {
+                        SystemName = "Google Sheets",
+                        IsHealthy = false,
+                        Message = "Не инициализирован (проверь credentials и SpreadsheetId)"
+                    });
+                }
+                else
+                {
+                    try
+                    {
+                        var probeResult = await _googleSheetsService.ProbeAsync().ConfigureAwait(false);
+                        checks.Add(new SystemHealthCheck
+                        {
+                            SystemName = "Google Sheets",
+                            IsHealthy = probeResult.Success,
+                            Message = probeResult.Message
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        checks.Add(new SystemHealthCheck
+                        {
+                            SystemName = "Google Sheets",
+                            IsHealthy = false,
+                            Message = $"Ошибка проверки: {ex.Message}"
+                        });
+                    }
+                }
+            }
 
             return checks;
         }

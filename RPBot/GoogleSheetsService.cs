@@ -121,6 +121,53 @@ namespace RPBot
         // ─── Публичный API ────────────────────────────────────────────────
 
         /// <summary>
+        /// Проверяет доступность таблицы: авторизация, наличие листа, права на запись.
+        /// Используется в чек-листе при запуске бота.
+        /// </summary>
+        public async Task<(bool Success, string Message)> ProbeAsync()
+        {
+            try
+            {
+                // Шаг 1: читаем заголовок листа (1 ячейка) — проверяем авторизацию и доступ
+                var readRange = $"'{_sheetName}'!A1";
+                var readRequest = _sheets.Values.Get(_spreadsheetId, readRange);
+                readRequest.ValueRenderOption = SpreadsheetsResource.ValuesResource.GetRequest.ValueRenderOptionEnum.FORMATTEDVALUE;
+                var readResponse = await readRequest.ExecuteAsync().ConfigureAwait(false);
+
+                // Шаг 2: пробная запись — проверяем права на запись
+                // Пишем в ячейку-«ping» вне диапазона данных, например Z1
+                var pingRange = $"'{_sheetName}'!Z1";
+                var pingBody = new ValueRange
+                {
+                    Range = pingRange,
+                    Values = new List<IList<object>> { new List<object> { "" } }
+                };
+                var writeRequest = _sheets.Values.Update(pingBody, _spreadsheetId, pingRange);
+                writeRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.RAW;
+                await writeRequest.ExecuteAsync().ConfigureAwait(false);
+
+                var sheetId = string.IsNullOrWhiteSpace(_sheetName) ? "(default)" : _sheetName;
+                return (true, $"OK — лист «{sheetId}», чтение и запись доступны");
+            }
+            catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return (false, $"Таблица не найдена (SpreadsheetId={_spreadsheetId})");
+            }
+            catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                return (false, "Нет доступа — выдай права Редактора сервисному аккаунту");
+            }
+            catch (Google.GoogleApiException ex)
+            {
+                return (false, $"Google API: {ex.HttpStatusCode} — {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Ошибка: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Записывает завершённую сессию в таблицу.
         /// Возвращает 1-based номер строки, куда была сделана запись,
         /// или -1 при ошибке / если строка-заглушка не найдена.
