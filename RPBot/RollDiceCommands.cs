@@ -74,22 +74,52 @@ namespace RPBot
             }
         }
 
-        private static string BuildRollResponse(IReadOnlyList<int> results, int modifier)
+        private static string BuildRollResponse(IReadOnlyList<int> results, bool hasRange, int minValue, int maxValue, int modifier)
         {
-            if (modifier == 0)
-                return $"Выпало: **{string.Join(", ", results)}**";
+            var resultLabel = results.Count == 1 ? "**Результат броска:**" : "**Результаты броска:**";
+            var totalLabel = results.Count == 1 ? "**Итоговый результат:**" : "**Итоговые результаты:**";
+            var resultValues = string.Join(", ", results);
+            var lines = new List<string>();
 
-            var parts = results.Select(r => $"{r} ({(modifier >= 0 ? "+" : string.Empty)}{modifier}={(r + modifier)})");
-            return $"Результат броска: **{string.Join("; ", parts)}**";
+            if (hasRange)
+                lines.Add($"**Диапазон:** {minValue}-{maxValue}");
+
+            lines.Add($"{resultLabel} {resultValues}");
+
+            if (modifier != 0)
+            {
+                var totalValues = string.Join(", ", results.Select(r => r + modifier));
+                var modifierText = $"{(modifier >= 0 ? "+" : string.Empty)}{modifier}";
+                lines.Add($"**Модификатор:** {modifierText}");
+                lines.Add($"{totalLabel} {totalValues}");
+            }
+
+            return string.Join("\n", lines);
         }
 
-        private static string BuildConsoleRollLog(string input, IReadOnlyList<int> results, int modifier)
+        private static void WriteCompletedRollLog(string input, IReadOnlyList<int> results, bool hasRange, int minValue, int maxValue, int modifier)
         {
-            if (modifier == 0)
-                return $"Условие броска: {input} | Результат: {string.Join(", ", results)}";
+            Console.WriteLine($"Условие броска: {input}");
 
-            var parts = results.Select(r => $"{r} ({(modifier >= 0 ? "+" : string.Empty)}{modifier}={r + modifier})");
-            return $"Условие броска: {input} | Результат: {string.Join("; ", parts)}";
+            if (hasRange)
+                Console.WriteLine($"Диапазон: {minValue}-{maxValue}");
+
+            Console.WriteLine($"{(results.Count == 1 ? "Результат броска" : "Результаты броска")}: {string.Join(", ", results)}");
+
+            if (modifier != 0)
+            {
+                Console.WriteLine($"Модификатор: {(modifier >= 0 ? "+" : string.Empty)}{modifier}");
+                Console.WriteLine($"{(results.Count == 1 ? "Итоговый результат" : "Итоговые результаты")}: {string.Join(", ", results.Select(r => r + modifier))}");
+            }
+
+            Console.WriteLine();
+        }
+
+        private static void WriteCompletedRollLog(string input, int result)
+        {
+            Console.WriteLine($"Условие броска: {input}");
+            Console.WriteLine($"Результат броска: {result}");
+            Console.WriteLine();
         }
 
         private static async Task DeleteOriginalResponseSafeAsync(SocketSlashCommand command, int delayMs)
@@ -125,7 +155,6 @@ namespace RPBot
             // Проверяем, сделан ли бросок в канале статистики
             bool isStatsChannel = channelId == statsChannelId && statsChannelId != 0;
 
-            Console.WriteLine($"\nБыло введено условие: {input}");
             var user = command.User as SocketGuildUser;
             if (user == null)
             {
@@ -146,7 +175,7 @@ namespace RPBot
 
             string diceType = ExtractDiceType(_input);
 
-            var match = Regex.Match(_input, @"^(?:(?:(\d*)d(\d+)|d(\d+))([+-]\d+)?$)", RegexOptions.IgnoreCase);
+            var match = Regex.Match(_input, @"^(?:(\d*)d(?:([1-9]\d*)|\[(\d+),(\d+)\]))([+-]\d+)?$", RegexOptions.IgnoreCase);
 
             if (!match.Success)
             {
@@ -156,24 +185,36 @@ namespace RPBot
             }
 
             int count = 1;
+            int min = 1;
             int max = 1;
             int modifier = 0;
+            var hasRange = false;
 
             if (match.Groups[1].Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value))
-            {
                 count = int.Parse(match.Groups[1].Value);
-                max = int.Parse(match.Groups[2].Value);
-                if (match.Groups[4].Success) modifier = int.Parse(match.Groups[4].Value);
-            }
-            else if (match.Groups[2].Success)
+
+            if (match.Groups[2].Success && !string.IsNullOrWhiteSpace(match.Groups[2].Value))
             {
                 max = int.Parse(match.Groups[2].Value);
-                if (match.Groups[4].Success) modifier = int.Parse(match.Groups[4].Value);
+            }
+            else if (match.Groups[3].Success && match.Groups[4].Success)
+            {
+                min = int.Parse(match.Groups[3].Value);
+                max = int.Parse(match.Groups[4].Value);
+                hasRange = true;
             }
 
-            if (count <= 0 || max <= 0)
+            if (match.Groups[5].Success)
+                modifier = int.Parse(match.Groups[5].Value);
+
+            if (count <= 0 || min <= 0 || max <= 0)
             {
                 await command.FollowupAsync("Количество бросков и верхняя граница должны быть больше нуля.", ephemeral: true);
+                return;
+            }
+            if (min > max)
+            {
+                await command.FollowupAsync("Левая граница диапазона не может быть больше правой.", ephemeral: true);
                 return;
             }
             if (count > 10)
@@ -215,12 +256,12 @@ namespace RPBot
 
             Random random = new Random();
             List<int> results = Enumerable.Range(0, count)
-                .Select(_ => random.Next(1, max + 1))
+                .Select(_ => random.Next(min, max + 1))
                 .ToList();
 
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
             var diceSubfolder = Path.Combine(numbersDir, diceType);
-            bool hasImages = Directory.Exists(diceSubfolder);
+            bool hasImages = !hasRange && Directory.Exists(diceSubfolder);
 
             if (isStatsChannel)
             {
@@ -268,6 +309,7 @@ namespace RPBot
                             .WithColor(GetGradientColor(result, 1, max))
                             .Build();
                         await command.FollowupWithFileAsync(filePath, embed: embed);
+                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
                         return;
                     }
                 }
@@ -314,14 +356,15 @@ namespace RPBot
                             attachments: files,
                             text: combinedMessage,
                             embeds: embeds.ToArray());
+                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
                         return;
                     }
                 }
             }
 
-            var resultMessage = BuildRollResponse(results, modifier);
+            var resultMessage = BuildRollResponse(results, hasRange, min, max, modifier);
             await command.FollowupAsync(resultMessage);
-            Console.WriteLine(BuildConsoleRollLog(_input, results, modifier));
+            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
         }
 
         [Command("roll20")]
@@ -409,9 +452,9 @@ namespace RPBot
             }
             else
             {
-                await command.FollowupAsync($"Выпало: **{result}**");
+                await command.FollowupAsync($"**Результат броска:** {result}");
             }
-            Console.WriteLine($"Условие броска: d20 | Результат: {result}");
+            WriteCompletedRollLog("d20", result);
         }
 
         private Color GetGradientColor(int value, int minValue, int maxValue)
