@@ -41,6 +41,7 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
+        private GoogleSheetsService? _googleSheetsService;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
@@ -737,9 +738,12 @@ namespace RPBot
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
-            _eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.SettingsFolderName, "event_announcements.json"));
+			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.SettingsFolderName, "event_announcements.json"));
+			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
+			if (_googleSheetsService != null)
+				_googleSheetsService.LogSink = msg => CommandLogSink?.Invoke(msg);
 
-			// Сервисы для костяшек и игровых прогнозов
+			// Сервисы для костяшек
 			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json"));
 			_pointsService = new PointsService(pointsPath);
 			// Загрузка балансов костяшек из файла
@@ -770,8 +774,9 @@ namespace RPBot
 				.AddSingleton(_pointsService)
                .AddSingleton(_pointsUserIndex)
 				.AddSingleton(_predictionService)
-              .AddSingleton(_voicePointsService)
-                .AddSingleton<QueueModule>()
+			  .AddSingleton(_voicePointsService)
+				.AddSingleton(_googleSheetsService)
+				.AddSingleton<QueueModule>()
                 .AddSingleton<InfoCommands>()
                 .AddSingleton<RollDiceCommands>()
                 .AddSingleton<GameSessionCommands>()

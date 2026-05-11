@@ -46,18 +46,25 @@ namespace RPBot
         public ulong? ConfirmationMessageId { get; set; }
         public bool StatsSent { get; set; }
         public object StatsSync { get; } = new();
+        /// <summary>1-based номер строки в Google Sheets, куда записана эта сессия. 0 = не записано.</summary>
+        public int SheetRowIndex { get; set; } = 0;
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
     {
         private readonly DiscordSocketClient _client;
+        private readonly GoogleSheetsService? _googleSheets;
         public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
         private static readonly string _sessionsStatePath = Path.Combine(AppContext.BaseDirectory, "Data", "sessions_state.json");
 
-        public GameSessionCommands(DiscordSocketClient client) => _client = client;
+        public GameSessionCommands(DiscordSocketClient client, GoogleSheetsService? googleSheets = null)
+        {
+            _client = client;
+            _googleSheets = googleSheets;
+        }
 
         private void Log(string message)
         {
@@ -795,6 +802,22 @@ namespace RPBot
 
                 await UpdateControlMessage(session, modal.Channel);
                 await SendTemporaryEphemeralResponse(modal, $"Изменения сохранены:\n{string.Join("\n", changes)}");
+
+                // Обновляем строку в Google Sheets если сессия уже была туда записана
+                if (_googleSheets != null && session.SheetRowIndex > 0)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _googleSheets.UpdateSessionRowAsync(session).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Ошибка обновления Google Sheets: {ex.Message}");
+                        }
+                    });
+                }
             }
             finally
             {
@@ -1157,6 +1180,24 @@ namespace RPBot
                 var statsMessage = BuildSessionStats(session);
                 await channel.SendMessageAsync(statsMessage);
                 Log($"Статистика по времени для сессии {session.SessionId} отправлена");
+
+                // Записываем сессию в Google Sheets (если сервис настроен)
+                if (_googleSheets != null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var row = await _googleSheets.AppendSessionAsync(session).ConfigureAwait(false);
+                            if (row > 0)
+                                session.SheetRowIndex = row;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Ошибка записи в Google Sheets: {ex.Message}");
+                        }
+                    });
+                }
 
                 if (session.Rolls.Count > 0)
                 {
