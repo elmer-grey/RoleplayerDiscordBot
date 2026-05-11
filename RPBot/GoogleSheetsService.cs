@@ -297,7 +297,7 @@ namespace RPBot
 
             return new List<object>
             {
-                session.StartTime.ToString("dd.MM.yyyy"),          // A – Дата
+                session.StartTime.ToString("dd/MM"),              // A – Дата
                 session.MasterName ?? "",                           // B – Мастер
                 session.GameName ?? "",                             // C – Название
                 session.StartTime.ToString("HH:mm"),               // D – Время старта
@@ -325,16 +325,7 @@ namespace RPBot
                 .Sum(p => (p.End!.Value - p.Start).TotalSeconds);
 
             var ts = TimeSpan.FromSeconds(totalSeconds);
-            var hours   = (int)ts.TotalHours;
-            var minutes = ts.Minutes;
-            var seconds = ts.Seconds;
-
-            var parts = new List<string>();
-            if (hours > 0)   parts.Add($"{hours} ч");
-            if (minutes > 0) parts.Add($"{minutes} мин");
-            if (seconds > 0 && hours == 0) parts.Add($"{seconds} сек"); // секунды только если меньше часа
-
-            return parts.Count > 0 ? string.Join(" ", parts) : "< 1 мин";
+            return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}";
         }
 
         /// <summary>
