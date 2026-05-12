@@ -177,29 +177,30 @@ namespace RPBot
             await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                Log($"Поиск свободной строки для сессии \"{session.GameName}\"...");
+                Log($"[Sheets] Поиск строки-заглушки для сессии \"{session.GameName}\"...");
 
                 int row = await FindPlaceholderRowAsync().ConfigureAwait(false);
                 if (row < 0)
                 {
-                    Log("Свободная строка-заглушка не найдена. Добавляю новую строку в конец таблицы.");
+                    Log("[Sheets] Заглушка не найдена — ищу первую пустую строку.");
                     row = await FindFirstEmptyRowAsync().ConfigureAwait(false);
                     if (row < 0)
                     {
-                        Log("Не удалось определить строку для записи.");
+                        Log("[Sheets] Не удалось определить строку для записи.");
                         return -1;
                     }
                 }
 
                 var values = BuildRowValues(session);
+                Log($"[Sheets] Запись в строку {row}: {string.Join(" | ", values.Select(v => v?.ToString() ?? "-"))}");
                 await WriteRowAsync(row, values).ConfigureAwait(false);
 
-                Log($"Сессия \"{session.GameName}\" записана в строку {row}.");
+                Log($"[Sheets] Запись завершена, строка {row}.");
                 return row;
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при записи сессии: {ex.Message}");
+                Log($"[Sheets] Ошибка при записи сессии: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
                 return -1;
             }
             finally
@@ -220,7 +221,7 @@ namespace RPBot
             await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                Log($"Обновление строки {session.SheetRowIndex} для сессии \"{session.GameName}\"...");
+                Log($"[Sheets] Обновление строки {session.SheetRowIndex} (мастер: {session.MasterName}, название: {session.GameName})...");
 
                 // Обновляем только колонки B (Мастер) и C (Название)
                 var rangeB = $"'{_sheetName}'!B{session.SheetRowIndex}";
@@ -249,11 +250,11 @@ namespace RPBot
                     _spreadsheetId);
 
                 await batchRequest.ExecuteAsync().ConfigureAwait(false);
-                Log($"Строка {session.SheetRowIndex} обновлена (мастер: {session.MasterName}, название: {session.GameName}).");
+                Log($"[Sheets] Строка {session.SheetRowIndex} обновлена.");
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при обновлении строки {session.SheetRowIndex}: {ex.Message}");
+                Log($"[Sheets] Ошибка при обновлении строки {session.SheetRowIndex}: {ex.Message}");
             }
             finally
             {
@@ -280,6 +281,8 @@ namespace RPBot
                 if (response?.Values == null)
                     return _dataStartRow; // лист пустой — пишем с первой строки данных
 
+                Log($"[Sheets] Прочитано {response.Values.Count} строк в столбце A.");
+
                 for (int i = 0; i < response.Values.Count; i++)
                 {
                     var cell = response.Values[i].Count > 0
@@ -294,7 +297,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при поиске строки-заглушки: {ex.Message}");
+                Log($"[Sheets] Ошибка при поиске строки-заглушки: {ex.GetType().Name}: {ex.Message}");
                 return -1;
             }
         }
@@ -329,7 +332,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при поиске пустой строки: {ex.Message}");
+                Log($"[Sheets] Ошибка при поиске пустой строки: {ex.Message}");
                 return -1;
             }
         }
@@ -395,7 +398,6 @@ namespace RPBot
         private void Log(string message)
         {
             LogSink?.Invoke($"[GoogleSheets] {message}");
-            Console.WriteLine($"[GoogleSheets] {message}");
         }
     }
 }

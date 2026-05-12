@@ -37,6 +37,8 @@ namespace RPBot
         public List<RollStatistic> Rolls { get; set; } = new();
         public string EventDescription { get; set; }
         public ulong ControlMessageId { get; set; }
+        /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
+        public ulong ControlChannelId { get; set; }
         public ulong StatsMessageId { get; set; }
         public CancellationTokenSource PauseReminderCTS { get; set; }
         public bool TrackRolls { get; set; }
@@ -54,6 +56,7 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly GoogleSheetsService? _googleSheets;
+        internal Action<string>? _logSinkOverride;
         public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
@@ -68,7 +71,7 @@ namespace RPBot
 
         private void Log(string message)
         {
-            Program.CommandLogSink?.Invoke(message);
+            (_logSinkOverride ?? Program.CommandLogSink)?.Invoke(message);
         }
 
         private static async Task SaveSessionsAsync()
@@ -102,6 +105,7 @@ namespace RPBot
                                 session.GameComment,
                                 session.EventId,
                                 session.ControlMessageId,
+                                session.ControlChannelId,
                                 session.IsPaused,
                                 session.TrackRolls,
                                 Rolls = session.Rolls
@@ -160,6 +164,7 @@ namespace RPBot
                         var gameComment = elem.TryGetProperty("GameComment", out var gc) ? gc.GetString() : null;
                         var eventId = elem.TryGetProperty("EventId", out var eid) && eid.ValueKind != System.Text.Json.JsonValueKind.Null ? (ulong?)eid.GetUInt64() : null;
                         var controlMessageId = elem.GetProperty("ControlMessageId").GetUInt64();
+                        var controlChannelId = elem.TryGetProperty("ControlChannelId", out var cci) ? cci.GetUInt64() : 0UL;
                         var channelId = elem.GetProperty("ChannelId").GetUInt64();
                         var isPaused = elem.TryGetProperty("IsPaused", out var ip) && ip.GetBoolean();
                         var trackRolls = elem.TryGetProperty("TrackRolls", out var tr) && tr.GetBoolean();
@@ -196,6 +201,7 @@ namespace RPBot
                             GameComment = gameComment,
                             EventId = eventId,
                             ControlMessageId = controlMessageId,
+                            ControlChannelId = controlChannelId,
                             IsPaused = isPaused,
                             TrackRolls = trackRolls,
                             Rolls = rolls
@@ -246,8 +252,10 @@ namespace RPBot
                     {
                         try
                         {
-                            var channel = client.GetChannel(session.ChannelId) as ITextChannel
-                                ?? client.GetGuild(session.GuildId)?.GetTextChannel(session.ChannelId);
+                            // Приоритет: ControlChannelId (точный канал control message) → ChannelId (fallback)
+                            var resolvedChannelId = session.ControlChannelId != 0 ? session.ControlChannelId : session.ChannelId;
+                            var channel = client.GetChannel(resolvedChannelId) as ITextChannel
+                                ?? client.GetGuild(session.GuildId)?.GetTextChannel(resolvedChannelId);
 
                             if (channel == null)
                                 continue;
@@ -278,6 +286,7 @@ namespace RPBot
                             var buttons = commands.CreateControlButtons(session);
                             var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                             session.ControlMessageId = message.Id;
+                            session.ControlChannelId = channel.Id;
 
                             recreatedCount++;
                             Console.WriteLine($"[SESSIONS] Пересоздано сообщение управления для сессии {session.SessionId}");
@@ -497,6 +506,7 @@ namespace RPBot
                 var buttons = commands.CreateControlButtons(session);
                 var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                 session.ControlMessageId = message.Id;
+                session.ControlChannelId = channel.Id;
 
                 commands.Log($"Создано сообщение управления для сессии {session.SessionId} (ID сообщения: {message.Id})");
             }
@@ -554,6 +564,7 @@ namespace RPBot
             var buttons = CreateControlButtons(session);
             var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
             session.ControlMessageId = message.Id;
+            session.ControlChannelId = command.Channel.Id;
         }
 
         public async Task HandleControlButton(SocketMessageComponent component)
@@ -916,11 +927,10 @@ namespace RPBot
                     }
                 }
 
-                // ВАЖНО: Сначала выводим статистику
-                await SendSessionStats(session, component.Channel);
-
-                // ПОТОМ удаляем контрольное сообщение
+                // ВАЖНО: Сначала удаляем контрольное сообщение, потом выводим статистику
                 await DeleteControlMessageAsync(session, component.Channel);
+
+                await SendSessionStats(session, component.Channel);
 
                 // Очистка сессии происходит:
                 // 1. В SendSessionStats → RemoveSession() если нет бросков (строка 6621)
@@ -945,14 +955,16 @@ namespace RPBot
             if (overrideChannel != null)
                 return overrideChannel;
 
-            if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config) && config.RecordChannelID != 0)
+            // Используем ControlChannelId — точный канал, в котором было создано сообщение управления
+            if (session.ControlChannelId != 0)
             {
-                var channel = _client.GetChannel(config.RecordChannelID) as IMessageChannel
-                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(config.RecordChannelID);
+                var channel = _client.GetChannel(session.ControlChannelId) as IMessageChannel
+                    ?? _client.GetGuild(session.GuildId)?.GetTextChannel(session.ControlChannelId);
                 if (channel != null)
                     return channel;
             }
 
+            // Fallback: канал, переданный при создании сессии через /start (старые сессии без ControlChannelId)
             if (session.ChannelId != 0)
             {
                 var channel = _client.GetChannel(session.ChannelId) as IMessageChannel
@@ -1027,9 +1039,10 @@ namespace RPBot
             _ = Task.Run(() => SaveSessionsAsync());
         }
 
-        public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client)
+        public static async Task OnGuildScheduledEventCompleted(SocketGuildEvent guildEvent, DiscordSocketClient client, GoogleSheetsService? googleSheets = null, Action<string>? logSink = null)
         {
-            var commands = new GameSessionCommands(client);
+            var commands = new GameSessionCommands(client, googleSheets);
+            commands._logSinkOverride = logSink;
             commands.Log($"Событие {guildEvent.Id} завершено - обработка связанной сессии...");
 
             try
@@ -1048,32 +1061,39 @@ namespace RPBot
                         {
                             commands.Log($"Найдена сессия {session.SessionId} для завершения");
 
-                    if (session.IsPaused)
-                    {
-                        commands.Log($"Снятие паузы для сессии {session.SessionId}...");
-                        try { session.PauseReminderCTS?.Cancel(); } catch { }
-                        try { session.PauseReminderCTS?.Dispose(); } catch { }
-                        session.PauseReminderCTS = null;
-                        var lastPause = session.PausePeriods.Last();
-                        session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-                        session.IsPaused = false;
-                    }
+                            if (session.IsPaused)
+                            {
+                                commands.Log($"Снятие паузы для сессии {session.SessionId}...");
+                                try { session.PauseReminderCTS?.Cancel(); } catch { }
+                                try { session.PauseReminderCTS?.Dispose(); } catch { }
+                                session.PauseReminderCTS = null;
+                                var lastPause = session.PausePeriods.Last();
+                                session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                                session.IsPaused = false;
+                            }
 
                             session.EndTime = DateTime.Now;
                             commands.Log($"Установлено время окончания для сессии {session.SessionId}");
 
-                    var recordChannelId = Program.ServerConfigResolver?.Invoke(guildId)?.RecordChannelID ?? 0;
-                    var channel = client.GetChannel(recordChannelId) as SocketTextChannel;
+                            var recordChannelId = Program.ServerConfigResolver?.Invoke(guildId)?.RecordChannelID ?? 0;
+                            // Fallback: если RecordChannelID не задан — используем канал control message
+                            if (recordChannelId == 0)
+                                recordChannelId = session.ControlChannelId;
+                            var channel = client.GetChannel(recordChannelId) as ISocketMessageChannel
+                                ?? client.GetGuild(guildId)?.GetTextChannel(recordChannelId) as ISocketMessageChannel;
+
                             if (channel != null)
                             {
-                                commands.Log($"Отправка статистики для сессии {session.SessionId}...");
+                                commands.Log($"Отправка статистики для сессии {session.SessionId} в канал {recordChannelId}...");
+                                // Сначала удаляем сообщение управления, затем отправляем статистику
+                                await commands.DeleteControlMessageAsync(session);
                                 await commands.SendSessionStats(session, channel);
                             }
                             else
                             {
-                                commands.Log($"Канал для статистики не найден");
+                                commands.Log($"Канал для статистики не найден (RecordChannelID={recordChannelId})");
+                                await commands.DeleteControlMessageAsync(session);
                             }
-                            await commands.DeleteControlMessageAsync(session);
                         }
                         else
                         {
@@ -1173,7 +1193,7 @@ namespace RPBot
                 session.StatsSent = true;
             }
 
-          Log($"Формирование статистики для сессии {session.SessionId}...");
+            Log($"Формирование статистики для сессии {session.SessionId}...");
 
             try
             {
@@ -1181,32 +1201,12 @@ namespace RPBot
                 await channel.SendMessageAsync(statsMessage);
                 Log($"Статистика по времени для сессии {session.SessionId} отправлена");
 
-                // Записываем сессию в Google Sheets (если сервис настроен)
-                if (_googleSheets != null)
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var row = await _googleSheets.AppendSessionAsync(session).ConfigureAwait(false);
-                            if (row > 0)
-                                session.SheetRowIndex = row;
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"Ошибка записи в Google Sheets: {ex.Message}");
-                        }
-                    });
-                }
-
                 if (session.Rolls.Count > 0)
                 {
                     Log($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
 
                     if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config))
                     {
-                        Log($"Конфигурация сервера {session.GuildId} найдена");
-
                         if (_client.GetChannel(config.StatsChannelID) is ITextChannel statsChannel)
                         {
                             var buttons = new ComponentBuilder()
@@ -1240,6 +1240,31 @@ namespace RPBot
                 {
                     Log($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
                     RemoveSession(session);
+                }
+
+                // Google Sheets — в последнюю очередь, после всех Discord-сообщений
+                if (_googleSheets != null)
+                {
+                    try
+                    {
+                        var row = await _googleSheets.AppendSessionAsync(session).ConfigureAwait(false);
+                        if (row > 0)
+                        {
+                            session.SheetRowIndex = row;
+                        }
+                        else
+                        {
+                            Log($"[Sheets] Запись не удалась — AppendSessionAsync вернул {row}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[Sheets] Ошибка записи: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Log($"[Sheets] Сервис не инициализирован — запись пропущена");
                 }
             }
             catch (Exception ex)
@@ -1285,7 +1310,10 @@ namespace RPBot
                     var guild = _client.GetGuild(session.GuildId);
                     if (guild == null) return;
 
-                    var channelId = Program.ServerConfigResolver?.Invoke(session.GuildId)?.RecordChannelID ?? 0;
+                    // Используем ControlChannelId — точный канал control message (напоминания о паузе тоже там)
+                    var channelId = session.ControlChannelId != 0
+                        ? session.ControlChannelId
+                        : session.ChannelId;
                     var channel = guild.GetTextChannel(channelId);
                     if (channel == null) return;
 

@@ -1637,7 +1637,7 @@ namespace RPBot
         {
             try
             {
-                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client);
+                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client, _googleSheetsService, CommandLogSink);
                try
                 {
                     Console.WriteLine($"[EVENT] completed guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
@@ -3142,7 +3142,7 @@ namespace RPBot
                 // Existing edit modal handling
                 if (parts.Length >= 2 && parts[0] == "edit_modal")
                 {
-                    await new GameSessionCommands(_client).HandleEditModal(modal);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleEditModal(modal);
                     return;
                 }
 
@@ -3621,13 +3621,13 @@ namespace RPBot
                 case "confirm_stop":
                 case "cancel_stop":
                 case "toggle_rolls":
-                    await new GameSessionCommands(_client).HandleControlButton(component);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleControlButton(component);
                     break;
 
                 case "no_stats":
                 case "general_stats":
                 case "detailed_stats":
-                    await new GameSessionCommands(_client).HandleStatsButton(component);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleStatsButton(component);
                     break;
             }
         }
