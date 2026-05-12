@@ -49,6 +49,22 @@ sentry:
   dsn: ""
   environment: ""
 
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - TVHTML5_SIMPLY  # загружает метаданные трека
+      - TV              # playback-only с OAuth: получает URL потоков через remote cipher
+    remoteCipher:
+      url: "http://localhost:8001"
+      userAgent: "RoleplayerDiscordBot"
+    oauth:
+      enabled: true
+      refreshToken: "1//09to_XQnY_UYtCgYIARAAGAkSNwF-L9IrGXj3ukPerjG_KjY3uzp-hIPVKKhq3etQXT_L9lQhEbjdBhDcTAHDzGoM0h_pEwhMR6o"
+
 logging:
   file:
     path: ./logs

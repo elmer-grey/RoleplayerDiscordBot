@@ -1,0 +1,5 @@
+# Lavalink jar не коммитим — слишком большой (~96 MB)
+Lavalink.jar
+
+# Логи Lavalink
+logs/

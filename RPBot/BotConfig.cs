@@ -82,6 +82,9 @@ namespace RPBot
         // Настройки прогнозирования отключений соединения (отдельно от игровых прогнозов/ставок)
         public PredictionConfig Prediction { get; set; } = new PredictionConfig();
 
+        // === МУЗЫКА (LAVALINK) ===
+        public MusicConfig Music { get; set; } = new MusicConfig();
+
         // === ЛОГИ И ОТЧЁТЫ ===
 
         // Директория для логов (по умолчанию отдельная папка Logs рядом с EXE)
@@ -280,5 +283,43 @@ namespace RPBot
         public double FrequencyWeight { get; set; } = 1.0;
         public double HeartbeatWeight { get; set; } = 1.5;
         public double StabilityWeight { get; set; } = 1.0;
+    }
+    public class MusicConfig
+    {
+        /// <summary>Включить музыкальный функционал.</summary>
+        public bool Enabled { get; set; } = false;
+
+        /// <summary>Адрес Lavalink-сервера.</summary>
+        public string Host { get; set; } = "127.0.0.1";
+
+        /// <summary>Порт Lavalink-сервера.</summary>
+        public int Port { get; set; } = 2333;
+
+        /// <summary>Пароль Lavalink-сервера (должен совпадать с application.yml).</summary>
+        public string Password { get; set; } = "rpbot_lavalink_password";
+
+        /// <summary>Автоматически запускать Lavalink.jar при старте бота.</summary>
+        public bool AutoStart { get; set; } = true;
+
+        /// <summary>Путь к Lavalink.jar (относительный или абсолютный).</summary>
+        public string JarPath { get; set; } = "Lavalink/Lavalink.jar";
+
+        /// <summary>Путь к application.yml для Lavalink (относительный или абсолютный).</summary>
+        public string ConfigPath { get; set; } = "Lavalink/application.yml";
+
+        /// <summary>Секунд ожидания готовности Lavalink после запуска.</summary>
+        public int StartupTimeoutSeconds { get; set; } = 30;
+
+        /// <summary>Отключить бота от голосового канала если очередь пуста N секунд. 0 = не отключать.</summary>
+        public int InactivityTimeoutSeconds { get; set; } = 300;
+
+        /// <summary>Автоматически запускать локальный yt-cipher сервер перед Lavalink.</summary>
+        public bool YtCipherAutoStart { get; set; } = false;
+
+        /// <summary>Путь к директории с yt-cipher (там должен лежать server.ts).</summary>
+        public string YtCipherPath { get; set; } = "yt-cipher";
+
+        /// <summary>Порт для локального yt-cipher сервера.</summary>
+        public int YtCipherPort { get; set; } = 8001;
     }
 }

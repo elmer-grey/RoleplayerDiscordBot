@@ -25,18 +25,20 @@ namespace RPBot
     public sealed class LavalinkService : IAsyncDisposable, IDisposable
     {
         private readonly MusicConfig _config;
-        private readonly DiscordSocketClient _discordClient;
+        private readonly Func<DiscordSocketClient> _getClient;
+        private DiscordSocketClient _discordClient => _getClient();
 
         private ServiceProvider? _serviceProvider;
         private IAudioService? _audioService;
         private Process? _lavalinkProcess;
+        private Process? _ytCipherProcess;
         private bool _disposed;
 
         public Action<string>? LogSink { get; set; }
 
-        public LavalinkService(DiscordSocketClient discordClient, MusicConfig config)
+        public LavalinkService(Func<DiscordSocketClient> getClient, MusicConfig config)
         {
-            _discordClient = discordClient;
+            _getClient = getClient;
             _config = config;
         }
 
@@ -57,6 +59,162 @@ namespace RPBot
             await StartLavalinkProcessAsync(cancellationToken);
             BuildServices();
             await StartHostedServicesAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Фаза 1: строим DI-контейнер и подписываемся на Discord-события.
+        /// Должна вызываться ДО LoginAsync, чтобы DiscordClientWrapper
+        /// поймал событие Ready в нужный момент.
+        /// AudioServiceHost НЕ запускается здесь — он стартует только после Lavalink.
+        /// </summary>
+        public Task PrepareAsync(CancellationToken cancellationToken = default)
+        {
+            if (!_config.Enabled) return Task.CompletedTask;
+            BuildServices();
+            Log("[Music] DI-контейнер собран, DiscordClientWrapper подписан на события ✓");
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Фаза 2: запускаем Lavalink-процесс, затем поднимаем AudioServiceHost.
+        /// Вызывается после того как Discord-клиент уже подключён (после Ready).
+        /// </summary>
+        public async Task LaunchProcessAsync(CancellationToken cancellationToken = default)
+        {
+            if (!_config.Enabled) return;
+            await StartYtCipherProcessAsync(cancellationToken);
+            await StartLavalinkProcessAsync(cancellationToken);
+            await StartHostedServicesAsync(cancellationToken);
+            Log("[Music] AudioServiceHost запущен после Lavalink ✓");
+        }
+
+        /// <summary>
+        /// Пересобирает DI-контейнер с актуальным Discord-клиентом.
+        /// Вызывается при перезапуске бота когда создаётся новый DiscordSocketClient.
+        /// </summary>
+        public async Task RebuildClientAsync(CancellationToken cancellationToken = default)
+        {
+            if (_serviceProvider is null) return;
+            Log("[Music] Пересборка DI-контейнера с новым Discord-клиентом...");
+            await StopHostedServicesAsync(cancellationToken);
+            _serviceProvider.Dispose();
+            _serviceProvider = null;
+            _audioService = null;
+            BuildServices();
+            await StartHostedServicesAsync(cancellationToken);
+            Log("[Music] DI-контейнер пересобран ✓");
+        }
+
+        private async Task StopHostedServicesAsync(CancellationToken cancellationToken)
+        {
+            if (_serviceProvider is null) return;
+            foreach (var svc in _serviceProvider.GetServices<IHostedService>())
+            {
+                try { await svc.StopAsync(cancellationToken); } catch { }
+            }
+        }
+
+        private async Task StartYtCipherProcessAsync(CancellationToken cancellationToken)
+        {
+            if (!_config.YtCipherAutoStart) return;
+
+            if (_ytCipherProcess is { HasExited: false })
+            {
+                Log("[Music] yt-cipher уже запущен.");
+                return;
+            }
+
+            var denoExe = ResolveDeno();
+            if (denoExe is null)
+            {
+                Log("[Music] deno не найден — yt-cipher не будет запущен.");
+                return;
+            }
+
+            var ytCipherDir = BotConfig.ResolvePath(_config.YtCipherPath);
+            var serverTs = Path.Combine(ytCipherDir, "server.ts");
+            if (!File.Exists(serverTs))
+            {
+                Log($"[Music] server.ts не найден: {serverTs} — yt-cipher не будет запущен.");
+                return;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = denoExe,
+                Arguments = "run --allow-net --allow-env --allow-read --allow-write --allow-run server.ts",
+                WorkingDirectory = ytCipherDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+            psi.Environment["PORT"] = _config.YtCipherPort.ToString();
+            psi.Environment["OVERRIDE_SCRIPT_VARIANT"] = "IAS";
+
+            Log($"[Music] Запуск yt-cipher: {denoExe} в {ytCipherDir} на порту {_config.YtCipherPort}");
+            try
+            {
+                _ytCipherProcess = Process.Start(psi);
+                if (_ytCipherProcess is null)
+                {
+                    Log("[Music] Не удалось запустить yt-cipher процесс.");
+                    return;
+                }
+                Log($"[Music] yt-cipher PID={_ytCipherProcess.Id}");
+            }
+            catch (Exception ex)
+            {
+                Log($"[Music] Ошибка запуска yt-cipher: {ex.Message}");
+                return;
+            }
+
+            // Ждём готовности — до 20 сек
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            var url = $"http://127.0.0.1:{_config.YtCipherPort}/metrics";
+            Log("[Music] Ожидание готовности yt-cipher...");
+            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var resp = await http.GetAsync(url, cancellationToken);
+                    if (resp.IsSuccessStatusCode) { Log("[Music] yt-cipher готов ✓"); return; }
+                }
+                catch { }
+                await Task.Delay(1000, cancellationToken);
+            }
+            Log("[Music] yt-cipher не ответил в отведённое время.");
+        }
+
+        private static string? ResolveDeno()
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var candidate = Path.Combine(home, ".deno", "bin", "deno.exe");
+            if (File.Exists(candidate)) return candidate;
+
+            try
+            {
+                var where = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "where.exe",
+                    Arguments = "deno",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                });
+                if (where is not null)
+                {
+                    var output = where.StandardOutput.ReadToEnd();
+                    where.WaitForExit();
+                    var first = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+                    if (!string.IsNullOrEmpty(first) && File.Exists(first)) return first;
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         private async Task StartLavalinkProcessAsync(CancellationToken cancellationToken)
@@ -81,29 +239,80 @@ namespace RPBot
             }
 
             var workDir = Path.GetDirectoryName(jarPath) ?? ".";
+            var javaExe = ResolveJavaExecutable();
+            Log($"[Music] Java: {javaExe}");
+
+            // UseShellExecute = true — запускаем через оболочку, чтобы не конфликтовать с Terminal.Gui.
+            // Lavalink сам пишет логи в ./logs/, поэтому перенаправление не нужно.
             var psi = new ProcessStartInfo
             {
-                FileName = "java",
+                FileName = javaExe,
                 Arguments = $"-jar \"{jarPath}\"",
                 WorkingDirectory = workDir,
-                // Запускаем отдельно — НЕ перенаправляем stdout/stderr в бот,
-                // так как Terminal.Gui перехватывает консоль и вызывает IOException.
-                // Lavalink пишет свои логи в ./logs/ самостоятельно.
-                UseShellExecute = false,
-                RedirectStandardOutput = false,
-                RedirectStandardError = false,
+                UseShellExecute = true,
                 CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
             };
 
-            Log($"[Music] Запуск Lavalink: java -jar {jarPath}");
-            _lavalinkProcess = Process.Start(psi)!;
+            Log($"[Music] Запуск Lavalink: {javaExe} -jar {jarPath}");
+            try
+            {
+                _lavalinkProcess = Process.Start(psi);
+                if (_lavalinkProcess is null)
+                {
+                    Log("[Music] Process.Start вернул null — не удалось запустить java.");
+                    return;
+                }
+                Log($"[Music] Lavalink процесс запущен, PID={_lavalinkProcess.Id}");
+            }
+            catch (Exception ex)
+            {
+                Log($"[Music] Не удалось запустить Lavalink: {ex.Message}");
+                return;
+            }
 
             await WaitUntilReadyAsync(cancellationToken);
+        }
+
+        private static string ResolveJavaExecutable()
+        {
+            // 1. JAVA_HOME — приоритет
+            var javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
+            if (!string.IsNullOrEmpty(javaHome))
+            {
+                var candidate = Path.Combine(javaHome, "bin", "java.exe");
+                if (File.Exists(candidate)) return candidate;
+            }
+
+            // 2. Ищем через where.exe (корректно находит даже если PATH задан только для cmd)
+            try
+            {
+                var where = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "where.exe",
+                    Arguments = "java",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                });
+                if (where is not null)
+                {
+                    var output = where.StandardOutput.ReadToEnd();
+                    where.WaitForExit();
+                    var first = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+                    if (!string.IsNullOrEmpty(first) && File.Exists(first)) return first;
+                }
+            }
+            catch { }
+
+            // 3. Fallback — надеемся что java есть в PATH
+            return "java";
         }
 
         private async Task WaitUntilReadyAsync(CancellationToken cancellationToken)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            http.DefaultRequestHeaders.Add("Authorization", _config.Password);
             var deadline = DateTime.UtcNow.AddSeconds(_config.StartupTimeoutSeconds);
             var url = $"http://{_config.Host}:{_config.Port}/version";
 
@@ -114,8 +323,9 @@ namespace RPBot
                 {
                     var resp = await http.GetAsync(url, cancellationToken);
                     if (resp.IsSuccessStatusCode) { Log("[Music] Lavalink готов ✓"); return; }
+                    Log($"[Music] Зонд: HTTP {(int)resp.StatusCode}");
                 }
-                catch { }
+                catch (Exception ex) { Log($"[Music] Зонд: {ex.Message}"); }
                 await Task.Delay(1000, cancellationToken);
             }
             Log("[Music] Lavalink не ответил в отведённое время.");
@@ -126,7 +336,24 @@ namespace RPBot
             var services = new ServiceCollection();
 
             // Lavalink4NET.DiscordNet требует DiscordSocketClient в DI
-            services.AddSingleton(_discordClient);
+            // Регистрируем и как DiscordSocketClient, и как BaseSocketClient —
+            // DiscordClientWrapper запрашивает именно BaseSocketClient
+            var client = _discordClient;
+
+            // Диагностика: логируем gateway-события чтобы убедиться что они приходят
+            client.UserVoiceStateUpdated += (user, before, after) =>
+            {
+                Log($"[Music][DBG] UserVoiceStateUpdated: user={user.Id} before={before.VoiceChannel?.Id} after={after.VoiceChannel?.Id} sessionId='{after.VoiceSessionId}' isSelf={user.Id == client.CurrentUser?.Id}");
+                return Task.CompletedTask;
+            };
+            client.VoiceServerUpdated += server =>
+            {
+                Log($"[Music][DBG] VoiceServerUpdated: guild={server.Guild.Id} endpoint={server.Endpoint} token={(server.Token?.Length > 0 ? "ok" : "EMPTY")}");
+                return Task.CompletedTask;
+            };
+
+            services.AddSingleton(client);
+            services.AddSingleton<Discord.WebSocket.BaseSocketClient>(client);
 
             // Регистрируем IAudioService + IDiscordClientWrapper (DiscordClientWrapper)
             services.AddLavalink();
@@ -164,6 +391,7 @@ namespace RPBot
         {
             if (!_config.Enabled) return "отключён в конфиге";
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            http.DefaultRequestHeaders.Add("Authorization", _config.Password);
             try
             {
                 var resp = await http.GetAsync($"http://{_config.Host}:{_config.Port}/version");
@@ -187,18 +415,41 @@ namespace RPBot
                 return "❌ Ты должен быть в голосовом канале.";
 
             var guildId = user.Guild.Id;
-            var voiceChannelId = user.VoiceChannel.Id;
+            var voiceChannel = user.VoiceChannel;
 
-            // Получаем или создаём плеер
-            var player = await _audioService.Players.GetPlayerAsync<QueuedLavalinkPlayer>(guildId, cancellationToken);
+            Log($"[Music] PlayAsync: guild={guildId} voiceChannel={voiceChannel.Id} query={query}");
+            Log($"[Music] Client hash={_discordClient.GetHashCode()} guilds={_discordClient.Guilds.Count} state={_discordClient.ConnectionState} login={_discordClient.LoginState}");
+
+            // Получаем или создаём плеер, передавая IVoiceChannel напрямую
+            QueuedLavalinkPlayer? player;
+            try
+            {
+                player = await _audioService.Players.GetPlayerAsync<QueuedLavalinkPlayer>(guildId, cancellationToken);
+                Log($"[Music] GetPlayer: {(player is null ? "null, создаю новый" : $"найден state={player.State}")}");
+            }
+            catch (Exception ex)
+            {
+                Log($"[Music] GetPlayer exception: {ex.Message}");
+                player = null;
+            }
+
             if (player is null)
             {
-                player = await _audioService.Players.JoinAsync(
-                    guildId,
-                    voiceChannelId,
-                    PlayerFactory.Queued,
-                    Options.Create(new QueuedLavalinkPlayerOptions()),
-                    cancellationToken);
+                try
+                {
+                    Log($"[Music] JoinAsync: guild={guildId} channel={voiceChannel.Id} ({voiceChannel.Name})");
+                    player = await _audioService.Players.JoinAsync(
+                        voiceChannel,
+                        PlayerFactory.Queued,
+                        Options.Create(new QueuedLavalinkPlayerOptions()),
+                        cancellationToken);
+                    Log($"[Music] JoinAsync: успех, player state={player?.State}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"[Music] JoinAsync exception: {ex}");
+                    return $"❌ Ошибка подключения к голосовому каналу: {ex.Message}";
+                }
             }
 
             // TODO (поиск): заменить TrackSearchMode.None на TrackSearchMode.YouTube
@@ -321,7 +572,14 @@ namespace RPBot
                 : duration.Value.ToString(@"m\:ss");
         }
 
-        private void Log(string message) => LogSink?.Invoke(message);
+        private void Log(string message)
+        {
+            LogSink?.Invoke(message);
+            FileSink?.Invoke(message);
+        }
+
+        /// <summary>Дополнительный sink для записи в файл (назначается из Program.cs).</summary>
+        public Action<string>? FileSink { get; set; }
 
         // ─── Dispose ─────────────────────────────────────────────────────
 
@@ -362,6 +620,20 @@ namespace RPBot
             catch (Exception ex)
             {
                 Log($"[Music] Ошибка при остановке Lavalink: {ex.Message}");
+            }
+
+            try
+            {
+                if (_ytCipherProcess is { HasExited: false })
+                {
+                    _ytCipherProcess.Kill(entireProcessTree: true);
+                    Log("[Music] yt-cipher процесс остановлен.");
+                }
+                _ytCipherProcess?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log($"[Music] Ошибка при остановке yt-cipher: {ex.Message}");
             }
         }
     }

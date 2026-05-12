@@ -24,35 +24,29 @@ namespace RPBot
         /// </summary>
         public async Task HandleMusicAsync(SocketSlashCommand command)
         {
+            // DeferAsync должен быть на gateway потоке — сразу отвечаем Discord что запрос принят
             await command.DeferAsync();
 
-            var action = command.Data.Options
-                .FirstOrDefault(o => o.Name == "action")?.Value as string ?? "";
-
-            switch (action)
+            // Дальнейшее выполнение — в отдельном потоке, чтобы не блокировать gateway
+            // (JoinAsync ждёт VoiceStateUpdate от gateway — иначе дедлок)
+            _ = Task.Run(async () =>
             {
-                case "play":
-                    await HandlePlayInternalAsync(command);
-                    break;
-                case "stop":
-                    await HandleStopInternalAsync(command);
-                    break;
-                case "pause":
-                    await HandlePauseInternalAsync(command);
-                    break;
-                case "resume":
-                    await HandleResumeInternalAsync(command);
-                    break;
-                case "skip":
-                    await HandleSkipInternalAsync(command);
-                    break;
-                case "queue":
-                    await HandleQueueInternalAsync(command);
-                    break;
-                default:
-                    await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
-                    break;
-            }
+                var action = command.Data.Options
+                    .FirstOrDefault(o => o.Name == "action")?.Value as string ?? "";
+
+                switch (action)
+                {
+                    case "play":   await HandlePlayInternalAsync(command);   break;
+                    case "stop":   await HandleStopInternalAsync(command);   break;
+                    case "pause":  await HandlePauseInternalAsync(command);  break;
+                    case "resume": await HandleResumeInternalAsync(command); break;
+                    case "skip":   await HandleSkipInternalAsync(command);   break;
+                    case "queue":  await HandleQueueInternalAsync(command);  break;
+                    default:
+                        await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
+                        break;
+                }
+            });
         }
 
         // ─── играть ──────────────────────────────────────────────────────

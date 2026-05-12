@@ -626,8 +626,15 @@ namespace RPBot
 			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
 			if (_config.Music.Enabled)
 			{
-				_lavalinkService = new LavalinkService(_client, _config.Music);
+				_lavalinkService = new LavalinkService(() => _client, _config.Music);
 				_lavalinkService.LogSink = msg => _ui?.AddLog(msg);
+				_lavalinkService.FileSink = msg =>
+				{
+					var logDir = BotConfig.ResolvePath("Logs");
+					Directory.CreateDirectory(logDir);
+					var path = System.IO.Path.Combine(logDir, $"MusicDebug_{DateTime.Now:yyyyMMdd}.txt");
+					File.AppendAllText(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {msg}\n");
+				};
 				_musicCommands = new MusicCommands(_lavalinkService);
 				_musicCommands.LogSink = msg => _ui?.AddLog(msg);
 			}
@@ -1178,6 +1185,10 @@ namespace RPBot
 
         static async Task Main(string[] args)
         {
+            // Гарантированное завершение Lavalink при любом способе остановки (VS Stop, taskkill и т.д.)
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
+
             bool restart;
             int restartCount = 0;
             var pendingStartupType = StartupType.FirstStart;
@@ -1212,8 +1223,33 @@ namespace RPBot
 
             } while (restart);
 
-            _ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
-        }
+			_ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
+		}
+
+		/// <summary>
+		/// Убивает процессы Lavalink (java) занимающие порт 2333.
+		/// Вызывается при любом завершении — штатном или через VS Stop/taskkill.
+		/// </summary>
+		private static void KillOrphanedLavalink()
+		{
+			try
+			{
+				var connections = System.Net.NetworkInformation.IPGlobalProperties
+					.GetIPGlobalProperties()
+					.GetActiveTcpListeners()
+					.Where(ep => ep.Port == 2333)
+					.ToArray();
+
+				if (connections.Length == 0) return;
+
+				// Убиваем все java-процессы слушающие порт 2333
+				foreach (var proc in Process.GetProcessesByName("java"))
+				{
+					try { proc.Kill(entireProcessTree: true); } catch { }
+				}
+			}
+			catch { }
+		}
 
 		private static BotUI? _ui;
         private static bool _uiStarted = false;
@@ -1350,8 +1386,17 @@ namespace RPBot
                         await _client.StartAsync();
                         await LogStartup(" Вход выполнен успешно.");
 
+                        // PrepareAsync ПОСЛЕ LoginAsync — CurrentUser уже установлен,
+                        // DiscordClientWrapper подпишется на Ready до того как оно сработает
+                        if (_lavalinkService is not null)
+                            await _lavalinkService.PrepareAsync();
+
                         // Ждем готовности
                         await WaitForReadyAsync();
+
+                        // Запускаем Lavalink-процесс фоново (Discord уже подключён)
+                        if (_lavalinkService is not null)
+                            _ = Task.Run(() => _lavalinkService.LaunchProcessAsync());
 
                         // Запускаем инициализацию с опросом
                         await InitializeBotWithProgress();
@@ -2392,16 +2437,6 @@ namespace RPBot
 
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
-
-            // Запускаем музыкальный сервис после того как бот готов
-            if (_lavalinkService is not null)
-            {
-                _ = Task.Run(async () =>
-                {
-                    try { await _lavalinkService.StartAsync(); }
-                    catch (Exception ex) { _ui?.AddLog($"[Music] Ошибка запуска: {ex.Message}"); }
-                });
-            }
 
             await Task.CompletedTask;
         }
