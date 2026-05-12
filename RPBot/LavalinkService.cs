@@ -240,6 +240,29 @@ namespace RPBot
             return "⏹ Воспроизведение остановлено.";
         }
 
+        /// <summary>Ставит воспроизведение на паузу.</summary>
+        public async Task<string> PauseAsync(ulong guildId, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+            if (player.State == PlayerState.Paused) return "⏸ Уже на паузе.";
+            if (player.CurrentItem is null) return "❌ Ничего не играет.";
+
+            await player.PauseAsync(cancellationToken);
+            return $"⏸ Пауза: **{player.CurrentItem.Track?.Title ?? "трек"}**";
+        }
+
+        /// <summary>Возобновляет воспроизведение после паузы.</summary>
+        public async Task<string> ResumeAsync(ulong guildId, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+            if (player.State != PlayerState.Paused) return "▶️ Воспроизведение не на паузе.";
+
+            await player.ResumeAsync(cancellationToken);
+            return $"▶️ Продолжаю: **{player.CurrentItem?.Track?.Title ?? "трек"}**";
+        }
+
         /// <summary>
         /// Пропускает текущий трек.
         /// При наличии очереди автоматически запустится следующий (QueuedLavalinkPlayer).

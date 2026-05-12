@@ -3727,29 +3727,11 @@ namespace RPBot
                 case "bwonk":
                     // handled by BwonkCommand (subscribed handler)
                     break;
-                case "play":
+                case "music":
                     if (_musicCommands is not null)
-                        await _musicCommands.HandlePlayAsync(command);
+                        await _musicCommands.HandleMusicAsync(command);
                     else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
-                    break;
-                case "mstop":
-                    if (_musicCommands is not null)
-                        await _musicCommands.HandleStopAsync(command);
-                    else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
-                    break;
-                case "mskip":
-                    if (_musicCommands is not null)
-                        await _musicCommands.HandleSkipAsync(command);
-                    else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
-                    break;
-                case "mqueue":
-                    if (_musicCommands is not null)
-                        await _musicCommands.HandleQueueAsync(command);
-                    else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
+                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
                     break;
                 default:
                     await command.RespondAsync("Команда не распознана.");

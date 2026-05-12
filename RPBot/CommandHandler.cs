@@ -342,21 +342,24 @@ namespace RPBot
 
                 // === МУЗЫКА ===
                 new SlashCommandBuilder()
-                    .WithName("play")
-                    .WithDescription("Воспроизвести трек по ссылке")
-                    .AddOption("url", ApplicationCommandOptionType.String, "Прямая ссылка на трек (YouTube, SoundCloud, и др.)", isRequired: true),
-
-                new SlashCommandBuilder()
-                    .WithName("mstop")
-                    .WithDescription("Остановить музыку и покинуть голосовой канал"),
-
-                new SlashCommandBuilder()
-                    .WithName("mskip")
-                    .WithDescription("Пропустить текущий трек"),
-
-                new SlashCommandBuilder()
-                    .WithName("mqueue")
-                    .WithDescription("Показать текущий трек и очередь"),
+                    .WithName("music")
+                    .WithDescription("Управление музыкой в голосовом канале.")
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("action")
+                        .WithDescription("Действие")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("играть", "play")
+                        .AddChoice("стоп", "stop")
+                        .AddChoice("пауза", "pause")
+                        .AddChoice("продолжить", "resume")
+                        .AddChoice("пропустить", "skip")
+                        .AddChoice("очередь", "queue")
+                        .WithRequired(true))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("url")
+                        .WithDescription("Ссылка на трек (YouTube, SoundCloud и др.) — только для действия «играть»")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(false)),
             };
         }
     }

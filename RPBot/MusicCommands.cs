@@ -1,4 +1,3 @@
-using Discord;
 using Discord.WebSocket;
 using System;
 using System.Linq;
@@ -7,8 +6,7 @@ using System.Threading.Tasks;
 namespace RPBot
 {
     /// <summary>
-    /// Slash-команды для управления музыкой.
-    /// Регистрируются через Program.cs вместе с остальными командами.
+    /// Обработчик команды /music — единая точка входа для всех музыкальных действий.
     /// </summary>
     public class MusicCommands
     {
@@ -21,65 +19,53 @@ namespace RPBot
             _lavalink = lavalink;
         }
 
-        // ─── Регистрация команд ───────────────────────────────────────────
-
         /// <summary>
-        /// Возвращает список SlashCommandProperties для регистрации на сервере.
+        /// Диспетчер команды /music action:[играть|стоп|пауза|продолжить|пропустить|очередь]
         /// </summary>
-        public static SlashCommandProperties[] BuildCommands()
-        {
-            var play = new SlashCommandBuilder()
-                .WithName("play")
-                .WithDescription("Воспроизвести трек по ссылке")
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("url")
-                    .WithDescription("Прямая ссылка на трек (YouTube, SoundCloud, и др.)")
-                    .WithType(ApplicationCommandOptionType.String)
-                    .WithRequired(true))
-                // Задел: параметр поиска по названию (пока не активен)
-                // .AddOption(new SlashCommandOptionBuilder()
-                //     .WithName("search")
-                //     .WithDescription("Поиск по названию (YouTube)")
-                //     .WithType(ApplicationCommandOptionType.String)
-                //     .WithRequired(false))
-                .Build();
-
-            var stop = new SlashCommandBuilder()
-                .WithName("mstop")
-                .WithDescription("Остановить музыку и покинуть голосовой канал")
-                .Build();
-
-            var skip = new SlashCommandBuilder()
-                .WithName("mskip")
-                .WithDescription("Пропустить текущий трек")
-                .Build();
-
-            var queue = new SlashCommandBuilder()
-                .WithName("mqueue")
-                .WithDescription("Показать текущий трек и очередь")
-                .Build();
-
-            return new[] { play, stop, skip, queue };
-        }
-
-        // ─── Обработчики команд ───────────────────────────────────────────
-
-        public async Task HandlePlayAsync(SocketSlashCommand command)
+        public async Task HandleMusicAsync(SocketSlashCommand command)
         {
             await command.DeferAsync();
 
-            var user = command.User as SocketGuildUser;
-            if (user == null)
-            {
-                await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true);
-                return;
-            }
+            var action = command.Data.Options
+                .FirstOrDefault(o => o.Name == "action")?.Value as string ?? "";
 
-            var url = command.Data.Options
-                .FirstOrDefault(o => o.Name == "url")?.Value as string ?? "";
+            switch (action)
+            {
+                case "play":
+                    await HandlePlayInternalAsync(command);
+                    break;
+                case "stop":
+                    await HandleStopInternalAsync(command);
+                    break;
+                case "pause":
+                    await HandlePauseInternalAsync(command);
+                    break;
+                case "resume":
+                    await HandleResumeInternalAsync(command);
+                    break;
+                case "skip":
+                    await HandleSkipInternalAsync(command);
+                    break;
+                case "queue":
+                    await HandleQueueInternalAsync(command);
+                    break;
+                default:
+                    await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
+                    break;
+            }
+        }
+
+        // ─── играть ──────────────────────────────────────────────────────
+
+        private async Task HandlePlayInternalAsync(SocketSlashCommand command)
+        {
+            var user = command.User as SocketGuildUser;
+            if (user is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
+
+            var url = command.Data.Options.FirstOrDefault(o => o.Name == "url")?.Value as string ?? "";
             if (string.IsNullOrWhiteSpace(url))
             {
-                await command.FollowupAsync("❌ Укажи ссылку на трек.", ephemeral: true);
+                await command.FollowupAsync("❌ Укажи ссылку: `/music action:играть url:<ссылка>`", ephemeral: true);
                 return;
             }
 
@@ -90,79 +76,70 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Log($"[Music] Ошибка /play: {ex.Message}");
+                Log($"[Music] Ошибка play: {ex.Message}");
                 await command.FollowupAsync($"❌ Ошибка воспроизведения: {ex.Message}", ephemeral: true);
             }
         }
 
-        public async Task HandleStopAsync(SocketSlashCommand command)
+        // ─── стоп ─────────────────────────────────────────────────────────
+
+        private async Task HandleStopInternalAsync(SocketSlashCommand command)
         {
-            await command.DeferAsync();
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
 
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null)
-            {
-                await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true);
-                return;
-            }
-
-            try
-            {
-                var result = await _lavalink.StopAsync(guildId.Value);
-                await command.FollowupAsync(result);
-            }
-            catch (Exception ex)
-            {
-                Log($"[Music] Ошибка /stop: {ex.Message}");
-                await command.FollowupAsync($"❌ Ошибка: {ex.Message}", ephemeral: true);
-            }
+            try { await command.FollowupAsync(await _lavalink.StopAsync(guildId.Value)); }
+            catch (Exception ex) { Log($"[Music] Ошибка stop: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        public async Task HandleSkipAsync(SocketSlashCommand command)
+        // ─── пауза ────────────────────────────────────────────────────────
+
+        private async Task HandlePauseInternalAsync(SocketSlashCommand command)
         {
-            await command.DeferAsync();
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
 
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null)
-            {
-                await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true);
-                return;
-            }
-
-            try
-            {
-                var result = await _lavalink.SkipAsync(guildId.Value);
-                await command.FollowupAsync(result);
-            }
-            catch (Exception ex)
-            {
-                Log($"[Music] Ошибка /skip: {ex.Message}");
-                await command.FollowupAsync($"❌ Ошибка: {ex.Message}", ephemeral: true);
-            }
+            try { await command.FollowupAsync(await _lavalink.PauseAsync(guildId.Value)); }
+            catch (Exception ex) { Log($"[Music] Ошибка pause: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        public async Task HandleQueueAsync(SocketSlashCommand command)
+        // ─── продолжить ───────────────────────────────────────────────────
+
+        private async Task HandleResumeInternalAsync(SocketSlashCommand command)
         {
-            await command.DeferAsync();
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
 
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId == null)
-            {
-                await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true);
-                return;
-            }
-
-            try
-            {
-                var result = await _lavalink.GetQueueInfoAsync(guildId.Value);
-                await command.FollowupAsync(result);
-            }
-            catch (Exception ex)
-            {
-                Log($"[Music] Ошибка /queue: {ex.Message}");
-                await command.FollowupAsync($"❌ Ошибка: {ex.Message}", ephemeral: true);
-            }
+            try { await command.FollowupAsync(await _lavalink.ResumeAsync(guildId.Value)); }
+            catch (Exception ex) { Log($"[Music] Ошибка resume: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
+
+        // ─── пропустить ───────────────────────────────────────────────────
+
+        private async Task HandleSkipInternalAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
+
+            try { await command.FollowupAsync(await _lavalink.SkipAsync(guildId.Value)); }
+            catch (Exception ex) { Log($"[Music] Ошибка skip: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+        }
+
+        // ─── очередь ─────────────────────────────────────────────────────
+
+        private async Task HandleQueueInternalAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
+
+            try { await command.FollowupAsync(await _lavalink.GetQueueInfoAsync(guildId.Value)); }
+            catch (Exception ex) { Log($"[Music] Ошибка queue: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+        }
+
+        // ─── Вспомогательные ─────────────────────────────────────────────
+
+        private static ulong? GetGuildId(SocketSlashCommand command)
+            => (command.Channel as SocketGuildChannel)?.Guild.Id;
 
         private void Log(string message) => LogSink?.Invoke(message);
     }
