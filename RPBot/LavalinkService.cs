@@ -86,24 +86,17 @@ namespace RPBot
                 FileName = "java",
                 Arguments = $"-jar \"{jarPath}\"",
                 WorkingDirectory = workDir,
+                // Запускаем отдельно — НЕ перенаправляем stdout/stderr в бот,
+                // так как Terminal.Gui перехватывает консоль и вызывает IOException.
+                // Lavalink пишет свои логи в ./logs/ самостоятельно.
                 UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
                 CreateNoWindow = true,
             };
 
             Log($"[Music] Запуск Lavalink: java -jar {jarPath}");
             _lavalinkProcess = Process.Start(psi)!;
-            _lavalinkProcess.OutputDataReceived += (_, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data)) Log($"[Lavalink] {e.Data}");
-            };
-            _lavalinkProcess.ErrorDataReceived += (_, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data)) Log($"[Lavalink][ERR] {e.Data}");
-            };
-            _lavalinkProcess.BeginOutputReadLine();
-            _lavalinkProcess.BeginErrorReadLine();
 
             await WaitUntilReadyAsync(cancellationToken);
         }
