@@ -339,6 +339,24 @@ namespace RPBot
                         .AddChoice("unsubscribe", "unsubscribe")
                         .AddChoice("status", "status")
                         .WithRequired(true)),
+
+                // === МУЗЫКА ===
+                new SlashCommandBuilder()
+                    .WithName("play")
+                    .WithDescription("Воспроизвести трек по ссылке")
+                    .AddOption("url", ApplicationCommandOptionType.String, "Прямая ссылка на трек (YouTube, SoundCloud, и др.)", isRequired: true),
+
+                new SlashCommandBuilder()
+                    .WithName("mstop")
+                    .WithDescription("Остановить музыку и покинуть голосовой канал"),
+
+                new SlashCommandBuilder()
+                    .WithName("mskip")
+                    .WithDescription("Пропустить текущий трек"),
+
+                new SlashCommandBuilder()
+                    .WithName("mqueue")
+                    .WithDescription("Показать текущий трек и очередь"),
             };
         }
     }

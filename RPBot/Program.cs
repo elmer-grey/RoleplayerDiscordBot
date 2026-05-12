@@ -104,6 +104,8 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
+        private LavalinkService? _lavalinkService;
+        private MusicCommands? _musicCommands;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
@@ -621,7 +623,16 @@ namespace RPBot
 			_predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
 			_voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
-            // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
+			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
+			if (_config.Music.Enabled)
+			{
+				_lavalinkService = new LavalinkService(_client, _config.Music);
+				_lavalinkService.LogSink = msg => _ui?.AddLog(msg);
+				_musicCommands = new MusicCommands(_lavalinkService);
+				_musicCommands.LogSink = msg => _ui?.AddLog(msg);
+			}
+
+			// ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
             _reconnectionService.OnReconnectStarted += OnReconnectStarted;
             _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -2381,6 +2392,17 @@ namespace RPBot
 
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+
+            // Запускаем музыкальный сервис после того как бот готов
+            if (_lavalinkService is not null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await _lavalinkService.StartAsync(); }
+                    catch (Exception ex) { _ui?.AddLog($"[Music] Ошибка запуска: {ex.Message}"); }
+                });
+            }
+
             await Task.CompletedTask;
         }
 
@@ -3705,6 +3727,30 @@ namespace RPBot
                 case "bwonk":
                     // handled by BwonkCommand (subscribed handler)
                     break;
+                case "play":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandlePlayAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
+                    break;
+                case "mstop":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleStopAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
+                    break;
+                case "mskip":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleSkipAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
+                    break;
+                case "mqueue":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleQueueAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён.", ephemeral: true);
+                    break;
                 default:
                     await command.RespondAsync("Команда не распознана.");
                     break;
@@ -4415,6 +4461,32 @@ namespace RPBot
                     ? "Активно" 
                     : "Не инициализировано"
             });
+
+            // 8. Проверка музыкального сервиса (Lavalink)
+            if (_config.Music.Enabled)
+            {
+                string musicMsg;
+                bool musicHealthy;
+                if (_lavalinkService is null)
+                {
+                    musicHealthy = false;
+                    musicMsg = "Сервис не инициализирован";
+                }
+                else
+                {
+                    var probeErr = await _lavalinkService.ProbeAsync();
+                    musicHealthy = probeErr is null;
+                    musicMsg = probeErr is null
+                        ? $"Lavalink доступен ({_config.Music.Host}:{_config.Music.Port})"
+                        : $"Недоступен: {probeErr}";
+                }
+                checks.Add(new SystemHealthCheck
+                {
+                    SystemName = "Музыка (Lavalink)",
+                    IsHealthy = musicHealthy,
+                    Message = musicMsg,
+                });
+            }
 
             return checks;
         }
