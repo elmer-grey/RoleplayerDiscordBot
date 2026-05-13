@@ -1394,11 +1394,7 @@ namespace RPBot
                         // Ждем готовности
                         await WaitForReadyAsync();
 
-                        // Запускаем Lavalink-процесс фоново (Discord уже подключён)
-                        if (_lavalinkService is not null)
-                            _ = Task.Run(() => _lavalinkService.LaunchProcessAsync());
-
-                        // Запускаем инициализацию с опросом
+                        // Запускаем инициализацию с опросом (Lavalink запускается внутри на Этапе 3.5)
                         await InitializeBotWithProgress();
 
 						// Ежедневный плановый перезапуск (время задаётся в config.json)
@@ -2562,6 +2558,53 @@ namespace RPBot
             }
         }
 
+        /// <summary>
+        /// Проверяет config.json на наличие новых полей и дописывает недостающие строки.
+        /// Вызывается и при первом запуске, и при перезапуске.
+        /// </summary>
+        private async Task EnsureConfigFieldsAsync()
+        {
+            try
+            {
+                var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                if (!File.Exists(configPath)) return;
+
+                var json = await File.ReadAllTextAsync(configPath).ConfigureAwait(false);
+                var needsSave = false;
+                var addedFields = new List<string>();
+
+                // Поля MusicConfig, добавленные позже — проверяем наличие в JSON
+                if (!json.Contains("\"YtCipherAutoStart\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherAutoStart = false");
+                    needsSave = true;
+                }
+                if (!json.Contains("\"YtCipherPath\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherPath = \"yt-cipher\"");
+                    needsSave = true;
+                }
+                if (!json.Contains("\"YtCipherPort\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherPort = 8001");
+                    needsSave = true;
+                }
+
+                if (needsSave)
+                {
+                    // Load уже обновляет Current и при необходимости пересохраняет
+                    var freshConfig = BotConfig.Load(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    // Явно сохраняем через относительный путь (Save сам делает ResolvePath)
+                    freshConfig.Save(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    await LogStartup($"[CONFIG] Добавлены новые поля в config.json: {string.Join(", ", addedFields)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"[CONFIG] Ошибка проверки полей конфига: {ex.Message}");
+            }
+        }
+
         private async Task BootstrapFirstRunSettingsAsync()
         {
             if (_currentStartupType != StartupType.FirstStart)
@@ -2578,6 +2621,9 @@ namespace RPBot
                 Directory.CreateDirectory(settingsDir);
 
                 var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+
+                // Проверяем и дополняем config.json новыми полями
+                await EnsureConfigFieldsAsync().ConfigureAwait(false);
 
                 var serverConfigsCreated = false;
                 var serverConfigsExisted = File.Exists(_serverConfigsPath);
@@ -2649,7 +2695,7 @@ namespace RPBot
                 var lines = new List<string>
                 {
                     $"Settings directory: {settingsDir}",
-                    File.Exists(configPath) ? "config.json already exists" : "config.json created by BotConfig.Load",
+                    File.Exists(configPath) ? "config.json present (fields verified)" : "config.json created by BotConfig.Load",
                     serverConfigsCreated ? "serverconfigs.json created and seeded for connected guilds" : "serverconfigs.json already exists or was updated",
                     pointsCreated ? "points.json created" : "points.json already exists",
                     pointsUsersCreated ? "points_users.json created" : "points_users.json already exists",
@@ -2672,7 +2718,7 @@ namespace RPBot
                     lines.Add($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
                 }
 
-                foreach (var line in BuildStartupBox("ЭТАП 0/4: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
+                foreach (var line in BuildStartupBox("ЭТАП 0/5: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
                 {
                     Write(line);
                 }
@@ -2690,6 +2736,11 @@ namespace RPBot
                if (_currentStartupType == StartupType.FirstStart)
                 {
                     await BootstrapFirstRunSettingsAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    // При перезапуске тоже проверяем/дополняем конфиг новыми полями
+                    await EnsureConfigFieldsAsync().ConfigureAwait(false);
                 }
 
 				// ЭТАП 1: Регистрация команд
@@ -2725,11 +2776,11 @@ namespace RPBot
 				}
                 if (stage1Lines.Count == 0)
                     stage1Lines.Add("Регистрация команд завершена.");
-                await LogStartupBoxAsync("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
+                await LogStartupBoxAsync("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
 
                 // ЭТАП 2: Активация обработчиков
                 await SetupDiscordEvents();
-                await LogStartupBoxAsync("ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
+                await LogStartupBoxAsync("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
                 {
                     "Подписки на события Discord обновлены и активированы."
                 });
@@ -2787,9 +2838,65 @@ namespace RPBot
                 catch { }
                 if (stage3Lines.Count == 0)
                     stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
-                await LogStartupBoxAsync("ЭТАП 3/4: СИНХРОНИЗАЦИЯ", stage3Lines);
+                await LogStartupBoxAsync("ЭТАП 3/5: СИНХРОНИЗАЦИЯ", stage3Lines);
 
-                // ЭТАП 4: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
+                // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
+                if (_config.Music.Enabled && _lavalinkService is not null)
+                {
+                    var musicLines = new List<string>();
+                    // Перехватываем весь вывод LavalinkService в буфер,
+                    // чтобы он отобразился внутри бокса этапа, а не до него.
+                    _lavalinkService.StartupLogBuffer = musicLines;
+                    try
+                    {
+                        var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
+
+                        if (!lavalinkReady)
+                        {
+                            // WaitUntilReadyAsync исчерпал таймаут — даём ещё до 15 секунд
+                            // (Lavalink может ещё грузить JVM или плагины)
+                            const int extraRetries = 15;
+                            const int retryDelayMs = 1000;
+                            musicLines.Add($"⏳ Lavalink не ответил за основной таймаут, ждём ещё до {extraRetries}с...");
+
+                            for (int i = 0; i < extraRetries; i++)
+                            {
+                                await Task.Delay(retryDelayMs);
+                                var err = await _lavalinkService.ProbeAsync();
+                                if (err is null)
+                                {
+                                    lavalinkReady = true;
+                                    musicLines.Add($"✅ Lavalink поднялся на попытке {i + 1} — готов ({_config.Music.Host}:{_config.Music.Port})");
+                                    break;
+                                }
+                            }
+
+                            if (!lavalinkReady)
+                            {
+                                var finalErr = await _lavalinkService.ProbeAsync();
+                                musicLines.Add(finalErr is null
+                                    ? $"✅ Lavalink готов ({_config.Music.Host}:{_config.Music.Port})"
+                                    : $"⚠️ Lavalink так и не ответил: {finalErr}");
+                            }
+                        }
+                        else
+                        {
+                            musicLines.Add($"✅ yt-cipher и Lavalink запущены и отвечают ({_config.Music.Host}:{_config.Music.Port})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        musicLines.Add($"❌ Ошибка запуска музыкального стека: {ex.Message}");
+                    }
+                    finally
+                    {
+                        // Снимаем буфер — дальнейшие логи идут обратно в обычный sink
+                        _lavalinkService.StartupLogBuffer = null;
+                    }
+                    await LogStartupBoxAsync("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ", musicLines);
+                }
+
+                // ЭТАП 5: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
                 var stage4Lines = new List<string>();
 
                 // Выполняем проверку здоровья систем
@@ -2859,7 +2966,7 @@ namespace RPBot
                 if (stage4Lines.Count == 0)
                     stage4Lines.Add("Нет серверов для отправки стартовых уведомлений.");
 
-                await LogStartupBoxAsync("ЭТАП 4/4: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
+                await LogStartupBoxAsync("ЭТАП 5/5: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
 
                 // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;

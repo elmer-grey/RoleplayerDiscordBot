@@ -78,14 +78,16 @@ namespace RPBot
         /// <summary>
         /// Фаза 2: запускаем Lavalink-процесс, затем поднимаем AudioServiceHost.
         /// Вызывается после того как Discord-клиент уже подключён (после Ready).
+        /// Возвращает true если Lavalink ответил на зонд в отведённое время.
         /// </summary>
-        public async Task LaunchProcessAsync(CancellationToken cancellationToken = default)
+        public async Task<bool> LaunchProcessAsync(CancellationToken cancellationToken = default)
         {
-            if (!_config.Enabled) return;
+            if (!_config.Enabled) return false;
             await StartYtCipherProcessAsync(cancellationToken);
-            await StartLavalinkProcessAsync(cancellationToken);
+            var ready = await StartLavalinkProcessAsync(cancellationToken);
             await StartHostedServicesAsync(cancellationToken);
             Log("[Music] AudioServiceHost запущен после Lavalink ✓");
+            return ready;
         }
 
         /// <summary>
@@ -217,25 +219,26 @@ namespace RPBot
             return null;
         }
 
-        private async Task StartLavalinkProcessAsync(CancellationToken cancellationToken)
+        private async Task<bool> StartLavalinkProcessAsync(CancellationToken cancellationToken)
         {
             if (!_config.AutoStart)
             {
                 Log("[Music] AutoStart выключен, Lavalink запускать не буду.");
-                return;
+                return false;
             }
 
             var jarPath = BotConfig.ResolvePath(_config.JarPath);
             if (!File.Exists(jarPath))
             {
                 Log($"[Music] Lavalink.jar не найден: {jarPath}. Запуск пропущен.");
-                return;
+                return false;
             }
 
             if (_lavalinkProcess is { HasExited: false })
             {
                 Log("[Music] Lavalink уже запущен.");
-                return;
+                // Проверим — может он уже и отвечает
+                return await WaitUntilReadyAsync(cancellationToken);
             }
 
             var workDir = Path.GetDirectoryName(jarPath) ?? ".";
@@ -261,17 +264,17 @@ namespace RPBot
                 if (_lavalinkProcess is null)
                 {
                     Log("[Music] Process.Start вернул null — не удалось запустить java.");
-                    return;
+                    return false;
                 }
                 Log($"[Music] Lavalink процесс запущен, PID={_lavalinkProcess.Id}");
             }
             catch (Exception ex)
             {
                 Log($"[Music] Не удалось запустить Lavalink: {ex.Message}");
-                return;
+                return false;
             }
 
-            await WaitUntilReadyAsync(cancellationToken);
+            return await WaitUntilReadyAsync(cancellationToken);
         }
 
         private static string ResolveJavaExecutable()
@@ -309,7 +312,7 @@ namespace RPBot
             return "java";
         }
 
-        private async Task WaitUntilReadyAsync(CancellationToken cancellationToken)
+        private async Task<bool> WaitUntilReadyAsync(CancellationToken cancellationToken)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             http.DefaultRequestHeaders.Add("Authorization", _config.Password);
@@ -322,13 +325,14 @@ namespace RPBot
                 try
                 {
                     var resp = await http.GetAsync(url, cancellationToken);
-                    if (resp.IsSuccessStatusCode) { Log("[Music] Lavalink готов ✓"); return; }
+                    if (resp.IsSuccessStatusCode) { Log("[Music] Lavalink готов ✓"); return true; }
                     Log($"[Music] Зонд: HTTP {(int)resp.StatusCode}");
                 }
                 catch (Exception ex) { Log($"[Music] Зонд: {ex.Message}"); }
                 await Task.Delay(1000, cancellationToken);
             }
             Log("[Music] Lavalink не ответил в отведённое время.");
+            return false;
         }
 
         private void BuildServices()
@@ -574,9 +578,26 @@ namespace RPBot
 
         private void Log(string message)
         {
-            LogSink?.Invoke(message);
+            // Если активен буфер запуска — перехватываем в него (не дублируем в консоль),
+            // в файловый sink пишем всегда.
+            if (_startupLogBuffer is not null)
+                _startupLogBuffer.Add(message);
+            else
+                LogSink?.Invoke(message);
+
             FileSink?.Invoke(message);
         }
+
+        /// <summary>
+        /// Когда установлен — Log() пишет сюда вместо консоли.
+        /// Program.cs устанавливает перед LaunchProcessAsync и забирает после,
+        /// включая собранные строки в startup-бокс этапа.
+        /// </summary>
+        public List<string>? StartupLogBuffer { get; set; }
+
+        // Ссылка на текущий активный буфер (совпадает с StartupLogBuffer, хранится отдельно
+        // чтобы Log() работал без лишних property-read)
+        private List<string>? _startupLogBuffer => StartupLogBuffer;
 
         /// <summary>Дополнительный sink для записи в файл (назначается из Program.cs).</summary>
         public Action<string>? FileSink { get; set; }
