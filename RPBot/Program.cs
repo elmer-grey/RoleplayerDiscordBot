@@ -2590,11 +2590,48 @@ namespace RPBot
                     needsSave = true;
                 }
 
+                // Нормализация путей: если JarPath / YtCipherPath / ConfigPath абсолютные —
+                // заменяем на относительные к AppContext.BaseDirectory.
+                // Это случается когда пути были заданы вручную или сохранены на старой машине.
+                if (needsSave || _config?.Music is not null)
+                {
+                    var cfg = BotConfig.Load(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    var baseDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                    var music = cfg.Music;
+                    bool pathsFixed = false;
+
+                    string Relativize(string path)
+                    {
+                        if (string.IsNullOrWhiteSpace(path)) return path;
+                        if (!Path.IsPathRooted(path)) return path;
+                        if (path.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rel = path.Substring(baseDir.Length).Replace('\\', '/');
+                            return rel;
+                        }
+                        return path;
+                    }
+
+                    var relJar = Relativize(music.JarPath);
+                    if (relJar != music.JarPath) { music.JarPath = relJar; pathsFixed = true; addedFields.Add($"Music.JarPath → {relJar}"); }
+
+                    var relYtCipher = Relativize(music.YtCipherPath);
+                    if (relYtCipher != music.YtCipherPath) { music.YtCipherPath = relYtCipher; pathsFixed = true; addedFields.Add($"Music.YtCipherPath → {relYtCipher}"); }
+
+                    var relConfig = Relativize(music.ConfigPath);
+                    if (relConfig != music.ConfigPath) { music.ConfigPath = relConfig; pathsFixed = true; addedFields.Add($"Music.ConfigPath → {relConfig}"); }
+
+                    if (needsSave || pathsFixed)
+                    {
+                        cfg.Save(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                        await LogStartup($"[CONFIG] Обновлён config.json: {string.Join(", ", addedFields)}");
+                    }
+                    return;
+                }
+
                 if (needsSave)
                 {
-                    // Load уже обновляет Current и при необходимости пересохраняет
                     var freshConfig = BotConfig.Load(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
-                    // Явно сохраняем через относительный путь (Save сам делает ResolvePath)
                     freshConfig.Save(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
                     await LogStartup($"[CONFIG] Добавлены новые поля в config.json: {string.Join(", ", addedFields)}");
                 }
