@@ -3,3 +3,7 @@ Lavalink.jar
 
 # Логи Lavalink
 logs/
+
+# Живой конфиг содержит личные OAuth-токены — не коммитим
+# Образец для новой машины: application.yml.example
+application.yml

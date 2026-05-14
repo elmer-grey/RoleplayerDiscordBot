@@ -192,31 +192,36 @@ namespace RPBot
 
         private static string? ResolveDeno()
         {
+            // 1. Стандартный путь установки Deno (~/.deno/bin/deno или deno.exe)
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var candidate = Path.Combine(home, ".deno", "bin", "deno.exe");
+            var exeName = OperatingSystem.IsWindows() ? "deno.exe" : "deno";
+            var candidate = Path.Combine(home, ".deno", "bin", exeName);
             if (File.Exists(candidate)) return candidate;
 
+            // 2. Ищем в PATH через where (Windows) / which (Unix)
+            var finder = OperatingSystem.IsWindows() ? "where.exe" : "which";
             try
             {
-                var where = Process.Start(new ProcessStartInfo
+                var proc = Process.Start(new ProcessStartInfo
                 {
-                    FileName = "where.exe",
+                    FileName = finder,
                     Arguments = "deno",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     CreateNoWindow = true,
                 });
-                if (where is not null)
+                if (proc is not null)
                 {
-                    var output = where.StandardOutput.ReadToEnd();
-                    where.WaitForExit();
+                    var output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit();
                     var first = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
                     if (!string.IsNullOrEmpty(first) && File.Exists(first)) return first;
                 }
             }
             catch { }
 
-            return null;
+            // 3. Fallback — надеемся что deno есть в PATH
+            return exeName;
         }
 
         private async Task<bool> StartLavalinkProcessAsync(CancellationToken cancellationToken)
@@ -245,16 +250,17 @@ namespace RPBot
             var javaExe = ResolveJavaExecutable();
             Log($"[Music] Java: {javaExe}");
 
-            // UseShellExecute = true — запускаем через оболочку, чтобы не конфликтовать с Terminal.Gui.
-            // Lavalink сам пишет логи в ./logs/, поэтому перенаправление не нужно.
+            // На Windows запускаем через оболочку (не конфликтует с Terminal.Gui).
+            // На Linux/macOS UseShellExecute = false — иначе WindowStyle/CreateNoWindow не поддерживаются.
+            var useShell = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo
             {
                 FileName = javaExe,
                 Arguments = $"-jar \"{jarPath}\"",
                 WorkingDirectory = workDir,
-                UseShellExecute = true,
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
+                UseShellExecute = useShell,
+                CreateNoWindow = useShell,
+                WindowStyle = useShell ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
             };
 
             Log($"[Music] Запуск Lavalink: {javaExe} -jar {jarPath}");
@@ -279,29 +285,32 @@ namespace RPBot
 
         private static string ResolveJavaExecutable()
         {
+            var exeName = OperatingSystem.IsWindows() ? "java.exe" : "java";
+
             // 1. JAVA_HOME — приоритет
             var javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
             if (!string.IsNullOrEmpty(javaHome))
             {
-                var candidate = Path.Combine(javaHome, "bin", "java.exe");
+                var candidate = Path.Combine(javaHome, "bin", exeName);
                 if (File.Exists(candidate)) return candidate;
             }
 
-            // 2. Ищем через where.exe (корректно находит даже если PATH задан только для cmd)
+            // 2. Ищем через where (Windows) / which (Unix)
+            var finder = OperatingSystem.IsWindows() ? "where.exe" : "which";
             try
             {
-                var where = Process.Start(new ProcessStartInfo
+                var proc = Process.Start(new ProcessStartInfo
                 {
-                    FileName = "where.exe",
+                    FileName = finder,
                     Arguments = "java",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     CreateNoWindow = true,
                 });
-                if (where is not null)
+                if (proc is not null)
                 {
-                    var output = where.StandardOutput.ReadToEnd();
-                    where.WaitForExit();
+                    var output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit();
                     var first = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
                     if (!string.IsNullOrEmpty(first) && File.Exists(first)) return first;
                 }
