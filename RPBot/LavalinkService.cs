@@ -1,5 +1,7 @@
+using Discord;
 using Discord.WebSocket;
 using Lavalink4NET;
+using RPBot.Music;
 using Lavalink4NET.DiscordNet;
 using Lavalink4NET.Extensions;
 using Lavalink4NET.Players;
@@ -10,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -250,17 +253,16 @@ namespace RPBot
             var javaExe = ResolveJavaExecutable();
             Log($"[Music] Java: {javaExe}");
 
-            // На Windows запускаем через оболочку (не конфликтует с Terminal.Gui).
-            // На Linux/macOS UseShellExecute = false — иначе WindowStyle/CreateNoWindow не поддерживаются.
-            var useShell = OperatingSystem.IsWindows();
+            // Всегда запускаем без оболочки — перехватываем stdout/stderr и пишем построчно.
             var psi = new ProcessStartInfo
             {
                 FileName = javaExe,
                 Arguments = $"-jar \"{jarPath}\"",
                 WorkingDirectory = workDir,
-                UseShellExecute = useShell,
-                CreateNoWindow = useShell,
-                WindowStyle = useShell ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
             };
 
             Log($"[Music] Запуск Lavalink: {javaExe} -jar {jarPath}");
@@ -273,6 +275,12 @@ namespace RPBot
                     return false;
                 }
                 Log($"[Music] Lavalink процесс запущен, PID={_lavalinkProcess.Id}");
+
+                // Логи Lavalink намеренно не выводятся — достаточно [Music] логов
+                _lavalinkProcess.OutputDataReceived += (_, e) => { };
+                _lavalinkProcess.ErrorDataReceived  += (_, e) => { };
+                _lavalinkProcess.BeginOutputReadLine();
+                _lavalinkProcess.BeginErrorReadLine();
             }
             catch (Exception ex)
             {
@@ -413,7 +421,64 @@ namespace RPBot
             catch (Exception ex) { return ex.Message; }
         }
 
+        // ─── Колбэки смены трека ─────────────────────────────────────────
+
+        /// <summary>
+        /// Вызывается когда Lavalink начинает воспроизведение нового трека.
+        /// Устанавливается из MusicCommands.
+        /// </summary>
+        public Func<ulong, string, string?, TimeSpan, string?, string?, Task>? OnTrackStartedCallback { get; set; }
+
+        /// <summary>
+        /// Вызывается когда трек завершился (кроме случаев skip/stop).
+        /// </summary>
+        public Func<ulong, Task>? OnTrackEndedCallback { get; set; }
+
+        /// <summary>Подключает глобальные колбэки NotifyingPlayer к LavalinkService.</summary>
+        public void SetTrackCallbacks(
+            Func<ulong, string, string?, TimeSpan, string?, string?, Task> onStarted,
+            Func<ulong, Task> onEnded)
+        {
+            OnTrackStartedCallback = onStarted;
+            OnTrackEndedCallback   = onEnded;
+            NotifyingPlayer.OnTrackStartedGlobal = onStarted;
+            NotifyingPlayer.OnTrackEndedGlobal   = onEnded;
+        }
+
+        // ─── Состояние плеера (UI) ─────────────────────────────────────────
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, MusicPlayerState>
+            _playerStates = new();
+
+        /// <summary>Возвращает или создаёт UI-состояние для гильдии.</summary>
+        public MusicPlayerState GetOrCreateState(ulong guildId)
+            => _playerStates.GetOrAdd(guildId, _ => new MusicPlayerState());
+
+        /// <summary>Все активные состояния (для фонового обновления прогресса).</summary>
+        public IEnumerable<KeyValuePair<ulong, MusicPlayerState>> GetAllStates()
+            => _playerStates;
+
+        /// <summary>Удаляет состояние (вызывается при Stop).</summary>
+        public void RemoveState(ulong guildId) => _playerStates.TryRemove(guildId, out _);
+
         // ─── Воспроизведение ──────────────────────────────────────────────
+
+        /// <summary>Результат команды play — содержит и строку-ответ и данные трека.</summary>
+        public sealed class PlayResult
+        {
+            public string Message { get; init; } = "";
+            public bool IsNewTrack { get; init; }
+            public bool IsQueued  { get; init; }
+            public bool IsPlaylist { get; init; }
+            public string? PlaylistName      { get; init; }
+            public int PlaylistTracksCount   { get; init; }
+            public string? TrackTitle   { get; init; }
+            public TimeSpan? Duration   { get; init; }
+            public string? ArtworkUrl   { get; init; }
+            public string? TrackUrl     { get; init; }
+            public string? Author       { get; init; }
+            public int QueueCount       { get; init; }
+        }
 
         /// <summary>Воспроизводит трек по прямой ссылке в голосовом канале пользователя.</summary>
         public async Task<string> PlayAsync(
@@ -434,10 +499,10 @@ namespace RPBot
             Log($"[Music] Client hash={_discordClient.GetHashCode()} guilds={_discordClient.Guilds.Count} state={_discordClient.ConnectionState} login={_discordClient.LoginState}");
 
             // Получаем или создаём плеер, передавая IVoiceChannel напрямую
-            QueuedLavalinkPlayer? player;
+            NotifyingPlayer? player;
             try
             {
-                player = await _audioService.Players.GetPlayerAsync<QueuedLavalinkPlayer>(guildId, cancellationToken);
+                player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken);
                 Log($"[Music] GetPlayer: {(player is null ? "null, создаю новый" : $"найден state={player.State}")}");
             }
             catch (Exception ex)
@@ -453,7 +518,7 @@ namespace RPBot
                     Log($"[Music] JoinAsync: guild={guildId} channel={voiceChannel.Id} ({voiceChannel.Name})");
                     player = await _audioService.Players.JoinAsync(
                         voiceChannel,
-                        PlayerFactory.Queued,
+                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
                         Options.Create(new QueuedLavalinkPlayerOptions()),
                         cancellationToken);
                     Log($"[Music] JoinAsync: успех, player state={player?.State}");
@@ -483,7 +548,276 @@ namespace RPBot
             }
 
             await player.PlayAsync(track, cancellationToken: cancellationToken);
-            return $"▶️ Воспроизвожу: **{track.Title}** ({FormatDuration(track.Duration)})";
+            return $"▶️ Воспроизвожу: **{track.Title}** ({FormatDuration(track.Duration)})";  // kept for compat
+        }
+
+        /// <summary>Поиск треков по названию — возвращает до 5 результатов.</summary>
+        public async Task<List<TrackSearchResult>> SearchTracksAsync(string query, CancellationToken cancellationToken = default)
+        {
+            if (_audioService is null) return new();
+            var results = await _audioService.Tracks.LoadTracksAsync(query, TrackSearchMode.YouTube, cancellationToken: cancellationToken);
+            var list = new List<TrackSearchResult>();
+            foreach (var t in results.Tracks.Take(5))
+            {
+                list.Add(new TrackSearchResult
+                {
+                    Title      = t.Title,
+                    Author     = t.Author,
+                    Duration   = t.Duration,
+                    Url        = t.Uri?.ToString() ?? "",
+                    ArtworkUrl = t.ArtworkUri?.ToString(),
+                });
+            }
+            return list;
+        }
+
+        public sealed class TrackSearchResult
+        {
+            public string   Title      { get; init; } = "";
+            public string?  Author     { get; init; }
+            public TimeSpan Duration   { get; init; }
+            public string   Url        { get; init; } = "";
+            public string?  ArtworkUrl { get; init; }
+        }
+
+        /// <summary>Полная версия play, возвращает богатый PlayResult.</summary>
+        public async Task<PlayResult> PlayRichAsync(
+            SocketGuildUser user,
+            string query,
+            CancellationToken cancellationToken = default)
+        {
+            if (_audioService is null)
+                return new PlayResult { Message = "❌ Музыкальный сервис не инициализирован." };
+
+            if (user.VoiceChannel is null)
+                return new PlayResult { Message = "❌ Ты должен быть в голосовом канале." };
+
+            var guildId = user.Guild.Id;
+            var voiceChannel = user.VoiceChannel;
+
+            NotifyingPlayer? player;
+            try { player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
+            catch { player = null; }
+
+            if (player is null)
+            {
+                try
+                {
+                    player = await _audioService.Players.JoinAsync(
+                        voiceChannel, PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
+                        Options.Create(new QueuedLavalinkPlayerOptions()),
+                        cancellationToken);
+                }
+                catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
+            }
+
+            // Для YouTube-плейлистов (URL содержит list=) используем загрузку всего плейлиста
+            if (IsPlaylistUrl(query))
+                return await LoadAndQueuePlaylistAsync(player, query, cancellationToken);
+
+            var track = await _audioService.Tracks.LoadTrackAsync(query, TrackSearchMode.None, cancellationToken: cancellationToken);
+            if (track is null)
+                return new PlayResult { Message = $"❌ Трек не найден: `{query}`" };
+
+            var queueCount = player.Queue.Count;
+
+            if (player.CurrentItem is not null)
+            {
+                await player.Queue.AddAsync(new TrackQueueItem(track), cancellationToken);
+                return new PlayResult
+                {
+                    Message     = $"📋 Добавлено в очередь: **{track.Title}**",
+                    IsQueued    = true,
+                    TrackTitle  = track.Title,
+                    Duration    = track.Duration,
+                    ArtworkUrl  = track.ArtworkUri?.ToString(),
+                    TrackUrl    = track.Uri?.ToString(),
+                    Author      = track.Author,
+                    QueueCount  = queueCount + 1,
+                };
+            }
+
+            await player.PlayAsync(track, cancellationToken: cancellationToken);
+            return new PlayResult
+            {
+                Message     = $"▶️ Воспроизвожу: **{track.Title}**",
+                IsNewTrack  = true,
+                TrackTitle  = track.Title,
+                Duration    = track.Duration,
+                ArtworkUrl  = track.ArtworkUri?.ToString(),
+                TrackUrl    = track.Uri?.ToString(),
+                Author      = track.Author,
+                QueueCount  = queueCount,
+            };
+        }
+
+        private static bool IsPlaylistUrl(string query)
+        {
+            if (!Uri.TryCreate(query, UriKind.Absolute, out var uri)) return false;
+            var query2 = uri.Query;
+            return query2.Contains("list=", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<PlayResult> LoadAndQueuePlaylistAsync(
+            NotifyingPlayer player,
+            string url,
+            CancellationToken ct)
+        {
+            // Lavalink загружает плейлист целиком когда в URL есть list=
+            var result = await _audioService!.Tracks.LoadTracksAsync(url, TrackSearchMode.None, cancellationToken: ct);
+            Console.WriteLine($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
+            Log($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
+            var tracks = result.Tracks;
+            if (tracks.IsDefaultOrEmpty)
+            {
+                if (result.Exception is not null)
+                    return new PlayResult { Message = $"❌ Ошибка загрузки плейлиста: {result.Exception?.Message}" };
+                return new PlayResult { Message = "❌ Плейлист не найден или пуст. Убедись, что он публичный." };
+            }
+
+            var playlistName = result.Playlist?.Name ?? "YouTube Playlist";
+            var queueCountBefore = player.Queue.Count;
+            int added = 0;
+
+            foreach (var track in tracks)
+            {
+                if (player.CurrentItem is null && added == 0)
+                    await player.PlayAsync(track, cancellationToken: ct);
+                else
+                    await player.Queue.AddAsync(new TrackQueueItem(track), ct);
+                added++;
+            }
+
+            var firstTrack = tracks[0];
+            return new PlayResult
+            {
+                Message            = $"📋 Плейлист **{playlistName}**: загружено {added} треков.",
+                IsPlaylist         = true,
+                PlaylistName       = playlistName,
+                PlaylistTracksCount = added,
+                IsNewTrack         = player.CurrentItem is not null,
+                TrackTitle         = firstTrack.Title,
+                Duration           = firstTrack.Duration,
+                ArtworkUrl         = firstTrack.ArtworkUri?.ToString(),
+                TrackUrl           = firstTrack.Uri?.ToString(),
+                Author             = firstTrack.Author,
+                QueueCount         = queueCountBefore + added,
+            };
+        }
+
+        // ─── Loop ─────────────────────────────────────────────────────────
+
+        public async Task<string> SetLoopAsync(ulong guildId, LoopMode mode, CancellationToken ct = default)
+        {
+            var state = GetOrCreateState(guildId);
+            state.LoopMode = mode;
+
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player is not null)
+            {
+                player.RepeatMode = mode switch
+                {
+                    LoopMode.Track => TrackRepeatMode.Track,
+                    LoopMode.Queue => TrackRepeatMode.Queue,
+                    _              => TrackRepeatMode.None,
+                };
+            }
+
+            return mode switch
+            {
+                LoopMode.Track => "🔂 Повтор трека включён.",
+                LoopMode.Queue => "🔁 Повтор очереди включён.",
+                _              => "➡️ Повтор отключён.",
+            };
+        }
+
+        public LoopMode GetLoopMode(ulong guildId) => GetOrCreateState(guildId).LoopMode;
+
+        // ─── Volume ───────────────────────────────────────────────────────
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, int> _volumes = new();
+
+        public int GetVolume(ulong guildId) => _volumes.GetOrAdd(guildId, 100);
+
+        public async Task<string> SetVolumeAsync(ulong guildId, int volume, CancellationToken ct = default)
+        {
+            volume = Math.Clamp(volume, 0, 200);
+            _volumes[guildId] = volume;
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player is not null)
+                await player.SetVolumeAsync(volume / 100f, ct);
+            return $"🔊 Громкость: **{volume}%**";
+        }
+
+        // ─── Shuffle ──────────────────────────────────────────────────────
+
+        public async Task<string> ShuffleAsync(ulong guildId, CancellationToken ct = default)
+        {
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player is null) return "❌ Ничего не играет.";
+            if (player.Queue.IsEmpty) return "📋 Очередь пуста.";
+            // ITrackQueue не имеет Shuffle/Clear — перемешиваем через RemoveAtAsync
+            var items = player.Queue.ToList();
+            var rng = new Random();
+            for (int i = items.Count - 1; i > 0; i--)
+            {
+                int j = rng.Next(i + 1);
+                (items[i], items[j]) = (items[j], items[i]);
+            }
+            // Удаляем с конца (индексы стабильны при удалении с хвоста)
+            for (int i = player.Queue.Count - 1; i >= 0; i--)
+                await player.Queue.RemoveAtAsync(i, ct);
+            foreach (var item in items)
+                await player.Queue.AddAsync(item, ct);
+            return "🔀 Очередь перемешана.";
+        }
+
+        // ─── Позиция / прогресс ───────────────────────────────────────────
+
+        /// <summary>Возвращает (elapsed, duration) текущего трека.</summary>
+        public async Task<(TimeSpan Elapsed, TimeSpan Duration)?> GetPositionAsync(
+            ulong guildId, CancellationToken ct = default)
+        {
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player?.CurrentItem is null) return null;
+            var duration = player.CurrentItem.Track?.Duration ?? TimeSpan.Zero;
+            var pos      = player.Position?.Position ?? TimeSpan.Zero;
+            return (pos, duration);
+        }
+
+        // ─── Очередь (данные для embed) ───────────────────────────────────
+
+        public async Task<bool?> IsPlayerPausedAsync(ulong guildId, CancellationToken ct = default)
+        {
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player is null) return null;
+            return player.State == PlayerState.Paused;
+        }
+
+        public async Task<(string? CurrentTitle, TimeSpan? CurrentDuration,
+                            List<(string Title, TimeSpan? Duration)> Queue)?>
+            GetQueueDataAsync(ulong guildId, CancellationToken ct = default)
+        {
+            var player = await GetPlayerAsync(guildId, ct);
+            if (player is null) return null;
+            var cur = player.CurrentItem?.Track;
+            var list = new List<(string, TimeSpan?)>();
+            foreach (var item in player.Queue)
+                list.Add((item.Track?.Title ?? "?", item.Track?.Duration));
+            return (cur?.Title, cur?.Duration, list);
+        }
+
+        /// <summary>Возвращает URL-ы всех треков: текущего + очереди.</summary>
+        public async Task<List<string>> GetQueueUrlsAsync(ulong guildId, CancellationToken ct = default)
+        {
+            var player = await GetPlayerAsync(guildId, ct);
+            var urls = new List<string>();
+            if (player is null) return urls;
+            // Только очередь (без текущего трека — он сохраняется отдельно как CurrentUrl)
+            foreach (var item in player.Queue)
+                if (item.Track?.Uri is { } uri)
+                    urls.Add(uri.ToString());
+            return urls;
         }
 
         /// <summary>Останавливает воспроизведение и отключает бота.</summary>
@@ -502,8 +836,8 @@ namespace RPBot
         {
             var player = await GetPlayerAsync(guildId, cancellationToken);
             if (player is null) return "❌ Ничего не играет.";
-            if (player.State == PlayerState.Paused) return "⏸ Уже на паузе.";
             if (player.CurrentItem is null) return "❌ Ничего не играет.";
+            if (player.State == PlayerState.Paused) return $"⏸ Пауза: **{player.CurrentItem.Track?.Title ?? "трек"}**";
 
             await player.PauseAsync(cancellationToken);
             return $"⏸ Пауза: **{player.CurrentItem.Track?.Title ?? "трек"}**";
@@ -514,7 +848,7 @@ namespace RPBot
         {
             var player = await GetPlayerAsync(guildId, cancellationToken);
             if (player is null) return "❌ Ничего не играет.";
-            if (player.State != PlayerState.Paused) return "▶️ Воспроизведение не на паузе.";
+            if (player.State != PlayerState.Paused) return $"▶️ Продолжаю: **{player.CurrentItem?.Track?.Title ?? "трек"}**";
 
             await player.ResumeAsync(cancellationToken);
             return $"▶️ Продолжаю: **{player.CurrentItem?.Track?.Title ?? "трек"}**";
@@ -532,6 +866,86 @@ namespace RPBot
 
             await player.SkipAsync(cancellationToken: cancellationToken);
             return "⏭ Трек пропущен.";
+        }
+
+        /// <summary>
+        /// Назад: если прошло >15 с — перематывает в начало, иначе играет предыдущий трек из истории.
+        /// </summary>
+        public async Task<string> PreviousAsync(ulong guildId, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+
+            var state = GetOrCreateState(guildId);
+            var elapsed = DateTime.UtcNow - state.TrackStartedAtUtc;
+
+            // Если прошло >15 секунд — перемотать в начало
+            if (elapsed.TotalSeconds > 15)
+            {
+                await player.SeekAsync(TimeSpan.Zero, cancellationToken);
+                state.TrackStartedAtUtc = DateTime.UtcNow;
+                return "⏮ Перемотано в начало трека.";
+            }
+
+            // Иначе — предыдущий трек из истории
+            if (state.TrackHistory.Count == 0)
+            {
+                await player.SeekAsync(TimeSpan.Zero, cancellationToken);
+                state.TrackStartedAtUtc = DateTime.UtcNow;
+                return "⏮ История пуста, перемотано в начало.";
+            }
+
+            var prev = state.TrackHistory.First!.Value;
+            state.TrackHistory.RemoveFirst();
+
+            // Ставим текущий трек первым в очередь, чтобы он не потерялся
+            if (player.CurrentItem is not null)
+                await player.Queue.InsertAsync(0, player.CurrentItem, cancellationToken);
+
+            var track = await _audioService!.Tracks.LoadTrackAsync(prev.Url, TrackSearchMode.None, cancellationToken: cancellationToken);
+            if (track is null) return "❌ Не удалось загрузить предыдущий трек.";
+
+            await player.PlayAsync(track, cancellationToken: cancellationToken);
+            return $"⏮ Предыдущий трек: **{track.Title}**";
+        }
+
+        /// <summary>Перематывает текущий трек на указанную позицию.</summary>
+        public async Task<string> SeekAsync(ulong guildId, TimeSpan position, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+            if (player.CurrentItem is null) return "❌ Нет текущего трека.";
+
+            var duration = player.CurrentItem.Track?.Duration ?? TimeSpan.Zero;
+            if (position > duration) position = duration;
+            if (position < TimeSpan.Zero) position = TimeSpan.Zero;
+
+            await player.SeekAsync(position, cancellationToken);
+
+            var state = GetOrCreateState(guildId);
+            state.TrackStartedAtUtc = DateTime.UtcNow - position;
+
+            return $"⏩ Перемотано на `{MusicEmbedBuilder.FormatTime(position)}`.";
+        }
+
+        /// <summary>
+        /// Удаляет трек из очереди по номеру (1-based). Не трогает текущий трек.
+        /// </summary>
+        public async Task<string> RemoveFromQueueAsync(ulong guildId, int number, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+
+            var count = player.Queue.Count;
+            if (count == 0) return "❌ Очередь пуста.";
+            if (number < 1 || number > count) return $"❌ Номер должен быть от 1 до {count}.";
+
+            var index = number - 1;
+            var items = new List<ITrackQueueItem>(player.Queue);
+            var removed = items[index];
+            await player.Queue.RemoveAtAsync(index, cancellationToken);
+
+            return $"🗑️ Удалён: **{removed.Track?.Title ?? "?"}**";
         }
 
         /// <summary>
@@ -569,12 +983,12 @@ namespace RPBot
 
         // ─── Вспомогательные ─────────────────────────────────────────────
 
-        private async Task<QueuedLavalinkPlayer?> GetPlayerAsync(
+        private async Task<NotifyingPlayer?> GetPlayerAsync(
             ulong guildId,
             CancellationToken cancellationToken = default)
         {
             if (_audioService is null) return null;
-            return await _audioService.Players.GetPlayerAsync<QueuedLavalinkPlayer>(guildId, cancellationToken);
+            return await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken);
         }
 
         private static string FormatDuration(TimeSpan? duration)

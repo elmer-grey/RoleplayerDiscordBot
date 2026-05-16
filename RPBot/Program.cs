@@ -3,6 +3,7 @@ using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using RPBot;
+using RPBot.Music;
 using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
@@ -106,6 +107,9 @@ namespace RPBot
         private EventAnnouncementStore? _eventAnnouncementStore;
         private LavalinkService? _lavalinkService;
         private MusicCommands? _musicCommands;
+        private MusicPlaylistStore? _playlistStore;
+        private MusicQueueStore? _musicQueueStore;
+        private MusicStats? _musicStats;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
@@ -635,8 +639,12 @@ namespace RPBot
 					var path = System.IO.Path.Combine(logDir, $"MusicDebug_{DateTime.Now:yyyyMMdd}.txt");
 					File.AppendAllText(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {msg}\n");
 				};
-				_musicCommands = new MusicCommands(_lavalinkService);
-				_musicCommands.LogSink = msg => _ui?.AddLog(msg);
+				_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
+					_ = _playlistStore.LoadAsync();
+					_musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
+					_musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
+					_musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats,
+						logSink: msg => _ui?.AddLog(msg));
 			}
 
 			// ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
@@ -1374,6 +1382,10 @@ namespace RPBot
                             _connectionPredictor,
                             _statusNotifier
                         );
+
+                        // Переподписываем MusicCommands на новый клиент
+                        if (_musicCommands is not null)
+                            _musicCommands.UpdateDiscordClient(_client);
                     }
 
                     _commandHandler = new CommandHandler(_client, _config.GuildIDs);
@@ -2345,6 +2357,16 @@ namespace RPBot
                 catch (Exception ex)
                 {
                     await LogStartup($"Ошибка при массовой отправке статусов после реконнекта: {ex.Message}");
+                }
+
+                // Восстанавливаем музыкальные очереди после переподключения
+                if (_musicCommands is not null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(10)); // ждём стабилизации Lavalink
+                        await _musicCommands.TryRestoreQueuesAsync();
+                    });
                 }
             }
         }
@@ -3419,8 +3441,36 @@ namespace RPBot
                 case "detailed_stats":
                     await new GameSessionCommands(_client).HandleStatsButton(component);
                     break;
-            }
-        }
+
+                case "music_prev":
+                case "music_pauseplay":
+                case "music_skip":
+                case "music_stop":
+                case "music_loop":
+                case "music_shuffle":
+                case "music_vol_down":
+                case "music_vol_up":
+                case "music_queue":
+                case "music_queue_prev":
+                case "music_queue_next":
+                case "music_autopause_resume":
+                case "music_autopause_skip":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleButtonAsync(component);
+                    break;
+
+                default:
+                    var cid = component.Data.CustomId;
+                    if (_musicCommands is not null &&
+                        (cid.StartsWith("music_search_") ||
+                         cid.StartsWith("playlist_public_yes_") ||
+                         cid.StartsWith("playlist_public_no_")))
+                    {
+                        await _musicCommands.HandleButtonAsync(component);
+                    }
+					break;
+			}
+		}
 
 		private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
 		{
@@ -3879,6 +3929,9 @@ namespace RPBot
                 case "help_gs":
                     await Help_GameSessionCommand(command);
                     break;
+                case "help_music":
+                    await Help_MusicCommand(command);
+                    break;
                 case "help_predict":
                     await Help_PredictCommand(command);
                     break;
@@ -3909,6 +3962,12 @@ namespace RPBot
                 case "music":
                     if (_musicCommands is not null)
                         await _musicCommands.HandleMusicAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                    break;
+                case "music-playlist":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleMusicPlaylistAsync(command);
                     else
                         await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
                     break;
@@ -4079,6 +4138,13 @@ namespace RPBot
             var infoModule = _services.GetRequiredService<InfoCommands>();
             await infoModule.Help_GS(command);
             await LogInfo("Выведена подсказка о командах для статистики.");
+        }
+
+        private async Task Help_MusicCommand(SocketSlashCommand command)
+        {
+            var infoModule = _services.GetRequiredService<InfoCommands>();
+            await infoModule.Help_Music(command);
+            await LogInfo("Выведена подсказка о музыкальных командах.");
         }
 
         private async Task Bug_ReportCommand(SocketSlashCommand command)
@@ -5408,6 +5474,13 @@ namespace RPBot
                     "> `/roll ...`, `/roll20` - Броски кубиков\n" +
                     "> `/start` - Запуск игровой сессии\n" +
                     "> `/prediction ...` - Прогнозы и ставки (см. `/help_predict`)")
+                .AddField("🎵 Музыка",
+                    "> `/music действие:play запрос:<трек/URL>` - Воспроизвести трек или плейлист\n" +
+                    "> `/music действие:pause/resume/skip/stop` - Управление воспроизведением\n" +
+                    "> `/music действие:queue` - Показать очередь (с пагинацией)\n" +
+                    "> `/music действие:loop/shuffle/seek/search/remove` - Расширенное управление\n" +
+                    "> `/music-playlist действие:playlist_save/playlist_load/playlist_list/playlist_delete` - Работа с плейлистами\n" +
+                    "> `/help_music` - Подробная справка по музыкальным командам")
                 .WithFooter("При проблемах используйте /bug_report")
                 .Build();
 
@@ -5568,6 +5641,45 @@ namespace RPBot
                     "• Время пауз не учитывается в общей статистике\n" +
                     "• Только мастера могут управлять сессиями")
                 .WithFooter("*При обнаружении некорректной работы бота сообщите об этом в `/bug_report`*")
+                .Build();
+
+            await command.RespondAsync(embed: helpMessage);
+        }
+
+        [Command("help_music")]
+        public async Task Help_Music(SocketSlashCommand command)
+        {
+            var helpMessage = new EmbedBuilder()
+                .WithTitle("🎵 Помощь по музыкальным командам")
+                .WithColor(Color.DarkMagenta)
+                .WithDescription("Музыкальный модуль позволяет воспроизводить треки и плейлисты прямо в голосовом канале. Бот должен быть в том же голосовом канале, что и вы.")
+                .AddField("▶️ Воспроизведение",
+                    "> `/music действие:play запрос:<трек или URL>` — воспроизвести трек по названию, ссылке YouTube/SoundCloud или целый плейлист\n" +
+                    "> `/music действие:search запрос:<название>` — поиск трека по названию с выбором из 5 результатов\n" +
+                    "> `/music действие:stop` — остановить воспроизведение и очистить очередь, бот покидает канал")
+                .AddField("⏸ Управление воспроизведением",
+                    "> `/music действие:pause` — поставить на паузу\n" +
+                    "> `/music действие:resume` — возобновить воспроизведение\n" +
+                    "> `/music действие:skip` — пропустить текущий трек\n" +
+                    "> `/music действие:seek время:<ЧЧ:ММ:СС или секунды>` — перемотать к указанному моменту\n" +
+                    "> `/music действие:loop` — переключить режим повтора (трек / вся очередь / выкл)")
+                .AddField("📋 Очередь",
+                    "> `/music действие:queue` — показать текущую очередь (до 15 треков на странице, кнопки ◀ ▶ для переключения)\n" +
+                    "> `/music действие:shuffle` — перемешать очередь\n" +
+                    "> `/music действие:remove номер:<N>` — удалить трек с позиции N из очереди")
+                .AddField("📁 Плейлисты (/music-playlist)",
+                    "> `/music-playlist действие:playlist_save название:<имя>` — сохранить текущую очередь как плейлист\n" +
+                    "> `/music-playlist действие:playlist_load название:<имя>` — загрузить сохранённый плейлист в очередь\n" +
+                    "> `/music-playlist действие:playlist_list` — показать список сохранённых плейлистов (личные и публичные)\n" +
+                    "> `/music-playlist действие:playlist_delete название:<имя>` — удалить плейлист")
+                .AddField("🤖 Автоматика",
+                    "• Если в голосовом канале никого нет **5 минут** — автопауза с предложением продолжить\n" +
+                    "• Если канал пуст **10 минут** — бот очищает очередь и покидает канал\n" +
+                    "• При возвращении в канал бот спросит: продолжить воспроизведение?")
+                .AddField("🔘 Кнопки управления",
+                    "После запуска трека появляется панель управления с кнопками:\n" +
+                    "`⏮ Пред.` `⏸/▶ Пауза/Продолжить` `⏭ Стоп` `🔁 Повтор` `🔀 Перемешать` `📋 Очередь`")
+                .WithFooter("*При обнаружении проблем используйте /bug_report*")
                 .Build();
 
             await command.RespondAsync(embed: helpMessage);

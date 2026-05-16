@@ -1,34 +1,292 @@
+using Discord;
 using Discord.WebSocket;
+using RPBot.Music;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RPBot
 {
     /// <summary>
-    /// Обработчик команды /music — единая точка входа для всех музыкальных действий.
+    /// Обработчик команды /music и кнопок плеера.
+    /// Все ответы пользователю — эфемерные; embed с управлением отправляется в канал.
     /// </summary>
     public class MusicCommands
     {
-        private readonly LavalinkService _lavalink;
+        private readonly LavalinkService    _lavalink;
+        private readonly MusicPlaylistStore? _playlistStore;
+        private readonly MusicQueueStore?   _queueStore;
+        private readonly MusicStats?        _stats;
+        private DiscordSocketClient _discord;
+        private Timer? _progressTimer;
 
         public Action<string>? LogSink { get; set; }
 
-        public MusicCommands(LavalinkService lavalink)
+        public MusicCommands(
+            LavalinkService      lavalink,
+            DiscordSocketClient  discord,
+            MusicPlaylistStore?  playlistStore = null,
+            MusicQueueStore?     queueStore    = null,
+            MusicStats?          stats         = null,
+            Action<string>?      logSink       = null)
         {
-            _lavalink = lavalink;
+            _lavalink      = lavalink;
+            _discord       = discord;
+            _playlistStore = playlistStore;
+            _queueStore    = queueStore;
+            _stats         = stats;
+            LogSink        = logSink; // устанавливаем ДО подписки на события
+
+            // Обновляем прогресс-бар каждые 5 секунд (#9)
+            _progressTimer = new Timer(OnProgressTick, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
+            // Подключаем колбэки смены трека
+            _lavalink.SetTrackCallbacks(
+                onStarted: OnTrackStartedAsync,
+                onEnded: OnTrackEndedAsync);
+
+            // Авто-пауза: слушаем изменения голосового канала (#4)
+            _discord.UserVoiceStateUpdated += OnVoiceStateUpdatedAsync;
+            Log($"[Music] MusicCommands инициализирован, LogSink={LogSink is not null}, client={_discord.GetHashCode()}");
+        }
+
+        /// <summary>Переподписывает обработчик голосовых событий на новый клиент (после рестарта бота).</summary>
+        public void UpdateDiscordClient(DiscordSocketClient newClient)
+        {
+            _discord.UserVoiceStateUpdated -= OnVoiceStateUpdatedAsync;
+            _discord = newClient;
+            _discord.UserVoiceStateUpdated += OnVoiceStateUpdatedAsync;
+            Log($"[Music] MusicCommands: клиент обновлён, переподписка выполнена, client={_discord.GetHashCode()}");
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Авто-пауза при пустом голосовом канале (#4)
+        // ═══════════════════════════════════════════════════════════════════
+
+        private async Task OnVoiceStateUpdatedAsync(SocketUser user, SocketVoiceState before, SocketVoiceState after)
+        {
+            try
+            {
+            Log($"[Music] VoiceStateUpdated: user={user.Username} IsBot={user.IsBot} before={before.VoiceChannel?.Name ?? "null"} after={after.VoiceChannel?.Name ?? "null"}");
+
+            if (user.IsBot) return;
+            var guild = (before.VoiceChannel ?? after.VoiceChannel)?.Guild;
+            if (guild is null)
+            {
+                Log($"[Music] guild is null для пользователя {user.Username}");
+                return;
+            }
+            var guildId = guild.Id;
+
+            var state = _lavalink.GetOrCreateState(guildId);
+
+            var botVoice = guild.GetUser(_discord.CurrentUser.Id)?.VoiceChannel;
+            if (botVoice is null)
+            {
+                Log($"[Music] VoiceState от {user.Username} — бот не в голосовом канале гильдии {guildId}, пропускаем.");
+                return;
+            }
+
+            // Определяем: вошёл или вышел
+            var joinedBotChannel = after.VoiceChannel?.Id == botVoice.Id;
+            var leftBotChannel   = before.VoiceChannel?.Id == botVoice.Id && after.VoiceChannel?.Id != botVoice.Id;
+
+            if (joinedBotChannel)
+                Log($"[Music] {user.Username} вошёл в голосовой канал '{botVoice.Name}' (гильдия {guildId})");
+            else if (leftBotChannel)
+                Log($"[Music] {user.Username} вышел из голосового канала '{botVoice.Name}' (гильдия {guildId})");
+
+            // guild.Users даёт актуальные голосовые состояния, в отличие от botVoice.Users (устаревший кэш)
+            var actualUsers = guild.Users
+                .Where(u => !u.IsBot && u.VoiceChannel?.Id == botVoice.Id)
+                .ToList();
+            var cachedCount = actualUsers.Count;
+            var cachedNames = string.Join(", ", actualUsers.Select(u => u.Username));
+            Log($"[Music] Кэш канала '{botVoice.Name}': [{cachedNames}]");
+
+            int humans = cachedCount;
+            if (leftBotChannel)
+                humans = Math.Max(0, cachedCount - 1); // пользователь ещё числится в кэше
+            else if (joinedBotChannel && !actualUsers.Any(u => u.Id == user.Id))
+                humans = cachedCount + 1; // пользователь ещё не попал в кэш
+
+            Log($"[Music] Людей в канале '{botVoice.Name}': {humans} (кэш: {cachedCount})");
+
+            // Prompt продолжения теперь показывается из CheckEmptyChannelAsync (polling),
+            // чтобы гарантированно сработать после TriggerAutoPauseAsync выставит IsPaused=true.
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Music/ERR] OnVoiceStateUpdatedAsync: {ex}");
+                Log($"[Music] OnVoiceStateUpdatedAsync ошибка: {ex.Message}");
+            }
+        }
+
+        private async Task TriggerAutoPauseAsync(ulong guildId)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.IsPaused)
+            {
+                Log($"[Music] TriggerAutoPause: уже на паузе (гильдия {guildId}), пропускаем.");
+                return;
+            }
+            var emptySince = state.ChannelEmptySince.HasValue
+                ? $"{(DateTime.UtcNow - state.ChannelEmptySince.Value):mm\\:ss}"
+                : "неизвестно";
+            Log($"[Music] Авто-пауза сработала (гильдия {guildId}). Канал пуст уже {emptySince}.");
+
+            // Сбрасываем таймер паузы (он уже сработал), стоп-таймер оставляем
+            state.AutoPauseTimer?.Dispose();
+            state.AutoPauseTimer = null;
+
+            await _lavalink.PauseAsync(guildId);
+            state.IsPaused = true;
+            // Принудительно синхронизируем со state плеера чтобы embed показал паузу
+            var playerPaused = await _lavalink.IsPlayerPausedAsync(guildId);
+            if (playerPaused.HasValue) state.IsPaused = playerPaused.Value;
+
+            await UpdateNowPlayingAsync(guildId, state);
+
+            if (state.NowPlayingChannel is not null)
+                await state.NowPlayingChannel.SendMessageAsync(
+                    "⏸ Никого нет в канале в течение 5 минут — музыка поставлена на паузу.");
+        }
+
+        private async Task TriggerAutoStopAsync(ulong guildId)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            var emptySince = state.ChannelEmptySince.HasValue
+                ? $"{(DateTime.UtcNow - state.ChannelEmptySince.Value):mm\\:ss}"
+                : "неизвестно";
+            Log($"[Music] Авто-стоп сработал (гильдия {guildId}). Канал пуст уже {emptySince}. Очищаем очередь и выходим.");
+            if (state.NowPlayingChannel is not null)
+                await state.NowPlayingChannel.SendMessageAsync(
+                    "⏹ Никого не было 10 минут — воспроизведение остановлено.");
+            if (_queueStore is not null) await _queueStore.ClearAsync(guildId);
+            await _lavalink.StopAsync(guildId);
+            await DeleteNowPlayingAsync(guildId);
+            _lavalink.RemoveState(guildId);
+        }
+
+        private async Task OnTrackEndedAsync(ulong guildId)
+        {
+            // При loop=Track Lavalink сам перезапустит — OnTrackStartedAsync вызовется снова.
+            // Здесь просто обновляем очередь если нет повтора трека.
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.LoopMode != LoopMode.Track)
+                await UpdateQueueMessageIfVisibleAsync(guildId, state);
+        }
+
+        private void OnProgressTick(object? _)
+        {
+            _ = Task.Run(async () =>
+            {
+                foreach (var (guildId, state) in _lavalink.GetAllStates())
+                {
+                    if (!state.NowPlayingMessageId.HasValue) continue;
+                    // Синхронизируем TrackStartedAtUtc по реальной позиции плеера
+                    var pos = await _lavalink.GetPositionAsync(guildId);
+                    if (pos.HasValue && state.CurrentTrackDuration.HasValue)
+                    {
+                        state.TrackStartedAtUtc = DateTime.UtcNow - pos.Value.Elapsed;
+                    }
+                    // Синхронизируем IsPaused с реальным состоянием плеера (#4)
+                    var playerPaused = await _lavalink.IsPlayerPausedAsync(guildId);
+                    if (playerPaused.HasValue) state.IsPaused = playerPaused.Value;
+
+                    await UpdateNowPlayingAsync(guildId, state);
+
+                    // ── Проверка пустого голосового канала каждые 5 сек ──
+                    await CheckEmptyChannelAsync(guildId, state);
+                }
+            });
         }
 
         /// <summary>
-        /// Диспетчер команды /music action:[играть|стоп|пауза|продолжить|пропустить|очередь]
+        /// Полинг: проверяем есть ли люди в голосовом канале бота.
+        /// Если нет — запускаем/продлеваем таймеры авто-паузы и авто-стопа.
+        /// Если есть — сбрасываем их.
         /// </summary>
+        private async Task CheckEmptyChannelAsync(ulong guildId, MusicPlayerState state)
+        {
+            var guild = _discord.GetGuild(guildId);
+            if (guild is null) return;
+
+            var botVoice = guild.GetUser(_discord.CurrentUser.Id)?.VoiceChannel;
+            if (botVoice is null) return; // бот не в канале
+
+            var humans = guild.Users.Count(u => !u.IsBot && u.VoiceChannel?.Id == botVoice.Id);
+
+            if (humans == 0)
+            {
+                // Никого нет — запускаем таймеры если ещё не запущены
+                if (state.ChannelEmptySince is null)
+                {
+                    state.ChannelEmptySince = DateTime.UtcNow;
+                    Log($"[Music] Канал '{botVoice.Name}' пуст (гильдия {guildId}) — запущен отсчёт: пауза через 5 мин, стоп через 10 мин.");
+
+                    state.AutoPauseTimer?.Dispose();
+                    state.AutoPauseTimer = new Timer(
+                        _ => _ = Task.Run(() => TriggerAutoPauseAsync(guildId)),
+                        null, TimeSpan.FromMinutes(5), Timeout.InfiniteTimeSpan);
+
+                    state.AutoStopTimer?.Dispose();
+                    state.AutoStopTimer = new Timer(
+                        _ => _ = Task.Run(() => TriggerAutoStopAsync(guildId)),
+                        null, TimeSpan.FromMinutes(10), Timeout.InfiniteTimeSpan);
+                }
+                else
+                {
+                    var elapsed = DateTime.UtcNow - state.ChannelEmptySince.Value;
+                    var minuteMark = (int)elapsed.TotalMinutes;
+                    if (minuteMark != state.LastLoggedEmptyMinute)
+                    {
+                        state.LastLoggedEmptyMinute = minuteMark;
+                        Log($"[Music] Канал всё ещё пуст: {elapsed:mm\\:ss} из 5:00 до паузы (гильдия {guildId})");
+                    }
+                }
+            }
+            else
+            {
+                // Кто-то есть — сбрасываем, если таймеры были запущены
+                if (state.ChannelEmptySince is not null)
+                {
+                    var waited = DateTime.UtcNow - state.ChannelEmptySince.Value;
+                    state.ChannelEmptySince = null;
+                    state.LastLoggedEmptyMinute = -1;
+                    state.AutoPauseTimer?.Dispose(); state.AutoPauseTimer = null;
+                    state.AutoStopTimer?.Dispose();  state.AutoStopTimer = null;
+                    Log($"[Music] Канал '{botVoice.Name}' снова занят (гильдия {guildId}), таймеры сброшены. Был пуст: {waited:mm\\:ss}");
+
+                    // Если бот на паузе из-за авто-паузы — предложить продолжить
+                    if (state.IsPaused && state.AutoPausePromptId is null && state.NowPlayingChannel is not null && state.NowPlayingMessageId.HasValue)
+                    {
+                        Log($"[Music] Канал снова занят после паузы ({waited:mm\\:ss}) — показываем prompt продолжения (гильдия {guildId})");
+                        var components = new ComponentBuilder()
+                            .WithButton("▶️ Да", "music_autopause_resume", ButtonStyle.Success)
+                            .WithButton("❌ Нет", "music_autopause_skip", ButtonStyle.Danger)
+                            .Build();
+                        var prompt = await state.NowPlayingChannel.SendMessageAsync(
+                            "👋 Кто-то вернулся! Продолжить воспроизведение?", components: components);
+                        state.AutoPausePromptId = prompt.Id;
+                    }
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Slash-команды
+        // ═══════════════════════════════════════════════════════════════════
+
         public async Task HandleMusicAsync(SocketSlashCommand command)
         {
-            // DeferAsync должен быть на gateway потоке — сразу отвечаем Discord что запрос принят
-            await command.DeferAsync();
+            // Эфемерный defer — только пользователь видит подтверждение
+            await command.DeferAsync(ephemeral: true);
 
-            // Дальнейшее выполнение — в отдельном потоке, чтобы не блокировать gateway
-            // (JoinAsync ждёт VoiceStateUpdate от gateway — иначе дедлок)
             _ = Task.Run(async () =>
             {
                 var action = command.Data.Options
@@ -36,12 +294,17 @@ namespace RPBot
 
                 switch (action)
                 {
-                    case "play":   await HandlePlayInternalAsync(command);   break;
-                    case "stop":   await HandleStopInternalAsync(command);   break;
-                    case "pause":  await HandlePauseInternalAsync(command);  break;
-                    case "resume": await HandleResumeInternalAsync(command); break;
-                    case "skip":   await HandleSkipInternalAsync(command);   break;
-                    case "queue":  await HandleQueueInternalAsync(command);  break;
+                    case "play":    await HandlePlayAsync(command);    break;
+                    case "stop":    await HandleStopAsync(command);    break;
+                    case "pause":   await HandlePauseAsync(command);   break;
+                    case "resume":  await HandleResumeAsync(command);  break;
+                    case "skip":    await HandleSkipAsync(command);    break;
+                    case "queue":   await HandleQueueAsync(command);   break;
+                    case "loop":    await HandleLoopAsync(command);    break;
+                    case "shuffle": await HandleShuffleAsync(command); break;
+                    case "search":  await HandleSearchAsync(command);  break;
+                    case "seek":    await HandleSeekAsync(command);    break;
+                    case "remove":  await HandleRemoveAsync(command);  break;
                     default:
                         await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
                         break;
@@ -49,9 +312,9 @@ namespace RPBot
             });
         }
 
-        // ─── играть ──────────────────────────────────────────────────────
+        // ─── play ─────────────────────────────────────────────────────────
 
-        private async Task HandlePlayInternalAsync(SocketSlashCommand command)
+        private async Task HandlePlayAsync(SocketSlashCommand command)
         {
             var user = command.User as SocketGuildUser;
             if (user is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
@@ -65,8 +328,76 @@ namespace RPBot
 
             try
             {
-                var result = await _lavalink.PlayAsync(user, url);
-                await command.FollowupAsync(result);
+                var result = await _lavalink.PlayRichAsync(user, url);
+
+                if (!result.IsNewTrack && !result.IsQueued && !result.IsPlaylist)
+                {
+                    await command.FollowupAsync(result.Message, ephemeral: true);
+                    return;
+                }
+
+                var guildId = user.Guild.Id;
+                var state   = _lavalink.GetOrCreateState(guildId);
+
+                if (result.IsPlaylist)
+                {
+                    // Плейлист загружен
+                    var reply = await command.FollowupAsync(result.Message, ephemeral: true);
+                    _ = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(8)); try { await reply.DeleteAsync(); } catch { } });
+
+                    // Если бот не играл — заполняем state первым треком и показываем плеер
+                    if (result.IsNewTrack || state.NowPlayingMessageId is null)
+                    {
+                        state.CurrentTrackTitle      = result.TrackTitle;
+                        state.CurrentTrackDuration   = result.Duration;
+                        state.CurrentTrackArtworkUrl = result.ArtworkUrl;
+                        state.CurrentTrackUrl        = result.TrackUrl;
+                        state.CurrentTrackAuthor     = result.Author;
+                        state.TrackStartedAtUtc      = DateTime.UtcNow;
+                        await SendOrUpdateNowPlayingAsync(command.Channel as ITextChannel, guildId, state);
+                    }
+                    else
+                    {
+                        // Уже играет — обновляем footer/очередь
+                        await UpdateNowPlayingAsync(guildId, state);
+                        await UpdateQueueMessageIfVisibleAsync(guildId, state);
+                    }
+                }
+                else if (result.IsQueued)
+                {
+                    // "Добавлено в очередь" — коротко, исчезает через 5 сек
+                    var reply = await command.FollowupAsync(result.Message, ephemeral: true);
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5));
+                        try { await reply.DeleteAsync(); } catch { }
+                    });
+                    await UpdateNowPlayingAsync(guildId, state);
+                    await UpdateQueueMessageIfVisibleAsync(guildId, state);
+                }
+                else
+                {
+                    await command.FollowupAsync(result.Message, ephemeral: true);
+                }
+
+                if (result.IsNewTrack && !result.IsPlaylist)
+                {
+                    state.CurrentTrackTitle      = result.TrackTitle;
+                    state.CurrentTrackDuration   = result.Duration;
+                    state.CurrentTrackArtworkUrl = result.ArtworkUrl;
+                    state.CurrentTrackUrl        = result.TrackUrl;
+                    state.CurrentTrackAuthor     = result.Author;
+                    state.TrackStartedAtUtc      = DateTime.UtcNow;
+                    await SendOrUpdateNowPlayingAsync(command.Channel as ITextChannel, guildId, state);
+                }
+
+                // Сохраняем очередь для восстановления после перезапуска
+                if (_queueStore is not null)
+                {
+                    var currentUrl = state.CurrentTrackUrl ?? url;
+                    var queueUrls  = await _lavalink.GetQueueUrlsAsync(guildId);
+                    await _queueStore.SaveAsync(guildId, currentUrl, queueUrls);
+                }
             }
             catch (Exception ex)
             {
@@ -75,66 +406,830 @@ namespace RPBot
             }
         }
 
-        // ─── стоп ─────────────────────────────────────────────────────────
+        // ─── stop ─────────────────────────────────────────────────────────
 
-        private async Task HandleStopInternalAsync(SocketSlashCommand command)
+        private async Task HandleStopAsync(SocketSlashCommand command)
         {
             var guildId = GetGuildId(command);
             if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
-
-            try { await command.FollowupAsync(await _lavalink.StopAsync(guildId.Value)); }
+            try
+            {
+                var msg = await _lavalink.StopAsync(guildId.Value);
+                await command.FollowupAsync(msg, ephemeral: true);
+                if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
+                await DeleteNowPlayingAsync(guildId.Value);
+                _lavalink.RemoveState(guildId.Value);
+            }
             catch (Exception ex) { Log($"[Music] Ошибка stop: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        // ─── пауза ────────────────────────────────────────────────────────
+        // ─── pause ────────────────────────────────────────────────────────
 
-        private async Task HandlePauseInternalAsync(SocketSlashCommand command)
+        private async Task HandlePauseAsync(SocketSlashCommand command)
         {
             var guildId = GetGuildId(command);
             if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
-
-            try { await command.FollowupAsync(await _lavalink.PauseAsync(guildId.Value)); }
+            try
+            {
+                var msg = await _lavalink.PauseAsync(guildId.Value);
+                await command.FollowupAsync(msg, ephemeral: true);
+                var state = _lavalink.GetOrCreateState(guildId.Value);
+                state.IsPaused = true;
+                await UpdateNowPlayingAsync(guildId.Value, state);
+            }
             catch (Exception ex) { Log($"[Music] Ошибка pause: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        // ─── продолжить ───────────────────────────────────────────────────
+        // ─── resume ───────────────────────────────────────────────────────
 
-        private async Task HandleResumeInternalAsync(SocketSlashCommand command)
+        private async Task HandleResumeAsync(SocketSlashCommand command)
         {
             var guildId = GetGuildId(command);
             if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
-
-            try { await command.FollowupAsync(await _lavalink.ResumeAsync(guildId.Value)); }
+            try
+            {
+                var msg = await _lavalink.ResumeAsync(guildId.Value);
+                await command.FollowupAsync(msg, ephemeral: true);
+                var state = _lavalink.GetOrCreateState(guildId.Value);
+                state.IsPaused = false;
+                await UpdateNowPlayingAsync(guildId.Value, state);
+            }
             catch (Exception ex) { Log($"[Music] Ошибка resume: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        // ─── пропустить ───────────────────────────────────────────────────
+        // ─── skip ─────────────────────────────────────────────────────────
 
-        private async Task HandleSkipInternalAsync(SocketSlashCommand command)
+        private async Task HandleSkipAsync(SocketSlashCommand command)
         {
             var guildId = GetGuildId(command);
             if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
-
-            try { await command.FollowupAsync(await _lavalink.SkipAsync(guildId.Value)); }
+            try
+            {
+                var msg = await _lavalink.SkipAsync(guildId.Value);
+                await command.FollowupAsync(msg, ephemeral: true);
+                var state = _lavalink.GetOrCreateState(guildId.Value);
+                await UpdateNowPlayingAsync(guildId.Value, state);
+            }
             catch (Exception ex) { Log($"[Music] Ошибка skip: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
         }
 
-        // ─── очередь ─────────────────────────────────────────────────────
+        // ─── queue ────────────────────────────────────────────────────────
 
-        private async Task HandleQueueInternalAsync(SocketSlashCommand command)
+        private async Task HandleQueueAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
+            try { await command.FollowupAsync(await _lavalink.GetQueueInfoAsync(guildId.Value), ephemeral: true); }
+            catch (Exception ex) { Log($"[Music] Ошибка queue: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+        }
+
+        // ─── loop ─────────────────────────────────────────────────────────
+
+        private async Task HandleLoopAsync(SocketSlashCommand command)
         {
             var guildId = GetGuildId(command);
             if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
 
-            try { await command.FollowupAsync(await _lavalink.GetQueueInfoAsync(guildId.Value)); }
-            catch (Exception ex) { Log($"[Music] Ошибка queue: {ex.Message}"); await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+            var modeStr = command.Data.Options.FirstOrDefault(o => o.Name == "mode")?.Value as string ?? "none";
+            var mode = modeStr switch
+            {
+                "track" => LoopMode.Track,
+                "queue" => LoopMode.Queue,
+                _       => LoopMode.None,
+            };
+            try
+            {
+                var msg = await _lavalink.SetLoopAsync(guildId.Value, mode);
+                await command.FollowupAsync(msg, ephemeral: true);
+                var state = _lavalink.GetOrCreateState(guildId.Value);
+                await UpdateNowPlayingAsync(guildId.Value, state);
+            }
+            catch (Exception ex) { await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+        }
+
+        // ─── shuffle ──────────────────────────────────────────────────────
+
+        private async Task HandleShuffleAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
+            try
+            {
+                var msg = await _lavalink.ShuffleAsync(guildId.Value);
+                await command.FollowupAsync(msg, ephemeral: true);
+                var state = _lavalink.GetOrCreateState(guildId.Value);
+                await UpdateNowPlayingAsync(guildId.Value, state);
+                await UpdateQueueMessageIfVisibleAsync(guildId.Value, state);
+            }
+            catch (Exception ex) { await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
+        }
+
+        // ─── search ───────────────────────────────────────────────────────
+
+        private async Task HandleSearchAsync(SocketSlashCommand command)
+        {
+            var query = command.Data.Options.FirstOrDefault(o => o.Name == "запрос")?.Value as string ?? "";
+            if (string.IsNullOrWhiteSpace(query)) { await command.FollowupAsync("❌ Укажи запрос.", ephemeral: true); return; }
+
+            var results = await _lavalink.SearchTracksAsync(query);
+            if (results.Count == 0) { await command.FollowupAsync("🔍 Ничего не найдено.", ephemeral: true); return; }
+
+            var sb = new StringBuilder("🔍 **Результаты поиска:**\n");
+            for (int i = 0; i < results.Count; i++)
+                sb.AppendLine($"`{i + 1}.` **{results[i].Title}** — {results[i].Author} `{MusicEmbedBuilder.FormatTime(results[i].Duration)}`");
+
+            var buttons = new ComponentBuilder();
+            for (int i = 0; i < results.Count; i++)
+                buttons.WithButton($"{i + 1}", $"music_search_{i}_{Uri.EscapeDataString(results[i].Url)}", ButtonStyle.Secondary, row: 0);
+
+            await command.FollowupAsync(sb.ToString(), components: buttons.Build(), ephemeral: true);
+        }
+
+        // ─── seek ─────────────────────────────────────────────────────────
+
+        private async Task HandleSeekAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Только на сервере.", ephemeral: true); return; }
+
+            var timeStr = command.Data.Options.FirstOrDefault(o => o.Name == "время")?.Value as string ?? "";
+            if (!TryParseTime(timeStr, out var position))
+            {
+                await command.FollowupAsync("❌ Неверный формат. Используй `1:30` или `90` (секунды).", ephemeral: true);
+                return;
+            }
+            var msg = await _lavalink.SeekAsync(guildId.Value, position);
+            await command.FollowupAsync(msg, ephemeral: true);
+            await UpdateNowPlayingAsync(guildId.Value, _lavalink.GetOrCreateState(guildId.Value));
+        }
+
+        // ─── remove ───────────────────────────────────────────────────────
+
+        private async Task HandleRemoveAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null) { await command.FollowupAsync("❌ Только на сервере.", ephemeral: true); return; }
+
+            var numObj = command.Data.Options.FirstOrDefault(o => o.Name == "номер")?.Value;
+            if (numObj is not long num) { await command.FollowupAsync("❌ Укажи номер трека.", ephemeral: true); return; }
+
+            var msg = await _lavalink.RemoveFromQueueAsync(guildId.Value, (int)num);
+            var state = _lavalink.GetOrCreateState(guildId.Value);
+            await UpdateQueueMessageIfVisibleAsync(guildId.Value, state);
+            await AutoDeleteFollowupAsync(command, msg);
+        }
+
+        private static bool TryParseTime(string s, out TimeSpan result)
+        {
+            result = TimeSpan.Zero;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            if (s.Contains(':'))
+            {
+                var parts = s.Split(':');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int m) && int.TryParse(parts[1], out int sec))
+                { result = TimeSpan.FromSeconds(m * 60 + sec); return true; }
+                if (parts.Length == 3 && int.TryParse(parts[0], out int h) && int.TryParse(parts[1], out int mm) && int.TryParse(parts[2], out int ss))
+                { result = TimeSpan.FromSeconds(h * 3600 + mm * 60 + ss); return true; }
+                return false;
+            }
+            if (double.TryParse(s, out double totalSec)) { result = TimeSpan.FromSeconds(totalSec); return true; }
+            return false;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Кнопки (ButtonExecuted)
+        // ═══════════════════════════════════════════════════════════════════
+
+        public async Task HandleButtonAsync(SocketMessageComponent component)
+        {
+            var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
+            if (guildId is null) { await component.DeferAsync(); return; }
+
+            await component.DeferAsync(ephemeral: true);
+
+            _ = Task.Run(async () =>
+            {
+                switch (component.Data.CustomId)
+                {
+                    case MusicEmbedBuilder.BtnPausePlay: await ButtonTogglePauseAsync(guildId.Value, component); break;
+                    case MusicEmbedBuilder.BtnSkip:      await ButtonSkipAsync(guildId.Value, component);        break;
+                    case MusicEmbedBuilder.BtnStop:      await ButtonStopAsync(guildId.Value, component);        break;
+                    case MusicEmbedBuilder.BtnLoop:      await ButtonLoopAsync(guildId.Value, component);        break;
+                    case MusicEmbedBuilder.BtnShuffle:   await ButtonShuffleAsync(guildId.Value, component);     break;
+                    case MusicEmbedBuilder.BtnVolDown:   await ButtonVolumeAsync(guildId.Value, component, -10); break;
+                    case MusicEmbedBuilder.BtnVolUp:     await ButtonVolumeAsync(guildId.Value, component, +10); break;
+                    case MusicEmbedBuilder.BtnQueue:     await ButtonToggleQueueAsync(guildId.Value, component); break;
+                    case MusicEmbedBuilder.BtnPrev:      await ButtonPrevAsync(guildId.Value, component);        break;
+                    case "music_autopause_resume":       await ButtonAutoPauseResumeAsync(guildId.Value, component); break;
+                    case "music_autopause_skip":         await ButtonAutoPauseSkipAsync(guildId.Value, component);  break;
+                    case "music_queue_prev":             await ButtonQueuePageAsync(guildId.Value, component, -1);  break;
+                    case "music_queue_next":             await ButtonQueuePageAsync(guildId.Value, component, +1);  break;
+                    default:
+                        if (component.Data.CustomId.StartsWith("music_search_"))
+                            await ButtonSearchPickAsync(guildId.Value, component);
+                        else if (component.Data.CustomId.StartsWith("playlist_public_yes_"))
+                            await ButtonPlaylistPublicAsync(component, true);
+                        else if (component.Data.CustomId.StartsWith("playlist_public_no_"))
+                            await ButtonPlaylistPublicAsync(component, false);
+                        break;
+                }
+            });
+        }
+
+        private async Task ButtonAutoPauseResumeAsync(ulong guildId, SocketMessageComponent component)
+        {
+            Log($"[Music] {component.User.Username} выбрал [Продолжить] после авто-паузы (гильдия {guildId})");
+            var state = _lavalink.GetOrCreateState(guildId);
+            await DeleteAutoPausePromptAsync(state);
+            await _lavalink.ResumeAsync(guildId);
+            state.IsPaused = false;
+            await UpdateNowPlayingAsync(guildId, state);
+        }
+
+        private async Task ButtonAutoPauseSkipAsync(ulong guildId, SocketMessageComponent component)
+        {
+            Log($"[Music] {component.User.Username} выбрал [Нет] (не продолжать) после авто-паузы (гильдия {guildId})");
+            var state = _lavalink.GetOrCreateState(guildId);
+            await DeleteAutoPausePromptAsync(state);
+        }
+
+        private async Task DeleteAutoPausePromptAsync(MusicPlayerState state)
+        {
+            if (state.AutoPausePromptId is null || state.NowPlayingChannel is null) return;
+            try
+            {
+                var msg = await state.NowPlayingChannel.GetMessageAsync(state.AutoPausePromptId.Value);
+                if (msg is IUserMessage uMsg) await uMsg.DeleteAsync();
+            }
+            catch { }
+            state.AutoPausePromptId = null;
+        }
+
+        private async Task ButtonSearchPickAsync(ulong guildId, SocketMessageComponent component)
+        {
+            // custom ID: music_search_{index}_{url_encoded}
+            var parts = component.Data.CustomId.Split('_', 4);
+            if (parts.Length < 4) return;
+            var url = Uri.UnescapeDataString(parts[3]);
+
+            var user = component.User as SocketGuildUser;
+            if (user is null) return;
+
+            await _lavalink.PlayRichAsync(user, url);
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.NowPlayingChannel is null && component.Channel is ITextChannel tc)
+                state.NowPlayingChannel = tc;
+
+            await SendNowPlayingPublicAsync(state.NowPlayingChannel, guildId, state);
+
+            // Удаляем сообщение с результатами поиска
+            try { await component.Message.DeleteAsync(); } catch { }
+        }
+
+        private async Task ButtonPlaylistPublicAsync(SocketMessageComponent component, bool makePublic)
+        {
+            // custom ID: playlist_public_yes_{guildId}_{userId}_{name}
+            //            playlist_public_no_{guildId}_{name}
+            try
+            {
+                var parts = component.Data.CustomId.Split('_');
+                // yes: playlist_public_yes_{gid}_{uid}_{name}  → parts[3]=gid, parts[4]=uid, parts[5..]=name
+                // no:  playlist_public_no_{gid}_{name}         → parts[3]=gid, parts[4..]=name
+                ulong guildId, userId;
+                string encodedName;
+                if (makePublic)
+                {
+                    guildId     = ulong.Parse(parts[3]);
+                    userId      = ulong.Parse(parts[4]);
+                    encodedName = string.Join("_", parts[5..]);
+                }
+                else
+                {
+                    guildId     = ulong.Parse(parts[3]);
+                    userId      = component.User.Id;
+                    encodedName = string.Join("_", parts[4..]);
+                }
+                var name = Uri.UnescapeDataString(encodedName);
+
+                if (_playlistStore is not null)
+                    await _playlistStore.SetPublicAsync(guildId, userId, name, makePublic);
+
+                var reply = makePublic
+                    ? $"🌐 Плейлист **{name}** теперь **публичный** — его видят все участники сервера."
+                    : $"🔒 Плейлист **{name}** остался **приватным**.";
+
+                try { await component.Message.DeleteAsync(); } catch { }
+                await component.FollowupAsync(reply, ephemeral: true);
+            }
+            catch { /* игнорируем */ }
+        }
+
+        private async Task ButtonPrevAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var msg = await _lavalink.PreviousAsync(guildId);
+            var state = _lavalink.GetOrCreateState(guildId);
+            await UpdateNowPlayingAsync(guildId, state);
+            await SendEphemeralAutoDeleteAsync(component, msg);
+        }
+
+        private async Task ButtonTogglePauseAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            string msg;
+            bool nowPaused;
+            if (!state.IsPaused)
+            {
+                msg = await _lavalink.PauseAsync(guildId);
+                nowPaused = true;
+            }
+            else
+            {
+                msg = await _lavalink.ResumeAsync(guildId);
+                nowPaused = false;
+            }
+            state.IsPaused = nowPaused;
+            await UpdateNowPlayingAsync(guildId, state, isPaused: nowPaused);
+            await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            // Кратко отвечаем с автоудалением (#10)
+            await SendEphemeralAutoDeleteAsync(component, msg);
+        }
+
+        private async Task ButtonSkipAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var msg = await _lavalink.SkipAsync(guildId);
+            // embed обновится через OnTrackStartedAsync; просто тихо подтверждаем
+            await SendEphemeralAutoDeleteAsync(component, msg);
+        }
+
+        private async Task ButtonStopAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var msg = await _lavalink.StopAsync(guildId);
+            await component.FollowupAsync(msg, ephemeral: true);
+            await DeleteNowPlayingAsync(guildId);
+            _lavalink.RemoveState(guildId);
+        }
+
+        private async Task ButtonLoopAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var next = _lavalink.GetLoopMode(guildId) switch
+            {
+                LoopMode.None  => LoopMode.Track,
+                LoopMode.Track => LoopMode.Queue,
+                _              => LoopMode.None,
+            };
+            var msg = await _lavalink.SetLoopAsync(guildId, next);
+            var state = _lavalink.GetOrCreateState(guildId);
+            await UpdateNowPlayingAsync(guildId, state);
+            await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            await SendEphemeralAutoDeleteAsync(component, msg);
+        }
+
+        private async Task ButtonShuffleAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var msg = await _lavalink.ShuffleAsync(guildId);
+            var state = _lavalink.GetOrCreateState(guildId);
+            await UpdateNowPlayingAsync(guildId, state);
+            await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            await SendEphemeralAutoDeleteAsync(component, msg);
+        }
+
+        private async Task ButtonVolumeAsync(ulong guildId, SocketMessageComponent component, int delta)
+        {
+            var vol = _lavalink.GetVolume(guildId) + delta;
+            await _lavalink.SetVolumeAsync(guildId, vol);
+            // Обновляем embed (там показана громкость) — без лишнего сообщения (#10)
+            await UpdateNowPlayingAsync(guildId, _lavalink.GetOrCreateState(guildId));
+            await SendEphemeralAutoDeleteAsync(component, $"🔊 {_lavalink.GetVolume(guildId)}%", seconds: 3);
+        }
+
+        private async Task ButtonQueuePageAsync(ulong guildId, SocketMessageComponent component, int delta)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.QueueMessageId is null || state.NowPlayingChannel is null) return;
+
+            var data = await _lavalink.GetQueueDataAsync(guildId);
+            var queue = data?.Queue ?? new System.Collections.Generic.List<(string, TimeSpan?)>();
+            int totalPages = queue.Count == 0 ? 1 : (int)Math.Ceiling(queue.Count / 15.0);
+            state.QueuePage = Math.Clamp(state.QueuePage + delta, 0, totalPages - 1);
+
+            var (embed, comps) = await BuildQueueEmbedAsync(guildId, state);
+            try
+            {
+                var msg = await state.NowPlayingChannel.GetMessageAsync(state.QueueMessageId.Value);
+                if (msg is IUserMessage uMsg) await uMsg.ModifyAsync(p => { p.Embed = embed; p.Components = comps; });
+            }
+            catch { state.QueueMessageId = null; }
+        }
+
+        private async Task ButtonToggleQueueAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.QueueMessageId is not null && state.NowPlayingChannel is not null)
+            {
+                try
+                {
+                    var qMsg = await state.NowPlayingChannel.GetMessageAsync(state.QueueMessageId.Value);
+                    if (qMsg is IUserMessage uMsg) await uMsg.DeleteAsync();
+                }
+                catch { }
+                state.QueueMessageId = null;
+                await SendEphemeralAutoDeleteAsync(component, "📋 Список скрыт.", seconds: 3);
+            }
+            else
+            {
+                state.QueuePage = 0;
+                var (embed, comps) = await BuildQueueEmbedAsync(guildId, state);
+                if (state.NowPlayingChannel is not null)
+                {
+                    var sent = await state.NowPlayingChannel.SendMessageAsync(embed: embed, components: comps);
+                    state.QueueMessageId = sent.Id;
+                }
+                await SendEphemeralAutoDeleteAsync(component, "📋 Список показан.", seconds: 3);
+            }
+        }
+
+        /// <summary>Отправляет эфемерное сообщение и удаляет его через указанное кол-во секунд (по умолчанию 10).</summary>
+        private static async Task SendEphemeralAutoDeleteAsync(SocketMessageComponent component, string text, int seconds = 10)
+        {
+            var msg = await component.FollowupAsync(text, ephemeral: true);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(seconds));
+                try { await msg.DeleteAsync(); } catch { }
+            });
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Публичный хук — вызывается при смене трека (из Program.cs)
+        // ═══════════════════════════════════════════════════════════════════
+
+        public async Task OnTrackStartedAsync(ulong guildId, string title, string? author,
+            TimeSpan duration, string? artworkUrl, string? trackUrl)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+
+            // Сохраняем предыдущий трек в историю (#1)
+            if (state.CurrentTrackTitle is not null && state.CurrentTrackUrl is not null)
+            {
+                var entry = new TrackHistoryEntry
+                {
+                    Title      = state.CurrentTrackTitle,
+                    Author     = state.CurrentTrackAuthor,
+                    Url        = state.CurrentTrackUrl,
+                    ArtworkUrl = state.CurrentTrackArtworkUrl,
+                    Duration   = state.CurrentTrackDuration ?? TimeSpan.Zero,
+                };
+                state.TrackHistory.AddFirst(entry);
+                while (state.TrackHistory.Count > MusicPlayerState.MaxHistory)
+                    state.TrackHistory.RemoveLast();
+            }
+
+            state.CurrentTrackTitle      = title;
+            state.CurrentTrackAuthor     = author;
+            state.CurrentTrackDuration   = duration;
+            state.CurrentTrackArtworkUrl = artworkUrl;
+            state.CurrentTrackUrl        = trackUrl;
+            state.TrackStartedAtUtc      = DateTime.UtcNow;
+            state.IsPaused               = false;
+
+            // Статистика (#13)
+            state.TracksPlayedSession++;
+            if (_stats is not null) await _stats.IncrementAsync();
+
+            await UpdateNowPlayingAsync(guildId, state);
+            await UpdateQueueMessageIfVisibleAsync(guildId, state);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Now-Playing helpers
+        // ═══════════════════════════════════════════════════════════════════
+
+        /// <summary>Публичный вход для PlaylistCommands — отправить/обновить Now Playing embed.</summary>
+        public Task SendNowPlayingPublicAsync(ITextChannel? channel, ulong guildId, MusicPlayerState state)
+            => SendOrUpdateNowPlayingAsync(channel, guildId, state);
+
+        private async Task SendOrUpdateNowPlayingAsync(
+            ITextChannel? channel, ulong guildId, MusicPlayerState state, bool isPaused = false)
+        {
+            if (channel is null) return;
+            state.NowPlayingChannel = channel;
+
+            var data = await _lavalink.GetQueueDataAsync(guildId);
+            var queueCount = data?.Queue.Count ?? 0;
+            var volume = _lavalink.GetVolume(guildId);
+            var sessionCount = state.TracksPlayedSession;
+            var allTimeCount = _stats?.TotalTracksAllTime ?? 0;
+            var (embed, components) = MusicEmbedBuilder.Build(state, isPaused, volume, queueCount, sessionCount, allTimeCount);
+
+            if (state.NowPlayingMessageId.HasValue)
+            {
+                try
+                {
+                    var existing = await channel.GetMessageAsync(state.NowPlayingMessageId.Value);
+                    if (existing is IUserMessage uMsg)
+                    {
+                        await uMsg.ModifyAsync(p => { p.Embed = embed; p.Components = components; });
+                        return;
+                    }
+                }
+                catch { }
+            }
+
+            var sent = await channel.SendMessageAsync(embed: embed, components: components);
+            state.NowPlayingMessageId = sent.Id;
+        }
+
+        private async Task UpdateNowPlayingAsync(ulong guildId, MusicPlayerState state, bool? isPaused = null)
+        {
+            if (state.NowPlayingChannel is null || !state.NowPlayingMessageId.HasValue) return;
+
+            // Используем переданное значение или берём из state (#4)
+            var paused = isPaused ?? state.IsPaused;
+
+            var data = await _lavalink.GetQueueDataAsync(guildId);
+            var queueCount = data?.Queue.Count ?? 0;
+            var volume = _lavalink.GetVolume(guildId);
+            var sessionCount = state.TracksPlayedSession;
+            var allTimeCount = _stats?.TotalTracksAllTime ?? 0;
+            var (embed, components) = MusicEmbedBuilder.Build(state, paused, volume, queueCount, sessionCount, allTimeCount);
+
+            try
+            {
+                var existing = await state.NowPlayingChannel.GetMessageAsync(state.NowPlayingMessageId.Value);
+                if (existing is IUserMessage uMsg)
+                    await uMsg.ModifyAsync(p => { p.Embed = embed; p.Components = components; });
+            }
+            catch { }
+        }
+
+        private async Task DeleteNowPlayingAsync(ulong guildId)
+        {
+            var state = _lavalink.GetOrCreateState(guildId);
+            if (state.NowPlayingChannel is null) return;
+
+            foreach (var msgId in new[] { state.NowPlayingMessageId, state.QueueMessageId })
+            {
+                if (msgId is null) continue;
+                try
+                {
+                    var msg = await state.NowPlayingChannel.GetMessageAsync(msgId.Value);
+                    if (msg is IUserMessage uMsg) await uMsg.DeleteAsync();
+                }
+                catch { }
+            }
+            state.NowPlayingMessageId = null;
+            state.QueueMessageId = null;
+        }
+
+        private async Task UpdateQueueMessageIfVisibleAsync(ulong guildId, MusicPlayerState state)
+        {
+            if (state.QueueMessageId is null || state.NowPlayingChannel is null) return;
+            var (embed, comps) = await BuildQueueEmbedAsync(guildId, state);
+            try
+            {
+                var msg = await state.NowPlayingChannel.GetMessageAsync(state.QueueMessageId.Value);
+                if (msg is IUserMessage uMsg) await uMsg.ModifyAsync(p => { p.Embed = embed; p.Components = comps; });
+            }
+            catch { state.QueueMessageId = null; }
+        }
+
+        private async Task<(Embed embed, MessageComponent components)> BuildQueueEmbedAsync(ulong guildId, MusicPlayerState state)
+        {
+            var data = await _lavalink.GetQueueDataAsync(guildId);
+            var queue = data?.Queue ?? new System.Collections.Generic.List<(string, TimeSpan?)>();
+            return MusicEmbedBuilder.BuildQueueEmbed(
+                state.CurrentTrackTitle, state.CurrentTrackDuration, queue, state.LoopMode, state.QueuePage);
         }
 
         // ─── Вспомогательные ─────────────────────────────────────────────
 
+        // ═══════════════════════════════════════════════════════════════════
+        //  Плейлисты
+        // ═══════════════════════════════════════════════════════════════════
+
+        public async Task HandleMusicPlaylistAsync(SocketSlashCommand command)
+        {
+            await command.DeferAsync(ephemeral: true);
+            var action = command.Data.Options
+                .FirstOrDefault(o => o.Name == "действие")?.Value as string ?? "";
+            switch (action)
+            {
+                case "playlist_save":   await HandlePlaylistSaveAsync(command);   break;
+                case "playlist_load":   await HandlePlaylistLoadAsync(command);   break;
+                case "playlist_list":   await HandlePlaylistListAsync(command);   break;
+                case "playlist_delete": await HandlePlaylistDeleteAsync(command); break;
+                default:
+                    await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
+                    break;
+            }
+        }
+
+        private async Task HandlePlaylistSaveAsync(SocketSlashCommand command)
+        {
+            var name = command.Data.Options.FirstOrDefault(o => o.Name == "название")?.Value as string;
+            if (string.IsNullOrWhiteSpace(name))
+            { await command.FollowupAsync("❌ Укажи название плейлиста.", ephemeral: true); return; }
+
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var urls = await _lavalink.GetQueueUrlsAsync(guildId.Value);
+            if (urls.Count == 0) { await command.FollowupAsync("❌ Очередь пуста, нечего сохранять.", ephemeral: true); return; }
+
+            var playlist = new MusicPlaylist { Name = name, OwnerId = command.User.Id, Urls = urls, CreatedAt = DateTime.UtcNow };
+            await _playlistStore.SavePlaylistAsync(guildId.Value, command.User.Id, playlist);
+
+            // Prompt — сделать публичным?
+            var encodedName = Uri.EscapeDataString(name);
+            var uid = guildId.Value;
+            var buttons = new ComponentBuilder()
+                .WithButton("✅ Да", $"playlist_public_yes_{uid}_{command.User.Id}_{encodedName}", ButtonStyle.Success)
+                .WithButton("❌ Нет", $"playlist_public_no_{uid}_{encodedName}", ButtonStyle.Secondary)
+                .Build();
+
+            await command.FollowupAsync(
+                $"💾 Плейлист **{name}** сохранён ({urls.Count} треков).\n📢 Сделать этот плейлист **публичным** (виден всем участникам сервера)?",
+                components: buttons,
+                ephemeral: true);
+        }
+
+        private async Task HandlePlaylistLoadAsync(SocketSlashCommand command)
+        {
+            var name = command.Data.Options.FirstOrDefault(o => o.Name == "название")?.Value as string;
+            if (string.IsNullOrWhiteSpace(name))
+            { await command.FollowupAsync("❌ Укажи название плейлиста.", ephemeral: true); return; }
+
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var user = command.User as SocketGuildUser;
+            if (user is null) { await command.FollowupAsync("❌ Только на сервере.", ephemeral: true); return; }
+
+            var playlist = _playlistStore.Get(guildId.Value, command.User.Id, name);
+            if (playlist is null) { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
+
+            await command.FollowupAsync($"▶️ Загружаю **{name}** ({playlist.Urls.Count} треков)...", ephemeral: true);
+
+            int loaded = 0;
+            foreach (var url in playlist.Urls)
+            {
+                try
+                {
+                    var result = await _lavalink.PlayRichAsync(user, url);
+                    if (result.IsNewTrack || result.IsQueued)
+                    {
+                        loaded++;
+                        if (result.IsNewTrack)
+                        {
+                            var state = _lavalink.GetOrCreateState(guildId.Value);
+                            state.CurrentTrackTitle      = result.TrackTitle;
+                            state.CurrentTrackDuration   = result.Duration;
+                            state.CurrentTrackArtworkUrl = result.ArtworkUrl;
+                            state.CurrentTrackUrl        = result.TrackUrl;
+                            state.CurrentTrackAuthor     = result.Author;
+                            state.TrackStartedAtUtc      = DateTime.UtcNow;
+                            await SendOrUpdateNowPlayingAsync(command.Channel as ITextChannel, guildId.Value, state);
+                        }
+                        else
+                        {
+                            await UpdateQueueMessageIfVisibleAsync(guildId.Value, _lavalink.GetOrCreateState(guildId.Value));
+                        }
+                    }
+                }
+                catch { /* пропускаем недоступный трек */ }
+            }
+
+            await AutoDeleteFollowupAsync(command, $"✅ Загружено {loaded} из {playlist.Urls.Count} треков.");
+        }
+
+        private async Task HandlePlaylistListAsync(SocketSlashCommand command)
+        {
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var mine   = _playlistStore.GetAll(guildId.Value, command.User.Id);
+            var public_ = _playlistStore.GetAllPublic(guildId.Value, command.User.Id);
+
+            if (mine.Count == 0 && public_.Count == 0)
+            { await command.FollowupAsync("📋 Нет сохранённых плейлистов.", ephemeral: true); return; }
+
+            var sb = new StringBuilder();
+            if (mine.Count > 0)
+            {
+                sb.AppendLine("📋 **Ваши плейлисты:**");
+                foreach (var pl in mine)
+                    sb.AppendLine($"• **{pl.Name}** — {pl.Urls.Count} треков (создан {pl.CreatedAt:dd.MM.yyyy}){(pl.IsPublic ? " 🌐" : "")}");
+            }
+            if (public_.Count > 0)
+            {
+                if (sb.Length > 0) sb.AppendLine();
+                sb.AppendLine("🌐 **Публичные плейлисты:**");
+                foreach (var pl in public_)
+                    sb.AppendLine($"• **{pl.Name}** — {pl.Urls.Count} треков");
+            }
+            await command.FollowupAsync(sb.ToString(), ephemeral: true);
+        }
+
+        private async Task HandlePlaylistDeleteAsync(SocketSlashCommand command)
+        {
+            var name = command.Data.Options.FirstOrDefault(o => o.Name == "название")?.Value as string;
+            if (string.IsNullOrWhiteSpace(name))
+            { await command.FollowupAsync("❌ Укажи название плейлиста.", ephemeral: true); return; }
+
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var deleted = await _playlistStore.DeletePlaylistAsync(guildId.Value, command.User.Id, name);
+            await AutoDeleteFollowupAsync(command,
+                deleted ? $"🗑️ Плейлист **{name}** удалён." : $"❌ Плейлист **{name}** не найден.");
+        }
+
         private static ulong? GetGuildId(SocketSlashCommand command)
             => (command.Channel as SocketGuildChannel)?.Guild.Id;
 
-        private void Log(string message) => LogSink?.Invoke(message);
+        private static async Task AutoDeleteFollowupAsync(SocketSlashCommand command, string text, int seconds = 10)
+        {
+            var msg = await command.FollowupAsync(text, ephemeral: true);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(seconds));
+                try { await msg.DeleteAsync(); } catch { }
+            });
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  Восстановление очереди после перезапуска / реконнекта (#14)
+        // ═══════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Пытается восстановить сохранённые очереди для всех гильдий.
+        /// Вызывается после успешного переподключения к Lavalink.
+        /// </summary>
+        public async Task TryRestoreQueuesAsync()
+        {
+            if (_queueStore is null) return;
+
+            var savedQueues = await _queueStore.LoadAllAsync();
+            foreach (var saved in savedQueues)
+            {
+                try
+                {
+                    var guildId = saved.GuildId;
+                    var guild   = _discord.GetGuild(guildId);
+                    if (guild is null) continue;
+
+                    // Найдём голосовой канал с участниками
+                    SocketVoiceChannel? voiceChannel = null;
+                    SocketGuildUser?    botUser       = null;
+                    foreach (var vc in guild.VoiceChannels)
+                    {
+                        var bot = vc.GetUser(_discord.CurrentUser.Id);
+                        if (bot is not null) { voiceChannel = vc; botUser = bot; break; }
+                    }
+                    if (voiceChannel is null || botUser is null) continue;
+
+                    // Восстанавливаем текущий трек
+                    var allUrls = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(saved.CurrentUrl))
+                        allUrls.Add(saved.CurrentUrl);
+                    allUrls.AddRange(saved.QueueUrls ?? new List<string>());
+
+                    foreach (var url in allUrls)
+                    {
+                        try { await _lavalink.PlayRichAsync(botUser, url); }
+                        catch { /* пропускаем недоступный трек */ }
+                    }
+
+                    Log($"[Music] Очередь восстановлена для гильдии {guildId}: {allUrls.Count} треков.");
+                    await _queueStore.ClearAsync(guildId);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[Music] Ошибка восстановления очереди: {ex.Message}");
+                }
+            }
+        }
+
+        private static readonly string _tempLogPath = System.IO.Path.Combine(
+            BotConfig.ResolvePath("Logs"),
+            $"MusicTemp_{DateTime.Now:yyyyMMdd}.txt");
+
+        private void Log(string message)
+        {
+            // Пишем в GUI
+            if (LogSink is not null)
+                LogSink(message);
+            else
+                Console.WriteLine($"[MusicCommands/NoSink] {message}");
+
+            // Дублируем во временный файл для отладки
+            try
+            {
+                var line = $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}\n";
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_tempLogPath)!);
+                System.IO.File.AppendAllText(_tempLogPath, line);
+            }
+            catch { /* не ломаем основную логику из-за файла */ }
+        }
     }
 }
