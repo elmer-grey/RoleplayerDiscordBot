@@ -152,8 +152,11 @@ namespace RPBot
             await UpdateNowPlayingAsync(guildId, state);
 
             if (state.NowPlayingChannel is not null)
-                await state.NowPlayingChannel.SendMessageAsync(
+            {
+                var notice = await state.NowPlayingChannel.SendMessageAsync(
                     "⏸ Никого нет в канале в течение 5 минут — музыка поставлена на паузу.");
+                state.AutoPauseNoticeId = notice.Id;
+            }
         }
 
         private async Task TriggerAutoStopAsync(ulong guildId)
@@ -163,13 +166,30 @@ namespace RPBot
                 ? $"{(DateTime.UtcNow - state.ChannelEmptySince.Value):mm\\:ss}"
                 : "неизвестно";
             Log($"[Music] Авто-стоп сработал (гильдия {guildId}). Канал пуст уже {emptySince}. Очищаем очередь и выходим.");
-            if (state.NowPlayingChannel is not null)
-                await state.NowPlayingChannel.SendMessageAsync(
+
+            // Сохраняем ссылки на сообщения до RemoveState
+            var channel        = state.NowPlayingChannel;
+            var pauseNoticeId  = state.AutoPauseNoticeId;
+            IUserMessage? stopNotice = null;
+
+            if (channel is not null)
+                stopNotice = await channel.SendMessageAsync(
                     "⏹ Никого не было 10 минут — воспроизведение остановлено.");
+
             if (_queueStore is not null) await _queueStore.ClearAsync(guildId);
             await _lavalink.StopAsync(guildId);
             await DeleteNowPlayingAsync(guildId);
             _lavalink.RemoveState(guildId);
+
+            // Удаляем оба уведомления с небольшой задержкой
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30));
+                if (channel is not null && pauseNoticeId.HasValue)
+                    try { var m = await channel.GetMessageAsync(pauseNoticeId.Value); if (m is IUserMessage u) await u.DeleteAsync(); } catch { }
+                if (stopNotice is not null)
+                    try { await stopNotice.DeleteAsync(); } catch { }
+            });
         }
 
         private async Task OnTrackEndedAsync(ulong guildId)
@@ -655,14 +675,31 @@ namespace RPBot
 
         private async Task DeleteAutoPausePromptAsync(MusicPlayerState state)
         {
-            if (state.AutoPausePromptId is null || state.NowPlayingChannel is null) return;
-            try
+            if (state.NowPlayingChannel is null) return;
+
+            // Удаляем prompt «Продолжить воспроизведение?»
+            if (state.AutoPausePromptId.HasValue)
             {
-                var msg = await state.NowPlayingChannel.GetMessageAsync(state.AutoPausePromptId.Value);
-                if (msg is IUserMessage uMsg) await uMsg.DeleteAsync();
+                try
+                {
+                    var msg = await state.NowPlayingChannel.GetMessageAsync(state.AutoPausePromptId.Value);
+                    if (msg is IUserMessage uMsg) await uMsg.DeleteAsync();
+                }
+                catch { }
+                state.AutoPausePromptId = null;
             }
-            catch { }
-            state.AutoPausePromptId = null;
+
+            // Удаляем уведомление «5 минут — пауза»
+            if (state.AutoPauseNoticeId.HasValue)
+            {
+                try
+                {
+                    var msg = await state.NowPlayingChannel.GetMessageAsync(state.AutoPauseNoticeId.Value);
+                    if (msg is IUserMessage uMsg) await uMsg.DeleteAsync();
+                }
+                catch { }
+                state.AutoPauseNoticeId = null;
+            }
         }
 
         private async Task ButtonSearchPickAsync(ulong guildId, SocketMessageComponent component)

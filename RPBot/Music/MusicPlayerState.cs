@@ -55,6 +55,10 @@ namespace RPBot.Music
         public Timer?    AutoStopTimer        { get; set; }
         /// <summary>ID сообщения "продолжить воспроизведение?" (null = нет).</summary>
         public ulong?    AutoPausePromptId    { get; set; }
+        /// <summary>ID сообщения об авто-паузе "5 минут" (null = нет).</summary>
+        public ulong?    AutoPauseNoticeId    { get; set; }
+        /// <summary>ID сообщения об авто-стопе "10 минут" (null = нет).</summary>
+        public ulong?    AutoStopNoticeId     { get; set; }
         /// <summary>Последний залогированный порог пустого канала (в целых минутах), чтобы не дублировать лог.</summary>
         public int       LastLoggedEmptyMinute { get; set; } = -1;
 
