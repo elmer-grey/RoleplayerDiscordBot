@@ -127,23 +127,36 @@ namespace RPBot.Music
         }
 
         /// <summary>
-        /// Ищет плейлист по имени в рамках гильдии (любой владелец).
-        /// Возвращает первый совпадающий (личный только если userId совпадает, публичный — любому).
+        /// Ищет плейлист по имени в рамках гильдии.
+        /// Приоритет: сначала у самого пользователя, затем публичные других.
+        /// Возвращает плейлист даже если он личный чужой — вызывающий код проверяет OwnerId.
         /// </summary>
         public MusicPlaylist? FindByName(ulong guildId, ulong requestingUserId, string name)
         {
             var key = name.ToLowerInvariant();
             if (!_data.TryGetValue(guildId.ToString(), out var users)) return null;
+
+            // 1. Сначала ищем у самого пользователя
+            var uk = requestingUserId.ToString();
+            if (users.TryGetValue(uk, out var own) && own.TryGetValue(key, out var ownPl))
+                return ownPl;
+
+            // 2. Затем ищем публичные плейлисты других пользователей
             foreach (var (uid, playlists) in users)
             {
-                if (!playlists.TryGetValue(key, out var pl)) continue;
-                // Плейлист доступен если: пользователь — владелец, или плейлист публичный
-                if (pl.OwnerId == requestingUserId || pl.IsPublic)
+                if (uid == uk) continue;
+                if (playlists.TryGetValue(key, out var pl) && pl.IsPublic)
                     return pl;
-                // Нашли плейлист, но он личный и чужой — вернём его с null-маркером через отдельный метод
-                // Здесь вернём его чтобы вызывающий код мог проверить OwnerId
-                return pl;
             }
+
+            // 3. Плейлист с таким именем есть, но личный чужой — вернём его чтобы дать правильную ошибку
+            foreach (var (uid, playlists) in users)
+            {
+                if (uid == uk) continue;
+                if (playlists.TryGetValue(key, out var pl))
+                    return pl;
+            }
+
             return null;
         }
 
