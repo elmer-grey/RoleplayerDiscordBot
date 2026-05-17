@@ -184,7 +184,7 @@ namespace RPBot
             // Удаляем оба уведомления с небольшой задержкой
             _ = Task.Run(async () =>
             {
-                await Task.Delay(TimeSpan.FromSeconds(30));
+                await Task.Delay(TimeSpan.FromSeconds(300));
                 if (channel is not null && pauseNoticeId.HasValue)
                     try { var m = await channel.GetMessageAsync(pauseNoticeId.Value); if (m is IUserMessage u) await u.DeleteAsync(); } catch { }
                 if (stopNotice is not null)
