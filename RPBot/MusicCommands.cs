@@ -1054,6 +1054,8 @@ namespace RPBot
                 case "playlist_save":   await HandlePlaylistSaveAsync(command);   break;
                 case "playlist_load":   await HandlePlaylistLoadAsync(command);   break;
                 case "playlist_list":   await HandlePlaylistListAsync(command);   break;
+                case "playlist_rename": await HandlePlaylistRenameAsync(command); break;
+                case "playlist_access": await HandlePlaylistAccessAsync(command); break;
                 case "playlist_delete": await HandlePlaylistDeleteAsync(command); break;
                 default:
                     await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
@@ -1102,10 +1104,24 @@ namespace RPBot
             var user = command.User as SocketGuildUser;
             if (user is null) { await command.FollowupAsync("❌ Только на сервере.", ephemeral: true); return; }
 
-            var playlist = _playlistStore.Get(guildId.Value, command.User.Id, name);
-            if (playlist is null) { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
+            // Ищем плейлист по всей гильдии
+            var playlist = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
+            if (playlist is null)
+            { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
 
-            await command.FollowupAsync($"▶️ Загружаю **{name}** ({playlist.Urls.Count} треков)...", ephemeral: true);
+            // Защита личного плейлиста
+            if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
+            { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
+
+            await command.FollowupAsync($"🔄 Переключаюсь на **{name}** ({playlist.Urls.Count} треков)...", ephemeral: true);
+
+            // Останавливаем текущее воспроизведение и очищаем очередь
+            await _lavalink.StopAsync(guildId.Value);
+            await DeleteNowPlayingAsync(guildId.Value);
+            if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
+
+            // Небольшая пауза чтобы плеер сбросился
+            await Task.Delay(300);
 
             int loaded = 0;
             foreach (var url in playlist.Urls)
@@ -1136,7 +1152,49 @@ namespace RPBot
                 catch { /* пропускаем недоступный трек */ }
             }
 
-            await AutoDeleteFollowupAsync(command, $"✅ Загружено {loaded} из {playlist.Urls.Count} треков.");
+            await AutoDeleteFollowupAsync(command, $"✅ Загружено {loaded} из {playlist.Urls.Count} треков из **{name}**.");
+        }
+
+        private async Task HandlePlaylistRenameAsync(SocketSlashCommand command)
+        {
+            var name    = command.Data.Options.FirstOrDefault(o => o.Name == "название")?.Value as string;
+            var newName = command.Data.Options.FirstOrDefault(o => o.Name == "новое_название")?.Value as string;
+
+            if (string.IsNullOrWhiteSpace(name))
+            { await command.FollowupAsync("❌ Укажи текущее название плейлиста.", ephemeral: true); return; }
+            if (string.IsNullOrWhiteSpace(newName))
+            { await command.FollowupAsync("❌ Укажи новое название плейлиста.", ephemeral: true); return; }
+
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var renamed = await _playlistStore.RenamePlaylistAsync(guildId.Value, command.User.Id, name, newName);
+            await AutoDeleteFollowupAsync(command, renamed
+                ? $"✏️ Плейлист **{name}** переименован в **{newName}**."
+                : $"❌ Плейлист **{name}** не найден или имя **{newName}** уже занято.");
+        }
+
+        private async Task HandlePlaylistAccessAsync(SocketSlashCommand command)
+        {
+            var name   = command.Data.Options.FirstOrDefault(o => o.Name == "название")?.Value as string;
+            var access = command.Data.Options.FirstOrDefault(o => o.Name == "доступ")?.Value as string;
+
+            if (string.IsNullOrWhiteSpace(name))
+            { await command.FollowupAsync("❌ Укажи название плейлиста.", ephemeral: true); return; }
+            if (string.IsNullOrWhiteSpace(access))
+            { await command.FollowupAsync("❌ Укажи уровень доступа: `личный` или `публичный`.", ephemeral: true); return; }
+
+            var guildId = GetGuildId(command);
+            if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
+
+            var pl = _playlistStore.Get(guildId.Value, command.User.Id, name);
+            if (pl is null)
+            { await command.FollowupAsync($"❌ Плейлист **{name}** не найден среди ваших плейлистов.", ephemeral: true); return; }
+
+            bool isPublic = access == "public";
+            await _playlistStore.SetPublicAsync(guildId.Value, command.User.Id, name, isPublic);
+            var label = isPublic ? "🌐 публичным" : "🔒 личным";
+            await AutoDeleteFollowupAsync(command, $"✅ Плейлист **{name}** теперь {label}.");
         }
 
         private async Task HandlePlaylistListAsync(SocketSlashCommand command)

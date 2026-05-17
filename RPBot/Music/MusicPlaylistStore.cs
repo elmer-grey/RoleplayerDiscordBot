@@ -103,6 +103,50 @@ namespace RPBot.Music
             await SaveAsync();
         }
 
+        /// <summary>
+        /// Переименовывает плейлист. Возвращает false, если плейлист не найден
+        /// или имя уже занято у этого пользователя.
+        /// </summary>
+        public async Task<bool> RenamePlaylistAsync(ulong guildId, ulong userId, string oldName, string newName)
+        {
+            var gk     = guildId.ToString();
+            var uk     = userId.ToString();
+            var oldKey = oldName.ToLowerInvariant();
+            var newKey = newName.ToLowerInvariant();
+
+            if (!_data.TryGetValue(gk, out var users)) return false;
+            if (!users.TryGetValue(uk, out var playlists)) return false;
+            if (!playlists.TryGetValue(oldKey, out var pl)) return false;
+            if (playlists.ContainsKey(newKey) && newKey != oldKey) return false;
+
+            playlists.Remove(oldKey);
+            pl.Name = newName;
+            playlists[newKey] = pl;
+            await SaveAsync();
+            return true;
+        }
+
+        /// <summary>
+        /// Ищет плейлист по имени в рамках гильдии (любой владелец).
+        /// Возвращает первый совпадающий (личный только если userId совпадает, публичный — любому).
+        /// </summary>
+        public MusicPlaylist? FindByName(ulong guildId, ulong requestingUserId, string name)
+        {
+            var key = name.ToLowerInvariant();
+            if (!_data.TryGetValue(guildId.ToString(), out var users)) return null;
+            foreach (var (uid, playlists) in users)
+            {
+                if (!playlists.TryGetValue(key, out var pl)) continue;
+                // Плейлист доступен если: пользователь — владелец, или плейлист публичный
+                if (pl.OwnerId == requestingUserId || pl.IsPublic)
+                    return pl;
+                // Нашли плейлист, но он личный и чужой — вернём его с null-маркером через отдельный метод
+                // Здесь вернём его чтобы вызывающий код мог проверить OwnerId
+                return pl;
+            }
+            return null;
+        }
+
         public async Task SavePlaylistAsync(ulong guildId, ulong userId, MusicPlaylist playlist)
         {
             var gk = guildId.ToString();
