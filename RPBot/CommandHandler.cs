@@ -156,6 +156,10 @@ namespace RPBot
                     .WithDescription("Выводит справку по системе прогнозов и ставок на костяшки."),
 
                 new SlashCommandBuilder()
+                    .WithName("help_music")
+                    .WithDescription("Выводит подробную справку по музыкальным командам (/music и /music-playlist)."),
+
+                new SlashCommandBuilder()
                     .WithName("clr")
                     .WithDescription("Удаляет выбранное количество сообщений.")
                     .AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений, которые нужно удалить", isRequired: true),
