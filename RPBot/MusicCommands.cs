@@ -1168,10 +1168,16 @@ namespace RPBot
             var guildId = GetGuildId(command);
             if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
 
+            var pl = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
+            if (pl is null)
+            { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
+            if (pl.OwnerId != command.User.Id)
+            { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
+
             var renamed = await _playlistStore.RenamePlaylistAsync(guildId.Value, command.User.Id, name, newName);
             await AutoDeleteFollowupAsync(command, renamed
                 ? $"✏️ Плейлист **{name}** переименован в **{newName}**."
-                : $"❌ Плейлист **{name}** не найден или имя **{newName}** уже занято.");
+                : $"❌ Имя **{newName}** уже занято.");
         }
 
         private async Task HandlePlaylistAccessAsync(SocketSlashCommand command)
@@ -1187,9 +1193,11 @@ namespace RPBot
             var guildId = GetGuildId(command);
             if (guildId is null || _playlistStore is null) { await command.FollowupAsync("❌ Недоступно.", ephemeral: true); return; }
 
-            var pl = _playlistStore.Get(guildId.Value, command.User.Id, name);
+            var pl = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
             if (pl is null)
-            { await command.FollowupAsync($"❌ Плейлист **{name}** не найден среди ваших плейлистов.", ephemeral: true); return; }
+            { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
+            if (pl.OwnerId != command.User.Id)
+            { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
 
             bool isPublic = access == "public";
             await _playlistStore.SetPublicAsync(guildId.Value, command.User.Id, name, isPublic);
