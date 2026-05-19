@@ -66,6 +66,13 @@ namespace RPBot
             return entry.Tracks;
         }
 
+        private IUserMessage? GetSearchCacheMessage(ulong guildId, ulong userId)
+        {
+            var key = SearchCacheKey(guildId, userId);
+            if (!_searchCache.TryGetValue(key, out var entry)) return null;
+            return entry.Message;
+        }
+
         public Action<string>? LogSink { get; set; }
 
         public MusicCommands(
@@ -790,6 +797,8 @@ namespace RPBot
 
             var track = cache[idx];
             // DeferAsync уже был вызван в HandleButtonAsync
+            // Берём сохранённое сообщение из кэша — component.Message недоступен для эфемерных после Defer
+            var cachedMsg = GetSearchCacheMessage(guildId, userId);
 
             var result = await _lavalink.PlayRichAsync(user, track.Url);
             var state = _lavalink.GetOrCreateState(guildId);
@@ -817,17 +826,19 @@ namespace RPBot
                 return;
             }
 
-            // Обновляем текст сообщения, но оставляем дропдаун — можно выбрать ещё треки
-            // Кэш НЕ удаляем, чтобы пользователь мог продолжить выбор; таймер TTL его сам уберёт
-            try
+            // Обновляем текст через сохранённый IUserMessage — дропдаун остаётся для выбора ещё треков
+            if (cachedMsg is not null)
             {
-                var trackLabel = track.Title.Length > 0 ? track.Title : "трек";
-                var statusText = result.IsQueued
-                    ? $"📋 **{trackLabel}** добавлен в очередь. Можно выбрать ещё трек."
-                    : $"▶️ **{trackLabel}** — воспроизводится. Можно добавить ещё в очередь.";
-                await component.Message.ModifyAsync(m => m.Content = statusText);
+                try
+                {
+                    var trackLabel = track.Title.Length > 0 ? track.Title : "трек";
+                    var statusText = result.IsQueued
+                        ? $"📋 **{trackLabel}** добавлен в очередь. Можно выбрать ещё трек."
+                        : $"▶️ **{trackLabel}** — воспроизводится. Можно добавить ещё в очередь.";
+                    await cachedMsg.ModifyAsync(m => m.Content = statusText);
+                }
+                catch { }
             }
-            catch { }
         }
 
         private async Task ButtonPlaylistPublicAsync(SocketMessageComponent component, bool makePublic)
