@@ -1584,15 +1584,19 @@ namespace RPBot
                 return;
 
             var entries = _eventAnnouncementStore.GetEntriesSnapshot();
-            if (entries.Count == 0)
-                return;
 
-            await LogStartup($"[EVENT][RESYNC] Начало синхронизации сохранённых анонсов: {entries.Count} записей.");
+            // Индекс сохранённых анонсов для быстрого поиска
+            var announcedKeys = new HashSet<(ulong guildId, ulong eventId)>(
+                entries.Select(e => (e.GuildId, e.EventId)));
+
+            await LogStartup($"[EVENT][RESYNC] Начало синхронизации: сохранённых анонсов={entries.Count}.");
 
             var updated = 0;
             var removed = 0;
+            var announced = 0;
             var failed = 0;
 
+            // ── Шаг 1: обновить / удалить уже известные анонсы ──────────────────
             foreach (var entry in entries)
             {
                 try
@@ -1607,6 +1611,7 @@ namespace RPBot
                     var guildEvent = guild.Events.FirstOrDefault(e => e.Id == entry.EventId);
                     if (guildEvent == null)
                     {
+                        // Событие исчезло с сервера — удаляем запись
                         _eventAnnouncementStore.Remove(entry.GuildId, entry.EventId);
                         removed++;
                         continue;
@@ -1614,16 +1619,20 @@ namespace RPBot
 
                     var status = guildEvent.Status switch
                     {
-                        GuildScheduledEventStatus.Active => "started",
+                        GuildScheduledEventStatus.Active    => "started",
                         GuildScheduledEventStatus.Completed => "completed",
                         GuildScheduledEventStatus.Cancelled => "cancelled",
-                          _ => "scheduled"
+                        _                                   => "scheduled"
                     };
 
-                     if (status == "scheduled")
-                        {
-                            continue;
-                        }
+                    // Для запланированных событий только обновляем embed, если данные изменились
+                    if (status == "scheduled")
+                    {
+                        // Обновляем анонс на случай, если описание/время изменилось оффлайн
+                        await AnnounceGuildScheduledEventUpdatedAsync(guildEvent);
+                        updated++;
+                        continue;
+                    }
 
                     await AnnounceGuildScheduledEventStatusChanged(guildEvent, status);
                     updated++;
@@ -1631,11 +1640,144 @@ namespace RPBot
                 catch (Exception ex)
                 {
                     failed++;
-                    await LogError($"[EVENT][RESYNC] Ошибка синхронизации guild={entry.GuildId}, event={entry.EventId}: {ex.Message}");
+                    await LogError($"[EVENT][RESYNC] Ошибка обновления guild={entry.GuildId}, event={entry.EventId}: {ex.Message}");
                 }
             }
 
-            await LogStartup($"[EVENT][RESYNC] Завершено: updated={updated}, removed={removed}, failed={failed}.");
+            // ── Шаг 2: анонсировать события, созданные пока бот был оффлайн ─────
+            foreach (var guild in _client.Guilds)
+            {
+                try
+                {
+                    foreach (var guildEvent in guild.Events)
+                    {
+                        // Пропускаем уже анонсированные и завершённые/отменённые события
+                        if (announcedKeys.Contains((guild.Id, guildEvent.Id)))
+                            continue;
+                        if (guildEvent.Status == GuildScheduledEventStatus.Completed ||
+                            guildEvent.Status == GuildScheduledEventStatus.Cancelled)
+                            continue;
+
+                        await LogStartup($"[EVENT][RESYNC] Обнаружено новое событие (оффлайн): guild={guild.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
+                        await AnnounceGuildScheduledEventCreated(guildEvent);
+                        announced++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    await LogError($"[EVENT][RESYNC] Ошибка скана событий guild={guild.Id}: {ex.Message}");
+                }
+            }
+
+            await LogStartup($"[EVENT][RESYNC] Завершено: updated={updated}, removed={removed}, announced={announced}, failed={failed}.");
+        }
+
+        /// <summary>
+        /// Обновляет embed уже анонсированного события (изменения оффлайн: название, описание, время).
+        /// </summary>
+        private async Task AnnounceGuildScheduledEventUpdatedAsync(SocketGuildEvent guildEvent)
+        {
+            if (guildEvent?.Guild == null || _eventAnnouncementStore == null)
+                return;
+
+            var guild = guildEvent.Guild;
+            var entry = _eventAnnouncementStore.TryGet(guild.Id, guildEvent.Id);
+            if (entry == null)
+                return;
+
+            if (!_serverConfigs.TryGetValue(guild.Id, out var config) || config.GeneralRGChannelID == 0)
+                return;
+
+            static string Truncate(string? value, int max)
+            {
+                if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+                value = value.Trim();
+                return value.Length <= max ? value : value.Substring(0, max - 1) + "…";
+            }
+
+            var eventUrl  = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
+            var startLocal = guildEvent.StartTime.ToLocalTime();
+            var endLocal   = guildEvent.EndTime?.ToLocalTime();
+            var imageUrl   = guildEvent.GetCoverImageUrl();
+
+            string whereText;
+            if (guildEvent.Channel != null)
+                whereText = $"<#{guildEvent.Channel.Id}>";
+            else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
+                whereText = Truncate(guildEvent.Location, 80);
+            else
+                whereText = "не указано";
+
+            var embed = new EmbedBuilder()
+                .WithTitle($"📅 {Truncate(guildEvent.Name, 100)}")
+                .WithUrl(eventUrl)
+                .WithDescription(Truncate(guildEvent.Description, 512))
+                .WithColor(new Color(0x5865F2))
+                .AddField("🕐 Начало", startLocal.ToString("dd.MM.yyyy HH:mm"), true)
+                .AddField("📍 Место", whereText, true);
+
+            if (endLocal.HasValue)
+                embed.AddField("🕓 Конец", endLocal.Value.ToString("dd.MM.yyyy HH:mm"), true);
+
+            if (!string.IsNullOrEmpty(imageUrl))
+                embed.WithImageUrl(imageUrl);
+
+            embed.WithFooter("Обновлено на старте бота");
+
+            // Обновляем сообщение в канале
+            if (entry.AnnounceMessageId != 0)
+            {
+                try
+                {
+                    var announceChannel = await _client.GetChannelAsync(config.GeneralRGChannelID) as ITextChannel;
+                    if (announceChannel != null)
+                    {
+                        var msg = await announceChannel.GetMessageAsync(entry.AnnounceMessageId) as IUserMessage;
+                        if (msg != null)
+                            await msg.ModifyAsync(p => p.Embed = embed.Build());
+                    }
+                }
+                catch { /* сообщение могло быть удалено */ }
+            }
+
+            // Обновляем DM-сообщения у подписчиков
+            if (entry.DmMessageIdsByUserId?.Count > 0)
+            {
+                var subscribers = _eventNotifications.GetActiveSubscribers(guild.Id);
+                foreach (var userId in subscribers)
+                {
+                    if (!entry.DmMessageIdsByUserId.TryGetValue(userId, out var dmMsgId) || dmMsgId == 0)
+                        continue;
+                    try
+                    {
+                        var user = await _client.GetUserAsync(userId);
+                        if (user == null) continue;
+                        var dmChannel = await user.CreateDMChannelAsync();
+                        var dmMsg = await dmChannel.GetMessageAsync(dmMsgId) as IUserMessage;
+                        if (dmMsg != null)
+                            await dmMsg.ModifyAsync(p => p.Embed = embed.Build());
+                    }
+                    catch { }
+                }
+            }
+
+            // Обновляем Telegram
+            if (_telegramNotifier != null && entry.TelegramChatId != 0 && entry.TelegramMessageId != 0)
+            {
+                try
+                {
+                    var tgText = $"📅 *{guildEvent.Name}*\n🕐 {startLocal:dd.MM.yyyy HH:mm}\n📍 {whereText}";
+                    if (!string.IsNullOrWhiteSpace(guildEvent.Description))
+                        tgText += $"\n\n{Truncate(guildEvent.Description, 300)}";
+                    tgText += $"\n\n[Открыть событие]({eventUrl})";
+                    await _telegramNotifier.EditMessageTextAsync(guild.Id, entry.TelegramMessageId, tgText);
+                }
+                catch { }
+            }
+
+            entry.LastUpdatedAtUtc = DateTimeOffset.UtcNow;
+            _eventAnnouncementStore.Upsert(entry);
         }
 
         private async Task AnnounceGuildScheduledEventStatusChanged(SocketGuildEvent guildEvent, string status)
