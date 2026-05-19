@@ -238,6 +238,12 @@ namespace RPBot
             var jarPath = BotConfig.ResolvePath(_config.JarPath);
             if (!File.Exists(jarPath))
             {
+                // Fallback: поиск вверх по дереву директорий (до 5 уровней)
+                jarPath = FindFileUpward(_config.JarPath, AppContext.BaseDirectory, 5) ?? jarPath;
+            }
+
+            if (!File.Exists(jarPath))
+            {
                 Log($"[Music] Lavalink.jar не найден: {jarPath}. Запуск пропущен.");
                 return false;
             }
@@ -327,6 +333,25 @@ namespace RPBot
 
             // 3. Fallback — надеемся что java есть в PATH
             return "java";
+        }
+
+        /// <summary>
+        /// Ищет файл по относительному пути, поднимаясь вверх по дереву директорий от startDir.
+        /// Например, "Lavalink/Lavalink.jar" будет искаться в startDir, startDir/.., startDir/../.. и т.д.
+        /// </summary>
+        private static string? FindFileUpward(string relativePath, string startDir, int maxLevels)
+        {
+            var dir = startDir;
+            for (int i = 0; i <= maxLevels; i++)
+            {
+                if (string.IsNullOrEmpty(dir)) break;
+                var candidate = Path.Combine(dir, relativePath);
+                if (File.Exists(candidate)) return candidate;
+                var parent = Directory.GetParent(dir)?.FullName;
+                if (parent == dir) break;
+                dir = parent;
+            }
+            return null;
         }
 
         private async Task<bool> WaitUntilReadyAsync(CancellationToken cancellationToken)
@@ -829,6 +854,20 @@ namespace RPBot
             await player.StopAsync(cancellationToken);
             await player.DisconnectAsync(cancellationToken);
             return "⏹ Воспроизведение остановлено.";
+        }
+
+        /// <summary>
+        /// Останавливает текущий трек и очищает очередь, НЕ отключаясь от канала.
+        /// Используется перед загрузкой нового плейлиста.
+        /// </summary>
+        public async Task StopPlaybackOnlyAsync(ulong guildId, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return;
+
+            await player.StopAsync(cancellationToken);
+            for (int i = player.Queue.Count - 1; i >= 0; i--)
+                try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
         }
 
         /// <summary>Ставит воспроизведение на паузу.</summary>

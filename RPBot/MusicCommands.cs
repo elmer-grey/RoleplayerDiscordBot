@@ -70,42 +70,32 @@ namespace RPBot
         {
             try
             {
-            Log($"[Music] VoiceStateUpdated: user={user.Username} IsBot={user.IsBot} before={before.VoiceChannel?.Name ?? "null"} after={after.VoiceChannel?.Name ?? "null"}");
-
             if (user.IsBot) return;
             var guild = (before.VoiceChannel ?? after.VoiceChannel)?.Guild;
-            if (guild is null)
-            {
-                Log($"[Music] guild is null для пользователя {user.Username}");
-                return;
-            }
+            if (guild is null) return;
             var guildId = guild.Id;
 
             var state = _lavalink.GetOrCreateState(guildId);
 
             var botVoice = guild.GetUser(_discord.CurrentUser.Id)?.VoiceChannel;
-            if (botVoice is null)
-            {
-                Log($"[Music] VoiceState от {user.Username} — бот не в голосовом канале гильдии {guildId}, пропускаем.");
-                return;
-            }
+            if (botVoice is null) return;
 
-            // Определяем: вошёл или вышел
+            // Определяем: вошёл или вышел из канала бота
             var joinedBotChannel = after.VoiceChannel?.Id == botVoice.Id;
             var leftBotChannel   = before.VoiceChannel?.Id == botVoice.Id && after.VoiceChannel?.Id != botVoice.Id;
 
+            // Логируем только реальный вход/выход из канала бота
             if (joinedBotChannel)
-                Log($"[Music] {user.Username} вошёл в голосовой канал '{botVoice.Name}' (гильдия {guildId})");
+                Log($"[Music] {user.Username} вошёл в '{botVoice.Name}'");
             else if (leftBotChannel)
-                Log($"[Music] {user.Username} вышел из голосового канала '{botVoice.Name}' (гильдия {guildId})");
+                Log($"[Music] {user.Username} вышел из '{botVoice.Name}'");
+            else
+                return; // мут/анмут/перемещение в другой канал — игнорируем
 
-            // guild.Users даёт актуальные голосовые состояния, в отличие от botVoice.Users (устаревший кэш)
             var actualUsers = guild.Users
                 .Where(u => !u.IsBot && u.VoiceChannel?.Id == botVoice.Id)
                 .ToList();
             var cachedCount = actualUsers.Count;
-            var cachedNames = string.Join(", ", actualUsers.Select(u => u.Username));
-            Log($"[Music] Кэш канала '{botVoice.Name}': [{cachedNames}]");
 
             int humans = cachedCount;
             if (leftBotChannel)
@@ -113,10 +103,7 @@ namespace RPBot
             else if (joinedBotChannel && !actualUsers.Any(u => u.Id == user.Id))
                 humans = cachedCount + 1; // пользователь ещё не попал в кэш
 
-            Log($"[Music] Людей в канале '{botVoice.Name}': {humans} (кэш: {cachedCount})");
-
-            // Prompt продолжения теперь показывается из CheckEmptyChannelAsync (polling),
-            // чтобы гарантированно сработать после TriggerAutoPauseAsync выставит IsPaused=true.
+            Log($"[Music] Людей в канале '{botVoice.Name}': {humans}");
 
             }
             catch (Exception ex)
@@ -1104,6 +1091,8 @@ namespace RPBot
             var user = command.User as SocketGuildUser;
             if (user is null) { await command.FollowupAsync("❌ Только на сервере.", ephemeral: true); return; }
 
+            if (user.VoiceChannel is null) { await command.FollowupAsync("❌ Войди в голосовой канал.", ephemeral: true); return; }
+
             // Ищем плейлист по всей гильдии
             var playlist = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
             if (playlist is null)
@@ -1113,43 +1102,51 @@ namespace RPBot
             if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
             { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
 
-            await command.FollowupAsync($"🔄 Переключаюсь на **{name}** ({playlist.Urls.Count} треков)...", ephemeral: true);
-
-            // Останавливаем текущее воспроизведение и очищаем очередь
-            await _lavalink.StopAsync(guildId.Value);
+            // Останавливаем текущее воспроизведение БЕЗ выхода из канала
+            await _lavalink.StopPlaybackOnlyAsync(guildId.Value);
             await DeleteNowPlayingAsync(guildId.Value);
             if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
 
             // Небольшая пауза чтобы плеер сбросился
             await Task.Delay(300);
 
+            var channel = command.Channel as ITextChannel;
+            var state = _lavalink.GetOrCreateState(guildId.Value);
+
             int loaded = 0;
+            bool firstTrack = true;
+
             foreach (var url in playlist.Urls)
             {
                 try
                 {
                     var result = await _lavalink.PlayRichAsync(user, url);
-                    if (result.IsNewTrack || result.IsQueued)
+                    if (result.IsNewTrack || result.IsQueued || result.IsPlaylist)
                     {
-                        loaded++;
-                        if (result.IsNewTrack)
+                        // Для первого реального трека/плейлиста — обновляем embed
+                        if (firstTrack && (result.IsNewTrack || result.IsPlaylist))
                         {
-                            var state = _lavalink.GetOrCreateState(guildId.Value);
+                            firstTrack = false;
                             state.CurrentTrackTitle      = result.TrackTitle;
                             state.CurrentTrackDuration   = result.Duration;
                             state.CurrentTrackArtworkUrl = result.ArtworkUrl;
                             state.CurrentTrackUrl        = result.TrackUrl;
                             state.CurrentTrackAuthor     = result.Author;
                             state.TrackStartedAtUtc      = DateTime.UtcNow;
-                            await SendOrUpdateNowPlayingAsync(command.Channel as ITextChannel, guildId.Value, state);
+                            await SendOrUpdateNowPlayingAsync(channel, guildId.Value, state);
                         }
-                        else
-                        {
-                            await UpdateQueueMessageIfVisibleAsync(guildId.Value, _lavalink.GetOrCreateState(guildId.Value));
-                        }
+
+                        loaded += result.IsPlaylist ? result.PlaylistTracksCount : 1;
                     }
                 }
                 catch { /* пропускаем недоступный трек */ }
+            }
+
+            // Если плейлист состоит из одиночных URL и первый трек ещё не стартовал через embed
+            if (firstTrack && loaded > 0)
+            {
+                var currentState = _lavalink.GetOrCreateState(guildId.Value);
+                await SendOrUpdateNowPlayingAsync(channel, guildId.Value, currentState);
             }
 
             await AutoDeleteFollowupAsync(command, $"✅ Загружено {loaded} из {playlist.Urls.Count} треков из **{name}**.");
