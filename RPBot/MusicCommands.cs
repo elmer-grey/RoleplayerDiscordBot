@@ -1034,6 +1034,8 @@ namespace RPBot
         public async Task HandleMusicPlaylistAsync(SocketSlashCommand command)
         {
             await command.DeferAsync(ephemeral: true);
+            _ = Task.Run(async () =>
+            {
             var action = command.Data.Options
                 .FirstOrDefault(o => o.Name == "действие")?.Value as string ?? "";
             switch (action)
@@ -1048,6 +1050,7 @@ namespace RPBot
                     await command.FollowupAsync("❌ Неизвестное действие.", ephemeral: true);
                     break;
             }
+            });
         }
 
         private async Task HandlePlaylistSaveAsync(SocketSlashCommand command)
@@ -1102,14 +1105,7 @@ namespace RPBot
             if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
             { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
 
-            // Гарантируем подключение к каналу ДО очистки/загрузки.
-            // Это важно: если бот не был в канале, JoinAsync инициирует VOICE_SERVER_UPDATE,
-            // и нужно дождаться готовности плеера прежде чем грузить треки.
-            var player = await _lavalink.EnsureJoinedAsync(user);
-            if (player is null)
-            { await command.FollowupAsync("❌ Не удалось подключиться к голосовому каналу.", ephemeral: true); return; }
-
-            // Останавливаем текущее воспроизведение БЕЗ выхода из канала
+            // Останавливаем текущее воспроизведение БЕЗ выхода из канала (если уже играло)
             await _lavalink.StopPlaybackOnlyAsync(guildId.Value);
             await DeleteNowPlayingAsync(guildId.Value);
             if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
@@ -1117,43 +1113,63 @@ namespace RPBot
             var channel = command.Channel as ITextChannel;
             var state = _lavalink.GetOrCreateState(guildId.Value);
 
+            // ── Шаг 1: первый трек — запускаем воспроизведение (и подключаемся к каналу)
             int loaded = 0;
-            bool firstTrack = true;
+            LavalinkService.PlayResult? firstResult = null;
+            int firstIndex = -1;
 
-            foreach (var url in playlist.Urls)
+            for (int i = 0; i < playlist.Urls.Count; i++)
             {
                 try
                 {
-                    var result = await _lavalink.PlayRichAsync(user, url);
-                    if (result.IsNewTrack || result.IsQueued || result.IsPlaylist)
+                    var r = await _lavalink.PlayRichAsync(user, playlist.Urls[i]);
+                    if (r.IsNewTrack || r.IsQueued || r.IsPlaylist)
                     {
-                        // Для первого реального трека/плейлиста — обновляем embed
-                        if (firstTrack && (result.IsNewTrack || result.IsPlaylist))
-                        {
-                            firstTrack = false;
-                            state.CurrentTrackTitle      = result.TrackTitle;
-                            state.CurrentTrackDuration   = result.Duration;
-                            state.CurrentTrackArtworkUrl = result.ArtworkUrl;
-                            state.CurrentTrackUrl        = result.TrackUrl;
-                            state.CurrentTrackAuthor     = result.Author;
-                            state.TrackStartedAtUtc      = DateTime.UtcNow;
-                            await SendOrUpdateNowPlayingAsync(channel, guildId.Value, state);
-                        }
-
-                        loaded += result.IsPlaylist ? result.PlaylistTracksCount : 1;
+                        firstResult = r;
+                        firstIndex  = i;
+                        loaded += r.IsPlaylist ? r.PlaylistTracksCount : 1;
+                        break;
                     }
                 }
                 catch { /* пропускаем недоступный трек */ }
             }
 
-            // Если плейлист состоит из одиночных URL и первый трек ещё не стартовал через embed
-            if (firstTrack && loaded > 0)
+            if (firstResult is null)
             {
-                var currentState = _lavalink.GetOrCreateState(guildId.Value);
-                await SendOrUpdateNowPlayingAsync(channel, guildId.Value, currentState);
+                await command.FollowupAsync($"❌ Не удалось воспроизвести ни одного трека из **{name}**.", ephemeral: true);
+                return;
             }
 
-            await AutoDeleteFollowupAsync(command, $"✅ Загружено {loaded} из {playlist.Urls.Count} треков из **{name}**.");
+            // Обновляем embed сразу после старта первого трека
+            if (firstResult.IsNewTrack || firstResult.IsPlaylist)
+            {
+                state.CurrentTrackTitle      = firstResult.TrackTitle;
+                state.CurrentTrackDuration   = firstResult.Duration;
+                state.CurrentTrackArtworkUrl = firstResult.ArtworkUrl;
+                state.CurrentTrackUrl        = firstResult.TrackUrl;
+                state.CurrentTrackAuthor     = firstResult.Author;
+                state.TrackStartedAtUtc      = DateTime.UtcNow;
+                await SendOrUpdateNowPlayingAsync(channel, guildId.Value, state);
+            }
+
+            // Сообщаем пользователю что первый трек пошёл, остальные догружаются
+            await AutoDeleteFollowupAsync(command, $"▶️ Плейлист **{name}**: запускаю первый трек, загружаю остальные…");
+
+            // ── Шаг 2: добавляем оставшиеся треки в очередь в фоне
+            _ = Task.Run(async () =>
+            {
+                for (int i = firstIndex + 1; i < playlist.Urls.Count; i++)
+                {
+                    try
+                    {
+                        var r = await _lavalink.PlayRichAsync(user, playlist.Urls[i]);
+                        if (r.IsNewTrack || r.IsQueued || r.IsPlaylist)
+                            loaded += r.IsPlaylist ? r.PlaylistTracksCount : 1;
+                    }
+                    catch { /* пропускаем недоступный трек */ }
+                }
+                Log($"[Music] Плейлист «{name}»: загружено {loaded} из {playlist.Urls.Count} треков.");
+            });
         }
 
         private async Task HandlePlaylistRenameAsync(SocketSlashCommand command)

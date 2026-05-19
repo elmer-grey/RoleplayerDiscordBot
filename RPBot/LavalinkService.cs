@@ -541,11 +541,11 @@ namespace RPBot
                 try
                 {
                     Log($"[Music] JoinAsync: guild={guildId} channel={voiceChannel.Id} ({voiceChannel.Name})");
-                    player = await _audioService.Players.JoinAsync(
+                    player = await Task.Run(() => _audioService.Players.JoinAsync(
                         voiceChannel,
                         PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
                         Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken);
+                        cancellationToken).AsTask(), cancellationToken);
                     Log($"[Music] JoinAsync: успех, player state={player?.State}");
                 }
                 catch (Exception ex)
@@ -628,10 +628,11 @@ namespace RPBot
             {
                 try
                 {
-                    player = await _audioService.Players.JoinAsync(
-                        voiceChannel, PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
+                    player = await Task.Run(() => _audioService.Players.JoinAsync(
+                        voiceChannel,
+                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
                         Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken);
+                        cancellationToken).AsTask(), cancellationToken);
                 }
                 catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
             }
@@ -869,12 +870,15 @@ namespace RPBot
             {
                 try
                 {
-                    player = await _audioService.Players.JoinAsync(
+                    // JoinAsync ждёт VOICE_SERVER_UPDATE от Discord Gateway.
+                    // Если мы на гейтвей-потоке — этот ответ никогда не придёт (дедлок).
+                    // Task.Run уходит с гейтвей-потока и позволяет Gateway обрабатывать входящие события.
+                    player = await Task.Run(() => _audioService.Players.JoinAsync(
                         user.VoiceChannel,
                         PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(
                             props => new NotifyingPlayer(props)),
                         Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken);
+                        cancellationToken).AsTask(), cancellationToken);
                 }
                 catch (Exception ex)
                 {
