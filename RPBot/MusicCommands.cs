@@ -23,6 +23,29 @@ namespace RPBot
         private DiscordSocketClient _discord;
         private Timer? _progressTimer;
 
+        // ── Кэш результатов поиска: ключ = "guildId:userId", значение = список треков + время создания
+        private readonly Dictionary<string, (List<LavalinkService.TrackSearchResult> Tracks, DateTime CreatedAt)> _searchCache = new();
+        private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(2);
+
+        private string SearchCacheKey(ulong guildId, ulong userId) => $"{guildId}:{userId}";
+
+        private void PutSearchCache(ulong guildId, ulong userId, List<LavalinkService.TrackSearchResult> tracks)
+        {
+            var key = SearchCacheKey(guildId, userId);
+            _searchCache[key] = (tracks, DateTime.UtcNow);
+            // Чистим просроченные записи
+            foreach (var k in _searchCache.Keys.Where(k => DateTime.UtcNow - _searchCache[k].CreatedAt > SearchCacheTtl).ToList())
+                _searchCache.Remove(k);
+        }
+
+        private List<LavalinkService.TrackSearchResult>? GetSearchCache(ulong guildId, ulong userId)
+        {
+            var key = SearchCacheKey(guildId, userId);
+            if (!_searchCache.TryGetValue(key, out var entry)) return null;
+            if (DateTime.UtcNow - entry.CreatedAt > SearchCacheTtl) { _searchCache.Remove(key); return null; }
+            return entry.Tracks;
+        }
+
         public Action<string>? LogSink { get; set; }
 
         public MusicCommands(
@@ -362,15 +385,27 @@ namespace RPBot
             var results = await _lavalink.SearchTracksAsync(input);
             if (results.Count == 0) { await command.FollowupAsync("🔍 Ничего не найдено.", ephemeral: true); return; }
 
-            var sb = new StringBuilder("🔍 **Результаты поиска:**\n");
-            for (int i = 0; i < results.Count; i++)
-                sb.AppendLine($"`{i + 1}.` **{results[i].Title}** — {results[i].Author} `{MusicEmbedBuilder.FormatTime(results[i].Duration)}`");
+            PutSearchCache(guildId, command.User.Id, results);
 
-            var buttons = new ComponentBuilder();
-            for (int i = 0; i < results.Count; i++)
-                buttons.WithButton($"{i + 1}", $"music_search_{i}_{Uri.EscapeDataString(results[i].Url)}", ButtonStyle.Secondary, row: 0);
+            var menu = new SelectMenuBuilder()
+                .WithCustomId($"music_search_select:{guildId}:{command.User.Id}")
+                .WithPlaceholder("🎵 Выбери трек…")
+                .WithMinValues(1)
+                .WithMaxValues(1);
 
-            await command.FollowupAsync(sb.ToString(), components: buttons.Build(), ephemeral: true);
+            for (int i = 0; i < results.Count; i++)
+            {
+                var t = results[i];
+                var label = t.Title.Length > 100 ? t.Title[..97] + "…" : t.Title;
+                var desc  = $"{t.Author} · {MusicEmbedBuilder.FormatTime(t.Duration)}";
+                if (desc.Length > 100) desc = desc[..97] + "…";
+                menu.AddOption(label, i.ToString(), desc);
+            }
+
+            var components = new ComponentBuilder().WithSelectMenu(menu).Build();
+            var sb = new StringBuilder($"🔍 **Результаты поиска по «{input}»:** ({results.Count} треков)\n");
+            sb.AppendLine("*Выбор действителен 2 минуты.*");
+            await command.FollowupAsync(sb.ToString(), components: components, ephemeral: true);
         }
 
         // Воспроизведение по прямой ссылке (вынесено из старого HandlePlayAsync)
@@ -654,8 +689,8 @@ namespace RPBot
                     case "music_queue_prev":             await ButtonQueuePageAsync(guildId.Value, component, -1);  break;
                     case "music_queue_next":             await ButtonQueuePageAsync(guildId.Value, component, +1);  break;
                     default:
-                        if (component.Data.CustomId.StartsWith("music_search_"))
-                            await ButtonSearchPickAsync(guildId.Value, component);
+                        if (component.Data.CustomId.StartsWith("music_search_select:"))
+                            await SelectSearchPickAsync(guildId.Value, component);
                         else if (component.Data.CustomId.StartsWith("playlist_public_yes_"))
                             await ButtonPlaylistPublicAsync(component, true);
                         else if (component.Data.CustomId.StartsWith("playlist_public_no_"))
@@ -711,24 +746,52 @@ namespace RPBot
             }
         }
 
-        private async Task ButtonSearchPickAsync(ulong guildId, SocketMessageComponent component)
+        private async Task SelectSearchPickAsync(ulong guildId, SocketMessageComponent component)
         {
-            // custom ID: music_search_{index}_{url_encoded}
-            var parts = component.Data.CustomId.Split('_', 4);
-            if (parts.Length < 4) return;
-            var url = Uri.UnescapeDataString(parts[3]);
+            // custom ID: music_search_select:{guildId}:{userId}
+            // value: индекс выбранного трека в кэше
+            var parts = component.Data.CustomId.Split(':');
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[2], out var userId)) return;
 
             var user = component.User as SocketGuildUser;
             if (user is null) return;
 
-            await _lavalink.PlayRichAsync(user, url);
+            var selected = component.Data.Values?.FirstOrDefault();
+            if (selected is null || !int.TryParse(selected, out var idx)) return;
+
+            var cache = GetSearchCache(guildId, userId);
+            if (cache is null || idx < 0 || idx >= cache.Count)
+            {
+                await component.RespondAsync("⏳ Результаты поиска устарели. Повтори запрос.", ephemeral: true);
+                return;
+            }
+
+            var track = cache[idx];
+            await component.DeferAsync(ephemeral: true);
+
+            var result = await _lavalink.PlayRichAsync(user, track.Url);
             var state = _lavalink.GetOrCreateState(guildId);
             if (state.NowPlayingChannel is null && component.Channel is ITextChannel tc)
                 state.NowPlayingChannel = tc;
 
-            await SendNowPlayingPublicAsync(state.NowPlayingChannel, guildId, state);
+            if (result.IsNewTrack)
+            {
+                state.CurrentTrackTitle      = result.TrackTitle;
+                state.CurrentTrackDuration   = result.Duration;
+                state.CurrentTrackArtworkUrl = result.ArtworkUrl;
+                state.CurrentTrackUrl        = result.TrackUrl;
+                state.CurrentTrackAuthor     = result.Author;
+                state.TrackStartedAtUtc      = DateTime.UtcNow;
+                await SendOrUpdateNowPlayingAsync(state.NowPlayingChannel, guildId, state);
+            }
+            else if (result.IsQueued)
+            {
+                await UpdateNowPlayingAsync(guildId, state);
+                await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            }
 
-            // Удаляем сообщение с результатами поиска
+            // Удаляем сообщение с дропдауном поиска
             try { await component.Message.DeleteAsync(); } catch { }
         }
 

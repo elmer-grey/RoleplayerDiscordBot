@@ -582,7 +582,7 @@ namespace RPBot
             if (_audioService is null) return new();
             var results = await _audioService.Tracks.LoadTracksAsync(query, TrackSearchMode.YouTube, cancellationToken: cancellationToken);
             var list = new List<TrackSearchResult>();
-            foreach (var t in results.Tracks.Take(5))
+            foreach (var t in results.Tracks.Take(25))
             {
                 list.Add(new TrackSearchResult
                 {
