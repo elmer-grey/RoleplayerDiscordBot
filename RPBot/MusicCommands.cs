@@ -23,19 +23,39 @@ namespace RPBot
         private DiscordSocketClient _discord;
         private Timer? _progressTimer;
 
-        // ── Кэш результатов поиска: ключ = "guildId:userId", значение = список треков + время создания
-        private readonly Dictionary<string, (List<LavalinkService.TrackSearchResult> Tracks, DateTime CreatedAt)> _searchCache = new();
+        // ── Кэш результатов поиска: ключ = "guildId:userId", значение = список треков + время создания + сообщение
+        private readonly Dictionary<string, (List<LavalinkService.TrackSearchResult> Tracks, DateTime CreatedAt, IUserMessage? Message)> _searchCache = new();
         private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(2);
 
         private string SearchCacheKey(ulong guildId, ulong userId) => $"{guildId}:{userId}";
 
-        private void PutSearchCache(ulong guildId, ulong userId, List<LavalinkService.TrackSearchResult> tracks)
+        private void PutSearchCache(ulong guildId, ulong userId, List<LavalinkService.TrackSearchResult> tracks, IUserMessage? message = null)
         {
             var key = SearchCacheKey(guildId, userId);
-            _searchCache[key] = (tracks, DateTime.UtcNow);
+            _searchCache[key] = (tracks, DateTime.UtcNow, message);
             // Чистим просроченные записи
             foreach (var k in _searchCache.Keys.Where(k => DateTime.UtcNow - _searchCache[k].CreatedAt > SearchCacheTtl).ToList())
                 _searchCache.Remove(k);
+
+            // Таймер: через TTL редактируем сообщение как устаревшее
+            if (message is not null)
+            {
+                _ = Task.Delay(SearchCacheTtl).ContinueWith(async _ =>
+                {
+                    if (!_searchCache.TryGetValue(key, out var entry)) return; // уже использован/удалён
+                    if (entry.Message?.Id != message.Id) return;               // заменён новым поиском
+                    _searchCache.Remove(key);
+                    try
+                    {
+                        await message.ModifyAsync(m =>
+                        {
+                            m.Content    = "⏳ **Результаты поиска устарели.** Повтори `/music` с новым запросом.";
+                            m.Components = new ComponentBuilder().Build(); // убираем дропдаун
+                        });
+                    }
+                    catch { }
+                }, TaskScheduler.Default);
+            }
         }
 
         private List<LavalinkService.TrackSearchResult>? GetSearchCache(ulong guildId, ulong userId)
@@ -405,7 +425,8 @@ namespace RPBot
             var components = new ComponentBuilder().WithSelectMenu(menu).Build();
             var sb = new StringBuilder($"🔍 **Результаты поиска по «{input}»:** ({results.Count} треков)\n");
             sb.AppendLine("*Выбор действителен 2 минуты.*");
-            await command.FollowupAsync(sb.ToString(), components: components, ephemeral: true);
+            var sentMsg = await command.FollowupAsync(sb.ToString(), components: components, ephemeral: true);
+            PutSearchCache(guildId, command.User.Id, results, sentMsg);
         }
 
         // Воспроизведение по прямой ссылке (вынесено из старого HandlePlayAsync)
