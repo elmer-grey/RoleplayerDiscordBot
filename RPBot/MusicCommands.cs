@@ -763,12 +763,12 @@ namespace RPBot
             var cache = GetSearchCache(guildId, userId);
             if (cache is null || idx < 0 || idx >= cache.Count)
             {
-                await component.RespondAsync("⏳ Результаты поиска устарели. Повтори запрос.", ephemeral: true);
+                await component.FollowupAsync("⏳ Результаты поиска устарели. Повтори запрос.", ephemeral: true);
                 return;
             }
 
             var track = cache[idx];
-            await component.DeferAsync(ephemeral: true);
+            // DeferAsync уже был вызван в HandleButtonAsync
 
             var result = await _lavalink.PlayRichAsync(user, track.Url);
             var state = _lavalink.GetOrCreateState(guildId);
@@ -790,8 +790,13 @@ namespace RPBot
                 await UpdateNowPlayingAsync(guildId, state);
                 await UpdateQueueMessageIfVisibleAsync(guildId, state);
             }
+            else if (!string.IsNullOrEmpty(result.Message))
+            {
+                await component.FollowupAsync(result.Message, ephemeral: true);
+                return;
+            }
 
-            // Удаляем сообщение с дропдауном поиска
+            // Удаляем ephemeral-сообщение с дропдауном поиска
             try { await component.Message.DeleteAsync(); } catch { }
         }
 

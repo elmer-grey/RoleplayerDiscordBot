@@ -1461,7 +1461,7 @@ namespace RPBot
             _client.SlashCommandExecuted -= BwonkCommand;
             _client.ModalSubmitted -= HandleModalSubmitted;
             _client.ButtonExecuted -= HandleButtonExecuted;
-         _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
+            _client.SelectMenuExecuted -= HandleSelectMenuExecuted;
             _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
             _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
@@ -1476,6 +1476,7 @@ namespace RPBot
             _client.SlashCommandExecuted += BwonkCommand;
             _client.ModalSubmitted += HandleModalSubmitted;
             _client.ButtonExecuted += HandleButtonExecuted;
+            _client.SelectMenuExecuted += HandleSelectMenuExecuted;
          _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
             _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
@@ -3259,7 +3260,7 @@ namespace RPBot
                         try { _client.SlashCommandExecuted -= BwonkCommand; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing BwonkCommand: {ex}"); }
                         try { _client.ModalSubmitted -= HandleModalSubmitted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ModalSubmitted: {ex}"); }
                         try { _client.ButtonExecuted -= HandleButtonExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ButtonExecuted: {ex}"); }
-                        try { _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCreated: {ex}"); }
+                        try { _client.SelectMenuExecuted -= HandleSelectMenuExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing SelectMenuExecuted: {ex}"); }
                         try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
                         try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCompleted: {ex}"); }
 
@@ -3546,6 +3547,22 @@ namespace RPBot
                 try { await PredictionErrorLogger.LogAsync("HandleButtonExecuted", ex, $"customId={component.Data.CustomId}").ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
                 try { await component.RespondAsync("Ошибка обработки", ephemeral: true); } catch { }
+            }
+        }
+
+        public async Task HandleSelectMenuExecuted(SocketMessageComponent component)
+        {
+            await Task.Yield();
+            try
+            {
+                var cid = component.Data.CustomId;
+                if (_musicCommands is not null && cid.StartsWith("music_search_select:"))
+                    await _musicCommands.HandleButtonAsync(component);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка обработки SelectMenu: {ex.Message}");
+                try { await component.RespondAsync("Ошибка взаимодействия", ephemeral: true); } catch { }
             }
         }
 
