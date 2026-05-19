@@ -988,9 +988,9 @@ namespace RPBot
                 var track = await _audioService!.Tracks.LoadTrackAsync(prevUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
                 if (track is null) return "❌ Не удалось загрузить предыдущий трек.";
 
-                // Текущий трек возвращаем первым в очередь
-                if (player.CurrentItem is not null)
-                    await player.Queue.InsertAsync(0, player.CurrentItem, cancellationToken);
+                // Очищаем очередь Lavalink чтобы не было дублирования
+                for (int i = player.Queue.Count - 1; i >= 0; i--)
+                    try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
 
                 state.PlaylistCurrentIndex = prevIndex;
                 await player.PlayAsync(track, cancellationToken: cancellationToken);
@@ -1048,6 +1048,10 @@ namespace RPBot
 
             var track = await _audioService!.Tracks.LoadTrackAsync(nextUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
             if (track is null) return "❌ Не удалось загрузить следующий трек.";
+
+            // Очищаем очередь Lavalink чтобы не было дублирования
+            for (int i = player.Queue.Count - 1; i >= 0; i--)
+                try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
 
             state.PlaylistCurrentIndex = nextIndex;
             await player.PlayAsync(track, cancellationToken: cancellationToken);

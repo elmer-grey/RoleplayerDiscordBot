@@ -232,10 +232,26 @@ namespace RPBot
         private async Task OnTrackEndedAsync(ulong guildId)
         {
             // При loop=Track Lavalink сам перезапустит — OnTrackStartedAsync вызовется снова.
-            // Здесь просто обновляем очередь если нет повтора трека.
             var state = _lavalink.GetOrCreateState(guildId);
-            if (state.LoopMode != LoopMode.Track)
-                await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            if (state.LoopMode == LoopMode.Track) return;
+
+            // Если загружен плейлист — переходим к следующему треку по индексу
+            if (state.PlaylistTrackList is not null)
+            {
+                if (state.PlaylistCurrentIndex < state.PlaylistTrackList.Count - 1)
+                {
+                    await _lavalink.PlaylistNextAsync(guildId);
+                    // embed обновится через OnTrackStartedAsync
+                }
+                else
+                {
+                    // Плейлист завершён
+                    await UpdateNowPlayingAsync(guildId, state);
+                }
+                return;
+            }
+
+            await UpdateQueueMessageIfVisibleAsync(guildId, state);
         }
 
         private void OnProgressTick(object? _)
@@ -1400,23 +1416,8 @@ namespace RPBot
                 await SendOrUpdateNowPlayingAsync(channel, guildId, state);
             }
 
-            await AutoDeleteFollowupAsync(command, $"▶️ Плейлист **{name}**: запускаю первый трек, загружаю остальные…");
-
-            // ── Шаг 2: добавляем оставшиеся треки в очередь в фоне
-            _ = Task.Run(async () =>
-            {
-                for (int i = firstIndex + 1; i < playlist.Urls.Count; i++)
-                {
-                    try
-                    {
-                        var r = await _lavalink.PlayRichAsync(user, playlist.Urls[i]);
-                        if (r.IsNewTrack || r.IsQueued || r.IsPlaylist)
-                            loaded += r.IsPlaylist ? r.PlaylistTracksCount : 1;
-                    }
-                    catch { /* пропускаем недоступный трек */ }
-                }
-                Log($"[Music] Плейлист «{name}»: загружено {loaded} из {playlist.Urls.Count} треков.");
-            });
+            await AutoDeleteFollowupAsync(command, $"▶️ Плейлист **{name}**: воспроизвожу трек {firstIndex + 1} из {playlist.Urls.Count}…");
+            Log($"[Music] Плейлист «{name}»: старт с трека {firstIndex + 1}/{playlist.Urls.Count}.");
         }
 
         private async Task HandlePlaylistRenameAsync(SocketSlashCommand command)
