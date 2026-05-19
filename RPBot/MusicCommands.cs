@@ -817,8 +817,22 @@ namespace RPBot
                 return;
             }
 
-            // Удаляем ephemeral-сообщение с дропдауном поиска
-            try { await component.Message.DeleteAsync(); } catch { }
+            // Убираем дропдаун из сообщения, но оставляем его — таймер сам заменит текст через TTL
+            // Удаляем запись из кэша, чтобы таймер не перезаписал текст поверх
+            _searchCache.Remove(SearchCacheKey(guildId, userId));
+            try
+            {
+                var trackLabel = track.Title.Length > 0 ? track.Title : "трек";
+                var statusText = result.IsQueued
+                    ? $"📋 **{trackLabel}** добавлен в очередь."
+                    : $"▶️ **{trackLabel}** — воспроизводится.";
+                await component.Message.ModifyAsync(m =>
+                {
+                    m.Content    = statusText;
+                    m.Components = new ComponentBuilder().Build();
+                });
+            }
+            catch { }
         }
 
         private async Task ButtonPlaylistPublicAsync(SocketMessageComponent component, bool makePublic)
