@@ -309,7 +309,6 @@ namespace RPBot
                     case "queue":   await HandleQueueAsync(command);   break;
                     case "loop":    await HandleLoopAsync(command);    break;
                     case "shuffle": await HandleShuffleAsync(command); break;
-                    case "search":  await HandleSearchAsync(command);  break;
                     case "seek":    await HandleSeekAsync(command);    break;
                     case "remove":  await HandleRemoveAsync(command);  break;
                     default:
@@ -326,13 +325,57 @@ namespace RPBot
             var user = command.User as SocketGuildUser;
             if (user is null) { await command.FollowupAsync("❌ Команда доступна только на сервере.", ephemeral: true); return; }
 
-            var url = command.Data.Options.FirstOrDefault(o => o.Name == "url")?.Value as string ?? "";
-            if (string.IsNullOrWhiteSpace(url))
+            var input = command.Data.Options.FirstOrDefault(o => o.Name == "запрос")?.Value as string ?? "";
+            if (string.IsNullOrWhiteSpace(input))
             {
-                await command.FollowupAsync("❌ Укажи ссылку: `/music action:играть url:<ссылка>`", ephemeral: true);
+                await command.FollowupAsync("❌ Укажи ссылку, название трека или название плейлиста.", ephemeral: true);
                 return;
             }
 
+            // ── Случай 1: URL → воспроизвести напрямую
+            if (Uri.TryCreate(input, UriKind.Absolute, out var uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            {
+                await HandlePlayUrlAsync(command, user, input);
+                return;
+            }
+
+            // ── Случай 2: совпадает с именем сохранённого плейлиста → загрузить плейлист
+            var guildId = user.Guild.Id;
+            if (_playlistStore is not null)
+            {
+                var playlist = _playlistStore.FindByName(guildId, command.User.Id, input);
+                if (playlist is not null)
+                {
+                    if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
+                    {
+                        await command.FollowupAsync("❌ Этот плейлист создан не вами.", ephemeral: true);
+                        return;
+                    }
+                    // Переиспользуем логику загрузки плейлиста
+                    await HandlePlaylistLoadCoreAsync(command, user, guildId, playlist, playlist.Name);
+                    return;
+                }
+            }
+
+            // ── Случай 3: текстовый поиск по YouTube
+            var results = await _lavalink.SearchTracksAsync(input);
+            if (results.Count == 0) { await command.FollowupAsync("🔍 Ничего не найдено.", ephemeral: true); return; }
+
+            var sb = new StringBuilder("🔍 **Результаты поиска:**\n");
+            for (int i = 0; i < results.Count; i++)
+                sb.AppendLine($"`{i + 1}.` **{results[i].Title}** — {results[i].Author} `{MusicEmbedBuilder.FormatTime(results[i].Duration)}`");
+
+            var buttons = new ComponentBuilder();
+            for (int i = 0; i < results.Count; i++)
+                buttons.WithButton($"{i + 1}", $"music_search_{i}_{Uri.EscapeDataString(results[i].Url)}", ButtonStyle.Secondary, row: 0);
+
+            await command.FollowupAsync(sb.ToString(), components: buttons.Build(), ephemeral: true);
+        }
+
+        // Воспроизведение по прямой ссылке (вынесено из старого HandlePlayAsync)
+        private async Task HandlePlayUrlAsync(SocketSlashCommand command, SocketGuildUser user, string url)
+        {
             try
             {
                 var result = await _lavalink.PlayRichAsync(user, url);
@@ -529,27 +572,6 @@ namespace RPBot
                 await UpdateQueueMessageIfVisibleAsync(guildId.Value, state);
             }
             catch (Exception ex) { await command.FollowupAsync($"❌ {ex.Message}", ephemeral: true); }
-        }
-
-        // ─── search ───────────────────────────────────────────────────────
-
-        private async Task HandleSearchAsync(SocketSlashCommand command)
-        {
-            var query = command.Data.Options.FirstOrDefault(o => o.Name == "запрос")?.Value as string ?? "";
-            if (string.IsNullOrWhiteSpace(query)) { await command.FollowupAsync("❌ Укажи запрос.", ephemeral: true); return; }
-
-            var results = await _lavalink.SearchTracksAsync(query);
-            if (results.Count == 0) { await command.FollowupAsync("🔍 Ничего не найдено.", ephemeral: true); return; }
-
-            var sb = new StringBuilder("🔍 **Результаты поиска:**\n");
-            for (int i = 0; i < results.Count; i++)
-                sb.AppendLine($"`{i + 1}.` **{results[i].Title}** — {results[i].Author} `{MusicEmbedBuilder.FormatTime(results[i].Duration)}`");
-
-            var buttons = new ComponentBuilder();
-            for (int i = 0; i < results.Count; i++)
-                buttons.WithButton($"{i + 1}", $"music_search_{i}_{Uri.EscapeDataString(results[i].Url)}", ButtonStyle.Secondary, row: 0);
-
-            await command.FollowupAsync(sb.ToString(), components: buttons.Build(), ephemeral: true);
         }
 
         // ─── seek ─────────────────────────────────────────────────────────
@@ -1096,22 +1118,32 @@ namespace RPBot
 
             if (user.VoiceChannel is null) { await command.FollowupAsync("❌ Войди в голосовой канал.", ephemeral: true); return; }
 
-            // Ищем плейлист по всей гильдии
             var playlist = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
             if (playlist is null)
             { await command.FollowupAsync($"❌ Плейлист **{name}** не найден.", ephemeral: true); return; }
 
-            // Защита личного плейлиста
             if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
             { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
 
+            await HandlePlaylistLoadCoreAsync(command, user, guildId.Value, playlist, name);
+        }
+
+        private async Task HandlePlaylistLoadCoreAsync(
+            SocketSlashCommand command,
+            SocketGuildUser user,
+            ulong guildId,
+            Music.MusicPlaylist playlist,
+            string name)
+        {
+            if (user.VoiceChannel is null) { await command.FollowupAsync("❌ Войди в голосовой канал.", ephemeral: true); return; }
+
             // Останавливаем текущее воспроизведение БЕЗ выхода из канала (если уже играло)
-            await _lavalink.StopPlaybackOnlyAsync(guildId.Value);
-            await DeleteNowPlayingAsync(guildId.Value);
-            if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
+            await _lavalink.StopPlaybackOnlyAsync(guildId);
+            await DeleteNowPlayingAsync(guildId);
+            if (_queueStore is not null) await _queueStore.ClearAsync(guildId);
 
             var channel = command.Channel as ITextChannel;
-            var state = _lavalink.GetOrCreateState(guildId.Value);
+            var state = _lavalink.GetOrCreateState(guildId);
 
             // ── Шаг 1: первый трек — запускаем воспроизведение (и подключаемся к каналу)
             int loaded = 0;
@@ -1149,10 +1181,9 @@ namespace RPBot
                 state.CurrentTrackUrl        = firstResult.TrackUrl;
                 state.CurrentTrackAuthor     = firstResult.Author;
                 state.TrackStartedAtUtc      = DateTime.UtcNow;
-                await SendOrUpdateNowPlayingAsync(channel, guildId.Value, state);
+                await SendOrUpdateNowPlayingAsync(channel, guildId, state);
             }
 
-            // Сообщаем пользователю что первый трек пошёл, остальные догружаются
             await AutoDeleteFollowupAsync(command, $"▶️ Плейлист **{name}**: запускаю первый трек, загружаю остальные…");
 
             // ── Шаг 2: добавляем оставшиеся треки в очередь в фоне
