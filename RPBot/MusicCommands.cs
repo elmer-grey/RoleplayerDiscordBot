@@ -723,6 +723,10 @@ namespace RPBot
                             await ButtonPlaylistPublicAsync(component, true);
                         else if (component.Data.CustomId.StartsWith("playlist_public_no_"))
                             await ButtonPlaylistPublicAsync(component, false);
+                        else if (component.Data.CustomId.StartsWith("playlist_overwrite_yes_"))
+                            await ButtonPlaylistOverwriteYesAsync(component);
+                        else if (component.Data.CustomId.StartsWith("playlist_overwrite_no_"))
+                            await ButtonPlaylistOverwriteNoAsync(component);
                         break;
                 }
             });
@@ -879,6 +883,70 @@ namespace RPBot
             catch { /* игнорируем */ }
         }
 
+        // custom ID: playlist_overwrite_yes_{guildId}_{userId}_{encodedName}
+        private async Task ButtonPlaylistOverwriteYesAsync(SocketMessageComponent component)
+        {
+            try
+            {
+                // parts: [0]=playlist [1]=overwrite [2]=yes [3]=guildId [4]=userId [5..]=encodedName
+                var parts = component.Data.CustomId.Split('_');
+                var guildId     = ulong.Parse(parts[3]);
+                var userId      = ulong.Parse(parts[4]);
+                var encodedName = string.Join("_", parts[5..]);
+                var name        = Uri.UnescapeDataString(encodedName);
+
+                if (userId != component.User.Id)
+                {
+                    await component.FollowupAsync("❌ Эта кнопка не для вас.", ephemeral: true);
+                    return;
+                }
+
+                if (_playlistStore is null)
+                {
+                    await component.FollowupAsync("❌ Недоступно.", ephemeral: true);
+                    return;
+                }
+
+                var urls = await _lavalink.GetQueueUrlsAsync(guildId);
+                if (urls.Count == 0)
+                {
+                    await component.FollowupAsync("❌ Очередь пуста.", ephemeral: true);
+                    return;
+                }
+
+                var playlist = new MusicPlaylist { Name = name, OwnerId = userId, Urls = urls, CreatedAt = DateTime.UtcNow };
+                await _playlistStore.SavePlaylistAsync(guildId, userId, playlist);
+
+                try { await component.Message.DeleteAsync(); } catch { }
+
+                // Предложить сделать публичным
+                var newEncodedName = Uri.EscapeDataString(name);
+                var buttons = new ComponentBuilder()
+                    .WithButton("✅ Да", $"playlist_public_yes_{guildId}_{userId}_{newEncodedName}", ButtonStyle.Success)
+                    .WithButton("❌ Нет", $"playlist_public_no_{guildId}_{newEncodedName}", ButtonStyle.Secondary)
+                    .Build();
+                await component.FollowupAsync(
+                    $"💾 Плейлист **{name}** перезаписан ({urls.Count} треков).\n📢 Сделать его **публичным**?",
+                    components: buttons,
+                    ephemeral: true);
+            }
+            catch { /* игнорируем */ }
+        }
+
+        // custom ID: playlist_overwrite_no_{encodedName}
+        private async Task ButtonPlaylistOverwriteNoAsync(SocketMessageComponent component)
+        {
+            try
+            {
+                var parts       = component.Data.CustomId.Split('_');
+                var encodedName = string.Join("_", parts[3..]);
+                var name        = Uri.UnescapeDataString(encodedName);
+                try { await component.Message.DeleteAsync(); } catch { }
+                await component.FollowupAsync($"↩️ Плейлист **{name}** не изменён.", ephemeral: true);
+            }
+            catch { /* игнорируем */ }
+        }
+
         private async Task ButtonPrevAsync(ulong guildId, SocketMessageComponent component)
         {
             var msg = await _lavalink.PreviousAsync(guildId);
@@ -911,7 +979,18 @@ namespace RPBot
 
         private async Task ButtonSkipAsync(ulong guildId, SocketMessageComponent component)
         {
-            var msg = await _lavalink.SkipAsync(guildId);
+            var state = _lavalink.GetOrCreateState(guildId);
+            string msg;
+            if (state.PlaylistTrackList is not null)
+            {
+                // Плейлист загружен — переходим по индексу вперёд
+                msg = await _lavalink.PlaylistNextAsync(guildId);
+                await UpdateNowPlayingAsync(guildId, state);
+            }
+            else
+            {
+                msg = await _lavalink.SkipAsync(guildId);
+            }
             // embed обновится через OnTrackStartedAsync; просто тихо подтверждаем
             await SendEphemeralAutoDeleteAsync(component, msg);
         }
@@ -1196,15 +1275,36 @@ namespace RPBot
             var urls = await _lavalink.GetQueueUrlsAsync(guildId.Value);
             if (urls.Count == 0) { await command.FollowupAsync("❌ Очередь пуста, нечего сохранять.", ephemeral: true); return; }
 
+            // Если существует личный плейлист этого пользователя с таким именем — спросить про перезапись
+            var existing = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
+            if (existing is not null && existing.OwnerId == command.User.Id && !existing.IsPublic)
+            {
+                var encodedName = Uri.EscapeDataString(name);
+                var uid = guildId.Value;
+                var confirmButtons = new ComponentBuilder()
+                    .WithButton("✅ Да", $"playlist_overwrite_yes_{uid}_{command.User.Id}_{encodedName}", ButtonStyle.Danger)
+                    .WithButton("❌ Нет", $"playlist_overwrite_no_{encodedName}", ButtonStyle.Secondary)
+                    .Build();
+                await command.FollowupAsync(
+                    $"⚠️ Обнаружен плейлист с таким же названием **{name}**. Перезаписать его?",
+                    components: confirmButtons,
+                    ephemeral: true);
+                return;
+            }
+
+            await DoSavePlaylistAsync(command, guildId.Value, name, urls);
+        }
+
+        private async Task DoSavePlaylistAsync(SocketSlashCommand command, ulong guildId, string name, List<string> urls)
+        {
             var playlist = new MusicPlaylist { Name = name, OwnerId = command.User.Id, Urls = urls, CreatedAt = DateTime.UtcNow };
-            await _playlistStore.SavePlaylistAsync(guildId.Value, command.User.Id, playlist);
+            await _playlistStore!.SavePlaylistAsync(guildId, command.User.Id, playlist);
 
             // Prompt — сделать публичным?
             var encodedName = Uri.EscapeDataString(name);
-            var uid = guildId.Value;
             var buttons = new ComponentBuilder()
-                .WithButton("✅ Да", $"playlist_public_yes_{uid}_{command.User.Id}_{encodedName}", ButtonStyle.Success)
-                .WithButton("❌ Нет", $"playlist_public_no_{uid}_{encodedName}", ButtonStyle.Secondary)
+                .WithButton("✅ Да", $"playlist_public_yes_{guildId}_{command.User.Id}_{encodedName}", ButtonStyle.Success)
+                .WithButton("❌ Нет", $"playlist_public_no_{guildId}_{encodedName}", ButtonStyle.Secondary)
                 .Build();
 
             await command.FollowupAsync(
@@ -1254,6 +1354,10 @@ namespace RPBot
             var channel = command.Channel as ITextChannel;
             var state = _lavalink.GetOrCreateState(guildId);
 
+            // Инициализируем навигацию по плейлисту
+            state.PlaylistTrackList   = new List<string>(playlist.Urls);
+            state.PlaylistCurrentIndex = -1;
+
             // ── Шаг 1: первый трек — запускаем воспроизведение (и подключаемся к каналу)
             int loaded = 0;
             LavalinkService.PlayResult? firstResult = null;
@@ -1280,6 +1384,9 @@ namespace RPBot
                 await command.FollowupAsync($"❌ Не удалось воспроизвести ни одного трека из **{name}**.", ephemeral: true);
                 return;
             }
+
+            // Фиксируем индекс первого воспроизведённого трека
+            state.PlaylistCurrentIndex = firstIndex;
 
             // Обновляем embed сразу после старта первого трека
             if (firstResult.IsNewTrack || firstResult.IsPlaylist)

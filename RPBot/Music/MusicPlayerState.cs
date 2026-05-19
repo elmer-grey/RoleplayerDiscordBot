@@ -70,6 +70,12 @@ namespace RPBot.Music
         /// <summary>URL-ы очереди для персистентности (заполняются при сохранении).</summary>
         public List<string> PersistedQueueUrls { get; set; } = new();
 
+        // ─── Навигация по плейлисту ───────────────────────────────────────
+        /// <summary>Все URL-ы загруженного плейлиста (null = не из плейлиста).</summary>
+        public List<string>? PlaylistTrackList  { get; set; }
+        /// <summary>Индекс текущего трека в PlaylistTrackList (-1 = не задан).</summary>
+        public int           PlaylistCurrentIndex { get; set; } = -1;
+
         // ─── Пагинация списка очереди ─────────────────────────────────────
         /// <summary>Текущая страница списка очереди (0-based).</summary>
         public int QueuePage { get; set; } = 0;

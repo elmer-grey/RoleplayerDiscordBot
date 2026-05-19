@@ -975,6 +975,28 @@ namespace RPBot
             if (player is null) return "❌ Ничего не играет.";
 
             var state = GetOrCreateState(guildId);
+
+            // Если плейлист загружен — используем индекс для навигации
+            if (state.PlaylistTrackList is not null)
+            {
+                if (state.PlaylistCurrentIndex <= 0)
+                    return "⏮ Это первый трек плейлиста.";
+
+                var prevIndex = state.PlaylistCurrentIndex - 1;
+                var prevUrl   = state.PlaylistTrackList[prevIndex];
+
+                var track = await _audioService!.Tracks.LoadTrackAsync(prevUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
+                if (track is null) return "❌ Не удалось загрузить предыдущий трек.";
+
+                // Текущий трек возвращаем первым в очередь
+                if (player.CurrentItem is not null)
+                    await player.Queue.InsertAsync(0, player.CurrentItem, cancellationToken);
+
+                state.PlaylistCurrentIndex = prevIndex;
+                await player.PlayAsync(track, cancellationToken: cancellationToken);
+                return $"⏮ Предыдущий трек: **{track.Title}**";
+            }
+
             var elapsed = DateTime.UtcNow - state.TrackStartedAtUtc;
 
             // Если прошло >15 секунд — перемотать в начало
@@ -1000,11 +1022,36 @@ namespace RPBot
             if (player.CurrentItem is not null)
                 await player.Queue.InsertAsync(0, player.CurrentItem, cancellationToken);
 
-            var track = await _audioService!.Tracks.LoadTrackAsync(prev.Url, TrackSearchMode.None, cancellationToken: cancellationToken);
-            if (track is null) return "❌ Не удалось загрузить предыдущий трек.";
+            var prevTrack = await _audioService!.Tracks.LoadTrackAsync(prev.Url, TrackSearchMode.None, cancellationToken: cancellationToken);
+            if (prevTrack is null) return "❌ Не удалось загрузить предыдущий трек.";
 
+            await player.PlayAsync(prevTrack, cancellationToken: cancellationToken);
+            return $"⏮ Предыдущий трек: **{prevTrack.Title}**";
+        }
+
+        /// <summary>Переходит к следующему треку плейлиста (если плейлист загружен).</summary>
+        public async Task<string> PlaylistNextAsync(ulong guildId, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
+
+            var state = GetOrCreateState(guildId);
+
+            if (state.PlaylistTrackList is null)
+                return "❌ Плейлист не загружен.";
+
+            if (state.PlaylistCurrentIndex >= state.PlaylistTrackList.Count - 1)
+                return "⏭ Это последний трек плейлиста.";
+
+            var nextIndex = state.PlaylistCurrentIndex + 1;
+            var nextUrl   = state.PlaylistTrackList[nextIndex];
+
+            var track = await _audioService!.Tracks.LoadTrackAsync(nextUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
+            if (track is null) return "❌ Не удалось загрузить следующий трек.";
+
+            state.PlaylistCurrentIndex = nextIndex;
             await player.PlayAsync(track, cancellationToken: cancellationToken);
-            return $"⏮ Предыдущий трек: **{track.Title}**";
+            return $"⏭ Следующий трек: **{track.Title}**";
         }
 
         /// <summary>Перематывает текущий трек на указанную позицию.</summary>

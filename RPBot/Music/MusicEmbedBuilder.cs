@@ -37,7 +37,14 @@ namespace RPBot.Music
             long allTimeCount = 0)
         {
             var embed = BuildEmbed(state, isPaused, queueCount, volume, sessionCount, allTimeCount);
-            var components = BuildComponents(state.LoopMode, isPaused, volume, queueCount);
+            // Флаги навигации: если плейлист загружен, используем индекс; иначе альт отключен
+            bool hasPrev = state.PlaylistTrackList is not null
+                ? state.PlaylistCurrentIndex > 0
+                : false;
+            bool hasNext = state.PlaylistTrackList is not null
+                ? state.PlaylistCurrentIndex < state.PlaylistTrackList.Count - 1
+                : queueCount > 0;
+            var components = BuildComponents(state.LoopMode, isPaused, volume, queueCount, hasPrev, hasNext);
             return (embed, components);
         }
 
@@ -107,7 +114,8 @@ namespace RPBot.Music
         // ─── Кнопки ───────────────────────────────────────────────────────
 
         private static MessageComponent BuildComponents(
-            LoopMode loop, bool isPaused, int volume, int queueCount)
+            LoopMode loop, bool isPaused, int volume, int queueCount,
+            bool hasPrev = false, bool hasNext = true)
         {
             var pauseLabel = isPaused ? "▶️" : "⏸";
             var pauseStyle = isPaused ? ButtonStyle.Success : ButtonStyle.Secondary;
@@ -122,9 +130,9 @@ namespace RPBot.Music
 
             return new ComponentBuilder()
                 // Ряд 1: управление воспроизведением
-                .WithButton("⏮", BtnPrev,      ButtonStyle.Secondary, row: 0)
+                .WithButton("⏮", BtnPrev,      ButtonStyle.Secondary, row: 0, disabled: !hasPrev)
                 .WithButton(pauseLabel, BtnPausePlay, pauseStyle,      row: 0)
-                .WithButton("⏭", BtnSkip,      ButtonStyle.Secondary, row: 0)
+                .WithButton("⏭", BtnSkip,      ButtonStyle.Secondary, row: 0, disabled: !hasNext)
                 .WithButton("⏹", BtnStop,      ButtonStyle.Danger,    row: 0)
                 // Ряд 2: дополнительно
                 .WithButton(loopLabel, BtnLoop,    loopStyle,           row: 1)
