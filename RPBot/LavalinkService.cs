@@ -845,6 +845,61 @@ namespace RPBot
             return urls;
         }
 
+        /// <summary>
+        /// Подключается к голосовому каналу пользователя (если ещё не подключён)
+        /// и ждёт пока Lavalink установит сессию (VOICE_SERVER_UPDATE).
+        /// Возвращает null при ошибке.
+        /// </summary>
+        public async Task<NotifyingPlayer?> EnsureJoinedAsync(
+            SocketGuildUser user,
+            CancellationToken cancellationToken = default)
+        {
+            if (_audioService is null || user.VoiceChannel is null)
+                return null;
+
+            var guildId = user.Guild.Id;
+
+            NotifyingPlayer? player;
+            try { player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
+            catch { player = null; }
+
+            bool freshJoin = player is null;
+
+            if (player is null)
+            {
+                try
+                {
+                    player = await _audioService.Players.JoinAsync(
+                        user.VoiceChannel,
+                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(
+                            props => new NotifyingPlayer(props)),
+                        Options.Create(new QueuedLavalinkPlayerOptions()),
+                        cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[Music] EnsureJoinedAsync: ошибка JoinAsync — {ex.Message}");
+                    return null;
+                }
+            }
+
+            // После нового подключения ждём пока Lavalink получит VOICE_SERVER_UPDATE от Discord
+            // и установит аудио-сессию (обычно 300–800 мс, ждём до 5 сек).
+            if (freshJoin)
+            {
+                await Task.Delay(500, cancellationToken);
+                for (int i = 0; i < 18; i++)
+                {
+                    if (player.State != PlayerState.Destroyed)
+                        break;
+                    await Task.Delay(250, cancellationToken);
+                }
+                Log($"[Music] EnsureJoinedAsync: плеер готов (state={player.State})");
+            }
+
+            return player;
+        }
+
         /// <summary>Останавливает воспроизведение и отключает бота.</summary>
         public async Task<string> StopAsync(ulong guildId, CancellationToken cancellationToken = default)
         {

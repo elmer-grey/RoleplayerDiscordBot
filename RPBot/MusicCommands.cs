@@ -1102,13 +1102,17 @@ namespace RPBot
             if (!playlist.IsPublic && playlist.OwnerId != command.User.Id)
             { await command.FollowupAsync("❌ Этот плейлист создан не вами. Запросите изменения параметра у автора.", ephemeral: true); return; }
 
+            // Гарантируем подключение к каналу ДО очистки/загрузки.
+            // Это важно: если бот не был в канале, JoinAsync инициирует VOICE_SERVER_UPDATE,
+            // и нужно дождаться готовности плеера прежде чем грузить треки.
+            var player = await _lavalink.EnsureJoinedAsync(user);
+            if (player is null)
+            { await command.FollowupAsync("❌ Не удалось подключиться к голосовому каналу.", ephemeral: true); return; }
+
             // Останавливаем текущее воспроизведение БЕЗ выхода из канала
             await _lavalink.StopPlaybackOnlyAsync(guildId.Value);
             await DeleteNowPlayingAsync(guildId.Value);
             if (_queueStore is not null) await _queueStore.ClearAsync(guildId.Value);
-
-            // Небольшая пауза чтобы плеер сбросился
-            await Task.Delay(300);
 
             var channel = command.Channel as ITextChannel;
             var state = _lavalink.GetOrCreateState(guildId.Value);
