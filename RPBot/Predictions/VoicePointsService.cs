@@ -303,14 +303,14 @@ namespace RPBot
             }
         }
 
-        private static long CalculatePointsForUser(SocketGuildUser user, int baseAmount)
+        private long CalculatePointsForUser(SocketGuildUser user, int baseAmount)
         {
-            // У мастера 1.5x костяшек
-            var hasMasterRole = user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase));
+            var config = _getServerConfig(user.Guild.Id);
+            var hasMasterRole = config?.MasterRoleId.HasValue == true && config.MasterRoleId.Value != 0 &&
+                user.Roles.Any(r => r.Id == config.MasterRoleId.Value);
             if (!hasMasterRole)
                 return baseAmount;
 
-            // Базовое значение чётное, поэтому 1.5x даёт целое число
             return (long)(baseAmount * 1.5);
         }
 

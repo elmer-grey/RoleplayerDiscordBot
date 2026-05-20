@@ -88,10 +88,10 @@ namespace RPBot
                         }
 
                         var isAdmin = user.GuildPermissions.Administrator;
-                        var isMaster = user.Roles.Any(r => r.Name.Equals("Мастер НРИ", StringComparison.OrdinalIgnoreCase));
+                        var isMaster = sconfig.MasterRoleId.HasValue && sconfig.MasterRoleId.Value != 0 && user.Roles.Any(r => r.Id == sconfig.MasterRoleId.Value);
                         if (!isAdmin && !isMaster)
                         {
-                            await command.RespondAsync("Создавать прогнозы могут только мастера НРИ или администраторы.", ephemeral: true);
+                            await command.RespondAsync("Создавать прогнозы могут только мастера или администраторы.", ephemeral: true);
                             return;
                         }
 
@@ -155,16 +155,22 @@ namespace RPBot
                             return;
                         }
 
-                        var modal = new ModalBuilder()
-                            .WithTitle("Создать прогноз")
-                            .WithCustomId($"pred_create_modal:{guildId}:{targetMessageChannel.Id}")
-                            .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза")
-                            .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1")
-                            .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2")
-                            .AddTextInput("Продолжительность сбора ставок (минуты)", "duration_minutes", TextInputStyle.Short, placeholder: "Например: 30")
-                            .Build();
+                        // ✅ БАГ 8: Проверка наличия активного прогноза ПЕРЕД показом кнопок
+                        var existingPrediction = _predictionService.GetActive(guildId);
+                        if (existingPrediction != null)
+                        {
+                            await command.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
 
-                        await command.RespondWithModalAsync(modal);
+                        // ✅ НОВОЕ: Показываем кнопки выбора количества исходов
+                        var buttonsBuilder = new ComponentBuilder()
+                            .WithButton("До трёх исходов", customId: $"pred_outcomes:3:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Primary)
+                            .WithButton("До пяти исходов", customId: $"pred_outcomes:5:{guildId}:{targetMessageChannel.Id}", style: ButtonStyle.Success);
+
+                        await command.RespondAsync("Сколько исходов вы хотите создать?", components: buttonsBuilder.Build(), ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 20); // ✅ Уменьшено до 20 сек (быстрое исчезание при отмене события)
                         break;
                     }
 
@@ -179,14 +185,24 @@ namespace RPBot
 
                         if (outcomeNumberOpt == null || amountOpt == null)
                         {
-                            await command.RespondAsync("Укажите outcome (1 или 2) и amount (количество костяшек).", ephemeral: true);
+                            await command.RespondAsync("Укажите outcome (номер исхода) и amount (количество костяшек).", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
 
-                        if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                        if (!int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || outcomeNum < 1)
                         {
-                            await command.RespondAsync("Исход должен быть 1 или 2.", ephemeral: true);
+                            await command.RespondAsync("Неверный номер исхода.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
+
+                        // ✅ Проверка: исход существует
+                        var activePred = _predictionService.GetActive(guildId);
+                        if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
+                        {
+                            var maxOutcome = activePred?.Outcomes.Count ?? 2;
+                            await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
@@ -213,9 +229,19 @@ namespace RPBot
                             return;
                         }
 
-                        if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                        if (outcomeNumberOpt == null || !int.TryParse(outcomeNumberOpt.ToString(), out var outcomeNum) || outcomeNum < 1)
                         {
-                            await command.RespondAsync("Укажите outcome (1 или 2) для завершения прогноза.", ephemeral: true);
+                            await command.RespondAsync("Укажите корректный номер исхода для завершения прогноза.", ephemeral: true);
+                            ScheduleDeleteOriginalResponse(command);
+                            return;
+                        }
+
+                        // ✅ Проверка: исход существует
+                        var activePred = _predictionService.GetActive(guildId);
+                        if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
+                        {
+                            var maxOutcome = activePred?.Outcomes.Count ?? 2;
+                            await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
                             return;
                         }
@@ -243,7 +269,7 @@ namespace RPBot
                         break;
                     }
 
-                    case "status":
+                    case "info": // Баланс и текущий прогноз
                     {
                         if (user == null)
                         {
@@ -272,9 +298,9 @@ namespace RPBot
 
                             if (prediction.Bets.TryGetValue(user.Id, out var bet))
                             {
-                                var outcomeName = bet.OutcomeId == 1 ? prediction.Outcome1.Name : prediction.Outcome2.Name;
-                                sb.AppendLine($"Ваша ставка: {bet.Amount} костяшек на исход '" +
-                                              $"{outcomeName}' (#{bet.OutcomeId})");
+                                var outcome = prediction.GetOutcomeById(bet.OutcomeId);
+                                var outcomeName = outcome?.Name ?? $"Исход {bet.OutcomeId}";
+                                sb.AppendLine($"Ваша ставка: {bet.Amount} костяшек на исход '{outcomeName}' (#{bet.OutcomeId})");
                             }
                             else
                             {
@@ -332,6 +358,41 @@ namespace RPBot
                         break;
                     }
 
+                    case "history":
+                    {
+                        var pageOpt = command.Data.Options.FirstOrDefault(o => o.Name == "page")?.Value;
+                        int page = 0;
+                        if (pageOpt != null && int.TryParse(pageOpt.ToString(), out var p))
+                        {
+                            page = Math.Max(0, p - 1); // Пользователи вводят 1-based, храним 0-based
+                        }
+
+                        var embed = BuildHistoryEmbed(guildId, page);
+                        var components = BuildHistoryComponents(guildId, page);
+
+                        await command.RespondAsync(embed: embed, components: components?.Build(), ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения истории
+                        break;
+                    }
+
+                    case "profile": // Профиль игрока с полной статистикой
+                    {
+                        var targetUser = userOpt ?? command.User;
+                        var embed = BuildStatsEmbed(guildId, targetUser.Id, targetUser.Username);
+
+                        // Статистика видна всем (не ephemeral)
+                        await command.RespondAsync(embed: embed);
+                        break;
+                    }
+
+                    case "achievements":
+                    {
+                        var embed = BuildAchievementsListEmbed(guildId);
+                        await command.RespondAsync(embed: embed, ephemeral: true);
+                        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения достижений
+                        break;
+                    }
+
                     default:
                         await command.RespondAsync("Неизвестное действие для /prediction.", ephemeral: true);
                         ScheduleDeleteOriginalResponse(command);
@@ -344,6 +405,218 @@ namespace RPBot
                 try { await LogError($"PredictionCommand exception: {ex}"); } catch { }
                 try { await command.RespondAsync("Ошибка обработки команды прогноза.", ephemeral: true); } catch { }
             }
+        }
+
+        private Embed BuildHistoryEmbed(ulong guildId, int page)
+        {
+            const int pageSize = 10;
+            var history = _predictionService.GetHistory(guildId, page, pageSize);
+            var totalPages = _predictionService.GetHistoryPageCount(guildId, pageSize);
+
+            var eb = new EmbedBuilder()
+                .WithTitle("📜 История прогнозов")
+                .WithColor(Color.Blue)
+                .WithFooter($"Страница {page + 1} из {Math.Max(1, totalPages)}");
+
+            if (history.Count == 0)
+            {
+                eb.WithDescription("История пуста.");
+                return eb.Build();
+            }
+
+            var sb = new StringBuilder();
+            foreach (var entry in history)
+            {
+                sb.AppendLine($"**📅 {entry.EndTime:dd.MM.yyyy HH:mm}**");
+                sb.AppendLine($"🎯 **{entry.Title}**");
+
+                if (entry.WasCancelled)
+                {
+                    sb.AppendLine("❌ **Отменён** (все ставки возвращены)");
+                    sb.AppendLine($"💎 Общий банк: {entry.TotalPool:N0} костяшек");
+                }
+                else if (entry.WinningOutcomeName != null)
+                {
+                    var winners = entry.Bets.Count(b => b.Won);
+                    sb.AppendLine($"✅ **Победивший исход:** {entry.WinningOutcomeName}");
+                    sb.AppendLine($"💰 **Выигрыш:** {entry.TotalPayout:N0} костяшек");
+                    sb.AppendLine($"💎 **Общий банк:** {entry.TotalPool:N0} костяшек");
+                    sb.AppendLine($"👥 **Участников:** {entry.Bets.Count} ({winners} выиграли)");
+                }
+
+                sb.AppendLine("───────────────────");
+                sb.AppendLine();
+            }
+
+            eb.WithDescription(sb.ToString());
+            return eb.Build();
+        }
+
+        private ComponentBuilder? BuildHistoryComponents(ulong guildId, int page)
+        {
+            const int pageSize = 10;
+            var totalPages = _predictionService.GetHistoryPageCount(guildId, pageSize);
+
+            if (totalPages <= 1)
+                return null;
+
+            var cb = new ComponentBuilder();
+
+            if (page > 0)
+            {
+                cb.WithButton("◄ Назад", $"pred_history_page:{guildId}:{page - 1}", ButtonStyle.Secondary);
+            }
+
+            if (page < totalPages - 1)
+            {
+                cb.WithButton("Вперёд ►", $"pred_history_page:{guildId}:{page + 1}", ButtonStyle.Secondary);
+            }
+
+            return cb;
+        }
+
+        private Embed BuildStatsEmbed(ulong guildId, ulong userId, string username)
+        {
+            var stats = _predictionService.GetUserStats(guildId, userId);
+            var achievements = _predictionService.GetUserAchievements(guildId, userId);
+            var totalAchievements = RPBot.Predictions.AchievementDefinitions.All.Count;
+
+            var eb = new EmbedBuilder()
+                .WithTitle($"📊 Статистика игрока: {username}")
+                .WithColor(stats != null && stats.NetProfit >= 0 ? Color.Green : Color.Red);
+
+            if (stats == null || stats.TotalBets == 0)
+            {
+                eb.WithDescription("Статистика отсутствует. Участвуйте в прогнозах!");
+                return eb.Build();
+            }
+
+            var sb = new StringBuilder();
+
+            // Общая статистика
+            sb.AppendLine("**🎲 Общая статистика:**");
+            sb.AppendLine($"  • Участий в прогнозах: {stats.TotalParticipation}");
+            sb.AppendLine($"  • Всего ставок: {stats.TotalBets}");
+            sb.AppendLine($"  • Средняя ставка: {(stats.TotalBets > 0 ? stats.TotalWagered / stats.TotalBets : 0):N0} костяшек");
+            sb.AppendLine();
+
+            // Результаты
+            sb.AppendLine("**💹 Результаты:**");
+            sb.AppendLine($"  ✅ Выигрышей: {stats.WonBets} ({stats.WinRate:F1}%)");
+            sb.AppendLine($"  ❌ Проигрышей: {stats.LostBets} ({(100 - stats.WinRate):F1}%)");
+
+            if (stats.CurrentStreak > 0)
+                sb.AppendLine($"  📈 Текущая серия: {stats.CurrentStreak} побед");
+            else if (stats.CurrentStreak < 0)
+                sb.AppendLine($"  📉 Текущая серия: {Math.Abs(stats.CurrentStreak)} поражений");
+
+            sb.AppendLine($"  🔥 Лучшая серия: {stats.BestStreak} побед");
+            sb.AppendLine();
+
+            // Финансы
+            sb.AppendLine("**💰 Финансы:**");
+            sb.AppendLine($"  📥 Поставлено: {stats.TotalWagered:N0} костяшек");
+            sb.AppendLine($"  📤 Прибыль от выигрышей: {stats.TotalWon:N0} костяшек");
+            sb.AppendLine($"  💔 Потеряно на проигрышах: {stats.TotalLost:N0} костяшек");
+
+            var profitSign = stats.NetProfit >= 0 ? "+" : "";
+            var profitEmoji = stats.NetProfit >= 0 ? "💎" : "💔";
+            sb.AppendLine($"  {profitEmoji} Чистая прибыль: {profitSign}{stats.NetProfit:N0}");
+            sb.AppendLine($"  📊 ROI: {profitSign}{stats.ROI:F1}%");
+
+            if (stats.HighestSingleWin > 0)
+                sb.AppendLine($"  🏆 Лучший выигрыш: +{stats.HighestSingleWin:N0} костяшек");
+            sb.AppendLine();
+
+            // Достижения
+            if (achievements.Count > 0)
+            {
+                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ ({achievements.Count}/{totalAchievements}):**");
+                sb.AppendLine();
+
+                var grouped = achievements
+                    .Select(a => RPBot.Predictions.AchievementDefinitions.All.GetValueOrDefault(a.AchievementId))
+                    .Where(def => def != null)
+                    .GroupBy(def => def!.Type);
+
+                foreach (var group in grouped)
+                {
+                    foreach (var def in group.Take(5)) // Показываем первые 5 из каждой категории
+                    {
+                        sb.AppendLine($"  {def!.Icon} **{def.Name}**");
+                        sb.AppendLine($"     {def.Description}");
+                        sb.AppendLine();
+                    }
+                }
+            }
+            else
+            {
+                sb.AppendLine($"**🏅 ДОСТИЖЕНИЯ (0/{totalAchievements}):**");
+                sb.AppendLine("Участвуйте в прогнозах чтобы получать достижения!");
+            }
+
+            eb.WithDescription(sb.ToString());
+            return eb.Build();
+        }
+
+        private Embed BuildAchievementsListEmbed(ulong guildId)
+        {
+            var eb = new EmbedBuilder()
+                .WithTitle($"🏅 Все достижения ({RPBot.Predictions.AchievementDefinitions.All.Count})")
+                .WithColor(Color.Purple);
+
+            var sb = new StringBuilder();
+
+            // Группируем по типам
+            var grouped = RPBot.Predictions.AchievementDefinitions.All.Values
+                .GroupBy(a => a.Type)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in grouped)
+            {
+                // Заголовок категории
+                var categoryName = group.Key switch
+                {
+                    RPBot.Predictions.AchievementType.Beginner => "🌟 НОВИЧКОВЫЕ",
+                    RPBot.Predictions.AchievementType.Financial => "💰 ФИНАНСОВЫЕ",
+                    RPBot.Predictions.AchievementType.Accuracy => "🎯 ТОЧНОСТЬ",
+                    RPBot.Predictions.AchievementType.Risk => "🚀 РИСК",
+                    RPBot.Predictions.AchievementType.Strategy => "📈 СТРАТЕГИЯ",
+                    RPBot.Predictions.AchievementType.Special => "⭐ СПЕЦИАЛЬНЫЕ",
+                    _ => "ДРУГОЕ"
+                };
+
+                sb.AppendLine($"**{categoryName}**");
+                sb.AppendLine();
+
+                // ✅ Сортировка по Order, затем по Rarity
+                foreach (var def in group.OrderBy(a => a.Order).ThenBy(a => a.Rarity))
+                {
+                    // Считаем сколько людей получили это достижение
+                    int ownersCount = 0;
+                    var allStats = _predictionService.GetAllUserStats(guildId);
+                    foreach (var userStats in allStats)
+                    {
+                        var userAchievements = _predictionService.GetUserAchievements(guildId, userStats.UserId);
+                        if (userAchievements.Any(a => a.AchievementId == def.Id))
+                        {
+                            ownersCount++;
+                        }
+                    }
+
+                    var repeatableStr = def.Repeatable ? " 🔄" : "";
+                    var ownersStr = ownersCount > 0 
+                        ? $"({ownersCount} {(ownersCount == 1 ? "игрок" : ownersCount < 5 ? "игрока" : "игроков")})"
+                        : "(Никто)";
+
+                    sb.AppendLine($"  {def.Icon} **{def.Name}**{repeatableStr} {ownersStr}");
+                    sb.AppendLine($"     _{def.Description}_");
+                    sb.AppendLine();
+                }
+            }
+
+            eb.WithDescription(sb.ToString());
+            return eb.Build();
         }
     }
 }

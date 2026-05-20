@@ -1610,6 +1610,8 @@ namespace RPBot
                 {
                     _historyIndex--;
                     _inputField.Text = _commandHistory[_historyIndex];
+                    // ✅ Перемещаем курсор в конец строки
+                    _inputField.CursorPosition = _inputField.Text.Length;
                 }
                 args.Handled = true;
             }
@@ -1619,11 +1621,14 @@ namespace RPBot
                 {
                     _historyIndex++;
                     _inputField.Text = _commandHistory[_historyIndex];
+                    // ✅ Перемещаем курсор в конец строки
+                    _inputField.CursorPosition = _inputField.Text.Length;
                 }
                 else if (_historyIndex == _commandHistory.Count - 1)
                 {
                     _historyIndex = _commandHistory.Count;
                     _inputField.Text = "";
+                    _inputField.CursorPosition = 0;
                 }
                 args.Handled = true;
             }
@@ -1967,19 +1972,6 @@ namespace RPBot
 
         public void ShowSystemReady(string botName, int serverCount, double initTime)
         {
-            string initTimeStr;
-            if (initTime < 1)
-                initTimeStr = $"{(initTime * 1000):F0} мс";
-            else if (initTime < 60)
-                initTimeStr = $"{initTime:F1} сек";
-            else
-            {
-                int minutes = (int)initTime / 60;
-                double seconds = initTime % 60;
-                initTimeStr = $"{minutes} мин {seconds:F0} сек";
-            }
-
-            // Показываем только краткое уведомление о готовности консоли
             var readyShort = "Консоль готова к приёму команд. Введите 'help'";
 
             if (Application.MainLoop == null || _isDisposed || _logPanel == null)

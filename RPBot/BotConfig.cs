@@ -98,7 +98,24 @@ namespace RPBot
         // Директория с картинками для бросков (например, Numbers)
 		public string NumbersDirectory { get; set; } = Path.Combine(SettingsFolderName, "Numbers");
 
-        // === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
+		// === GOOGLE SHEETS ===
+
+		// Путь к файлу credentials (сервисный аккаунт JSON), относительный или абсолютный
+		public string? GoogleSheetsCredentialsPath { get; set; } = "google_credentials.json";
+
+		// ID таблицы (из URL: .../spreadsheets/d/{ID}/edit)
+		public string? GoogleSpreadsheetId { get; set; } = null;
+
+		// Название листа, куда пишется статистика
+		public string GoogleSheetName { get; set; } = "2026 год";
+
+		// Первая строка с данными (строка 1 = заголовки, данные с 2)
+		public int GoogleSheetDataStartRow { get; set; } = 2;
+
+		// Включить запись статистики сессий в Google Sheets
+		public bool GoogleSheetsEnabled { get; set; } = false;
+
+		// === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
 
 		// Включить/выключить ежедневную плановую перезагрузку
 		public bool DailyRestartEnabled { get; set; } = false;
@@ -132,12 +149,21 @@ namespace RPBot
 					// пересохраняем, чтобы они появились в файле.
 					var needsResave = false;
 					if (!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
-						!json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
-						!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
-						!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
-					{
-					needsResave = true;
-				}
+							!json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
+							!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
+							!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
+						{
+							needsResave = true;
+						}
+
+						if (!json.Contains("\"GoogleSheetsEnabled\"", StringComparison.Ordinal) ||
+							!json.Contains("\"GoogleSpreadsheetId\"", StringComparison.Ordinal) ||
+							!json.Contains("\"GoogleSheetName\"", StringComparison.Ordinal) ||
+							!json.Contains("\"GoogleSheetsCredentialsPath\"", StringComparison.Ordinal) ||
+							!json.Contains("\"GoogleSheetDataStartRow\"", StringComparison.Ordinal))
+						{
+							needsResave = true;
+						}
 
                // Telegram settings moved to serverconfigs.json (ServerConfig)
                 if (json.Contains("\"TelegramEnabled\"", StringComparison.Ordinal) ||

@@ -137,209 +137,224 @@ namespace RPBot
 
         private List<SlashCommandBuilder> GetAllCommands()
         {
-            return new List<SlashCommandBuilder>
-            {
-                new SlashCommandBuilder()
-                    .WithName("help")
-                    .WithDescription("Выводит список доступных команд."),
+			return new List<SlashCommandBuilder>
+			{
+				new SlashCommandBuilder()
+					.WithName("help")
+					.WithDescription("Показывает список всех доступных команд бота"),
 
-                new SlashCommandBuilder()
-                    .WithName("help_r")
-                    .WithDescription("Выводит список команд для бросков кубов."),
+				new SlashCommandBuilder()
+					.WithName("help_r")
+					.WithDescription("Справка по системе бросков кубиков"),
 
-                new SlashCommandBuilder()
-                    .WithName("help_gs")
-                    .WithDescription("Выводит список команд, которые используются для подсчёта времени игры."),
+				new SlashCommandBuilder()
+					.WithName("help_gs")
+					.WithDescription("Справка по управлению игровыми сессиями и подсчёту времени"),
 
-                new SlashCommandBuilder()
-                    .WithName("help_predict")
-                    .WithDescription("Выводит справку по системе прогнозов и ставок на костяшки."),
+				new SlashCommandBuilder()
+					.WithName("help_predict")
+					.WithDescription("Справка по системе прогнозов и ставок на костяшки"),
 
-                new SlashCommandBuilder()
-                    .WithName("clr")
-                    .WithDescription("Удаляет выбранное количество сообщений.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений, которые нужно удалить", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("clr")
+					.WithDescription("Удаляет указанное количество сообщений из чата")
+					.AddOption("input", ApplicationCommandOptionType.String, "Количество сообщений для удаления (1-100)", isRequired: true),
 
-                new SlashCommandBuilder()
-                    .WithName("serverinfo")
-                    .WithDescription("Показывает информацию о текущем сервере."),
+				new SlashCommandBuilder()
+					.WithName("serverinfo")
+					.WithDescription("Показывает детальную информацию о текущем сервере"),
 
-                new SlashCommandBuilder()
-                    .WithName("bug_report")
-                    .WithDescription("Отправка сообщения об ошибке, которая связана с ботом, или любое предложение по его улучшению.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Введите описание ошибки бота или ваше предложение, которое можно реализовать", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("bug_report")
+					.WithDescription("Отправить отчёт об ошибке или предложение по улучшению бота")
+					.AddOption("input", ApplicationCommandOptionType.String, "Описание проблемы или предложение", isRequired: true),
 
-                new SlashCommandBuilder()
-                    .WithName("settings")
-					.WithDescription("Управление настройками бота на этом сервере (для администраторов и роли суперпользователя).")
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("action")
-                        .WithDescription("Действие: get, set, list, reset")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .AddChoice("get", "get")
-                        .AddChoice("set", "set")
-                        .AddChoice("list", "list")
-						.AddChoice("reset", "reset")
-						.AddChoice("reload", "reload")
-						.AddChoice("help", "help")
-                        .WithRequired(true))
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("key")
-                        .WithDescription("Ключ настройки")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .AddChoice("moderation_channel", "moderation_channel")
-                        .AddChoice("welcome_channel", "welcome_channel")
-                        .AddChoice("roll_channel", "roll_channel")
-                        .AddChoice("stats_channel", "stats_channel")
-                        .AddChoice("record_channel", "record_channel")
-                        .AddChoice("welcome_message", "welcome_message")
-                        .AddChoice("line_message", "line_message")
-                        .AddChoice("general_rg_channel", "general_rg_channel")
-                        .AddChoice("default_role", "default_role")
-						.AddChoice("super_user_role", "super_user_role")
-                        .AddChoice("swear_filter", "swear_filter")
-                        .AddChoice("swear_words", "swear_words")
-                        .AddChoice("predictions", "predictions")
-                        .AddChoice("event_voice_channel", "event_voice_channel")
-                        .WithRequired(false))
-                    .AddOption("value", ApplicationCommandOptionType.String, "Значение для установки (ID канала, текст, true/false для переключателей)")
-                    .AddOption("channel", ApplicationCommandOptionType.Channel, "Канал (альтернативный способ указать канал)")
-					.AddOption("toggle", ApplicationCommandOptionType.Boolean, "Переключатель (true/false)") ,
+				new SlashCommandBuilder()
+					.WithName("settings")
+					.WithDescription("Управление настройками бота на сервере (только для администраторов)")
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("action")
+						.WithDescription("Выбор действия с настройками")
+						.WithType(ApplicationCommandOptionType.String)
+						.AddChoice("Получить значение настройки", "get")
+						.AddChoice("Установить новое значение", "set")
+						.AddChoice("Показать все настройки", "list")
+						.AddChoice("Сбросить настройки сервера", "reset")
+						.AddChoice("Перезагрузить из файла", "reload")
+						.AddChoice("Показать справку", "help")
+						.WithRequired(true))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("key")
+						.WithDescription("Ключ настройки для изменения")
+						.WithType(ApplicationCommandOptionType.String)
+						.AddChoice("Канал модерации", "moderation_channel")
+						.AddChoice("Канал приветствий", "welcome_channel")
+						.AddChoice("Канал бросков кубиков", "roll_channel")
+						.AddChoice("Канал статистики", "stats_channel")
+						.AddChoice("Канал записи времени", "record_channel")
+						.AddChoice("Сообщение приветствия", "welcome_message")
+						.AddChoice("Сообщение-линия", "line_message")
+						.AddChoice("Общий ролевой канал", "general_rg_channel")
+						.AddChoice("Роль по умолчанию", "default_role")
+                 .AddChoice("Роль мастера", "master_role")
+						.AddChoice("Роль суперпользователя", "super_user_role")
+						.AddChoice("Фильтр мата (вкл/выкл)", "swear_filter")
+						.AddChoice("Список матерных слов", "swear_words")
+						.AddChoice("Прогнозы (вкл/выкл)", "predictions")
+                        .AddChoice("Картинки для бросков (вкл/выкл)", "roll_pictures")
+						.AddChoice("Голосовой канал события", "event_voice_channel")
+						.WithRequired(false))
+					.AddOption("value", ApplicationCommandOptionType.String, "Новое значение настройки")
+					.AddOption("channel", ApplicationCommandOptionType.Channel, "Выбор канала из списка")
+					.AddOption("toggle", ApplicationCommandOptionType.Boolean, "Переключатель включения/выключения") ,
+
+				new SlashCommandBuilder()
+					.WithName("roll_pictures")
+					.WithDescription("Включает или выключает картинки для бросков кубиков")
+					.AddOption("enabled", ApplicationCommandOptionType.Boolean, "Включить картинки для бросков", isRequired: false),
 
 				new SlashCommandBuilder()
 					.WithName("prediction")
-					.WithDescription("Игровые прогнозы и ставки на костяшки.")
+					.WithDescription("Прогнозы и ставки на костяшки")
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("action")
-						.WithDescription("Действие: create, bet, resolve, cancel, status, adjust_points")
+						.WithDescription("Выбор действия с прогнозами")
 						.WithType(ApplicationCommandOptionType.String)
-						.AddChoice("create", "create")
-						.AddChoice("bet", "bet")
-						.AddChoice("resolve", "resolve")
-						.AddChoice("cancel", "cancel")
-						.AddChoice("status", "status")
-						.AddChoice("adjust_points", "adjust_points")
+						.AddChoice("Создать прогноз", "create")
+						.AddChoice("Сделать ставку", "bet")
+						.AddChoice("Завершить прогноз", "resolve")
+						.AddChoice("Баланс и текущий прогноз", "info")
+						.AddChoice("Отменить прогноз", "cancel")
+						.AddChoice("История прогнозов", "history")
+						.AddChoice("Профиль игрока", "profile")
+						.AddChoice("Все достижения", "achievements")
+						.AddChoice("Изменить баланс (только админ)", "adjust_points")
 						.WithRequired(true))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("title")
-						.WithDescription("Название прогноза (для create)")
+						.WithDescription("Название прогноза")
 						.WithType(ApplicationCommandOptionType.String)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("outcome1")
-						.WithDescription("Исход 1 (для create)")
+						.WithDescription("Название первого исхода")
 						.WithType(ApplicationCommandOptionType.String)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("outcome2")
-						.WithDescription("Исход 2 (для create)")
+						.WithDescription("Название второго исхода")
 						.WithType(ApplicationCommandOptionType.String)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("duration_minutes")
-						.WithDescription("Сколько минут открыт приём ставок (для create)")
+						.WithDescription("Продолжительность приёма ставок в минутах")
 						.WithType(ApplicationCommandOptionType.Integer)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("outcome")
-						.WithDescription("Исход (1 или 2) для bet/resolve")
+						.WithDescription("Номер исхода от 1 до 5")
 						.WithType(ApplicationCommandOptionType.Integer)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("amount")
-						.WithDescription("Количество костяшек для ставки (для bet) или изменение баланса (для adjust_points)")
+						.WithDescription("Количество костяшек")
 						.WithType(ApplicationCommandOptionType.Integer)
 						.WithRequired(false))
 					.AddOption(new SlashCommandOptionBuilder()
 						.WithName("user")
-						.WithDescription("Пользователь для ручной корректировки баланса (adjust_points)")
+						.WithDescription("Выбор пользователя")
 						.WithType(ApplicationCommandOptionType.User)
+						.WithRequired(false))
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("page")
+						.WithDescription("Номер страницы истории")
+						.WithType(ApplicationCommandOptionType.Integer)
 						.WithRequired(false)) ,
 
-                new SlashCommandBuilder()
-                    .WithName("roll")
-                    .WithDescription("Выполняет бросок кубика с заданными условиями. Подробнее в команде /help_r.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: XdY, где X - количество бросков, Y - верхняя граница. Подробнее в команде `/help_r`", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("roll")
+					.WithDescription("Выполняет бросок кубика по указанной формуле")
+					.AddOption("input", ApplicationCommandOptionType.String, "Формула броска (например: 2d6+3, 1d20). Подробности: /help_r", isRequired: true),
 
-                new SlashCommandBuilder()
-                    .WithName("roll20")
-                    .WithDescription("Выполняет бросок кубика d20."),
+				new SlashCommandBuilder()
+					.WithName("roll20")
+					.WithDescription("Выполняет бросок двадцатигранного кубика d20"),
 
-                new SlashCommandBuilder()
-                    .WithName("queue")
-                    .WithDescription("Запускает создание очереди.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: X, где X - количество участников сцены", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("queue")
+					.WithDescription("Создаёт очередь участников для сцены")
+					.AddOption("input", ApplicationCommandOptionType.String, "Количество участников сцены", isRequired: true),
 
-                new SlashCommandBuilder()
-                    .WithName("bwonk")
-                    .WithDescription("Бонькнуть пользователя или посмотреть статистику")
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("action")
-                        .WithDescription("Действие")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .AddChoice("bonk", "bonk")
-                        .AddChoice("stats", "stats")
-                        .WithRequired(false))
-                    .AddOption("target", ApplicationCommandOptionType.User, "Пользователь (для bonk обязательно, для stats опционально)", isRequired: false),
+				new SlashCommandBuilder()
+					.WithName("bwonk")
+					.WithDescription("Бонькнуть пользователя или посмотреть статистику бонков")
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("action")
+						.WithDescription("Выбор действия")
+						.WithType(ApplicationCommandOptionType.String)
+						.AddChoice("Бонькнуть", "bonk")
+						.AddChoice("Статистика", "stats")
+						.WithRequired(false))
+					.AddOption("target", ApplicationCommandOptionType.User, "Пользователь для бонка или просмотра статистики", isRequired: false),
 
-                new SlashCommandBuilder()
-                    .WithName("q")
-                    .WithDescription("Добавляет вас в очередь на выполнение действия.")
-                    .AddOption("input", ApplicationCommandOptionType.String, "Формат: dY, где Y - верхняя граница", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("q")
+					.WithDescription("Добавляет вас в очередь с броском инициативы")
+					.AddOption("input", ApplicationCommandOptionType.String, "Формула броска (например: d20)", isRequired: true),
 
-                new SlashCommandBuilder()
-                    .WithName("stop_q")
-                    .WithDescription("Останавливает текущую очередь, если она активна."),
+				new SlashCommandBuilder()
+					.WithName("stop_q")
+					.WithDescription("Останавливает текущую активную очередь"),
 
-                new SlashCommandBuilder()
-                    .WithName("start")
-                    .WithDescription("Запустить игру.")
-                    .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры", isRequired: true)
-                    .AddOption("master", ApplicationCommandOptionType.User, "Имя мастера, проводящего игру", isRequired: false)
-                    .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии", isRequired: false),
+				new SlashCommandBuilder()
+					.WithName("start")
+					.WithDescription("Начать новую игровую сессию")
+					.AddOption("game_name", ApplicationCommandOptionType.String, "Название игры или сцены", isRequired: true)
+					.AddOption("master", ApplicationCommandOptionType.User, "Мастер игры", isRequired: false)
+					.AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии к сессии", isRequired: false),
 
-                new SlashCommandBuilder()
-                    .WithName("pause")
-                    .WithDescription("Приостановить игру."),
+				new SlashCommandBuilder()
+					.WithName("pause")
+					.WithDescription("Приостановить текущую игровую сессию"),
 
-                new SlashCommandBuilder()
-                    .WithName("resume")
-                    .WithDescription("Продолжить игру."),
+				new SlashCommandBuilder()
+					.WithName("resume")
+					.WithDescription("Возобновить приостановленную игровую сессию"),
 
-                new SlashCommandBuilder()
-                    .WithName("stop")
-                    .WithDescription("Остановить игру."),
+				new SlashCommandBuilder()
+					.WithName("stop")
+					.WithDescription("Завершить текущую игровую сессию"),
 
-                new SlashCommandBuilder()
-                    .WithName("edit_session")
-                    .WithDescription("Изменить параметры текущей игры (только для мастеров)")
-                    .AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
-                    .AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер", isRequired: false)
-                    .AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
+				new SlashCommandBuilder()
+					.WithName("edit_session")
+					.WithDescription("Изменить параметры текущей игровой сессии (только для мастеров)")
+					.AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
+					.AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер игры", isRequired: false)
+					.AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
 
-                new SlashCommandBuilder()
-                    .WithName("close_chat")
-                    .WithDescription("Закрывает чат/ветку на форуме: чат — в архив, ветку — блокирует.")
-                    .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
+				new SlashCommandBuilder()
+					.WithName("close_chat")
+					.WithDescription("Архивирует текстовый канал или блокирует ветку форума")
+					.AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
 
-                new SlashCommandBuilder()
-                    .WithName("open_chat")
-                    .WithDescription("Возвращает закрытый чат в открытый статус и перемещает в указанную категорию.")
-                    .AddOption("category", ApplicationCommandOptionType.String, "Название категории, в которую нужно переместить чат", isRequired: true),
+				new SlashCommandBuilder()
+					.WithName("open_chat")
+					.WithDescription("Возвращает канал из архива и перемещает в указанную категорию")
+					.AddOption("category", ApplicationCommandOptionType.String, "Название категории для перемещения", isRequired: true),
 
 
-                new SlashCommandBuilder()
-                    .WithName("event_notify")
-                    .WithDescription("Личные уведомления о новых событиях (в личные сообщения)")
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("action")
-                        .WithDescription("Действие")
-                        .WithType(ApplicationCommandOptionType.String)
-                        .AddChoice("subscribe", "subscribe")
-                        .AddChoice("unsubscribe", "unsubscribe")
-                        .AddChoice("status", "status")
-                        .WithRequired(true)),
-            };
+				new SlashCommandBuilder()
+					.WithName("event_notify")
+					.WithDescription("Управление личными уведомлениями о новых событиях")
+					.AddOption(new SlashCommandOptionBuilder()
+						.WithName("action")
+						.WithDescription("Выбор действия с уведомлениями")
+						.WithType(ApplicationCommandOptionType.String)
+						.AddChoice("Подписаться на уведомления", "subscribe")
+						.AddChoice("Отписаться от уведомлений", "unsubscribe")
+						.AddChoice("Проверить статус подписки", "status")
+						.WithRequired(true)),
+			};
         }
     }
 }

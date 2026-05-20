@@ -1,4 +1,4 @@
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,69 +20,6 @@ using System.Threading.Tasks;
 
 namespace RPBot
 {
-    public class ServerConfig
-    {
-        public ulong GuildID { get; set; }
-        public ulong ModerateChannelID { get; set; }
-        public ulong WelcomeChannelID { get; set; }
-        public ulong GeneralRGChannelID { get; set; }
-        public ulong RollChannelID { get; set; }
-        public ulong StatsChannelID { get; set; }
-        public ulong RecordChannelID { get; set; }
-        public string WelcomeMessage { get; set; } = string.Empty;
-        public string LineMessage { get; set; } = string.Empty;
-        public ulong DefaultRoleID { get; set; }
-		// Роль "суперпользователя" на сервере, имеющая расширенные права управления ботом
-		public ulong? SuperUserRoleId { get; set; } = null;
-        // Включить фильтр мата для этого сервера
-        public bool SwearFilterEnabled { get; set; } = false;
-        // Доп. список слов для фильтрации на уровне сервера (если пуст — используются BotConfig.DefaultSwearWords)
-        public List<string> SwearWords { get; set; } = new List<string>();
-		// Включены ли игровые прогнозы/ставки и начисление костяшек на этом сервере
-		public bool PredictionsEnabled { get; set; } = true;
-		// Голосовой канал события (event), в котором начисляются костяшки
-		public ulong EventVoiceChannelID { get; set; }
-
-        // === TELEGRAM (уведомления о событиях) ===
-        public bool TelegramEnabled { get; set; } = false;
-        public string? TelegramBotToken { get; set; } = null;
-        public long TelegramChatId { get; set; } = 0;
-           public int TelegramMessageThreadId { get; set; } = 0;
-    }
-
-        // Modal handling moved inside Program class
-
-    public enum StartupType
-    {
-        FirstStart,
-        Restart,
-        Reconnect
-    }
-
-	public interface IBotController
-	{
-		bool ShouldExit { get; }
-		bool ShouldRestart { get; }
-		Task RestartAsync();
-		Task StopAsync();
-
-		// Управление конфигурациями серверов (доступно из UI)
-		Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync();
-		Task<ServerConfig?> GetServerConfigAsync(ulong guildId);
-		Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null);
-		Task ResetServerConfigAsync(ulong guildId);
-		Task ReloadServerConfigsAsync();
-	}
-
-	/// <summary>
-	/// Результат проверки здоровья системы
-	/// </summary>
-	public class SystemHealthCheck
-	{
-		public string SystemName { get; set; } = string.Empty;
-		public bool IsHealthy { get; set; }
-		public string Message { get; set; } = string.Empty;
-	}
  public partial class Program : IDisposable, IBotController
     {
         private DiscordSocketClient _client;
@@ -104,8 +41,11 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
+        private GoogleSheetsService? _googleSheetsService;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
+
+        private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
 
         private Task? _backgroundMonitoringTask;
 		private CancellationTokenSource? _dailyRestartCts;
@@ -116,8 +56,8 @@ namespace RPBot
         private TextWriter? _originalErr;
 
         public static Action<string>? CommandLogSink { get; private set; }
+        public static Func<ulong, ServerConfig?>? ServerConfigResolver { get; private set; }
 
-        // Centralized cleanup for services to avoid leaks when recreating
         private void CleanupServices()
         {
             try
@@ -168,8 +108,38 @@ namespace RPBot
             }
         }
 
+        private Task SetupDiscordEvents()
+        {
+            _client.Ready -= OnReady;
+            _client.Disconnected -= OnDisconnected;
+            _client.UserJoined -= UserJoined;
+            _client.MessageReceived -= HandleCommandAsync;
+            _client.SlashCommandExecuted -= OnSlashCommandExecuted;
+            _client.SlashCommandExecuted -= BwonkCommand;
+            _client.ModalSubmitted -= HandleModalSubmitted;
+            _client.ButtonExecuted -= HandleButtonExecuted;
+            _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
+            _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
+            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
+            _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
+            _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
 
+            _client.Ready += OnReady;
+            _client.Disconnected += OnDisconnected;
+            _client.UserJoined += UserJoined;
+            _client.MessageReceived += HandleCommandAsync;
+            _client.SlashCommandExecuted += OnSlashCommandExecuted;
+            _client.SlashCommandExecuted += BwonkCommand;
+            _client.ModalSubmitted += HandleModalSubmitted;
+            _client.ButtonExecuted += HandleButtonExecuted;
+            _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
+            _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
+            _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
+            _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
+            _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
 
+            return LogStartup("│   События Discord настроены    │");
+        }
         private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
         {
             // customId: pred_bet:<guildId>
@@ -188,8 +158,6 @@ namespace RPBot
                 _ = Task.Run(() => _pointsUserIndex.SaveAsync());
             }
             catch { }
-            // Show ephemeral balance and a confirm button before modal
-            // Check active prediction exists to avoid showing intermediate UI when none
             var active = _predictionService.GetActive(guildId);
             if (active == null || active.IsResolved)
             {
@@ -219,7 +187,6 @@ namespace RPBot
                 return;
             }
 
-            // Remember the ephemeral balance interaction so we can delete it as soon as the modal is submitted.
             _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
 
             var active = _predictionService?.GetActive(guildId);
@@ -230,7 +197,10 @@ namespace RPBot
             Modal modal;
             if (hasExistingBet && existingBet != null)
             {
-                var existingOutcomeName = existingBet!.OutcomeId == 1 ? active!.Outcome1.Name : active!.Outcome2.Name;
+                // ✅ Обновлено: динамический поиск имени исхода
+                var existingOutcome = active!.GetOutcomeById(existingBet!.OutcomeId);
+                var existingOutcomeName = existingOutcome?.Name ?? $"Исход {existingBet.OutcomeId}";
+
                 modal = new ModalBuilder()
                     .WithTitle("Увеличить ставку")
                     .WithCustomId($"pred_bet_add_modal:{guildId}")
@@ -239,25 +209,175 @@ namespace RPBot
             }
             else
             {
+                // ✅ Обновлено: показываем список исходов с названиями
+                var outcomeCount = active?.Outcomes.Count ?? 2;
+                var outcomesList = active != null 
+                    ? string.Join(", ", active.Outcomes.Select(o => $"{o.Id}: {o.Name}"))
+                    : "1: Исход 1, 2: Исход 2";
+
+                var useCompactOutcomeLabels = active?.UseCompactOutcomeLabels ?? false;
+                var outcomePlaceholder = useCompactOutcomeLabels
+                    ? $"Выберите 1-{outcomeCount}"
+                    : outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
+
+                var label = useCompactOutcomeLabels
+                    ? "Исход"
+                    : $"Исход ({outcomesList})";
+
                 modal = new ModalBuilder()
                     .WithTitle("Сделать ставку")
                     .WithCustomId($"pred_bet_modal:{guildId}")
-                    .AddTextInput("Исход (1 или 2)", "outcome", TextInputStyle.Short, placeholder: "1 или 2")
+                    .AddTextInput(label, "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
                     .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
                     .Build();
             }
 
             await component.RespondWithModalAsync(modal);
-            // Note: original ephemeral balance message will be deleted by ScheduleDeleteOriginalResponse
         }
 
-        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction)
+        /// <summary>
+        /// Проверяет наличие активного события на указанном голосовом канале
+        /// </summary>
+        private bool IsActiveEventOnChannel(ulong guildId, ulong channelId)
+        {
+            var guild = _client.GetGuild(guildId);
+            if (guild == null) return false;
+
+            return guild.Events.Any(e =>
+                e.Status == GuildScheduledEventStatus.Active &&
+                e.Channel != null &&
+                e.Channel.Id == channelId);
+        }
+
+        private async Task HandlePredictionOutcomesButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_outcomes:<count>:<guildId>:<channelId>
+            // count: 3 или 5
+            if (parts.Length < 4) return;
+            if (!int.TryParse(parts[1], out var outcomesCount)) return;
+            if (!ulong.TryParse(parts[2], out var guildId)) return;
+            if (!ulong.TryParse(parts[3], out var channelId)) return;
+
+            try
+            {
+                if (!IsActiveEventOnChannel(guildId, channelId))
+                {
+                    await component.RespondAsync("⚠️ Активное событие в этом голосовом канале завершено или отсутствует. Создание прогноза невозможно.", ephemeral: true);
+                    return;
+                }
+
+                var existingPrediction = _predictionService.GetActive(guildId);
+                if (existingPrediction != null)
+                {
+                    await component.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                    return;
+                }
+
+                if (outcomesCount == 3)
+                {
+                    var modal = new ModalBuilder()
+                        .WithTitle("Создать прогноз")
+                        .WithCustomId($"pred_create_modal_3:{guildId}:{channelId}")
+                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
+                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
+                        .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
+                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                        .Build();
+
+                    await component.RespondWithModalAsync(modal);
+                }
+                else if (outcomesCount == 5)
+                {
+                    var modal = new ModalBuilder()
+                        .WithTitle("Создать прогноз (шаг 1/2)")
+                        .WithCustomId($"pred_create_step1:{guildId}:{channelId}")
+                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                        .Build();
+
+                    await component.RespondWithModalAsync(modal);
+                }
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("HandlePredictionOutcomesButton", ex, $"guild={guildId} channel={channelId} count={outcomesCount}").ConfigureAwait(false);
+                try { await component.RespondAsync("Произошла ошибка при открытии формы. Попробуйте ещё раз.", ephemeral: true); } catch { }
+            }
+        }
+
+        private async Task HandlePredictionContinueStep2Button(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_continue_step2:<guildId>:<channelId>
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            if (!ulong.TryParse(parts[2], out var channelId)) return;
+
+            try
+            {
+                // Читаем данные из словаря
+                var key = $"{guildId}:{channelId}:{component.User.Id}";
+                if (!_pendingPredictionCreate.TryGetValue(key, out var data))
+                {
+                    await component.RespondAsync("Данные первого шага не найдены. Начните сначала.", ephemeral: true);
+                    return;
+                }
+
+                var title = data.title;
+
+                // Показываем второй модал с 5 исходами
+                var step2Modal = new ModalBuilder()
+                    .WithTitle($"Прогноз: {(title.Length > 20 ? title.Substring(0, 20) + "..." : title)} (2/2)")
+                    .WithCustomId($"pred_create_step2:{guildId}:{channelId}")
+                    .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
+                    .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Обязательно", maxLength: 80)
+                    .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                    .AddTextInput("Исход 4 (опц.)", "outcome4", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                    .AddTextInput("Исход 5 (опц.)", "outcome5", TextInputStyle.Short, placeholder: "Необязательно", required: false, maxLength: 80)
+                    .Build();
+
+                await component.RespondWithModalAsync(step2Modal);
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("HandlePredictionContinueStep2Button", ex, $"guild={guildId} channel={channelId} user={component.User.Id}").ConfigureAwait(false);
+                try { await component.RespondAsync("Произошла ошибка. Попробуйте начать сначала.", ephemeral: true); } catch { }
+            }
+        }
+
+        private async Task HandlePredictionHistoryPageButton(SocketMessageComponent component, string[] parts)
+        {
+            // customId: pred_history_page:<guildId>:<page>
+            if (parts.Length < 3) return;
+            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            if (!int.TryParse(parts[2], out var page)) return;
+
+            try
+            {
+                // Используем метод из Program.Prediction.cs (partial class)
+                var embed = BuildHistoryEmbed(guildId, page);
+                var components = BuildHistoryComponents(guildId, page);
+
+                await component.UpdateAsync(msg =>
+                {
+                    msg.Embed = embed;
+                    msg.Components = components?.Build();
+                });
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}").ConfigureAwait(false);
+                try { await component.RespondAsync("Ошибка при переключении страницы.", ephemeral: true); } catch { }
+            }
+        }
+
+        private void ScheduleDeleteOriginalResponse(SocketInteraction interaction, int delaySeconds = 30)
         {
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
                     try { await interaction.DeleteOriginalResponseAsync(); } catch { }
                 }
                 catch { }
@@ -501,9 +621,18 @@ namespace RPBot
                     ? overrides.DefaultRoleID
                     : defaults.DefaultRoleID,
 
+                MasterRoleId = overrides.MasterRoleId.HasValue && overrides.MasterRoleId.Value != 0
+                    ? overrides.MasterRoleId
+                    : defaults.MasterRoleId,
+
+                SuperUserRoleId = overrides.SuperUserRoleId.HasValue && overrides.SuperUserRoleId.Value != 0
+                    ? overrides.SuperUserRoleId
+                    : defaults.SuperUserRoleId,
+
                 // Булевые флаги трактуем как явные значения из serverconfig
                 SwearFilterEnabled = overrides.SwearFilterEnabled,
                 PredictionsEnabled = overrides.PredictionsEnabled,
+                RollPicturesEnabled = overrides.RollPicturesEnabled,
                 EventVoiceChannelID = overrides.EventVoiceChannelID != 0 ? overrides.EventVoiceChannelID : defaults.EventVoiceChannelID,
 
                 SwearWords = (overrides.SwearWords != null && overrides.SwearWords.Count > 0)
@@ -560,7 +689,10 @@ namespace RPBot
                     if (!json.Contains("\"TelegramEnabled\"", StringComparison.Ordinal) ||
                         !json.Contains("\"TelegramBotToken\"", StringComparison.Ordinal) ||
                      !json.Contains("\"TelegramChatId\"", StringComparison.Ordinal) ||
-                        !json.Contains("\"TelegramMessageThreadId\"", StringComparison.Ordinal))
+                        !json.Contains("\"TelegramMessageThreadId\"", StringComparison.Ordinal) ||
+                        !json.Contains("\"MasterRoleId\"", StringComparison.Ordinal) ||
+                         !json.Contains("\"SuperUserRoleId\"", StringComparison.Ordinal) ||
+                         !json.Contains("\"RollPicturesEnabled\"", StringComparison.Ordinal))
                     {
                         needsResave = true;
                     }
@@ -585,6 +717,7 @@ namespace RPBot
 			_config = BotConfig.Load(configRelativePath);
 			_serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
+            ServerConfigResolver = GetServerConfigInternal;
 
 			// Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
 			try
@@ -605,9 +738,12 @@ namespace RPBot
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
-            _eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.SettingsFolderName, "event_announcements.json"));
+			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.SettingsFolderName, "event_announcements.json"));
+			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
+			if (_googleSheetsService != null)
+				_googleSheetsService.LogSink = msg => CommandLogSink?.Invoke(msg);
 
-			// Сервисы для костяшек и игровых прогнозов
+			// Сервисы для костяшек
 			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json"));
 			_pointsService = new PointsService(pointsPath);
 			// Загрузка балансов костяшек из файла
@@ -629,22 +765,26 @@ namespace RPBot
             _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
             _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
-            _services = new ServiceCollection()
-                .AddSingleton(_client)
-                .AddSingleton(_commandService)
-                .AddSingleton(_reconnectionService)
-                .AddSingleton(_connectionPredictor)
-                .AddSingleton(_statusNotifier)
+			var serviceCollection = new ServiceCollection()
+				.AddSingleton(_client)
+				.AddSingleton(_commandService)
+				.AddSingleton(_reconnectionService)
+				.AddSingleton(_connectionPredictor)
+				.AddSingleton(_statusNotifier)
 				.AddSingleton(_pointsService)
-               .AddSingleton(_pointsUserIndex)
+				.AddSingleton(_pointsUserIndex)
 				.AddSingleton(_predictionService)
-              .AddSingleton(_voicePointsService)
-                .AddSingleton<QueueModule>()
-                .AddSingleton<InfoCommands>()
-                .AddSingleton<RollDiceCommands>()
-                .AddSingleton<GameSessionCommands>()
-                .AddSingleton<ModerationCommands>()
-                .BuildServiceProvider();
+				.AddSingleton(_voicePointsService)
+				.AddSingleton<QueueModule>()
+				.AddSingleton<InfoCommands>()
+				.AddSingleton<RollDiceCommands>()
+				.AddSingleton<GameSessionCommands>()
+				.AddSingleton<ModerationCommands>();
+
+			if (_googleSheetsService != null)
+				serviceCollection.AddSingleton(_googleSheetsService);
+
+			_services = serviceCollection.BuildServiceProvider();
             // Load persisted bwonk counts
             try
             {
@@ -922,11 +1062,9 @@ namespace RPBot
 				return new DateTimeOffset(nextUtc, TimeSpan.Zero);
 			}
 
-			// Время перезагрузки берём только из config.json
 			if (!TryParseTime(_config?.DailyRestartLocalTime, out var localTarget))
 				throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
 
-			// Если локальная TZ = Москва и включено предпочтение московского времени — используем его.
 			if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
 				TryGetMoscowTimeZone(out var mskTz) && mskTz != null &&
 				string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
@@ -959,7 +1097,6 @@ namespace RPBot
 			return false;
 		}
 
-		// Утилита для перевода UTC-времени в локальное время по МСК.
 		private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
 		{
 			if (TryGetMoscowTimeZone(out var tz) && tz != null)
@@ -987,8 +1124,6 @@ namespace RPBot
 			return Task.FromResult<ServerConfig?>(null);
         }
 
-		// Вспомогательный метод для внутренних сервисов (VoicePointsService, PredictionCommand)
-		// для получения ServerConfig без копирования словаря.
 		private ServerConfig? GetServerConfigInternal(ulong guildId)
 		{
 			if (_serverConfigs.TryGetValue(guildId, out var cfg))
@@ -998,12 +1133,11 @@ namespace RPBot
 
 		public Task ReloadServerConfigsAsync()
 		{
-			// Перечитываем serverconfigs.json и пересобираем эффективные ServerConfigs
 			LoadServerConfigs();
 			return Task.CompletedTask;
 		}
 
-        public Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null)
+        public async Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null)
         {
             if (!_serverConfigs.TryGetValue(guildId, out var sconfig))
             {
@@ -1011,31 +1145,45 @@ namespace RPBot
                 _serverConfigs[guildId] = sconfig;
             }
 
+            var guild = _client.GetGuild(guildId);
+
             switch (key.ToLowerInvariant())
             {
                 case "moderation_channel":
-                    if (channelId.HasValue) sconfig.ModerateChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var mc)) sconfig.ModerateChannelID = mc;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.ModerateChannelID = resolved.Value;
+                    }
                     break;
                 case "roll_channel":
-                    if (channelId.HasValue) sconfig.RollChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var rc)) sconfig.RollChannelID = rc;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.RollChannelID = resolved.Value;
+                    }
                     break;
                 case "stats_channel":
-                    if (channelId.HasValue) sconfig.StatsChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var sc)) sconfig.StatsChannelID = sc;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.StatsChannelID = resolved.Value;
+                    }
                     break;
                 case "record_channel":
-                    if (channelId.HasValue) sconfig.RecordChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var rec)) sconfig.RecordChannelID = rec;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.RecordChannelID = resolved.Value;
+                    }
                     break;
                 case "welcome_channel":
-                    if (channelId.HasValue) sconfig.WelcomeChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var wc)) sconfig.WelcomeChannelID = wc;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.WelcomeChannelID = resolved.Value;
+                    }
                     break;
                 case "general_rg_channel":
-                    if (channelId.HasValue) sconfig.GeneralRGChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var grg)) sconfig.GeneralRGChannelID = grg;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.GeneralRGChannelID = resolved.Value;
+                    }
                     break;
                 case "welcome_message":
                     sconfig.WelcomeMessage = value ?? "";
@@ -1044,10 +1192,25 @@ namespace RPBot
                     sconfig.LineMessage = value ?? "";
                     break;
                 case "default_role":
-                    if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var dr)) sconfig.DefaultRoleID = dr;
+                    if (guild != null)
+                    {
+                        var resolved = ResolveRoleId(guild, value);
+                        if (resolved.HasValue) sconfig.DefaultRoleID = resolved.Value;
+                    }
+                    break;
+                case "master_role":
+                    if (guild != null)
+                    {
+                        var resolved = ResolveRoleId(guild, value);
+                        if (resolved.HasValue) sconfig.MasterRoleId = resolved.Value;
+                    }
                     break;
 				case "super_user_role":
-					if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var su)) sconfig.SuperUserRoleId = su;
+                   if (guild != null)
+                    {
+                        var resolved = ResolveRoleId(guild, value);
+                        if (resolved.HasValue) sconfig.SuperUserRoleId = resolved.Value;
+                    }
 					break;
                 case "swear_filter":
                     if (toggle.HasValue) sconfig.SwearFilterEnabled = toggle.Value;
@@ -1063,47 +1226,51 @@ namespace RPBot
                     if (toggle.HasValue) sconfig.PredictionsEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var p)) sconfig.PredictionsEnabled = p;
                     break;
+                case "roll_pictures":
+                    if (toggle.HasValue) sconfig.RollPicturesEnabled = toggle.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var rp)) sconfig.RollPicturesEnabled = rp;
+                    break;
                 case "event_voice_channel":
-                    if (channelId.HasValue) sconfig.EventVoiceChannelID = channelId.Value;
-                    else if (!string.IsNullOrWhiteSpace(value) && ulong.TryParse(value, out var evc)) sconfig.EventVoiceChannelID = evc;
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value, requireVoice: true);
+                        if (resolved.HasValue) sconfig.EventVoiceChannelID = resolved.Value;
+                    }
                     break;
 				default:
 					break;
 			}
 
-			// Сразу сохраняем изменения serverconfig и пересобираем эффективные ServerConfigs
 			SaveServerConfigs();
 
-			// Валидация: если указаны channel/role - проверим, что они есть на сервере и залогируем предупреждения
             try
             {
-                var guild = _client.GetGuild(guildId);
-                if (guild != null)
+                var validationGuild = _client.GetGuild(guildId);
+                if (validationGuild != null)
                 {
                     if (sconfig.ModerateChannelID != 0)
                     {
-                        var ch = guild.GetTextChannel(sconfig.ModerateChannelID);
+                        var ch = validationGuild.GetTextChannel(sconfig.ModerateChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: moderation_channel {sconfig.ModerateChannelID} не найден на сервере {guildId}.");
                     }
 
                     if (sconfig.RollChannelID != 0)
                     {
-                        var ch = guild.GetTextChannel(sconfig.RollChannelID);
+                        var ch = validationGuild.GetTextChannel(sconfig.RollChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: roll_channel {sconfig.RollChannelID} не найден на сервере {guildId}.");
                     }
 
                     if (sconfig.StatsChannelID != 0)
                     {
-                        var ch = guild.GetTextChannel(sconfig.StatsChannelID);
+                        var ch = validationGuild.GetTextChannel(sconfig.StatsChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: stats_channel {sconfig.StatsChannelID} не найден на сервере {guildId}.");
                     }
 
                     if (sconfig.WelcomeChannelID != 0)
                     {
-                        var ch = guild.GetTextChannel(sconfig.WelcomeChannelID);
+                        var ch = validationGuild.GetTextChannel(sconfig.WelcomeChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: welcome_channel {sconfig.WelcomeChannelID} не найден на сервере {guildId}.");
                     }
@@ -1111,21 +1278,28 @@ namespace RPBot
 
                     if (sconfig.GeneralRGChannelID != 0)
                     {
-                        var ch = guild.GetTextChannel(sconfig.GeneralRGChannelID);
+                        var ch = validationGuild.GetTextChannel(sconfig.GeneralRGChannelID);
                         if (ch == null)
                             _ = LogInfo($"Предупреждение: general_rg_channel {sconfig.GeneralRGChannelID} не найден на сервере {guildId}.");
                     }
 
                     if (sconfig.DefaultRoleID != 0)
                     {
-                        var role = guild.Roles.FirstOrDefault(r => r.Id == sconfig.DefaultRoleID);
+                        var role = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.DefaultRoleID);
                         if (role == null)
                             _ = LogInfo($"Предупреждение: роль {sconfig.DefaultRoleID} не найдена на сервере {guildId}.");
                     }
 
+                    if (sconfig.MasterRoleId.HasValue && sconfig.MasterRoleId.Value != 0)
+                    {
+                       var masterRole = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.MasterRoleId.Value);
+                        if (masterRole == null)
+                            _ = LogInfo($"Предупреждение: MasterRoleId {sconfig.MasterRoleId.Value} не найдена на сервере {guildId}.");
+                    }
+
 					if (sconfig.SuperUserRoleId.HasValue && sconfig.SuperUserRoleId.Value != 0)
 					{
-						var suRole = guild.Roles.FirstOrDefault(r => r.Id == sconfig.SuperUserRoleId.Value);
+                        var suRole = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.SuperUserRoleId.Value);
 						if (suRole == null)
 							_ = LogInfo($"Предупреждение: SuperUserRoleId {sconfig.SuperUserRoleId.Value} не найдена на сервере {guildId}.");
 					}
@@ -1138,7 +1312,6 @@ namespace RPBot
             }
 
             SaveServerConfigs();
-            return Task.CompletedTask;
         }
 
         public Task ResetServerConfigAsync(ulong guildId)
@@ -1294,10 +1467,8 @@ namespace RPBot
                         _client?.Dispose();
                         _client = CreateDiscordClient();
 
-                        // Корректно очистим старые сервисы (отпишем, shutdown, dispose)
                         CleanupServices();
 
-                        // ПЕРЕСОЗДАЕМ СЕРВИСЫ С НОВЫМ КЛИЕНТОМ
                         _reconnectionService = new ReconnectionService(_client)
                         {
                             LogSink = msg => _ui?.AddLog(msg)
@@ -1312,15 +1483,12 @@ namespace RPBot
                         var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
                         _predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
                         _voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
-
-
-                        // ПЕРЕПОДПИСЫВАЕМСЯ
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
+                        _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
                         _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
-                        // ОБНОВЛЯЕМ UI С НОВЫМ КЛИЕНТОМ
                         _ui?.UpdateServices(
                             _client,
                             _reconnectionService,
@@ -1386,42 +1554,6 @@ namespace RPBot
             }
         }
 
-        private async Task SetupDiscordEvents()
-        {
-            // Отписываемся от всего
-            _client.Ready -= OnReady;
-            _client.Disconnected -= OnDisconnected;
-            _client.UserJoined -= UserJoined;
-            _client.MessageReceived -= HandleCommandAsync;
-            _client.SlashCommandExecuted -= OnSlashCommandExecuted;
-            _client.SlashCommandExecuted -= BwonkCommand;
-            _client.ModalSubmitted -= HandleModalSubmitted;
-            _client.ButtonExecuted -= HandleButtonExecuted;
-         _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
-
-            // Подписываемся заново
-            _client.Ready += OnReady;
-            _client.Disconnected += OnDisconnected;
-            _client.UserJoined += UserJoined;
-            _client.MessageReceived += HandleCommandAsync;
-            _client.SlashCommandExecuted += OnSlashCommandExecuted;
-            _client.SlashCommandExecuted += BwonkCommand;
-            _client.ModalSubmitted += HandleModalSubmitted;
-            _client.ButtonExecuted += HandleButtonExecuted;
-         _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
-
-            await LogStartup($"│   События Discord настроены    │");
-        }
-
-        // Отдельные обработчики для событий
         private async Task OnGuildScheduledEventCreated(SocketGuildEvent guildEvent)
         {
             try
@@ -1468,6 +1600,12 @@ namespace RPBot
                 }
                 catch { }
 
+                // ✅ НОВОЕ: Автоматическая отмена прогноза при отмене события
+                if (guildEvent.Guild != null)
+                {
+                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие было отменено");
+                }
+
                 await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "cancelled");
             }
             catch (Exception ex)
@@ -1499,18 +1637,57 @@ namespace RPBot
         {
             try
             {
-                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client);
+                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client, _googleSheetsService, CommandLogSink);
                try
                 {
                     Console.WriteLine($"[EVENT] completed guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
                 }
                 catch { }
 
+                // ✅ НОВОЕ: Автоматическая отмена прогноза при завершении события
+                if (guildEvent.Guild != null)
+                {
+                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие завершено");
+                }
+
                 await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "completed");
             }
             catch (Exception ex)
             {
                 await LogError($"Ошибка в OnGuildScheduledEventCompleted: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Автоматическая отмена активного прогноза при завершении/отмене события
+        /// </summary>
+        private async Task AutoCancelPredictionOnEventEnd(ulong guildId, string reason)
+        {
+            try
+            {
+                var prediction = _predictionService.GetActive(guildId);
+                if (prediction != null && !prediction.IsResolved)
+                {
+                    // Отменяем прогноз от имени системы с административным доступом
+                    var (ok, error) = await _predictionService.CancelAsync(
+                        guildId,
+                        resolverId: prediction.CreatorId, // используем ID создателя
+                        isAdminOverride: true, // административная отмена
+                        cancelReason: $"⚠️ {reason}. Все ставки возвращены.");
+
+                    if (ok)
+                    {
+                        Console.WriteLine($"[PREDICTION] Auto-cancelled prediction for guild={guildId} reason='{reason}'");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[PREDICTION] Failed to auto-cancel prediction for guild={guildId}: {error}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка в AutoCancelPredictionOnEventEnd: {ex.Message}");
             }
         }
 
@@ -2269,21 +2446,42 @@ namespace RPBot
 
             Task OnReadyOnce()
             {
-                _client.Ready -= OnReadyOnce;
                 readyTcs.TrySetResult(true);
                 return Task.CompletedTask;
             }
 
             _client.Ready += OnReadyOnce;
 
-            await Task.WhenAny(readyTcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+            try
+            {
+                if (_client.CurrentUser != null)
+                {
+                    readyTcs.TrySetResult(true);
+                }
+
+                var completedTask = await Task.WhenAny(readyTcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+                if (completedTask == readyTcs.Task)
+                    return;
+
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (DateTime.UtcNow < deadline && !_shouldExit)
+                {
+                    if (_client.CurrentUser != null)
+                        return;
+
+                    await Task.Delay(250);
+                }
+            }
+            finally
+            {
+                _client.Ready -= OnReadyOnce;
+            }
         }
 
         private async Task BackgroundMonitoringLoop()
         {
             while (!_shouldExit)
             {
-                // Ожидание между итерациями; прерываемся, если приложение завершает работу.
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(30));
@@ -2299,18 +2497,15 @@ namespace RPBot
                     continue;
                 }
 
-                // Локальные копии ссылок — чтобы избежать гонок с очищением полей в другом потоке
                 var predictor = _connectionPredictor;
                 var client = _client;
                 var recon = _reconnectionService;
 
-                // Анализ/прогноз — только если predictor доступен
                 if (predictor != null)
                 {
                     try
                     {
-                        var prediction = await predictor.AnalyzeAndPredict();
-                        // TODO: использовать prediction при необходимости
+                        await predictor.AnalyzeAndPredict();
                     }
                     catch (Exception ex)
                     {
@@ -2322,7 +2517,6 @@ namespace RPBot
                     await LogStartup("⚠️ BackgroundMonitoring: predictor is null, skipping prediction");
                 }
 
-                // Проверка состояния клиента — только если client доступен
                 if (client != null)
                 {
                     try
@@ -2523,6 +2717,10 @@ namespace RPBot
 
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+
+            // ✅ НОВОЕ: Загружаем сохранённые сессии игр
+            _ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
+
             await Task.CompletedTask;
         }
 
@@ -2956,9 +3154,15 @@ namespace RPBot
 
                 _ui?.EnableInput();
 
-                // УВЕДОМЛЕНИЕ В UI
+                var botName = _client.CurrentUser?.Username;
+                if (string.IsNullOrWhiteSpace(botName))
+                {
+                    await LogStartup("⚠️ UI startup: имя бота недоступно после инициализации клиента.");
+                    botName = "Discord Bot";
+                }
+
                 _ui?.ShowSystemReady(
-                    _client.CurrentUser.Username,
+                    botName,
                     _client.Guilds.Count,
                     initTime
                 );
@@ -3080,7 +3284,7 @@ namespace RPBot
                 // Existing edit modal handling
                 if (parts.Length >= 2 && parts[0] == "edit_modal")
                 {
-                    await new GameSessionCommands(_client).HandleEditModal(modal);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleEditModal(modal);
                     return;
                 }
 
@@ -3119,9 +3323,19 @@ namespace RPBot
                         if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
                     }
 
-                    if (!int.TryParse(outcomeStr, out var outcomeNum) || (outcomeNum != 1 && outcomeNum != 2))
+                    if (!int.TryParse(outcomeStr, out var outcomeNum) || outcomeNum < 1)
                     {
-                        await modal.FollowupAsync("Исход должен быть 1 или 2.", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Неверный номер исхода.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    // ✅ Проверка: исход существует в активном прогнозе
+                    var activePrediction = _predictionService.GetActive(guildId);
+                    if (activePrediction == null || activePrediction.GetOutcomeById(outcomeNum) == null)
+                    {
+                        var maxOutcome = activePrediction?.Outcomes.Count ?? 2;
+                        await modal.FollowupAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
@@ -3234,8 +3448,8 @@ namespace RPBot
                     return;
                 }
 
-                // Handle create modal: pred_create_modal:<guildId>:<channelId>
-                if (parts[0] == "pred_create_modal")
+                // Handle create modal (3 outcomes): pred_create_modal_3:<guildId>:<channelId>
+                if (parts[0] == "pred_create_modal_3")
                 {
                     if (parts.Length < 3)
                     {
@@ -3256,28 +3470,30 @@ namespace RPBot
                         return;
                     }
 
-                    string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, durationStr = string.Empty;
+                    // ✅ Обновлено: поддержка до 3 исходов
+                    string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, durationStr = string.Empty;
                     foreach (var comp in modal.Data.Components)
                     {
                         try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
                         if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
                         if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
                     }
 
-                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' duration='{durationStr}' user={modal.User.Id}");
+                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' oc3='{oc3}' duration='{durationStr}' user={modal.User.Id}");
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
                     {
-                        await modal.FollowupAsync("Заполните заголовок и оба исхода.", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Заполните заголовок и минимум 2 исхода.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
 
-                    if (!int.TryParse(durationStr, out var minutes) || minutes <= 0)
+                    if (!int.TryParse(durationStr, out var minutes) || minutes < 1 || minutes > 60)
                     {
-                        await modal.FollowupAsync("Неверная длительность (минут).", ephemeral: true).ConfigureAwait(false);
+                        await modal.FollowupAsync("Время должно быть от 1 до 60 минут. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
@@ -3285,7 +3501,23 @@ namespace RPBot
                     await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
 
                     var creatorId = modal.User.Id;
-                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channelId, title, oc1, oc2, TimeSpan.FromMinutes(minutes));
+
+                    // ✅ Обновлено: создание прогноза с N исходами
+                    var outcomeNames = new List<string> { oc1, oc2 };
+                    if (!string.IsNullOrWhiteSpace(oc3))
+                    {
+                        outcomeNames.Add(oc3);
+                    }
+
+                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    if (channel == null)
+                    {
+                        await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+
+                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                     if (createRes.ok)
                     {
@@ -3299,6 +3531,176 @@ namespace RPBot
                     }
 
                     return;
+                }
+
+                // ✅ НОВОЕ: Handle step 1 modal (5 outcomes): pred_create_step1:<guildId>:<channelId>
+                if (parts[0] == "pred_create_step1")
+                {
+                    try
+                    {
+                        if (parts.Length < 3)
+                        {
+                            await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+                        if (!ulong.TryParse(parts[1], out var guildId))
+                        {
+                            await modal.FollowupAsync("Неверный guildId.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+                        if (!ulong.TryParse(parts[2], out var channelId))
+                        {
+                            await modal.FollowupAsync("Неверный channelId.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        string title = string.Empty, durationStr = string.Empty;
+                        foreach (var comp in modal.Data.Components)
+                        {
+                            if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
+                            if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(title))
+                        {
+                            await modal.FollowupAsync("Заполните заголовок.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        if (!int.TryParse(durationStr, out var minutes) || minutes < 1 || minutes > 60)
+                        {
+                            await modal.FollowupAsync("Время должно быть от 1 до 60 минут. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        // ✅ Сохраняем данные в словарь для второго шага
+                        var key = $"{guildId}:{channelId}:{modal.User.Id}";
+                        if (_pendingPredictionCreate == null)
+                        {
+                            await PredictionErrorLogger.LogAsync("pred_create_step1", new Exception("_pendingPredictionCreate is null"), $"guild={guildId}").ConfigureAwait(false);
+                            await modal.FollowupAsync("Внутренняя ошибка. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        _pendingPredictionCreate[key] = (title, minutes);
+
+                        // ✅ Отправляем кнопку для перехода ко второму шагу (нельзя модал → модал)
+                        var continueButton = new ComponentBuilder()
+                            .WithButton("➡️ Продолжить (шаг 2/2)", customId: $"pred_continue_step2:{guildId}:{channelId}", style: ButtonStyle.Primary);
+
+                        await modal.RespondAsync($"✅ Прогноз: **{title}** ({minutes} мин)\n\nНажмите кнопку для ввода исходов:",
+                            components: continueButton.Build(), ephemeral: true).ConfigureAwait(false);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("pred_create_step1", ex, $"customId={customId} user={modal.User?.Id}").ConfigureAwait(false);
+                        try { await modal.FollowupAsync("Произошла ошибка. Попробуйте начать сначала.", ephemeral: true).ConfigureAwait(false); } catch { }
+                        try { ScheduleDeleteOriginalResponse(modal); } catch { }
+                        return;
+                    }
+                }
+
+                // ✅ НОВОЕ: Handle step 2 modal (5 outcomes): pred_create_step2:<guildId>:<channelId>
+                if (parts[0] == "pred_create_step2")
+                {
+                    try
+                    {
+                        if (parts.Length < 3)
+                        {
+                            await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+                        if (!ulong.TryParse(parts[1], out var guildId))
+                        {
+                            await modal.FollowupAsync("Неверный guildId.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+                        if (!ulong.TryParse(parts[2], out var channelId))
+                        {
+                            await modal.FollowupAsync("Неверный channelId.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        // ✅ Читаем данные из словаря
+                        var key = $"{guildId}:{channelId}:{modal.User.Id}";
+                        if (!_pendingPredictionCreate.TryRemove(key, out var data))
+                        {
+                            await modal.FollowupAsync("Данные первого шага не найдены. Начните сначала.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        var title = data.title;
+                        var minutes = data.minutes;
+
+                        string oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, oc4 = string.Empty, oc5 = string.Empty;
+                        foreach (var comp in modal.Data.Components)
+                        {
+                            if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
+                            if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                            if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
+                            if (string.Equals(comp.CustomId, "outcome4", StringComparison.OrdinalIgnoreCase)) oc4 = comp.Value ?? string.Empty;
+                            if (string.Equals(comp.CustomId, "outcome5", StringComparison.OrdinalIgnoreCase)) oc5 = comp.Value ?? string.Empty;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
+                        {
+                            await modal.FollowupAsync("Заполните минимум 2 исхода.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
+
+                        var creatorId = modal.User.Id;
+
+                        // Собираем исходы
+                        var outcomeNames = new List<string> { oc1, oc2 };
+                        if (!string.IsNullOrWhiteSpace(oc3)) outcomeNames.Add(oc3);
+                        if (!string.IsNullOrWhiteSpace(oc4)) outcomeNames.Add(oc4);
+                        if (!string.IsNullOrWhiteSpace(oc5)) outcomeNames.Add(oc5);
+
+                        var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                        if (channel == null)
+                        {
+                            await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
+
+                        var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                        await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
+                        if (createRes.ok)
+                        {
+                            await modal.FollowupAsync($"Прогноз создан: {title}", ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                        }
+                        else
+                        {
+                            await modal.FollowupAsync(createRes.error, ephemeral: true).ConfigureAwait(false);
+                            ScheduleDeleteOriginalResponse(modal);
+                        }
+
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("pred_create_step2", ex, $"customId={customId} user={modal.User?.Id}").ConfigureAwait(false);
+                        try { await modal.FollowupAsync("Произошла ошибка при создании прогноза. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false); } catch { }
+                        try { ScheduleDeleteOriginalResponse(modal); } catch { }
+                        return;
+                    }
                 }
             }
             catch (Exception ex)
@@ -3333,6 +3735,12 @@ namespace RPBot
 
             switch (buttonType)
             {
+                case "pred_outcomes":
+                    await HandlePredictionOutcomesButton(component, parts);
+                    break;
+                case "pred_continue_step2":
+                    await HandlePredictionContinueStep2Button(component, parts);
+                    break;
                 case "pred_bet":
                     await HandlePredictionBetButton(component, parts);
                     break;
@@ -3345,6 +3753,9 @@ namespace RPBot
                 case "pred_resolve":
                     await HandlePredictionResolveButton(component, parts);
                     break;
+                case "pred_history_page":
+                    await HandlePredictionHistoryPageButton(component, parts);
+                    break;
                 case "pause_session":
                 case "resume_session":
                 case "edit_session":
@@ -3352,13 +3763,13 @@ namespace RPBot
                 case "confirm_stop":
                 case "cancel_stop":
                 case "toggle_rolls":
-                    await new GameSessionCommands(_client).HandleControlButton(component);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleControlButton(component);
                     break;
 
                 case "no_stats":
                 case "general_stats":
                 case "detailed_stats":
-                    await new GameSessionCommands(_client).HandleStatsButton(component);
+                    await new GameSessionCommands(_client, _googleSheetsService).HandleStatsButton(component);
                     break;
             }
         }
@@ -3461,7 +3872,7 @@ namespace RPBot
                 await LogError($"Ошибка в фильтре мата: {ex.Message}");
             }
 
-            var (fludChannelId, rollChannelId, generalRGChannelID, responseMessage, emoji, lineMessages, emoteKappa, emoteAga) = GetResponseData(message);
+            var (fludChannelId, rollChannelId, generalRGChannelID, lineMessages, emoteKappa, emoteAga) = GetResponseData(message);
 
             // Определяем, является ли канал голосовым
             bool isVoiceChannel = message.Channel is SocketVoiceChannel;
@@ -3586,22 +3997,15 @@ namespace RPBot
                 await HandleMasteryArbitrarinessCommand(user, message, emoteKappa, emoteAga);
             }
 
-            if (message.Content.ToLower().Contains("привет, ролевой бот") && message.Channel.Id == fludChannelId)
-            {
-                await HandleGreetingCommand(user, message, responseMessage, emoji);
-            }
-
             if ((message.Content.ToLower() == "line" || message.Content.ToLower() == "ход") && message.Channel.Id == rollChannelId)
             {
                 await HandleLineCommand(user, message, lineMessages);
             }
 
-            // Управление ботом через чат: только участники с ролью "Хранители"
+            // Управление ботом через чат: администратор или суперпользователь сервера
             if (user is SocketGuildUser guildUser)
             {
-                var hasKeeperRole = guildUser.Roles.Any(r => string.Equals(r.Name, "Хранители", StringComparison.OrdinalIgnoreCase));
-
-                if (hasKeeperRole)
+                if (CanUseSuperUserActions(guildUser, guildUser.Guild.Id))
                 {
                     var content = message.Content.ToLower();
 
@@ -3669,47 +4073,28 @@ namespace RPBot
             }
         };
 
-        private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string? responseMessage, string? emoji, string? lineMessages, string? emoteKappa, string? emoteAga) GetResponseData(SocketMessage message)
+        private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string? lineMessages, string? emoteKappa, string? emoteAga) GetResponseData(SocketMessage message)
         {
             var channel = message.Channel as SocketGuildChannel;
 			if (channel == null || !_serverConfigs.TryGetValue(channel.Guild.Id, out var config))
             {
-                return (0, 0, 0, null, null, null, null, null);
+             return (0, 0, 0, null, null, null);
             }
 
             // Для тестового сервера
             if (channel.Guild.Id == 1288192593137635359)
             {
-                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.WelcomeMessage, "👋", config.LineMessage,
+                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.LineMessage,
                     "<:kappa:1333879110602326046>", "<:agakakskagesh:1333878999977431174>");
             }
             // Для основного сервера
             else if (channel.Guild.Id == 295189463376855040)
             {
-                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.WelcomeMessage, "👋", config.LineMessage,
+                return (config.WelcomeChannelID, config.RollChannelID, config.GeneralRGChannelID, config.LineMessage,
                     "<:kappa:1100150992428871720>", "<:Agakakskagesh:1316461730569916557>");
             }
 
-            return (0, 0, 0, null, null, null, null, null);
-        }
-
-        private async Task HandleGreetingCommand(SocketGuildUser user, SocketMessage message, string responseMessage, string emoji)
-        {
-
-            await message.AddReactionAsync(new Emoji(emoji));
-
-            if (user.Username == "perekrestok_mirov" || user.Username == "domen_")
-            {
-                int reportCount = GetBugReportCounter();
-                await message.Channel.SendMessageAsync($"Приветствую тебя, Админ. Все системы в норме. Отчётов о неисправности: {reportCount}");
-            }
-            else
-            {
-                var formattedMessage = responseMessage.Replace("{user.Mention}", user.Mention);
-                var responseMessageObj = await message.Channel.SendMessageAsync(formattedMessage);
-                await responseMessageObj.AddReactionAsync(new Emoji("✅"));
-            }
-            await LogInfo("Приветствие с ботом");
+         return (0, 0, 0, null, null, null);
         }
 
         private async Task HandleDictatorCommand(SocketGuildUser user, SocketMessage message)
@@ -3807,6 +4192,9 @@ namespace RPBot
                     break;
                 case "roll20":
                     await Roll20Command(command);
+                    break;
+                case "roll_pictures":
+                    await RollPicturesCommand(command);
                     break;
                 case "serverinfo":
                     await ServerInfoCommand(command);
@@ -3981,6 +4369,33 @@ namespace RPBot
             await diceModule.Roll20(command);
         }
 
+        private async Task RollPicturesCommand(SocketSlashCommand command)
+        {
+            if (command.GuildId == null)
+            {
+                await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
+                return;
+            }
+
+            var guildId = command.GuildId.Value;
+            var config = ServerConfigResolver?.Invoke(guildId);
+
+            var enabledOpt = command.Data.Options.FirstOrDefault(o => o.Name == "enabled")?.Value;
+            bool newValue;
+            if (enabledOpt != null)
+            {
+                newValue = Convert.ToBoolean(enabledOpt);
+            }
+            else
+            {
+                var current = config?.RollPicturesEnabled ?? true;
+                newValue = !current;
+            }
+
+            await SetServerConfigValueAsync(guildId, "roll_pictures", toggle: newValue);
+            await command.RespondAsync($"Картинки для бросков {(newValue ? "включены" : "выключены")}.", ephemeral: true);
+        }
+
         private async Task ServerInfoCommand(SocketSlashCommand command)
         {
             var infoModule = _services.GetRequiredService<InfoCommands>();
@@ -4039,6 +4454,85 @@ namespace RPBot
 
             var gameSessionModule = _services.GetRequiredService<GameSessionCommands>();
             await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
+        }
+
+        private static bool HasServerRole(SocketGuildUser? user, ulong? roleId)
+        {
+            if (user == null || !roleId.HasValue || roleId.Value == 0)
+                return false;
+
+            return user.Roles.Any(r => r.Id == roleId.Value);
+        }
+
+        private bool CanUseSuperUserActions(SocketGuildUser? user, ulong guildId)
+        {
+            if (user == null)
+                return false;
+
+            if (user.GuildPermissions.Administrator)
+                return true;
+
+            return _serverConfigs.TryGetValue(guildId, out var cfg) && HasServerRole(user, cfg.SuperUserRoleId);
+        }
+
+        private bool CanUseMasterActions(SocketGuildUser? user, ulong guildId)
+        {
+            if (user == null)
+                return false;
+
+            if (user.GuildPermissions.Administrator)
+                return true;
+
+            return _serverConfigs.TryGetValue(guildId, out var cfg) && HasServerRole(user, cfg.MasterRoleId);
+        }
+
+        private ulong? ResolveRoleId(SocketGuild guild, string? value)
+        {
+            if (guild == null || string.IsNullOrWhiteSpace(value))
+                return null;
+
+            var trimmed = value.Trim();
+            if (ulong.TryParse(trimmed, out var id))
+            {
+                return guild.Roles.Any(r => r.Id == id) ? id : null;
+            }
+
+            var normalized = trimmed.TrimStart('@');
+            var role = guild.Roles.FirstOrDefault(r => string.Equals(r.Name, normalized, StringComparison.OrdinalIgnoreCase));
+            return role?.Id;
+        }
+
+        private async Task<ulong?> ResolveChannelIdAsync(ulong guildId, object? channelOpt, string? value, bool requireVoice = false)
+        {
+            var guild = _client.GetGuild(guildId);
+            if (guild == null)
+                return null;
+
+            if (channelOpt != null)
+            {
+                var directId = Convert.ToUInt64(channelOpt);
+                var directChannel = await _client.GetChannelAsync(directId) as SocketGuildChannel;
+                if (directChannel != null && directChannel.Guild.Id == guildId && (!requireVoice || directChannel is SocketVoiceChannel))
+                    return directId;
+            }
+
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            var trimmed = value.Trim();
+            if (ulong.TryParse(trimmed, out var id))
+            {
+                var idChannel = await _client.GetChannelAsync(id) as SocketGuildChannel;
+                if (idChannel != null && idChannel.Guild.Id == guildId && (!requireVoice || idChannel is SocketVoiceChannel))
+                    return id;
+            }
+
+            var normalized = trimmed.TrimStart('#');
+            SocketGuildChannel? namedChannel = requireVoice
+                ? guild.VoiceChannels.FirstOrDefault(c => string.Equals(c.Name, normalized, StringComparison.OrdinalIgnoreCase))
+                : guild.Channels.FirstOrDefault(c => string.Equals(c.Name, normalized, StringComparison.OrdinalIgnoreCase));
+
+            return namedChannel?.Id;
         }
 
         private async Task SettingsCommand(SocketSlashCommand command)
@@ -4106,22 +4600,23 @@ namespace RPBot
 						sb.AppendLine("/settings action:reload — перечитать настройки всех серверов из serverconfigs.json.");
 						sb.AppendLine();
 						sb.AppendLine("Передача значений:");
-						sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
-						sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с числовым ID канала.");
+                      sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
+                        sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с ID или названием канала.");
 						sb.AppendLine("  Если указаны оба, приоритет у channel.");
-						sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
-                        sb.AppendLine("- Для ролей (default_role, super_user_role) указывайте ID роли в value.");
-                        sb.AppendLine("- для логических переключателей (swear_filter, predictions) используйте toggle:true/false или value:true/false.");
-                        sb.AppendLine("- Для event_voice_channel укажите ID голосового канала в value.");
-                        sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+                       sb.AppendLine("- Для ролей (default_role, master_role, super_user_role) указывайте ID роли или её название в value.");
+                       sb.AppendLine("- для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
+                       sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
+						sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
 						sb.AppendLine();
 						sb.AppendLine("Примеры:");
 						sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
 						sb.AppendLine("/settings action:set key:moderation_channel value:123456789012345678");
-						sb.AppendLine("/settings action:set key:default_role value:123456789012345678");
+                        sb.AppendLine("/settings action:set key:default_role value:@Игрок");
+                        sb.AppendLine("/settings action:set key:master_role value:Мастер НРИ");
 						sb.AppendLine("/settings action:set key:swear_filter toggle:true");
 						sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
 						await command.RespondAsync(sb.ToString(), ephemeral: true);
+						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
 					}
 					break;
 
@@ -4132,27 +4627,30 @@ namespace RPBot
 					}
 					break;
 
-                case "list":
-                    {
-                        var sb = new StringBuilder();
-                        sb.AppendLine($"Настройки для сервера {guildId}:");
-                        sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
-                        sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
-                        sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
-                        sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
-                        sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
-                        sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
-                        sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
-                        sb.AppendLine($"line_message: {sconfig.LineMessage}");
-                        sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+				case "list":
+					{
+						var sb = new StringBuilder();
+						sb.AppendLine($"Настройки для сервера {guildId}:");
+						sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
+						sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
+						sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
+						sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
+						sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
+						sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
+						sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
+						sb.AppendLine($"line_message: {sconfig.LineMessage}");
+						sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+                        sb.AppendLine($"master_role: {(sconfig.MasterRoleId.HasValue ? sconfig.MasterRoleId.Value.ToString() : "null")}");
 						sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
 						sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
 						sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
 						sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
-                        sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
-                        await command.RespondAsync(sb.ToString(), ephemeral: true);
-                    }
-                    break;
+                       sb.AppendLine($"roll_pictures: {sconfig.RollPicturesEnabled}");
+						sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
+						await command.RespondAsync(sb.ToString(), ephemeral: true);
+						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
+					}
+					break;
 
                 case "get":
 					{
@@ -4173,10 +4671,12 @@ namespace RPBot
 							"line_message" => sconfig.LineMessage ?? "",
 							"general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
 							"default_role" => sconfig.DefaultRoleID.ToString(),
+                          "master_role" => sconfig.MasterRoleId.HasValue ? sconfig.MasterRoleId.Value.ToString() : "",
 							"super_user_role" => sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "",
 							"swear_filter" => sconfig.SwearFilterEnabled.ToString(),
 							"swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
 							"predictions" => sconfig.PredictionsEnabled.ToString(),
+                            "roll_pictures" => sconfig.RollPicturesEnabled.ToString(),
                             "event_voice_channel" => sconfig.EventVoiceChannelID.ToString(),
 							_ => "Неизвестный ключ"
 						};
@@ -4196,97 +4696,52 @@ namespace RPBot
                         switch (keyOpt)
                         {
                             case "moderation_channel":
-                                {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-
-                                    // Валидация: канал существует и принадлежит данной гильдии
-                                    var guild = _client.GetGuild(guildId);
-                                    if (id != 0)
-                                    {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId)
-                                        {
-                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
-                                            return;
-                                        }
-                                    }
-
-                                    sconfig.ModerateChannelID = id;
-                                    SaveServerConfigs();
-                                    await command.RespondAsync($"moderation_channel установлен: {id}", ephemeral: true);
-                                }
-                                break;
                             case "roll_channel":
-                                {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-                                    var guild = _client.GetGuild(guildId);
-                                    if (id != 0)
-                                    {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId)
-                                        {
-                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
-                                            return;
-                                        }
-                                    }
-
-                                    sconfig.RollChannelID = id;
-                                    SaveServerConfigs();
-                                    await command.RespondAsync($"roll_channel установлен: {id}", ephemeral: true);
-                                }
-                                break;
                             case "stats_channel":
-                                {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-                                    var guild = _client.GetGuild(guildId);
-                                    if (id != 0)
-                                    {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId)
-                                        {
-                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
-                                            return;
-                                        }
-                                    }
-
-                                    sconfig.StatsChannelID = id;
-                                    SaveServerConfigs();
-                                    await command.RespondAsync($"stats_channel установлен: {id}", ephemeral: true);
-                                }
-                                break;
                             case "welcome_channel":
+                            case "general_rg_channel":
+                            case "record_channel":
+                            case "event_voice_channel":
                                 {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-                                    var guild = _client.GetGuild(guildId);
-                                    if (id != 0)
+                                    var requireVoice = keyOpt == "event_voice_channel";
+                                    var id = await ResolveChannelIdAsync(guildId, channelOpt, valueOpt, requireVoice);
+                                    if (!id.HasValue)
                                     {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId)
-                                        {
-                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
-                                            return;
-                                        }
+                                        await command.RespondAsync(
+                                            requireVoice
+                                                ? $"Ошибка: не удалось найти голосовой канал на этом сервере по значению '{valueOpt ?? channelOpt?.ToString() ?? "(пусто)"}'."
+                                                : $"Ошибка: не удалось найти канал на этом сервере по значению '{valueOpt ?? channelOpt?.ToString() ?? "(пусто)"}'.",
+                                            ephemeral: true);
+                                        return;
                                     }
 
-                                    sconfig.WelcomeChannelID = id;
+                                    switch (keyOpt)
+                                    {
+                                        case "moderation_channel":
+                                            sconfig.ModerateChannelID = id.Value;
+                                            break;
+                                        case "roll_channel":
+                                            sconfig.RollChannelID = id.Value;
+                                            break;
+                                        case "stats_channel":
+                                            sconfig.StatsChannelID = id.Value;
+                                            break;
+                                        case "welcome_channel":
+                                            sconfig.WelcomeChannelID = id.Value;
+                                            break;
+                                        case "general_rg_channel":
+                                            sconfig.GeneralRGChannelID = id.Value;
+                                            break;
+                                        case "record_channel":
+                                            sconfig.RecordChannelID = id.Value;
+                                            break;
+                                        case "event_voice_channel":
+                                            sconfig.EventVoiceChannelID = id.Value;
+                                            break;
+                                    }
+
                                     SaveServerConfigs();
-                                    await command.RespondAsync($"welcome_channel установлен: {id}", ephemeral: true);
+                                    await command.RespondAsync($"{keyOpt} установлен: {id.Value}", ephemeral: true);
                                 }
                                 break;
                             case "welcome_message":
@@ -4303,97 +4758,41 @@ namespace RPBot
                                     await command.RespondAsync($"line_message установлен.", ephemeral: true);
                                 }
                                 break;
-                            case "general_rg_channel":
-                                {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-
-                                    var guild = _client.GetGuild(guildId);
-                                    if (id != 0)
-                                    {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId)
-                                        {
-                                            await command.RespondAsync($"Ошибка: указанный канал не найден или не принадлежит этому серверу: {id}", ephemeral: true);
-                                            return;
-                                        }
-                                    }
-
-                                    sconfig.GeneralRGChannelID = id;
-                                    SaveServerConfigs();
-                                    await command.RespondAsync($"general_rg_channel установлен: {id}", ephemeral: true);
-                                }
-                                break;
                             case "default_role":
+                            case "master_role":
                                 {
-                                    if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                    {
-                                        var guild = _client.GetGuild(guildId);
-                                        var role = guild?.Roles.FirstOrDefault(r => r.Id == v);
-                                        if (role == null)
-                                        {
-                                            await command.RespondAsync($"Ошибка: роль с ID {v} не найдена на этом сервере.", ephemeral: true);
-                                            return;
-                                        }
+                                var guild = _client.GetGuild(guildId);
+                                var roleId = guild == null ? null : ResolveRoleId(guild, valueOpt);
+                                if (!roleId.HasValue)
+                                {
+                                    await command.RespondAsync($"Ошибка: не удалось найти роль на этом сервере по значению '{valueOpt ?? "(пусто)"}'.", ephemeral: true);
+                                    return;
+                                }
 
-                                        sconfig.DefaultRoleID = v;
-                                        SaveServerConfigs();
-                                        await command.RespondAsync($"default_role установлен: {v}", ephemeral: true);
-                                    }
-                                    else
-                                    {
-                                        await command.RespondAsync("Ошибка: укажите ID роли числом.", ephemeral: true);
-                                    }
+                                if (keyOpt == "default_role")
+                                    sconfig.DefaultRoleID = roleId.Value;
+                                else
+                                    sconfig.MasterRoleId = roleId.Value;
+
+                                SaveServerConfigs();
+                                await command.RespondAsync($"{keyOpt} установлен: {roleId.Value}", ephemeral: true);
                                 }
                                 break;
 							case "super_user_role":
 								{
-									if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-									{
-										var guild = _client.GetGuild(guildId);
-										var role = guild?.Roles.FirstOrDefault(r => r.Id == v);
-										if (role == null)
-										{
-											await command.RespondAsync($"Ошибка: роль с ID {v} не найдена на этом сервере.", ephemeral: true);
-											return;
-										}
-
-										sconfig.SuperUserRoleId = v;
-										SaveServerConfigs();
-										await command.RespondAsync($"super_user_role установлен: {v}", ephemeral: true);
-									}
-									else
-									{
-										await command.RespondAsync("Ошибка: укажите ID роли числом.", ephemeral: true);
-									}
-								}
-								break;
-                            case "event_voice_channel":
-                                {
-                                    ulong id = 0;
-                                    if (channelOpt != null)
-                                        id = Convert.ToUInt64(channelOpt);
-                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && ulong.TryParse(valueOpt, out var v))
-                                        id = v;
-
-                                    if (id != 0)
+                                    var guild = _client.GetGuild(guildId);
+                                    var roleId = guild == null ? null : ResolveRoleId(guild, valueOpt);
+                                    if (!roleId.HasValue)
                                     {
-                                        var chan = await _client.GetChannelAsync(id) as SocketGuildChannel;
-                                        if (chan == null || chan.Guild.Id != guildId || chan is not SocketVoiceChannel)
-                                        {
-                                            await command.RespondAsync($"Ошибка: укажите голосовой канал этого сервера: {id}", ephemeral: true);
-                                            return;
-                                        }
+                                        await command.RespondAsync($"Ошибка: не удалось найти роль на этом сервере по значению '{valueOpt ?? "(пусто)"}'.", ephemeral: true);
+                                        return;
                                     }
 
-                                    sconfig.EventVoiceChannelID = id;
+                                    sconfig.SuperUserRoleId = roleId.Value;
                                     SaveServerConfigs();
-                                    await command.RespondAsync($"event_voice_channel установлен: {id}", ephemeral: true);
-                                }
-                                break;
+                                    await command.RespondAsync($"super_user_role установлен: {roleId.Value}", ephemeral: true);
+								}
+								break;
                             case "swear_filter":
                                 {
                                     bool state = false;
@@ -4405,6 +4804,24 @@ namespace RPBot
                                     sconfig.SwearFilterEnabled = state;
                                     SaveServerConfigs();
                                     await command.RespondAsync($"swear_filter установлен: {state}", ephemeral: true);
+                                }
+                                break;
+                            case "predictions":
+                            case "roll_pictures":
+                                {
+                                    bool state = false;
+                                    if (toggleOpt != null)
+                                        state = Convert.ToBoolean(toggleOpt);
+                                    else if (!string.IsNullOrWhiteSpace(valueOpt) && bool.TryParse(valueOpt, out var b))
+                                        state = b;
+
+                                    if (keyOpt == "predictions")
+                                        sconfig.PredictionsEnabled = state;
+                                    else
+                                        sconfig.RollPicturesEnabled = state;
+
+                                    SaveServerConfigs();
+                                    await command.RespondAsync($"{keyOpt} установлен: {state}", ephemeral: true);
                                 }
                                 break;
                             default:
@@ -4557,6 +4974,50 @@ namespace RPBot
                     ? "Активно" 
                     : "Не инициализировано"
             });
+
+            // 8. Проверка Google Sheets
+            {
+                if (_config?.GoogleSheetsEnabled != true)
+                {
+                    checks.Add(new SystemHealthCheck
+                    {
+                        SystemName = "Google Sheets",
+                        IsHealthy = true,
+                        Message = "Отключено в конфиге"
+                    });
+                }
+                else if (_googleSheetsService == null)
+                {
+                    checks.Add(new SystemHealthCheck
+                    {
+                        SystemName = "Google Sheets",
+                        IsHealthy = false,
+                        Message = "Не инициализирован (проверь credentials и SpreadsheetId)"
+                    });
+                }
+                else
+                {
+                    try
+                    {
+                        var probeResult = await _googleSheetsService.ProbeAsync().ConfigureAwait(false);
+                        checks.Add(new SystemHealthCheck
+                        {
+                            SystemName = "Google Sheets",
+                            IsHealthy = probeResult.Success,
+                            Message = probeResult.Message
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        checks.Add(new SystemHealthCheck
+                        {
+                            SystemName = "Google Sheets",
+                            IsHealthy = false,
+                            Message = $"Ошибка проверки: {ex.Message}"
+                        });
+                    }
+                }
+            }
 
             return checks;
         }
@@ -4851,8 +5312,6 @@ namespace RPBot
             return textBlocks;
         }
     }
-
-    public class RollDiceCommands : ModuleBase<SocketCommandContext>
     {
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private string ValidateRollInput(string input)
