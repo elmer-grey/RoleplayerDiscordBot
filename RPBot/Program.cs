@@ -3,6 +3,7 @@ using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using RPBot;
+using RPBot.Music;
 using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
@@ -41,7 +42,12 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
-        private GoogleSheetsService? _googleSheetsService;
+private GoogleSheetsService? _googleSheetsService;
+private LavalinkService? _lavalinkService;
+private MusicCommands? _musicCommands;
+private MusicPlaylistStore? _playlistStore;
+private MusicQueueStore? _musicQueueStore;
+private MusicStats? _musicStats;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
@@ -118,6 +124,7 @@ namespace RPBot
             _client.SlashCommandExecuted -= BwonkCommand;
             _client.ModalSubmitted -= HandleModalSubmitted;
             _client.ButtonExecuted -= HandleButtonExecuted;
+            _client.SelectMenuExecuted -= HandleSelectMenuExecuted;
             _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
             _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
             _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
@@ -132,6 +139,7 @@ namespace RPBot
             _client.SlashCommandExecuted += BwonkCommand;
             _client.ModalSubmitted += HandleModalSubmitted;
             _client.ButtonExecuted += HandleButtonExecuted;
+            _client.SelectMenuExecuted += HandleSelectMenuExecuted;
             _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
             _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
@@ -757,7 +765,27 @@ namespace RPBot
 			_predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
 			_voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
-            // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
+			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
+			if (_config.Music.Enabled)
+			{
+				_lavalinkService = new LavalinkService(() => _client, _config.Music);
+				_lavalinkService.LogSink = msg => _ui?.AddLog(msg);
+				_lavalinkService.FileSink = msg =>
+				{
+					var logDir = BotConfig.ResolvePath("Logs");
+					Directory.CreateDirectory(logDir);
+					var path = System.IO.Path.Combine(logDir, $"MusicDebug_{DateTime.Now:yyyyMMdd}.txt");
+					File.AppendAllText(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {msg}\n");
+				};
+				_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
+					_ = _playlistStore.LoadAsync();
+					_musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
+					_musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
+					_musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats,
+						logSink: msg => _ui?.AddLog(msg));
+			}
+
+			// ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
             _reconnectionService.OnReconnectStarted += OnReconnectStarted;
             _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -1340,6 +1368,10 @@ namespace RPBot
 
         static async Task Main(string[] args)
         {
+            // Гарантированное завершение Lavalink при любом способе остановки (VS Stop, taskkill и т.д.)
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
+
             bool restart;
             int restartCount = 0;
             var pendingStartupType = StartupType.FirstStart;
@@ -1374,8 +1406,33 @@ namespace RPBot
 
             } while (restart);
 
-            _ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
-        }
+			_ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
+		}
+
+		/// <summary>
+		/// Убивает процессы Lavalink (java) занимающие порт 2333.
+		/// Вызывается при любом завершении — штатном или через VS Stop/taskkill.
+		/// </summary>
+		private static void KillOrphanedLavalink()
+		{
+			try
+			{
+				var connections = System.Net.NetworkInformation.IPGlobalProperties
+					.GetIPGlobalProperties()
+					.GetActiveTcpListeners()
+					.Where(ep => ep.Port == 2333)
+					.ToArray();
+
+				if (connections.Length == 0) return;
+
+				// Убиваем все java-процессы слушающие порт 2333
+				foreach (var proc in Process.GetProcessesByName("java"))
+				{
+					try { proc.Kill(entireProcessTree: true); } catch { }
+				}
+			}
+			catch { }
+		}
 
 		private static BotUI? _ui;
         private static bool _uiStarted = false;
@@ -1495,6 +1552,10 @@ namespace RPBot
                             _connectionPredictor,
                             _statusNotifier
                         );
+
+                        // Переподписываем MusicCommands на новый клиент
+                        if (_musicCommands is not null)
+                            _musicCommands.UpdateDiscordClient(_client);
                     }
 
                     _commandHandler = new CommandHandler(_client, _config.GuildIDs);
@@ -1507,10 +1568,15 @@ namespace RPBot
                         await _client.StartAsync();
                         await LogStartup(" Вход выполнен успешно.");
 
+                        // PrepareAsync ПОСЛЕ LoginAsync — CurrentUser уже установлен,
+                        // DiscordClientWrapper подпишется на Ready до того как оно сработает
+                        if (_lavalinkService is not null)
+                            await _lavalinkService.PrepareAsync();
+
                         // Ждем готовности
                         await WaitForReadyAsync();
 
-                        // Запускаем инициализацию с опросом
+                        // Запускаем инициализацию с опросом (Lavalink запускается внутри на Этапе 3.5)
                         await InitializeBotWithProgress();
 
 						// Ежедневный плановый перезапуск (время задаётся в config.json)
@@ -1554,6 +1620,7 @@ namespace RPBot
             }
         }
 
+// Отдельные обработчики для событий
         private async Task OnGuildScheduledEventCreated(SocketGuildEvent guildEvent)
         {
             try
@@ -2630,6 +2697,16 @@ namespace RPBot
                 {
                     await LogStartup($"Ошибка при массовой отправке статусов после реконнекта: {ex.Message}");
                 }
+
+                // Восстанавливаем музыкальные очереди после переподключения
+                if (_musicCommands is not null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(10)); // ждём стабилизации Lavalink
+                        await _musicCommands.TryRestoreQueuesAsync();
+                    });
+                }
             }
         }
 
@@ -2718,10 +2795,10 @@ namespace RPBot
             // ОТПРАВЛЯЕМ В UI
             _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
 
-            // ✅ НОВОЕ: Загружаем сохранённые сессии игр
-            _ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
+// ✅ НОВОЕ: Загружаем сохранённые сессии игр
+_ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
 
-            await Task.CompletedTask;
+await Task.CompletedTask;
         }
 
         private void EnsureServerConfigsForConnectedGuilds()
@@ -2845,6 +2922,90 @@ namespace RPBot
             }
         }
 
+        /// <summary>
+        /// Проверяет config.json на наличие новых полей и дописывает недостающие строки.
+        /// Вызывается и при первом запуске, и при перезапуске.
+        /// </summary>
+        private async Task EnsureConfigFieldsAsync()
+        {
+            try
+            {
+                var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                if (!File.Exists(configPath)) return;
+
+                var json = await File.ReadAllTextAsync(configPath).ConfigureAwait(false);
+                var needsSave = false;
+                var addedFields = new List<string>();
+
+                // Поля MusicConfig, добавленные позже — проверяем наличие в JSON
+                if (!json.Contains("\"YtCipherAutoStart\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherAutoStart = false");
+                    needsSave = true;
+                }
+                if (!json.Contains("\"YtCipherPath\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherPath = \"yt-cipher\"");
+                    needsSave = true;
+                }
+                if (!json.Contains("\"YtCipherPort\"", StringComparison.Ordinal))
+                {
+                    addedFields.Add("Music.YtCipherPort = 8001");
+                    needsSave = true;
+                }
+
+                // Нормализация путей: если JarPath / YtCipherPath / ConfigPath абсолютные —
+                // заменяем на относительные к AppContext.BaseDirectory.
+                // Это случается когда пути были заданы вручную или сохранены на старой машине.
+                if (needsSave || _config?.Music is not null)
+                {
+                    var cfg = BotConfig.Load(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    var baseDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                    var music = cfg.Music;
+                    bool pathsFixed = false;
+
+                    string Relativize(string path)
+                    {
+                        if (string.IsNullOrWhiteSpace(path)) return path;
+                        if (!Path.IsPathRooted(path)) return path;
+                        if (path.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rel = path.Substring(baseDir.Length).Replace('\\', '/');
+                            return rel;
+                        }
+                        return path;
+                    }
+
+                    var relJar = Relativize(music.JarPath);
+                    if (relJar != music.JarPath) { music.JarPath = relJar; pathsFixed = true; addedFields.Add($"Music.JarPath → {relJar}"); }
+
+                    var relYtCipher = Relativize(music.YtCipherPath);
+                    if (relYtCipher != music.YtCipherPath) { music.YtCipherPath = relYtCipher; pathsFixed = true; addedFields.Add($"Music.YtCipherPath → {relYtCipher}"); }
+
+                    var relConfig = Relativize(music.ConfigPath);
+                    if (relConfig != music.ConfigPath) { music.ConfigPath = relConfig; pathsFixed = true; addedFields.Add($"Music.ConfigPath → {relConfig}"); }
+
+                    if (needsSave || pathsFixed)
+                    {
+                        cfg.Save(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                        await LogStartup($"[CONFIG] Обновлён config.json: {string.Join(", ", addedFields)}");
+                    }
+                    return;
+                }
+
+                if (needsSave)
+                {
+                    var freshConfig = BotConfig.Load(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    freshConfig.Save(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+                    await LogStartup($"[CONFIG] Добавлены новые поля в config.json: {string.Join(", ", addedFields)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogStartup($"[CONFIG] Ошибка проверки полей конфига: {ex.Message}");
+            }
+        }
+
         private async Task BootstrapFirstRunSettingsAsync()
         {
             if (_currentStartupType != StartupType.FirstStart)
@@ -2861,6 +3022,9 @@ namespace RPBot
                 Directory.CreateDirectory(settingsDir);
 
                 var configPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "config.json"));
+
+                // Проверяем и дополняем config.json новыми полями
+                await EnsureConfigFieldsAsync().ConfigureAwait(false);
 
                 var serverConfigsCreated = false;
                 var serverConfigsExisted = File.Exists(_serverConfigsPath);
@@ -2932,7 +3096,7 @@ namespace RPBot
                 var lines = new List<string>
                 {
                     $"Settings directory: {settingsDir}",
-                    File.Exists(configPath) ? "config.json already exists" : "config.json created by BotConfig.Load",
+                    File.Exists(configPath) ? "config.json present (fields verified)" : "config.json created by BotConfig.Load",
                     serverConfigsCreated ? "serverconfigs.json created and seeded for connected guilds" : "serverconfigs.json already exists or was updated",
                     pointsCreated ? "points.json created" : "points.json already exists",
                     pointsUsersCreated ? "points_users.json created" : "points_users.json already exists",
@@ -2955,7 +3119,7 @@ namespace RPBot
                     lines.Add($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
                 }
 
-                foreach (var line in BuildStartupBox("ЭТАП 0/4: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
+                foreach (var line in BuildStartupBox("ЭТАП 0/5: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
                 {
                     Write(line);
                 }
@@ -2973,6 +3137,11 @@ namespace RPBot
                if (_currentStartupType == StartupType.FirstStart)
                 {
                     await BootstrapFirstRunSettingsAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    // При перезапуске тоже проверяем/дополняем конфиг новыми полями
+                    await EnsureConfigFieldsAsync().ConfigureAwait(false);
                 }
 
 				// ЭТАП 1: Регистрация команд
@@ -3008,11 +3177,11 @@ namespace RPBot
 				}
                 if (stage1Lines.Count == 0)
                     stage1Lines.Add("Регистрация команд завершена.");
-                await LogStartupBoxAsync("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
+                await LogStartupBoxAsync("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
 
                 // ЭТАП 2: Активация обработчиков
                 await SetupDiscordEvents();
-                await LogStartupBoxAsync("ЭТАП 2/4: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
+                await LogStartupBoxAsync("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
                 {
                     "Подписки на события Discord обновлены и активированы."
                 });
@@ -3070,9 +3239,65 @@ namespace RPBot
                 catch { }
                 if (stage3Lines.Count == 0)
                     stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
-                await LogStartupBoxAsync("ЭТАП 3/4: СИНХРОНИЗАЦИЯ", stage3Lines);
+                await LogStartupBoxAsync("ЭТАП 3/5: СИНХРОНИЗАЦИЯ", stage3Lines);
 
-                // ЭТАП 4: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
+                // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
+                if (_config.Music.Enabled && _lavalinkService is not null)
+                {
+                    var musicLines = new List<string>();
+                    // Перехватываем весь вывод LavalinkService в буфер,
+                    // чтобы он отобразился внутри бокса этапа, а не до него.
+                    _lavalinkService.StartupLogBuffer = musicLines;
+                    try
+                    {
+                        var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
+
+                        if (!lavalinkReady)
+                        {
+                            // WaitUntilReadyAsync исчерпал таймаут — даём ещё до 15 секунд
+                            // (Lavalink может ещё грузить JVM или плагины)
+                            const int extraRetries = 15;
+                            const int retryDelayMs = 1000;
+                            musicLines.Add($"⏳ Lavalink не ответил за основной таймаут, ждём ещё до {extraRetries}с...");
+
+                            for (int i = 0; i < extraRetries; i++)
+                            {
+                                await Task.Delay(retryDelayMs);
+                                var err = await _lavalinkService.ProbeAsync();
+                                if (err is null)
+                                {
+                                    lavalinkReady = true;
+                                    musicLines.Add($"✅ Lavalink поднялся на попытке {i + 1} — готов ({_config.Music.Host}:{_config.Music.Port})");
+                                    break;
+                                }
+                            }
+
+                            if (!lavalinkReady)
+                            {
+                                var finalErr = await _lavalinkService.ProbeAsync();
+                                musicLines.Add(finalErr is null
+                                    ? $"✅ Lavalink готов ({_config.Music.Host}:{_config.Music.Port})"
+                                    : $"⚠️ Lavalink так и не ответил: {finalErr}");
+                            }
+                        }
+                        else
+                        {
+                            musicLines.Add($"✅ yt-cipher и Lavalink запущены и отвечают ({_config.Music.Host}:{_config.Music.Port})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        musicLines.Add($"❌ Ошибка запуска музыкального стека: {ex.Message}");
+                    }
+                    finally
+                    {
+                        // Снимаем буфер — дальнейшие логи идут обратно в обычный sink
+                        _lavalinkService.StartupLogBuffer = null;
+                    }
+                    await LogStartupBoxAsync("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ", musicLines);
+                }
+
+                // ЭТАП 5: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
                 var stage4Lines = new List<string>();
 
                 // Выполняем проверку здоровья систем
@@ -3142,7 +3367,7 @@ namespace RPBot
                 if (stage4Lines.Count == 0)
                     stage4Lines.Add("Нет серверов для отправки стартовых уведомлений.");
 
-                await LogStartupBoxAsync("ЭТАП 4/4: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
+                await LogStartupBoxAsync("ЭТАП 5/5: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
 
                 // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
@@ -3240,7 +3465,7 @@ namespace RPBot
                         try { _client.SlashCommandExecuted -= BwonkCommand; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing BwonkCommand: {ex}"); }
                         try { _client.ModalSubmitted -= HandleModalSubmitted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ModalSubmitted: {ex}"); }
                         try { _client.ButtonExecuted -= HandleButtonExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing ButtonExecuted: {ex}"); }
-                        try { _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCreated: {ex}"); }
+                        try { _client.SelectMenuExecuted -= HandleSelectMenuExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing SelectMenuExecuted: {ex}"); }
                         try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
                         try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCompleted: {ex}"); }
 
@@ -3285,6 +3510,13 @@ namespace RPBot
                 if (parts.Length >= 2 && parts[0] == "edit_modal")
                 {
                     await new GameSessionCommands(_client, _googleSheetsService).HandleEditModal(modal);
+                    return;
+                }
+
+                if (parts[0] == "music_goto_modal")
+                {
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleGoToModalAsync(modal);
                     return;
                 }
 
@@ -3728,6 +3960,22 @@ namespace RPBot
             }
         }
 
+        public async Task HandleSelectMenuExecuted(SocketMessageComponent component)
+        {
+            await Task.Yield();
+            try
+            {
+                var cid = component.Data.CustomId;
+                if (_musicCommands is not null && cid.StartsWith("music_search_select:"))
+                    await _musicCommands.HandleButtonAsync(component);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка обработки SelectMenu: {ex.Message}");
+                try { await component.RespondAsync("Ошибка взаимодействия", ephemeral: true); } catch { }
+            }
+        }
+
         private async Task ProcessButtonAsync(SocketMessageComponent component)
         {
             var parts = component.Data.CustomId.Split(':');
@@ -3771,8 +4019,39 @@ namespace RPBot
                 case "detailed_stats":
                     await new GameSessionCommands(_client, _googleSheetsService).HandleStatsButton(component);
                     break;
-            }
-        }
+
+                case "music_prev":
+                case "music_pauseplay":
+                case "music_skip":
+                case "music_stop":
+                case "music_loop":
+                case "music_shuffle":
+                case "music_vol_down":
+                case "music_vol_up":
+                case "music_queue":
+                case "music_queue_prev":
+                case "music_queue_next":
+                case "music_queue_goto":
+                case "music_autopause_resume":
+                case "music_autopause_skip":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleButtonAsync(component);
+                    break;
+
+                default:
+                    var cid = component.Data.CustomId;
+                    if (_musicCommands is not null &&
+                        (cid.StartsWith("music_search_") ||
+                         cid.StartsWith("playlist_public_yes_") ||
+                         cid.StartsWith("playlist_public_no_") ||
+                         cid.StartsWith("playlist_overwrite_yes_") ||
+                         cid.StartsWith("playlist_overwrite_no_")))
+                    {
+                        await _musicCommands.HandleButtonAsync(component);
+                    }
+					break;
+			}
+		}
 
 		private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
 		{
@@ -4208,6 +4487,9 @@ namespace RPBot
                 case "help_gs":
                     await Help_GameSessionCommand(command);
                     break;
+                case "help_music":
+                    await Help_MusicCommand(command);
+                    break;
                 case "help_predict":
                     await Help_PredictCommand(command);
                     break;
@@ -4234,6 +4516,18 @@ namespace RPBot
                     break;
                 case "bwonk":
                     // handled by BwonkCommand (subscribed handler)
+                    break;
+                case "music":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleMusicAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                    break;
+                case "music-playlist":
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleMusicPlaylistAsync(command);
+                    else
+                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
                     break;
                 default:
                     await command.RespondAsync("Команда не распознана.");
@@ -4429,6 +4723,13 @@ namespace RPBot
             var infoModule = _services.GetRequiredService<InfoCommands>();
             await infoModule.Help_GS(command);
             await LogInfo("Выведена подсказка о командах для статистики.");
+        }
+
+        private async Task Help_MusicCommand(SocketSlashCommand command)
+        {
+            var infoModule = _services.GetRequiredService<InfoCommands>();
+            await infoModule.Help_Music(command);
+            await LogInfo("Выведена подсказка о музыкальных командах.");
         }
 
         private async Task Bug_ReportCommand(SocketSlashCommand command)
@@ -4975,49 +5276,75 @@ namespace RPBot
                     : "Не инициализировано"
             });
 
-            // 8. Проверка Google Sheets
+// 8. Проверка Google Sheets
+{
+    if (_config?.GoogleSheetsEnabled != true)
+    {
+        checks.Add(new SystemHealthCheck
+        {
+            SystemName = "Google Sheets",
+            IsHealthy = true,
+            Message = "Отключено в конфиге"
+        });
+    }
+    else if (_googleSheetsService == null)
+    {
+        checks.Add(new SystemHealthCheck
+        {
+            SystemName = "Google Sheets",
+            IsHealthy = false,
+            Message = "Не инициализирован (проверь credentials и SpreadsheetId)"
+        });
+    }
+    else
+    {
+        try
+        {
+            var probeResult = await _googleSheetsService.ProbeAsync().ConfigureAwait(false);
+            checks.Add(new SystemHealthCheck
             {
-                if (_config?.GoogleSheetsEnabled != true)
-                {
-                    checks.Add(new SystemHealthCheck
-                    {
-                        SystemName = "Google Sheets",
-                        IsHealthy = true,
-                        Message = "Отключено в конфиге"
-                    });
-                }
-                else if (_googleSheetsService == null)
-                {
-                    checks.Add(new SystemHealthCheck
-                    {
-                        SystemName = "Google Sheets",
-                        IsHealthy = false,
-                        Message = "Не инициализирован (проверь credentials и SpreadsheetId)"
-                    });
-                }
-                else
-                {
-                    try
-                    {
-                        var probeResult = await _googleSheetsService.ProbeAsync().ConfigureAwait(false);
-                        checks.Add(new SystemHealthCheck
-                        {
-                            SystemName = "Google Sheets",
-                            IsHealthy = probeResult.Success,
-                            Message = probeResult.Message
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        checks.Add(new SystemHealthCheck
-                        {
-                            SystemName = "Google Sheets",
-                            IsHealthy = false,
-                            Message = $"Ошибка проверки: {ex.Message}"
-                        });
-                    }
-                }
-            }
+                SystemName = "Google Sheets",
+                IsHealthy = probeResult.Success,
+                Message = probeResult.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            checks.Add(new SystemHealthCheck
+            {
+                SystemName = "Google Sheets",
+                IsHealthy = false,
+                Message = $"Ошибка проверки: {ex.Message}"
+            });
+        }
+    }
+}
+
+// 9. Проверка музыкального сервиса (Lavalink)
+if (_config.Music.Enabled)
+{
+    string musicMsg;
+    bool musicHealthy;
+    if (_lavalinkService is null)
+    {
+        musicHealthy = false;
+        musicMsg = "Сервис не инициализирован";
+    }
+    else
+    {
+        var probeErr = await _lavalinkService.ProbeAsync();
+        musicHealthy = probeErr is null;
+        musicMsg = probeErr is null
+            ? $"Lavalink доступен ({_config.Music.Host}:{_config.Music.Port})"
+            : $"Недоступен: {probeErr}";
+    }
+    checks.Add(new SystemHealthCheck
+    {
+        SystemName = "Музыка (Lavalink)",
+        IsHealthy = musicHealthy,
+        Message = musicMsg,
+    });
+}
 
             return checks;
         }

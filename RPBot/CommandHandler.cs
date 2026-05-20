@@ -155,10 +155,14 @@ namespace RPBot
 					.WithName("help_predict")
 					.WithDescription("Справка по системе прогнозов и ставок на костяшки"),
 
-				new SlashCommandBuilder()
-					.WithName("clr")
-					.WithDescription("Удаляет указанное количество сообщений из чата")
-					.AddOption("input", ApplicationCommandOptionType.String, "Количество сообщений для удаления (1-100)", isRequired: true),
+new SlashCommandBuilder()
+	.WithName("help_music")
+	.WithDescription("Выводит подробную справку по музыкальным командам (/music и /music-playlist)."),
+
+new SlashCommandBuilder()
+	.WithName("clr")
+	.WithDescription("Удаляет выбранное количество сообщений.")
+	.AddOption("input", ApplicationCommandOptionType.String, "Формат: Х, где Х - количество сообщений, которые нужно удалить", isRequired: true),
 
 				new SlashCommandBuilder()
 					.WithName("serverinfo")
@@ -343,18 +347,94 @@ namespace RPBot
 					.AddOption("category", ApplicationCommandOptionType.String, "Название категории для перемещения", isRequired: true),
 
 
-				new SlashCommandBuilder()
-					.WithName("event_notify")
-					.WithDescription("Управление личными уведомлениями о новых событиях")
-					.AddOption(new SlashCommandOptionBuilder()
-						.WithName("action")
-						.WithDescription("Выбор действия с уведомлениями")
-						.WithType(ApplicationCommandOptionType.String)
-						.AddChoice("Подписаться на уведомления", "subscribe")
-						.AddChoice("Отписаться от уведомлений", "unsubscribe")
-						.AddChoice("Проверить статус подписки", "status")
-						.WithRequired(true)),
-			};
+new SlashCommandBuilder()
+	.WithName("event_notify")
+	.WithDescription("Управление личными уведомлениями о новых событиях")
+	.AddOption(new SlashCommandOptionBuilder()
+		.WithName("action")
+		.WithDescription("Выбор действия с уведомлениями")
+		.WithType(ApplicationCommandOptionType.String)
+		.AddChoice("Подписаться на уведомления", "subscribe")
+		.AddChoice("Отписаться от уведомлений", "unsubscribe")
+		.AddChoice("Проверить статус подписки", "status")
+		.WithRequired(true)),
+
+                // === МУЗЫКА ===
+                new SlashCommandBuilder()
+                    .WithName("music")
+                    .WithDescription("Управление музыкой в голосовом канале.")
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("action")
+                        .WithDescription("Действие")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("играть",     "play")
+                        .AddChoice("стоп",       "stop")
+                        .AddChoice("пауза",      "pause")
+                        .AddChoice("продолжить", "resume")
+                        .AddChoice("пропустить", "skip")
+                        .AddChoice("очередь",    "queue")
+                        .AddChoice("повтор",     "loop")
+                        .AddChoice("перемешать", "shuffle")
+                        .AddChoice("перемотка",  "seek")
+                        .AddChoice("удалить",    "remove")
+                        .WithRequired(true))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("запрос")
+                        .WithDescription("Ссылка на трек, название для поиска или название сохранённого плейлиста — для «играть»")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("время")
+                        .WithDescription("Позиция для перемотки: «1:30» или «90» сек — для «перемотка»")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("номер")
+                        .WithDescription("Номер трека в очереди для удаления — для «удалить»")
+                        .WithType(ApplicationCommandOptionType.Integer)
+                        .WithRequired(false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("mode")
+                        .WithDescription("Режим повтора (для «повтор»): трек / очередь / выкл")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("трек",    "track")
+                        .AddChoice("очередь", "queue")
+                        .AddChoice("выкл",    "none")
+                        .WithRequired(false)),
+
+                // === ПЛЕЙЛИСТЫ ===
+                new SlashCommandBuilder()
+                    .WithName("music-playlist")
+                    .WithDescription("Управление сохранёнными плейлистами.")
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("действие")
+                        .WithDescription("Что сделать с плейлистом")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("сохранить",    "playlist_save")
+                        .AddChoice("загрузить",    "playlist_load")
+                        .AddChoice("список",       "playlist_list")
+                        .AddChoice("переименовать","playlist_rename")
+                        .AddChoice("доступ",       "playlist_access")
+                        .AddChoice("удалить",      "playlist_delete")
+                        .WithRequired(true))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("название")
+                        .WithDescription("Название плейлиста")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("новое_название")
+                        .WithDescription("Новое название плейлиста — для действия «переименовать»")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .WithRequired(false))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("доступ")
+                        .WithDescription("Уровень доступа — для действия «доступ»")
+                        .WithType(ApplicationCommandOptionType.String)
+                        .AddChoice("личный",   "private")
+                        .AddChoice("публичный","public")
+                        .WithRequired(false)),
+            };
         }
     }
 }

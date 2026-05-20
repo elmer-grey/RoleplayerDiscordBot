@@ -1,0 +1,90 @@
+## ОБРАЗЕЦ КОНФИГУРАЦИИ LAVALINK
+## Скопируй этот файл в application.yml и заполни значения.
+## application.yml НЕ коммитится в git (содержит личные токены).
+
+server:
+  port: 2333
+  address: 127.0.0.1
+  http2:
+    enabled: false
+
+lavalink:
+  plugins:
+    # YouTube source plugin — для воспроизведения с YouTube
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+      repository: "https://maven.lavalink.dev/releases"
+  server:
+    # Пароль должен совпадать с Music.Password в config.json бота
+    password: "rpbot_lavalink_password"
+    sources:
+      youtube: false        # отключён нативный, используется плагин выше
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      http: true            # прямые ссылки на аудио-файлы
+      local: false
+    filters:
+      volume: true
+      equalizer: true
+      timescale: true
+      tremolo: true
+      vibrato: true
+      distortion: true
+      rotation: true
+      channelMix: true
+      lowPass: true
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10
+    resamplingQuality: MEDIUM
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: true
+
+metrics:
+  prometheus:
+    enabled: false
+    endpoint: /metrics
+
+sentry:
+  dsn: ""
+  environment: ""
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - TVHTML5_SIMPLY  # загружает метаданные трека
+      - TV              # playback-only с OAuth через remote cipher
+    remoteCipher:
+      # Адрес локального yt-cipher сервера (запускается ботом автоматически если YtCipherAutoStart=true)
+      url: "http://localhost:8001"
+      userAgent: "RoleplayerDiscordBot"
+    oauth:
+      enabled: true
+      # КАК ПОЛУЧИТЬ refreshToken:
+      # 1. Запусти Lavalink без токена (оставь пустым) — он выведет ссылку авторизации в лог
+      # 2. Открой ссылку, войди в Google-аккаунт
+      # 3. Скопируй refreshToken из лога Lavalink и вставь сюда
+      refreshToken: ""
+
+logging:
+  file:
+    path: ./logs
+  level:
+    root: INFO
+    lavalink: INFO
+  request:
+    enabled: true
+    includeClientInfo: true
+    includeHeaders: false
+    includeQueryString: true
+    includePayload: true
+    maxPayloadLength: 10000
