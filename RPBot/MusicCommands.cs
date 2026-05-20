@@ -884,7 +884,7 @@ namespace RPBot
                     : $"🔒 Плейлист **{name}** остался **приватным**.";
 
                 try { await component.Message.DeleteAsync(); } catch { }
-                await component.FollowupAsync(reply, ephemeral: true);
+                await SendEphemeralAutoDeleteAsync(component, reply);
             }
             catch { /* игнорируем */ }
         }
@@ -929,10 +929,15 @@ namespace RPBot
                     .WithButton("✅ Да", $"playlist_public_yes_{guildId}_{userId}_{newEncodedName}", ButtonStyle.Success)
                     .WithButton("❌ Нет", $"playlist_public_no_{guildId}_{newEncodedName}", ButtonStyle.Secondary)
                     .Build();
-                await component.FollowupAsync(
+                var followupMsg = await component.FollowupAsync(
                     $"💾 Плейлист **{name}** перезаписан ({urls.Count} треков).\n📢 Сделать его **публичным**?",
                     components: buttons,
                     ephemeral: true);
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    try { await followupMsg.DeleteAsync(); } catch { }
+                });
         }
 
         // custom ID: playlist_overwrite_no_{encodedName}
@@ -941,7 +946,7 @@ namespace RPBot
             var parts       = component.Data.CustomId.Split('_');
             var encodedName = string.Join("_", parts[3..]);
             try { await component.Message.DeleteAsync(); } catch { }
-            await component.FollowupAsync("⚠️ Поменяйте имя плейлиста.", ephemeral: true);
+            await SendEphemeralAutoDeleteAsync(component, "⚠️ Поменяйте имя плейлиста.");
         }
 
         private async Task ButtonPrevAsync(ulong guildId, SocketMessageComponent component)
@@ -1311,10 +1316,15 @@ namespace RPBot
                     .WithButton("✅ Да", $"playlist_overwrite_yes_{uid}_{command.User.Id}_{encodedName}", ButtonStyle.Danger)
                     .WithButton("❌ Нет", $"playlist_overwrite_no_{encodedName}", ButtonStyle.Secondary)
                     .Build();
-                await command.FollowupAsync(
+                var confirmMsg = await command.FollowupAsync(
                     $"⚠️ Обнаружен плейлист с таким же названием **{name}**. Перезаписать его?",
                     components: confirmButtons,
                     ephemeral: true);
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    try { await confirmMsg.DeleteAsync(); } catch { }
+                });
                 return;
             }
 
@@ -1331,12 +1341,18 @@ namespace RPBot
             var buttons = new ComponentBuilder()
                 .WithButton("✅ Да", $"playlist_public_yes_{guildId}_{command.User.Id}_{encodedName}", ButtonStyle.Success)
                 .WithButton("❌ Нет", $"playlist_public_no_{guildId}_{encodedName}", ButtonStyle.Secondary)
+
                 .Build();
 
-            await command.FollowupAsync(
+            var saveMsg = await command.FollowupAsync(
                 $"💾 Плейлист **{name}** сохранён ({urls.Count} треков).\n📢 Сделать этот плейлист **публичным** (виден всем участникам сервера)?",
                 components: buttons,
                 ephemeral: true);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30));
+                try { await saveMsg.DeleteAsync(); } catch { }
+            });
         }
 
         private async Task HandlePlaylistLoadAsync(SocketSlashCommand command)
@@ -1515,7 +1531,7 @@ namespace RPBot
                 foreach (var pl in public_)
                     sb.AppendLine($"• **{pl.Name}** — {pl.Urls.Count} треков");
             }
-            await command.FollowupAsync(sb.ToString(), ephemeral: true);
+            await AutoDeleteFollowupAsync(command, sb.ToString(), seconds: 60);
         }
 
         private async Task HandlePlaylistDeleteAsync(SocketSlashCommand command)
