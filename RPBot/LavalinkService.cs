@@ -827,51 +827,53 @@ namespace RPBot
         {
             var player = await GetPlayerAsync(guildId, ct);
             if (player is null) return "❌ Ничего не играет.";
-            if (player.Queue.IsEmpty) return "📋 Очередь пуста.";
 
-            var items = player.Queue.ToList();
-            var rng = new Random();
-            for (int i = items.Count - 1; i > 0; i--)
-            {
-                int j = rng.Next(i + 1);
-                (items[i], items[j]) = (items[j], items[i]);
-            }
-            for (int i = player.Queue.Count - 1; i >= 0; i--)
-                await player.Queue.RemoveAtAsync(i, ct);
-            foreach (var item in items)
-                await player.Queue.AddAsync(item, ct);
-
-            // Синхронизируем хвост MasterQueue в том же порядке что и Lavalink-очередь
             var state = GetOrCreateState(guildId);
             await state.MasterQueueLock.WaitAsync(ct);
             try
             {
-                int cur = state.MasterCurrentIndex;
-                if (cur >= 0 && cur < state.MasterQueue.Count - 1)
+                if (state.MasterQueue.Count == 0) return "📋 Очередь пуста.";
+
+                // Перемешиваем всю MasterQueue целиком (история + текущий + будущие)
+                var rng = new Random();
+                var all = state.MasterQueue.ToList();
+                for (int i = all.Count - 1; i > 0; i--)
                 {
-                    var newOrder = items
-                        .Select(i2 => i2.Track?.Uri?.ToString())
-                        .Where(u => u is not null)
-                        .ToList();
+                    int j = rng.Next(i + 1);
+                    (all[i], all[j]) = (all[j], all[i]);
+                }
+                state.MasterQueue.Clear();
+                state.MasterQueue.AddRange(all);
+                state.RenumberMasterQueue();
 
-                    var tail = state.MasterQueue.Skip(cur + 1).ToList();
+                // Текущий трек ищем по URL в новом порядке
+                var currentUrl = player.CurrentItem?.Track?.Uri?.ToString();
+                if (currentUrl is not null)
+                {
+                    var idx = state.MasterQueue.FindIndex(e =>
+                        string.Equals(e.Url, currentUrl, StringComparison.OrdinalIgnoreCase));
+                    state.MasterCurrentIndex = idx >= 0 ? idx : 0;
+                }
+                else
+                {
+                    state.MasterCurrentIndex = 0;
+                }
 
-                    var reordered = newOrder
-                        .Select(u => tail.FirstOrDefault(e =>
-                            string.Equals(e.Url, u, StringComparison.OrdinalIgnoreCase)))
-                        .Where(e => e is not null)
-                        .Concat(tail.Where(e => !newOrder.Any(u =>
-                            string.Equals(u, e.Url, StringComparison.OrdinalIgnoreCase))))
-                        .ToList();
+                // Обновляем Lavalink-очередь: треки после текущего
+                for (int i = player.Queue.Count - 1; i >= 0; i--)
+                    await player.Queue.RemoveAtAsync(i, ct);
 
-                    state.MasterQueue.RemoveRange(cur + 1, state.MasterQueue.Count - cur - 1);
-                    state.MasterQueue.AddRange(reordered!);
-                    state.RenumberMasterQueue();
+                var future = state.MasterQueue.Skip(state.MasterCurrentIndex + 1).ToList();
+                foreach (var entry in future)
+                {
+                    var loaded = await _audioService.Tracks.LoadTrackAsync(entry.Url, TrackSearchMode.None, cancellationToken: ct);
+                    if (loaded is not null)
+                        await player.Queue.AddAsync(new TrackQueueItem(loaded), ct);
                 }
             }
             finally { state.MasterQueueLock.Release(); }
 
-            return "🔀 Очередь перемешана.";
+            return "🔀 Вся очередь перемешана.";
         }
 
         // ─── Позиция / прогресс ───────────────────────────────────────────

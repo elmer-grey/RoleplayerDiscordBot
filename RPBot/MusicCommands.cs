@@ -892,8 +892,6 @@ namespace RPBot
         // custom ID: playlist_overwrite_yes_{guildId}_{userId}_{encodedName}
         private async Task ButtonPlaylistOverwriteYesAsync(SocketMessageComponent component)
         {
-            try
-            {
                 // parts: [0]=playlist [1]=overwrite [2]=yes [3]=guildId [4]=userId [5..]=encodedName
                 var parts = component.Data.CustomId.Split('_');
                 var guildId     = ulong.Parse(parts[3]);
@@ -935,22 +933,15 @@ namespace RPBot
                     $"💾 Плейлист **{name}** перезаписан ({urls.Count} треков).\n📢 Сделать его **публичным**?",
                     components: buttons,
                     ephemeral: true);
-            }
-            catch { /* игнорируем */ }
         }
 
         // custom ID: playlist_overwrite_no_{encodedName}
         private async Task ButtonPlaylistOverwriteNoAsync(SocketMessageComponent component)
         {
-            try
-            {
-                var parts       = component.Data.CustomId.Split('_');
-                var encodedName = string.Join("_", parts[3..]);
-                var name        = Uri.UnescapeDataString(encodedName);
-                try { await component.Message.DeleteAsync(); } catch { }
-                await component.FollowupAsync($"↩️ Плейлист **{name}** не изменён.", ephemeral: true);
-            }
-            catch { /* игнорируем */ }
+            var parts       = component.Data.CustomId.Split('_');
+            var encodedName = string.Join("_", parts[3..]);
+            try { await component.Message.DeleteAsync(); } catch { }
+            await component.FollowupAsync("⚠️ Поменяйте имя плейлиста.", ephemeral: true);
         }
 
         private async Task ButtonPrevAsync(ulong guildId, SocketMessageComponent component)

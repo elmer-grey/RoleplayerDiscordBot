@@ -3619,6 +3619,7 @@ namespace RPBot
                 case "music_queue":
                 case "music_queue_prev":
                 case "music_queue_next":
+                case "music_queue_goto":
                 case "music_autopause_resume":
                 case "music_autopause_skip":
                     if (_musicCommands is not null)
@@ -3630,7 +3631,9 @@ namespace RPBot
                     if (_musicCommands is not null &&
                         (cid.StartsWith("music_search_") ||
                          cid.StartsWith("playlist_public_yes_") ||
-                         cid.StartsWith("playlist_public_no_")))
+                         cid.StartsWith("playlist_public_no_") ||
+                         cid.StartsWith("playlist_overwrite_yes_") ||
+                         cid.StartsWith("playlist_overwrite_no_")))
                     {
                         await _musicCommands.HandleButtonAsync(component);
                     }
