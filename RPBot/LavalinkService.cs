@@ -918,10 +918,8 @@ namespace RPBot
             await state.MasterQueueLock.WaitAsync(ct);
             try
             {
-                // Возвращаем все треки начиная с текущего (включительно)
-                int start = Math.Max(0, state.MasterCurrentIndex);
+                // Возвращаем всю очередь целиком: история + текущий + следующие
                 return state.MasterQueue
-                    .Skip(start)
                     .Select(e => e.Url)
                     .Where(u => !string.IsNullOrEmpty(u))
                     .ToList();
