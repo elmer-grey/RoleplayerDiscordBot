@@ -37,13 +37,10 @@ namespace RPBot.Music
             long allTimeCount = 0)
         {
             var embed = BuildEmbed(state, isPaused, queueCount, volume, sessionCount, allTimeCount);
-            // Флаги навигации: если плейлист загружен, используем индекс; иначе альт отключен
-            bool hasPrev = state.PlaylistTrackList is not null
-                ? state.PlaylistCurrentIndex > 0
-                : false;
-            bool hasNext = state.PlaylistTrackList is not null
-                ? state.PlaylistCurrentIndex < state.PlaylistTrackList.Count - 1
-                : queueCount > 0;
+            int cur  = state.MasterCurrentIndex;
+            int total = state.MasterQueue.Count;
+            bool hasPrev = cur > 0;
+            bool hasNext = cur >= 0 && cur < total - 1;
             var components = BuildComponents(state.LoopMode, isPaused, volume, queueCount, hasPrev, hasNext);
             return (embed, components);
         }
@@ -143,51 +140,105 @@ namespace RPBot.Music
                 .Build();
         }
 
-        // ─── Embed очереди ────────────────────────────────────────────────
+        // ─── Embed очереди (MasterQueue) ─────────────────────────────────
 
-        /// <summary>
-        /// Строит embed со списком очереди.
-        /// items[0] = текущий трек, items[1..] = очередь.
-        /// </summary>
-        public static (Embed embed, MessageComponent components) BuildQueueEmbed(
-            string? currentTitle,
-            TimeSpan? currentDuration,
-            IReadOnlyList<(string Title, TimeSpan? Duration)> queue,
+        private const int HistoryOnPage0 = 3;   // треков истории на стр.0
+        private const int PageSize       = 20;  // всего записей на странице
+        private const int FutureOnPage0  = PageSize - HistoryOnPage0 - 1; // 16
+        private const int MaxTitleLength = 60;
+
+        private static string Truncate(string s)
+            => s.Length > MaxTitleLength ? s[..MaxTitleLength] + "…" : s;
+
+        /// <summary>Возвращает (minPage, maxPage) для текущего состояния MasterQueue.</summary>
+        public static (int min, int max) GetMasterQueuePageRange(IReadOnlyList<MasterTrackEntry> master, int currentIndex)
+        {
+            if (master.Count == 0) return (0, 0);
+            int historyCount = currentIndex < 0 ? 0 : currentIndex;           // треков до текущего
+            int futureCount  = currentIndex < 0 ? master.Count
+                             : master.Count - currentIndex - 1;               // треков после текущего
+
+            // Страница 0 вмещает min(3, historyCount) + 1 + min(16, futureCount)
+            int histExtra = Math.Max(0, historyCount - HistoryOnPage0);       // история сверх стр.0
+            int futExtra  = Math.Max(0, futureCount  - FutureOnPage0);        // будущее сверх стр.0
+
+            int minPage = histExtra == 0 ? 0 : -(int)Math.Ceiling(histExtra / (double)PageSize);
+            int maxPage = futExtra  == 0 ? 0 :  (int)Math.Ceiling(futExtra  / (double)PageSize);
+            return (minPage, maxPage);
+        }
+
+        /// <summary>Строит embed очереди из MasterQueue с учётом страницы (может быть отрицательной).</summary>
+        public static (Embed embed, MessageComponent components) BuildQueueEmbedFromMaster(
+            IReadOnlyList<MasterTrackEntry> master,
+            int currentIndex,
             LoopMode loop,
             int page = 0)
         {
-            const int PageSize = 15;
-            int totalPages = queue.Count == 0 ? 1 : (int)Math.Ceiling(queue.Count / (double)PageSize);
-            page = Math.Clamp(page, 0, totalPages - 1);
-
             var sb = new System.Text.StringBuilder();
 
-            if (currentTitle is not null)
+            if (master.Count == 0 || currentIndex < 0)
             {
-                sb.AppendLine($"▶️ **{currentTitle}** — `{FormatTime(currentDuration ?? TimeSpan.Zero)}`");
-                if (queue.Count > 0) sb.AppendLine();
+                sb.AppendLine("*Очередь пуста*");
+            }
+            else
+            {
+                // Вычисляем срез для данной страницы
+                // Страница 0: [currentIndex-3 .. currentIndex .. currentIndex+16]
+                // Страница -1: 20 треков истории до стр.0
+                // Страница +1: 20 треков будущего после стр.0
+
+                int page0HistStart = Math.Max(0, currentIndex - HistoryOnPage0);
+
+                int sliceStart, sliceEnd;
+                if (page == 0)
+                {
+                    sliceStart = page0HistStart;
+                    sliceEnd   = Math.Min(master.Count, page0HistStart + PageSize);
+                }
+                else if (page < 0)
+                {
+                    // уходим глубже в историю
+                    int offset = (-page - 1) * PageSize;
+                    sliceEnd   = page0HistStart - offset;
+                    sliceStart = Math.Max(0, sliceEnd - PageSize);
+                }
+                else
+                {
+                    // уходим дальше в будущее
+                    int page0End = Math.Min(master.Count, page0HistStart + PageSize);
+                    int offset   = (page - 1) * PageSize;
+                    sliceStart   = page0End + offset;
+                    sliceEnd     = Math.Min(master.Count, sliceStart + PageSize);
+                }
+
+                sliceStart = Math.Clamp(sliceStart, 0, master.Count);
+                sliceEnd   = Math.Clamp(sliceEnd,   0, master.Count);
+
+                for (int i = sliceStart; i < sliceEnd; i++)
+                {
+                    var e = master[i];
+                    var title = Truncate(e.Title);
+                    var dur   = FormatTime(e.Duration);
+                    if (i == currentIndex)
+                        sb.AppendLine($"▶️ **`#{e.Number}`** **{title}** — `{dur}`");
+                    else if (i < currentIndex)
+                        sb.AppendLine($"— `#{e.Number}` {title} — `{dur}`");
+                    else
+                        sb.AppendLine($"`#{e.Number}.` {title} — `{dur}`");
+                }
+
+                if (sb.Length == 0) sb.AppendLine("*Нет треков на этой странице*");
             }
 
-            int start = page * PageSize;
-            int end   = Math.Min(start + PageSize, queue.Count);
-            for (int i = start; i < end; i++)
-            {
-                var (title, dur) = queue[i];
-                sb.AppendLine($"`{i + 1}.` {title} — `{FormatTime(dur ?? TimeSpan.Zero)}`");
-            }
-
-            if (sb.Length == 0) sb.AppendLine("*Очередь пуста*");
-
+            var (minPage, maxPage) = GetMasterQueuePageRange(master, currentIndex);
             var loopStr = loop switch
             {
                 LoopMode.Track => "🔂 Повтор трека",
                 LoopMode.Queue => "🔁 Повтор очереди",
                 _              => ""
             };
-
-            string footer = totalPages > 1
-                ? $"Страница {page + 1}/{totalPages} • {queue.Count} треков" + (loopStr.Length > 0 ? $" • {loopStr}" : "")
-                : loopStr;
+            string footer = $"Стр. {page} ({minPage}…{maxPage}) • {master.Count} треков"
+                + (loopStr.Length > 0 ? $" • {loopStr}" : "");
 
             var embed = new EmbedBuilder()
                 .WithColor(new Color(0x5865F2))
@@ -196,16 +247,24 @@ namespace RPBot.Music
                 .WithFooter(footer)
                 .Build();
 
-            // Кнопки пагинации — показываем только если больше одной страницы
             var cb = new ComponentBuilder();
-            if (totalPages > 1)
-            {
-                cb.WithButton("◀", "music_queue_prev", ButtonStyle.Secondary, disabled: page == 0);
-                cb.WithButton("▶", "music_queue_next", ButtonStyle.Secondary, disabled: page >= totalPages - 1);
-            }
+            cb.WithButton("◀", "music_queue_prev", ButtonStyle.Secondary, disabled: page <= minPage, row: 0);
+            cb.WithButton("🔢", "music_queue_goto", ButtonStyle.Secondary, row: 0);
+            cb.WithButton("▶", "music_queue_next", ButtonStyle.Secondary, disabled: page >= maxPage, row: 0);
 
             return (embed, cb.Build());
         }
+
+        // ─── Устаревший BuildQueueEmbed (оставлен для совместимости) ──────
+        /// <summary>Устаревший метод. Используй BuildQueueEmbedFromMaster.</summary>
+        public static (Embed embed, MessageComponent components) BuildQueueEmbed(
+            string? currentTitle,
+            TimeSpan? currentDuration,
+            IReadOnlyList<(string Title, TimeSpan? Duration)> queue,
+            LoopMode loop,
+            int page = 0,
+            IReadOnlyList<(string Title, TimeSpan? Duration)>? history = null)
+            => BuildQueueEmbedFromMaster(System.Array.Empty<MasterTrackEntry>(), -1, loop, 0);
 
         // ─── Helpers ──────────────────────────────────────────────────────
 

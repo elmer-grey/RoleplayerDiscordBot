@@ -639,11 +639,34 @@ namespace RPBot
 
             // Для YouTube-плейлистов (URL содержит list=) используем загрузку всего плейлиста
             if (IsPlaylistUrl(query))
-                return await LoadAndQueuePlaylistAsync(player, query, cancellationToken);
+                return await LoadAndQueuePlaylistAsync(player, guildId, query, cancellationToken);
 
             var track = await _audioService.Tracks.LoadTrackAsync(query, TrackSearchMode.None, cancellationToken: cancellationToken);
             if (track is null)
                 return new PlayResult { Message = $"❌ Трек не найден: `{query}`" };
+
+            var state = GetOrCreateState(guildId);
+
+            // Добавляем в MasterQueue (дедупликация по URL)
+            await state.MasterQueueLock.WaitAsync(cancellationToken);
+            try
+            {
+                var exists = state.MasterQueue.FindIndex(e =>
+                    string.Equals(e.Url, track.Uri?.ToString(), StringComparison.OrdinalIgnoreCase));
+                if (exists < 0)
+                {
+                    state.MasterQueue.Add(new MasterTrackEntry
+                    {
+                        Number     = state.MasterQueue.Count + 1,
+                        Title      = track.Title,
+                        Author     = track.Author,
+                        Url        = track.Uri?.ToString() ?? query,
+                        ArtworkUrl = track.ArtworkUri?.ToString(),
+                        Duration   = track.Duration,
+                    });
+                }
+            }
+            finally { state.MasterQueueLock.Release(); }
 
             var queueCount = player.Queue.Count;
 
@@ -686,10 +709,10 @@ namespace RPBot
 
         private async Task<PlayResult> LoadAndQueuePlaylistAsync(
             NotifyingPlayer player,
+            ulong guildId,
             string url,
             CancellationToken ct)
         {
-            // Lavalink загружает плейлист целиком когда в URL есть list=
             var result = await _audioService!.Tracks.LoadTracksAsync(url, TrackSearchMode.None, cancellationToken: ct);
             Console.WriteLine($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
             Log($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
@@ -701,12 +724,35 @@ namespace RPBot
                 return new PlayResult { Message = "❌ Плейлист не найден или пуст. Убедись, что он публичный." };
             }
 
+            var state = GetOrCreateState(guildId);
             var playlistName = result.Playlist?.Name ?? "YouTube Playlist";
             var queueCountBefore = player.Queue.Count;
             int added = 0;
 
             foreach (var track in tracks)
             {
+                var trackUrl = track.Uri?.ToString() ?? "";
+
+                // Добавляем в MasterQueue (дедупликация по URL)
+                await state.MasterQueueLock.WaitAsync(ct);
+                try
+                {
+                    if (!state.MasterQueue.Any(e =>
+                        string.Equals(e.Url, trackUrl, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        state.MasterQueue.Add(new MasterTrackEntry
+                        {
+                            Number     = state.MasterQueue.Count + 1,
+                            Title      = track.Title,
+                            Author     = track.Author,
+                            Url        = trackUrl,
+                            ArtworkUrl = track.ArtworkUri?.ToString(),
+                            Duration   = track.Duration,
+                        });
+                    }
+                }
+                finally { state.MasterQueueLock.Release(); }
+
                 if (player.CurrentItem is null && added == 0)
                     await player.PlayAsync(track, cancellationToken: ct);
                 else
@@ -782,7 +828,7 @@ namespace RPBot
             var player = await GetPlayerAsync(guildId, ct);
             if (player is null) return "❌ Ничего не играет.";
             if (player.Queue.IsEmpty) return "📋 Очередь пуста.";
-            // ITrackQueue не имеет Shuffle/Clear — перемешиваем через RemoveAtAsync
+
             var items = player.Queue.ToList();
             var rng = new Random();
             for (int i = items.Count - 1; i > 0; i--)
@@ -790,11 +836,41 @@ namespace RPBot
                 int j = rng.Next(i + 1);
                 (items[i], items[j]) = (items[j], items[i]);
             }
-            // Удаляем с конца (индексы стабильны при удалении с хвоста)
             for (int i = player.Queue.Count - 1; i >= 0; i--)
                 await player.Queue.RemoveAtAsync(i, ct);
             foreach (var item in items)
                 await player.Queue.AddAsync(item, ct);
+
+            // Синхронизируем хвост MasterQueue в том же порядке что и Lavalink-очередь
+            var state = GetOrCreateState(guildId);
+            await state.MasterQueueLock.WaitAsync(ct);
+            try
+            {
+                int cur = state.MasterCurrentIndex;
+                if (cur >= 0 && cur < state.MasterQueue.Count - 1)
+                {
+                    var newOrder = items
+                        .Select(i2 => i2.Track?.Uri?.ToString())
+                        .Where(u => u is not null)
+                        .ToList();
+
+                    var tail = state.MasterQueue.Skip(cur + 1).ToList();
+
+                    var reordered = newOrder
+                        .Select(u => tail.FirstOrDefault(e =>
+                            string.Equals(e.Url, u, StringComparison.OrdinalIgnoreCase)))
+                        .Where(e => e is not null)
+                        .Concat(tail.Where(e => !newOrder.Any(u =>
+                            string.Equals(u, e.Url, StringComparison.OrdinalIgnoreCase))))
+                        .ToList();
+
+                    state.MasterQueue.RemoveRange(cur + 1, state.MasterQueue.Count - cur - 1);
+                    state.MasterQueue.AddRange(reordered!);
+                    state.RenumberMasterQueue();
+                }
+            }
+            finally { state.MasterQueueLock.Release(); }
+
             return "🔀 Очередь перемешана.";
         }
 
@@ -912,6 +988,12 @@ namespace RPBot
 
             await player.StopAsync(cancellationToken);
             await player.DisconnectAsync(cancellationToken);
+
+            var state = GetOrCreateState(guildId);
+            await state.MasterQueueLock.WaitAsync(cancellationToken);
+            try { state.MasterQueue.Clear(); state.MasterCurrentIndex = -1; }
+            finally { state.MasterQueueLock.Release(); }
+
             return "⏹ Воспроизведение остановлено.";
         }
 
@@ -927,6 +1009,11 @@ namespace RPBot
             await player.StopAsync(cancellationToken);
             for (int i = player.Queue.Count - 1; i >= 0; i--)
                 try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
+
+            var state = GetOrCreateState(guildId);
+            await state.MasterQueueLock.WaitAsync(cancellationToken);
+            try { state.MasterQueue.Clear(); state.MasterCurrentIndex = -1; }
+            finally { state.MasterQueueLock.Release(); }
         }
 
         /// <summary>Ставит воспроизведение на паузу.</summary>
@@ -975,31 +1062,9 @@ namespace RPBot
             if (player is null) return "❌ Ничего не играет.";
 
             var state = GetOrCreateState(guildId);
-
-            // Если плейлист загружен — используем индекс для навигации
-            if (state.PlaylistTrackList is not null)
-            {
-                if (state.PlaylistCurrentIndex <= 0)
-                    return "⏮ Это первый трек плейлиста.";
-
-                var prevIndex = state.PlaylistCurrentIndex - 1;
-                var prevUrl   = state.PlaylistTrackList[prevIndex];
-
-                var track = await _audioService!.Tracks.LoadTrackAsync(prevUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
-                if (track is null) return "❌ Не удалось загрузить предыдущий трек.";
-
-                // Очищаем очередь Lavalink чтобы не было дублирования
-                for (int i = player.Queue.Count - 1; i >= 0; i--)
-                    try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
-
-                state.PlaylistCurrentIndex = prevIndex;
-                await player.PlayAsync(track, cancellationToken: cancellationToken);
-                return $"⏮ Предыдущий трек: **{track.Title}**";
-            }
-
             var elapsed = DateTime.UtcNow - state.TrackStartedAtUtc;
 
-            // Если прошло >15 секунд — перемотать в начало
+            // Если прошло >15 секунд — перемотать в начало (только для кнопки ⏮)
             if (elapsed.TotalSeconds > 15)
             {
                 await player.SeekAsync(TimeSpan.Zero, cancellationToken);
@@ -1007,55 +1072,87 @@ namespace RPBot
                 return "⏮ Перемотано в начало трека.";
             }
 
-            // Иначе — предыдущий трек из истории
-            if (state.TrackHistory.Count == 0)
+            int cur = state.MasterCurrentIndex;
+            if (cur <= 0)
             {
                 await player.SeekAsync(TimeSpan.Zero, cancellationToken);
                 state.TrackStartedAtUtc = DateTime.UtcNow;
-                return "⏮ История пуста, перемотано в начало.";
+                return "⏮ Первый трек, перемотано в начало.";
             }
 
-            var prev = state.TrackHistory.First!.Value;
-            state.TrackHistory.RemoveFirst();
-
-            // Ставим текущий трек первым в очередь, чтобы он не потерялся
-            if (player.CurrentItem is not null)
-                await player.Queue.InsertAsync(0, player.CurrentItem, cancellationToken);
-
-            var prevTrack = await _audioService!.Tracks.LoadTrackAsync(prev.Url, TrackSearchMode.None, cancellationToken: cancellationToken);
-            if (prevTrack is null) return "❌ Не удалось загрузить предыдущий трек.";
-
-            await player.PlayAsync(prevTrack, cancellationToken: cancellationToken);
-            return $"⏮ Предыдущий трек: **{prevTrack.Title}**";
+            return await GoToMasterIndexAsync(player, state, cur - 1, cancellationToken);
         }
 
-        /// <summary>Переходит к следующему треку плейлиста (если плейлист загружен).</summary>
+        /// <summary>Переходит к следующему треку.</summary>
         public async Task<string> PlaylistNextAsync(ulong guildId, CancellationToken cancellationToken = default)
         {
             var player = await GetPlayerAsync(guildId, cancellationToken);
             if (player is null) return "❌ Ничего не играет.";
 
             var state = GetOrCreateState(guildId);
+            int cur = state.MasterCurrentIndex;
 
-            if (state.PlaylistTrackList is null)
-                return "❌ Плейлист не загружен.";
+            if (cur < 0 || cur >= state.MasterQueue.Count - 1)
+                return "⏭ Это последний трек.";
 
-            if (state.PlaylistCurrentIndex >= state.PlaylistTrackList.Count - 1)
-                return "⏭ Это последний трек плейлиста.";
+            // Lavalink сам возьмёт следующий из очереди
+            await player.SkipAsync(cancellationToken: cancellationToken);
+            return "⏭ Следующий трек.";
+        }
 
-            var nextIndex = state.PlaylistCurrentIndex + 1;
-            var nextUrl   = state.PlaylistTrackList[nextIndex];
+        /// <summary>Переходит к треку с указанным номером (Number) из MasterQueue. Без проверки 15 сек.</summary>
+        public async Task<string> GoToTrackNumberAsync(ulong guildId, int trackNumber, CancellationToken cancellationToken = default)
+        {
+            var player = await GetPlayerAsync(guildId, cancellationToken);
+            if (player is null) return "❌ Ничего не играет.";
 
-            var track = await _audioService!.Tracks.LoadTrackAsync(nextUrl, TrackSearchMode.None, cancellationToken: cancellationToken);
-            if (track is null) return "❌ Не удалось загрузить следующий трек.";
+            var state = GetOrCreateState(guildId);
+            var idx = state.MasterQueue.FindIndex(e => e.Number == trackNumber);
+            if (idx < 0) return $"❌ Трек #{trackNumber} не найден в очереди.";
+            if (idx == state.MasterCurrentIndex) return $"▶️ Трек #{trackNumber} уже играет.";
 
-            // Очищаем очередь Lavalink чтобы не было дублирования
+            return await GoToMasterIndexAsync(player, state, idx, cancellationToken);
+        }
+
+        /// <summary>Общая логика перехода к треку по индексу в MasterQueue.</summary>
+        private async Task<string> GoToMasterIndexAsync(
+            NotifyingPlayer player, MusicPlayerState state, int targetIndex,
+            CancellationToken cancellationToken)
+        {
+            var target = state.MasterQueue[targetIndex];
+            var track  = await _audioService!.Tracks.LoadTrackAsync(
+                target.Url, TrackSearchMode.None, cancellationToken: cancellationToken);
+            if (track is null) return $"❌ Не удалось загрузить трек «{target.Title}».";
+
+            // Очищаем Lavalink-очередь
             for (int i = player.Queue.Count - 1; i >= 0; i--)
                 try { await player.Queue.RemoveAtAsync(i, cancellationToken); } catch { break; }
 
-            state.PlaylistCurrentIndex = nextIndex;
-            await player.PlayAsync(track, cancellationToken: cancellationToken);
-            return $"⏭ Следующий трек: **{track.Title}**";
+            await player.Queue.InsertAsync(0, new TrackQueueItem(track), cancellationToken);
+            await player.SkipAsync(cancellationToken: cancellationToken);
+
+            // Добавляем треки после target в Lavalink-очередь фоново
+            _ = Task.Run(async () =>
+            {
+                await state.MasterQueueLock.WaitAsync();
+                var afterUrls = state.MasterQueue
+                    .Skip(targetIndex + 1)
+                    .Select(e => e.Url)
+                    .ToList();
+                state.MasterQueueLock.Release();
+
+                foreach (var url in afterUrls)
+                {
+                    try
+                    {
+                        var t = await _audioService!.Tracks.LoadTrackAsync(url, TrackSearchMode.None);
+                        if (t is not null) await player.Queue.AddAsync(new TrackQueueItem(t));
+                    }
+                    catch { /* пропускаем недоступный трек */ }
+                }
+            });
+
+            return $"⏩ Перехожу к треку **#{target.Number}**: {target.Title}";
         }
 
         /// <summary>Перематывает текущий трек на указанную позицию.</summary>
@@ -1085,47 +1182,92 @@ namespace RPBot
             var player = await GetPlayerAsync(guildId, cancellationToken);
             if (player is null) return "❌ Ничего не играет.";
 
-            var count = player.Queue.Count;
-            if (count == 0) return "❌ Очередь пуста.";
-            if (number < 1 || number > count) return $"❌ Номер должен быть от 1 до {count}.";
+            var state = GetOrCreateState(guildId);
 
-            var index = number - 1;
-            var items = new List<ITrackQueueItem>(player.Queue);
-            var removed = items[index];
-            await player.Queue.RemoveAtAsync(index, cancellationToken);
+            await state.MasterQueueLock.WaitAsync(cancellationToken);
+            string result;
+            try
+            {
+                var idx = state.MasterQueue.FindIndex(e => e.Number == number);
+                if (idx < 0) return $"❌ Трек #{number} не найден.";
+                if (idx == state.MasterCurrentIndex) return "❌ Нельзя удалить текущий трек.";
 
-            return $"🗑️ Удалён: **{removed.Track?.Title ?? "?"}**";
+                var removed = state.MasterQueue[idx];
+                state.MasterQueue.RemoveAt(idx);
+                // Корректируем указатель, если удалили трек перед текущим
+                if (idx < state.MasterCurrentIndex)
+                    state.MasterCurrentIndex--;
+                state.RenumberMasterQueue();
+
+                // Синхронизируем Lavalink-очередь: удаляем трек по позиции относительно current
+                // Lavalink-очередь содержит треки ПОСЛЕ текущего; индекс в ней = idx - (MasterCurrentIndex + 1)
+                int lavalinkIdx = idx - (state.MasterCurrentIndex + 1);
+                if (lavalinkIdx >= 0 && lavalinkIdx < player.Queue.Count)
+                {
+                    try { await player.Queue.RemoveAtAsync(lavalinkIdx, cancellationToken); } catch { }
+                }
+
+                result = $"🗑️ Удалён: **{(removed.Title.Length > 60 ? removed.Title[..60] + "…" : removed.Title)}**";
+            }
+            finally { state.MasterQueueLock.Release(); }
+
+            return result;
         }
 
-        /// <summary>
-        /// Возвращает статус плеера и очередь.
-        /// Задел: показывает до 5 треков из очереди.
-        /// </summary>
         public async Task<string> GetQueueInfoAsync(ulong guildId)
         {
             var player = await GetPlayerAsync(guildId);
             if (player is null) return "❌ Ничего не играет.";
+            if (player.CurrentItem is null) return "❌ Ничего не играет.";
 
-            var current = player.CurrentItem?.Track;
-            if (current is null) return "❌ Ничего не играет.";
-
+            var state = GetOrCreateState(guildId);
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"▶️ Сейчас: **{current.Title}** ({FormatDuration(current.Duration)})");
 
-            if (!player.Queue.IsEmpty)
+            await state.MasterQueueLock.WaitAsync();
+            try
             {
-                sb.AppendLine($"📋 Треков в очереди: **{player.Queue.Count}**");
-                int i = 1;
-                foreach (var item in player.Queue)
+                int cur = state.MasterCurrentIndex;
+                if (cur < 0 || state.MasterQueue.Count == 0)
                 {
-                    if (i > 5) { sb.AppendLine("  ..."); break; }
-                    sb.AppendLine($"  {i++}. {item.Track?.Title ?? "?"} ({FormatDuration(item.Track?.Duration)})");
+                    sb.AppendLine($"▶️ Сейчас: **{player.CurrentItem.Track?.Title ?? "?"}**");
+                    sb.AppendLine("📋 Очередь пуста.");
+                    return sb.ToString().TrimEnd();
+                }
+
+                var current = state.MasterQueue[cur];
+                sb.AppendLine($"▶️ **#{current.Number}** **{current.Title}** `{FormatDuration(current.Duration)}`");
+
+                // до 3 треков истории
+                int histStart = Math.Max(0, cur - 3);
+                if (histStart < cur)
+                {
+                    sb.AppendLine("— история:");
+                    for (int i = histStart; i < cur; i++)
+                    {
+                        var e = state.MasterQueue[i];
+                        sb.AppendLine($"  — #{e.Number} {(e.Title.Length > 50 ? e.Title[..50] + "…" : e.Title)}");
+                    }
+                }
+
+                // до 5 следующих треков
+                int futureEnd = Math.Min(state.MasterQueue.Count, cur + 6);
+                if (cur + 1 < state.MasterQueue.Count)
+                {
+                    sb.AppendLine($"📋 В очереди: {state.MasterQueue.Count - cur - 1} треков:");
+                    for (int i = cur + 1; i < futureEnd; i++)
+                    {
+                        var e = state.MasterQueue[i];
+                        sb.AppendLine($"  #{e.Number} {(e.Title.Length > 50 ? e.Title[..50] + "…" : e.Title)}");
+                    }
+                    if (futureEnd < state.MasterQueue.Count)
+                        sb.AppendLine("  ...");
+                }
+                else
+                {
+                    sb.AppendLine("📋 Больше треков нет.");
                 }
             }
-            else
-            {
-                sb.AppendLine("📋 Очередь пуста.");
-            }
+            finally { state.MasterQueueLock.Release(); }
 
             return sb.ToString().TrimEnd();
         }

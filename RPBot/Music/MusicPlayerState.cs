@@ -9,14 +9,15 @@ namespace RPBot.Music
     /// <summary>Режим повтора.</summary>
     public enum LoopMode { None, Track, Queue }
 
-    /// <summary>Запись в истории воспроизведения.</summary>
-    public sealed class TrackHistoryEntry
+    /// <summary>Единая запись мастер-очереди (история + текущий + будущее).</summary>
+    public sealed class MasterTrackEntry
     {
-        public string  Title      { get; init; } = "";
-        public string? Author     { get; init; }
-        public string  Url        { get; init; } = "";
-        public string? ArtworkUrl { get; init; }
-        public TimeSpan Duration  { get; init; }
+        public int       Number     { get; set; }   // 1-based; переприсваивается при удалении
+        public string    Title      { get; init; } = "";
+        public string?   Author     { get; init; }
+        public string    Url        { get; init; } = "";
+        public string?   ArtworkUrl { get; init; }
+        public TimeSpan  Duration   { get; init; }
     }
 
     /// <summary>
@@ -41,43 +42,38 @@ namespace RPBot.Music
         public string?   CurrentTrackAuthor   { get; set; }
         public bool      IsPaused             { get; set; }
 
-        // ─── История треков (#1) ──────────────────────────────────────────
-        /// <summary>Последние 20 треков (0 = самый новый).</summary>
-        public LinkedList<TrackHistoryEntry> TrackHistory { get; } = new();
-        public const int MaxHistory = 20;
+        // ─── Мастер-очередь ───────────────────────────────────────────────
+        /// <summary>Единый список всех треков: история + текущий + будущее.</summary>
+        public List<MasterTrackEntry> MasterQueue { get; } = new();
+        /// <summary>Индекс текущего трека в MasterQueue (-1 = не задан).</summary>
+        public int MasterCurrentIndex { get; set; } = -1;
+        /// <summary>Семафор для потокобезопасного доступа к MasterQueue.</summary>
+        public SemaphoreSlim MasterQueueLock { get; } = new(1, 1);
+
+        /// <summary>Переприсваивает номера (Number) всем записям после удаления.</summary>
+        public void RenumberMasterQueue()
+        {
+            for (int i = 0; i < MasterQueue.Count; i++)
+                MasterQueue[i].Number = i + 1;
+        }
 
         // ─── Auto-pause / Auto-stop (#4) ──────────────────────────────────
-        /// <summary>Когда канал опустел (null = не пуст).</summary>
         public DateTime? ChannelEmptySince    { get; set; }
-        /// <summary>Таймер авто-паузы (5 мин).</summary>
         public Timer?    AutoPauseTimer       { get; set; }
-        /// <summary>Таймер авто-стопа (10 мин).</summary>
         public Timer?    AutoStopTimer        { get; set; }
-        /// <summary>ID сообщения "продолжить воспроизведение?" (null = нет).</summary>
         public ulong?    AutoPausePromptId    { get; set; }
-        /// <summary>ID сообщения об авто-паузе "5 минут" (null = нет).</summary>
         public ulong?    AutoPauseNoticeId    { get; set; }
-        /// <summary>ID сообщения об авто-стопе "10 минут" (null = нет).</summary>
         public ulong?    AutoStopNoticeId     { get; set; }
-        /// <summary>Последний залогированный порог пустого канала (в целых минутах), чтобы не дублировать лог.</summary>
         public int       LastLoggedEmptyMinute { get; set; } = -1;
 
         // ─── Статистика (#13) ─────────────────────────────────────────────
-        /// <summary>Треков сыграно за текущую сессию бота.</summary>
         public int TracksPlayedSession { get; set; }
 
         // ─── Сохранение очереди (#11) ─────────────────────────────────────
-        /// <summary>URL-ы очереди для персистентности (заполняются при сохранении).</summary>
         public List<string> PersistedQueueUrls { get; set; } = new();
 
-        // ─── Навигация по плейлисту ───────────────────────────────────────
-        /// <summary>Все URL-ы загруженного плейлиста (null = не из плейлиста).</summary>
-        public List<string>? PlaylistTrackList  { get; set; }
-        /// <summary>Индекс текущего трека в PlaylistTrackList (-1 = не задан).</summary>
-        public int           PlaylistCurrentIndex { get; set; } = -1;
-
         // ─── Пагинация списка очереди ─────────────────────────────────────
-        /// <summary>Текущая страница списка очереди (0-based).</summary>
+        /// <summary>Текущая страница (0 = окрестность текущего трека; может быть отрицательной).</summary>
         public int QueuePage { get; set; } = 0;
     }
 }

@@ -233,25 +233,8 @@ namespace RPBot
         {
             // При loop=Track Lavalink сам перезапустит — OnTrackStartedAsync вызовется снова.
             var state = _lavalink.GetOrCreateState(guildId);
-            if (state.LoopMode == LoopMode.Track) return;
-
-            // Если загружен плейлист — переходим к следующему треку по индексу
-            if (state.PlaylistTrackList is not null)
-            {
-                if (state.PlaylistCurrentIndex < state.PlaylistTrackList.Count - 1)
-                {
-                    await _lavalink.PlaylistNextAsync(guildId);
-                    // embed обновится через OnTrackStartedAsync
-                }
-                else
-                {
-                    // Плейлист завершён
-                    await UpdateNowPlayingAsync(guildId, state);
-                }
-                return;
-            }
-
-            await UpdateQueueMessageIfVisibleAsync(guildId, state);
+            if (state.LoopMode != LoopMode.Track)
+                await UpdateQueueMessageIfVisibleAsync(guildId, state);
         }
 
         private void OnProgressTick(object? _)
@@ -713,6 +696,13 @@ namespace RPBot
             var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId is null) { await component.DeferAsync(); return; }
 
+            // Модальное окно нельзя открыть после DeferAsync — обрабатываем отдельно
+            if (component.Data.CustomId == "music_queue_goto")
+            {
+                await ButtonQueueGotoAsync(guildId.Value, component);
+                return;
+            }
+
             await component.DeferAsync(ephemeral: true);
 
             _ = Task.Run(async () =>
@@ -995,19 +985,7 @@ namespace RPBot
 
         private async Task ButtonSkipAsync(ulong guildId, SocketMessageComponent component)
         {
-            var state = _lavalink.GetOrCreateState(guildId);
-            string msg;
-            if (state.PlaylistTrackList is not null)
-            {
-                // Плейлист загружен — переходим по индексу вперёд
-                msg = await _lavalink.PlaylistNextAsync(guildId);
-                await UpdateNowPlayingAsync(guildId, state);
-            }
-            else
-            {
-                msg = await _lavalink.SkipAsync(guildId);
-            }
-            // embed обновится через OnTrackStartedAsync; просто тихо подтверждаем
+            var msg = await _lavalink.SkipAsync(guildId);
             await SendEphemeralAutoDeleteAsync(component, msg);
         }
 
@@ -1057,10 +1035,9 @@ namespace RPBot
             var state = _lavalink.GetOrCreateState(guildId);
             if (state.QueueMessageId is null || state.NowPlayingChannel is null) return;
 
-            var data = await _lavalink.GetQueueDataAsync(guildId);
-            var queue = data?.Queue ?? new System.Collections.Generic.List<(string, TimeSpan?)>();
-            int totalPages = queue.Count == 0 ? 1 : (int)Math.Ceiling(queue.Count / 15.0);
-            state.QueuePage = Math.Clamp(state.QueuePage + delta, 0, totalPages - 1);
+            var (minPage, maxPage) = MusicEmbedBuilder.GetMasterQueuePageRange(
+                state.MasterQueue, state.MasterCurrentIndex);
+            state.QueuePage = Math.Clamp(state.QueuePage + delta, minPage, maxPage);
 
             var (embed, comps) = await BuildQueueEmbedAsync(guildId, state);
             try
@@ -1069,6 +1046,36 @@ namespace RPBot
                 if (msg is IUserMessage uMsg) await uMsg.ModifyAsync(p => { p.Embed = embed; p.Components = comps; });
             }
             catch { state.QueueMessageId = null; }
+        }
+
+        private async Task ButtonQueueGotoAsync(ulong guildId, SocketMessageComponent component)
+        {
+            var modal = new ModalBuilder()
+                .WithTitle("Перейти к треку")
+                .WithCustomId($"music_goto_modal:{guildId}")
+                .AddTextInput("Номер трека", "track_number", TextInputStyle.Short,
+                    placeholder: "Например: 7", minLength: 1, maxLength: 6, required: true)
+                .Build();
+            await component.RespondWithModalAsync(modal);
+        }
+
+        public async Task HandleGoToModalAsync(SocketModal modal)
+        {
+            var parts  = modal.Data.CustomId.Split(':');
+            if (parts.Length < 2 || !ulong.TryParse(parts[1], out var guildId)) return;
+
+            var input = modal.Data.Components
+                .FirstOrDefault(c => c.CustomId == "track_number")?.Value ?? "";
+
+            if (!int.TryParse(input.Trim(), out int trackNumber) || trackNumber < 1)
+            {
+                await modal.RespondAsync("❌ Введи корректный номер трека.", ephemeral: true);
+                return;
+            }
+
+            await modal.DeferAsync(ephemeral: true);
+            var result = await _lavalink.GoToTrackNumberAsync(guildId, trackNumber);
+            await modal.FollowupAsync(result, ephemeral: true);
         }
 
         private async Task ButtonToggleQueueAsync(ulong guildId, SocketMessageComponent component)
@@ -1118,20 +1125,35 @@ namespace RPBot
         {
             var state = _lavalink.GetOrCreateState(guildId);
 
-            // Сохраняем предыдущий трек в историю (#1)
-            if (state.CurrentTrackTitle is not null && state.CurrentTrackUrl is not null)
+            // Синхронизируем MasterCurrentIndex по URL и при необходимости добавляем трек
+            if (trackUrl is not null)
             {
-                var entry = new TrackHistoryEntry
+                await state.MasterQueueLock.WaitAsync();
+                try
                 {
-                    Title      = state.CurrentTrackTitle,
-                    Author     = state.CurrentTrackAuthor,
-                    Url        = state.CurrentTrackUrl,
-                    ArtworkUrl = state.CurrentTrackArtworkUrl,
-                    Duration   = state.CurrentTrackDuration ?? TimeSpan.Zero,
-                };
-                state.TrackHistory.AddFirst(entry);
-                while (state.TrackHistory.Count > MusicPlayerState.MaxHistory)
-                    state.TrackHistory.RemoveLast();
+                    var idx = state.MasterQueue.FindIndex(
+                        e => string.Equals(e.Url, trackUrl, StringComparison.OrdinalIgnoreCase));
+                    if (idx >= 0)
+                    {
+                        state.MasterCurrentIndex = idx;
+                    }
+                    else
+                    {
+                        // Трек не был заранее добавлен (например, одиночный /играть) — добавляем
+                        var entry = new MasterTrackEntry
+                        {
+                            Number     = state.MasterQueue.Count + 1,
+                            Title      = title,
+                            Author     = author,
+                            Url        = trackUrl,
+                            ArtworkUrl = artworkUrl,
+                            Duration   = duration,
+                        };
+                        state.MasterQueue.Add(entry);
+                        state.MasterCurrentIndex = state.MasterQueue.Count - 1;
+                    }
+                }
+                finally { state.MasterQueueLock.Release(); }
             }
 
             state.CurrentTrackTitle      = title;
@@ -1141,6 +1163,7 @@ namespace RPBot
             state.CurrentTrackUrl        = trackUrl;
             state.TrackStartedAtUtc      = DateTime.UtcNow;
             state.IsPaused               = false;
+            state.QueuePage              = 0;
 
             // Статистика (#13)
             state.TracksPlayedSession++;
@@ -1164,8 +1187,7 @@ namespace RPBot
             if (channel is null) return;
             state.NowPlayingChannel = channel;
 
-            var data = await _lavalink.GetQueueDataAsync(guildId);
-            var queueCount = data?.Queue.Count ?? 0;
+            int queueCount = Math.Max(0, state.MasterQueue.Count - state.MasterCurrentIndex - 1);
             var volume = _lavalink.GetVolume(guildId);
             var sessionCount = state.TracksPlayedSession;
             var allTimeCount = _stats?.TotalTracksAllTime ?? 0;
@@ -1196,8 +1218,7 @@ namespace RPBot
             // Используем переданное значение или берём из state (#4)
             var paused = isPaused ?? state.IsPaused;
 
-            var data = await _lavalink.GetQueueDataAsync(guildId);
-            var queueCount = data?.Queue.Count ?? 0;
+            int queueCount = Math.Max(0, state.MasterQueue.Count - state.MasterCurrentIndex - 1);
             var volume = _lavalink.GetVolume(guildId);
             var sessionCount = state.TracksPlayedSession;
             var allTimeCount = _stats?.TotalTracksAllTime ?? 0;
@@ -1243,12 +1264,10 @@ namespace RPBot
             catch { state.QueueMessageId = null; }
         }
 
-        private async Task<(Embed embed, MessageComponent components)> BuildQueueEmbedAsync(ulong guildId, MusicPlayerState state)
+        private Task<(Embed embed, MessageComponent components)> BuildQueueEmbedAsync(ulong guildId, MusicPlayerState state)
         {
-            var data = await _lavalink.GetQueueDataAsync(guildId);
-            var queue = data?.Queue ?? new System.Collections.Generic.List<(string, TimeSpan?)>();
-            return MusicEmbedBuilder.BuildQueueEmbed(
-                state.CurrentTrackTitle, state.CurrentTrackDuration, queue, state.LoopMode, state.QueuePage);
+            return Task.FromResult(MusicEmbedBuilder.BuildQueueEmbedFromMaster(
+                state.MasterQueue, state.MasterCurrentIndex, state.LoopMode, state.QueuePage));
         }
 
         // ─── Вспомогательные ─────────────────────────────────────────────
@@ -1370,9 +1389,6 @@ namespace RPBot
             var channel = command.Channel as ITextChannel;
             var state = _lavalink.GetOrCreateState(guildId);
 
-            // Инициализируем навигацию по плейлисту
-            state.PlaylistTrackList   = new List<string>(playlist.Urls);
-            state.PlaylistCurrentIndex = -1;
 
             // ── Шаг 1: первый трек — запускаем воспроизведение (и подключаемся к каналу)
             int loaded = 0;
@@ -1401,9 +1417,6 @@ namespace RPBot
                 return;
             }
 
-            // Фиксируем индекс первого воспроизведённого трека
-            state.PlaylistCurrentIndex = firstIndex;
-
             // Обновляем embed сразу после старта первого трека
             if (firstResult.IsNewTrack || firstResult.IsPlaylist)
             {
@@ -1418,6 +1431,22 @@ namespace RPBot
 
             await AutoDeleteFollowupAsync(command, $"▶️ Плейлист **{name}**: воспроизвожу трек {firstIndex + 1} из {playlist.Urls.Count}…");
             Log($"[Music] Плейлист «{name}»: старт с трека {firstIndex + 1}/{playlist.Urls.Count}.");
+
+            // ── Шаг 2: добавляем оставшиеся треки в очередь в фоне
+            _ = Task.Run(async () =>
+            {
+                for (int i = firstIndex + 1; i < playlist.Urls.Count; i++)
+                {
+                    try
+                    {
+                        var r = await _lavalink.PlayRichAsync(user, playlist.Urls[i]);
+                        if (r.IsNewTrack || r.IsQueued || r.IsPlaylist)
+                            loaded += r.IsPlaylist ? r.PlaylistTracksCount : 1;
+                    }
+                    catch { /* пропускаем недоступный трек */ }
+                }
+                Log($"[Music] Плейлист «{name}»: загружено {loaded} из {playlist.Urls.Count} треков.");
+            });
         }
 
         private async Task HandlePlaylistRenameAsync(SocketSlashCommand command)

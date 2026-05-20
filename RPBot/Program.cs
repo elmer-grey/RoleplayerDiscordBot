@@ -3308,6 +3308,13 @@ namespace RPBot
                     return;
                 }
 
+                if (parts[0] == "music_goto_modal")
+                {
+                    if (_musicCommands is not null)
+                        await _musicCommands.HandleGoToModalAsync(modal);
+                    return;
+                }
+
                 // Handle bet modal: pred_bet_modal:<guildId>
                 if (parts[0] == "pred_bet_modal")
                 {
