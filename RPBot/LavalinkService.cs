@@ -914,14 +914,19 @@ namespace RPBot
         /// <summary>Возвращает URL-ы всех треков: текущего + очереди.</summary>
         public async Task<List<string>> GetQueueUrlsAsync(ulong guildId, CancellationToken ct = default)
         {
-            var player = await GetPlayerAsync(guildId, ct);
-            var urls = new List<string>();
-            if (player is null) return urls;
-            // Только очередь (без текущего трека — он сохраняется отдельно как CurrentUrl)
-            foreach (var item in player.Queue)
-                if (item.Track?.Uri is { } uri)
-                    urls.Add(uri.ToString());
-            return urls;
+            var state = GetOrCreateState(guildId);
+            await state.MasterQueueLock.WaitAsync(ct);
+            try
+            {
+                // Возвращаем все треки начиная с текущего (включительно)
+                int start = Math.Max(0, state.MasterCurrentIndex);
+                return state.MasterQueue
+                    .Skip(start)
+                    .Select(e => e.Url)
+                    .Where(u => !string.IsNullOrEmpty(u))
+                    .ToList();
+            }
+            finally { state.MasterQueueLock.Release(); }
         }
 
         /// <summary>
