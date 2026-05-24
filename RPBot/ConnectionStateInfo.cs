@@ -45,6 +45,18 @@ namespace RPBot
             LastConnectionTime == default ? TimeSpan.Zero : DateTime.UtcNow - LastConnectionTime;
 
         /// <summary>
+        /// Убирает последнюю запись об отключении из истории, если клиент сам восстановился.
+        /// Это предотвращает ухудшение прогноза после кратких WebSocket-сбоев с мгновенным реконнектом.
+        /// </summary>
+        public void RemoveLastSelfRecoveredDisconnect()
+        {
+            if (RecentDisconnectTimes.Count > 0)
+                RecentDisconnectTimes.RemoveAt(0);
+            if (RecentDisconnectReasons.Count > 0)
+                RecentDisconnectReasons.RemoveAt(0);
+        }
+
+        /// <summary>
         /// Добавляет причину отключения в историю
         /// </summary>
         public void AddDisconnectReason(string reason, string details = "")

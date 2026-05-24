@@ -1,32 +1,21 @@
-﻿using Discord;
+using Discord;
 using Discord.WebSocket;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace RPBot
 {
     public sealed class ManualReconnectException : Exception
     {
-        public ManualReconnectException(string message = "Ручной реконнект по команде") : base(message)
-        {
-        }
+        public ManualReconnectException(string message = "Ручной реконнект по команде") : base(message) { }
     }
 
     public sealed class BackgroundDisconnectException : Exception
     {
-        public BackgroundDisconnectException(string message = "Фоновая проверка: клиент всё ещё отключен") : base(message)
-        {
-        }
+        public BackgroundDisconnectException(string message = "Фоновая проверка: клиент всё ещё отключен") : base(message) { }
     }
 
-    /// <summary>
-    /// Отвечает за ВСЁ, что связано с переподключением бота
-    /// </summary>
     public class ReconnectionService : IDisposable
     {
         private readonly DiscordSocketClient _client;
@@ -34,44 +23,28 @@ namespace RPBot
         private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);
         private readonly object _stateLock = new();
         private CancellationTokenSource _reconnectCts = new();
+
+        private const int InitialWaitMs = 5000;
+        private const int ConnectTimeoutMs = 60000;
+        private const int MaxReconnectAttempts = 8;
+        private static readonly int[] BackoffSeconds = { 10, 20, 40, 60, 60, 60, 60, 60 };
+
+        private bool _isReconnecting;
+        private bool _isShuttingDown;
         private DateTime _ignoreDisconnectEventsUntil = DateTime.MinValue;
 
         public Action<string>? LogSink { get; set; }
 
-        private bool _isReconnecting = false;
-        private bool _isShuttingDown = false;
-
-        // Порог по числу последовательных попыток реконнекта, после которого требуется полный рестарт
-        private const int MaxReconnectAttemptsBeforeFullRestart = 8;
-
-        // События для оповещения других частей бота
-        public event Func<string, Task> OnReconnectStarted;
-        public event Func<bool, Task> OnReconnectCompleted;
-        public event Func<Exception, Task> OnDisconnectDetected;
-        // Событие запроса полной перезагрузки клиента (после многократных неудачных попыток)
-        public event Func<Task> OnFullRestartRequested;
+        public event Func<string, Task>? OnReconnectStarted;
+        public event Func<bool, Task>? OnReconnectCompleted;
+        public event Func<Exception, Task>? OnDisconnectDetected;
+        public event Func<Task>? OnFullRestartRequested;
 
         public ConnectionStateInfo ConnectionInfo => _connectionInfo;
-        public bool IsReconnectInProgress
-        {
-            get
-            {
-                lock (_stateLock)
-                {
-                    return _isReconnecting;
-                }
-            }
-        }
-
+        public bool IsReconnectInProgress { get { lock (_stateLock) { return _isReconnecting; } } }
         public bool ShouldPauseBackgroundDisconnectChecks
         {
-            get
-            {
-                lock (_stateLock)
-                {
-                    return _isReconnecting || _connectionInfo.IsExpectedDisconnect || _ignoreDisconnectEventsUntil > DateTime.UtcNow;
-                }
-            }
+            get { lock (_stateLock) { return _isReconnecting || _connectionInfo.IsExpectedDisconnect || _ignoreDisconnectEventsUntil > DateTime.UtcNow; } }
         }
 
         public ReconnectionService(DiscordSocketClient client)
@@ -81,435 +54,170 @@ namespace RPBot
         }
 
         public Task RequestManualReconnectAsync(string message = "Ручной реконнект по команде")
-        {
-            return HandleDisconnect(new ManualReconnectException(message));
-        }
+            => HandleDisconnect(new ManualReconnectException(message));
 
-        /// <summary>
-        /// Вызывается при отключении бота
-        /// </summary>
         public async Task HandleDisconnect(Exception exception)
         {
             if (_isShuttingDown) return;
-
-            var isManualReconnect = exception is ManualReconnectException;
-
-            if (!isManualReconnect && IsExpectedDisconnectInProgress())
+            var isManual = exception is ManualReconnectException;
+            if (!isManual && exception is GatewayReconnectException)
             {
+                await Log("Плановый реконнект Discord Gateway — не вмешиваемся.");
                 return;
             }
+            if (!isManual && IsExpectedDisconnectInProgress()) return;
+            if (!isManual && IsReconnectInProgress) return;
 
-            if (!isManualReconnect && IsReconnectInProgress)
-            {
-                return;
-            }
-
-            // Сохраняем причину
             var reason = DisconnectReasonTranslator.GetFriendlyReason(exception);
             _connectionInfo.AddDisconnectReason(reason, exception?.Message);
+            if (!isManual && OnDisconnectDetected != null) await OnDisconnectDetected.Invoke(exception);
 
-            // Оповещаем подписчиков
-            if (!isManualReconnect && OnDisconnectDetected != null)
-                await OnDisconnectDetected.Invoke(exception);
-
-            // Плановый реконнект Discord - не вмешиваемся
-            if (exception is GatewayReconnectException)
-            {
-                await Log("Плановый реконнект Discord - пропускаем");
-                return;
-            }
-
-            if (isManualReconnect)
-            {
-                await Log("Ручной реконнект по команде");
-            }
-
-            // Отменяем старый реконнект
-            CancellationTokenSource reconnectCts;
+            CancellationTokenSource cts;
             lock (_stateLock)
             {
                 try { _reconnectCts.Cancel(); } catch { }
                 try { _reconnectCts.Dispose(); } catch { }
                 _reconnectCts = new CancellationTokenSource();
-                reconnectCts = _reconnectCts;
+                cts = _reconnectCts;
             }
-
-            // Ждем 2 секунды перед началом
-            try
-            {
-                await Task.Delay(2000, reconnectCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-
-            if (_isShuttingDown) return;
-
-            // Запускаем реконнект
-            _ = Task.Run(() => ReconnectAsync(reconnectCts.Token, isManualReconnect));
+            _ = Task.Run(() => ReconnectLoopAsync(cts, isManual));
         }
 
-        /// <summary>
-        /// Основная логика реконнекта
-        /// </summary>
-        private async Task ReconnectAsync(CancellationToken cancellationToken, bool forceReconnect = false)
+        private async Task ReconnectLoopAsync(CancellationTokenSource cts, bool forceReconnect)
         {
-            if (!await _reconnectLock.WaitAsync(0, cancellationToken))
-            {
-                await Log(" Реконнект уже выполняется");
-                return;
-            }
-
+            var ct = cts.Token;
+            if (!await _reconnectLock.WaitAsync(0, ct)) { await Log("Реконнект уже выполняется — пропускаем."); return; }
             try
             {
-                lock (_stateLock)
+                lock (_stateLock) { _isReconnecting = true; }
+                await Log($"Ждём {InitialWaitMs / 1000} сек — даём Discord.NET шанс восстановиться самому...");
+                try { await Task.Delay(InitialWaitMs, ct); } catch (OperationCanceledException) { return; }
+
+                if (!forceReconnect && _client.ConnectionState == ConnectionState.Connected)
                 {
-                    _isReconnecting = true;
+                    await Log("Клиент восстановился сам — реконнект не нужен.");
+                    // Убираем этот дисконнект из истории предсказаний — кратковременный WebSocket-сбой не должен ухудшать прогноз
+                    _connectionInfo.RemoveLastSelfRecoveredDisconnect();
+                    if (OnReconnectCompleted != null) await OnReconnectCompleted.Invoke(true);
+                    _connectionInfo.ResetAttempts();
+                    return;
                 }
 
-                var manualReconnectRequested = forceReconnect;
+                var attempt = 0;
                 var success = false;
-
-                while (!cancellationToken.IsCancellationRequested && !_isShuttingDown)
+                while (!ct.IsCancellationRequested && !_isShuttingDown)
                 {
-                    _connectionInfo.ReconnectAttempts++;
-
-                    // Если превысили порог последовательных попыток — жалуемся и просим полный рестарт
-                    if (_connectionInfo.ReconnectAttempts >= MaxReconnectAttemptsBeforeFullRestart)
+                    attempt++;
+                    _connectionInfo.ReconnectAttempts = attempt;
+                    if (attempt > MaxReconnectAttempts)
                     {
-                        await Log($"Превышен лимит попыток реконнекта ({_connectionInfo.ReconnectAttempts}). Запрос полного перезапуска клиента.");
-                        try
-                        {
-                            if (OnFullRestartRequested != null)
-                                await OnFullRestartRequested.Invoke();
-                        }
-                        catch (Exception ex)
-                        {
-                            await Log($"Ошибка при запросе полного перезапуска: {ex.Message}");
-                        }
+                        await Log($"Превышен лимит попыток ({attempt - 1}). Запрашиваем полный рестарт.");
+                        try { if (OnFullRestartRequested != null) await OnFullRestartRequested.Invoke(); } catch (Exception ex) { await Log($"Ошибка при запросе рестарта: {ex.Message}"); }
                         return;
                     }
 
-                    if (_client.ConnectionState == ConnectionState.Connected && !forceReconnect)
-                    {
-                        await Log(" Клиент уже подключен, реконнект не требуется");
-                        success = true;
-                        break;
-                    }
+                    if (OnReconnectStarted != null) await OnReconnectStarted.Invoke($"Попытка реконнекта #{attempt}");
+                    await Log($"=== Попытка реконнекта {attempt}/{MaxReconnectAttempts} ===");
 
-                    if (_client.ConnectionState == ConnectionState.Connected && forceReconnect)
-                    {
-                        await Log(" Выполняем ручной реконнект подключенного клиента");
-                    }
-
-                    if (OnReconnectStarted != null) await OnReconnectStarted.Invoke($"Попытка реконнекта #{_connectionInfo.ReconnectAttempts}");
-
-                    // ВАЖНО: Сначала убеждаемся, что клиент полностью остановлен
                     if (_client.ConnectionState != ConnectionState.Disconnected)
                     {
-                        MarkExpectedDisconnect(TimeSpan.FromSeconds(15));
-                        await Log(" Останавливаем клиент перед перезапуском...");
-                        try { await _client.StopAsync(); } catch (Exception ex) { await Log($"Error stopping client before restart: {ex.Message}"); }
-                        await Task.Delay(2000, cancellationToken);
+                        await Log("Останавливаем клиент...");
+                        MarkExpectedDisconnect(TimeSpan.FromSeconds(20));
+                        try { await _client.StopAsync(); } catch (Exception ex) { await Log($"StopAsync: {ex.Message}"); }
+                        for (int i = 0; i < 50; i++)
+                        {
+                            if (_client.ConnectionState == ConnectionState.Disconnected) break;
+                            try { await Task.Delay(100, ct); } catch (OperationCanceledException) { return; }
+                        }
                     }
 
-                    await ExponentialDelay(cancellationToken);
-
-                    success = await TryConnectWithRetries(cancellationToken);
-                    if (success)
+                    await Log("Запускаем клиент...");
+                    try { await _client.StartAsync(); }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("already running"))
                     {
-                        break;
+                        await Log("Клиент уже запущен — ждём соединения...");
+                    }
+                    catch (Exception ex)
+                    {
+                        await Log($"StartAsync: {ex.Message}");
+                        _connectionInfo.IncrementFailedAttempts();
+                        forceReconnect = false;
+                        await DoBackoffAsync(attempt, ct);
+                        continue;
                     }
 
+                    if (await WaitForConnectedAsync(ct)) { success = true; break; }
+                    await Log($"Попытка {attempt} не дала результата.");
                     _connectionInfo.IncrementFailedAttempts();
                     forceReconnect = false;
-                    await Log(" Серия попыток подключения не удалась. Продолжаем реконнект...");
+                    await DoBackoffAsync(attempt, ct);
                 }
 
                 if (OnReconnectCompleted != null) await OnReconnectCompleted.Invoke(success);
-
                 if (success)
                 {
+                    await Log("РЕКОННЕКТ УСПЕШЕН");
                     _connectionInfo.LastConnectionTime = DateTime.UtcNow;
-                    _connectionInfo.LastConnectReason = manualReconnectRequested ? "Ручной реконнект" : "Автоматический реконнект";
-                    await Log(" РЕКОННЕКТ УСПЕШЕН");
+                    _connectionInfo.LastConnectReason = "Автоматический реконнект";
                     _connectionInfo.ResetAttempts();
                 }
-                else if (!cancellationToken.IsCancellationRequested && !_isShuttingDown)
+                else if (!ct.IsCancellationRequested && !_isShuttingDown)
                 {
-                    await Log(" РЕКОННЕКТ НЕ УДАЛСЯ");
+                    await Log("РЕКОННЕКТ НЕ УДАЛСЯ");
                 }
             }
-            catch (OperationCanceledException)
-            {
-                await Log(" Реконнект отменен");
-            }
-            catch (Exception ex)
-            {
-                await Log($" Ошибка реконнекта: {ex.Message}");
-            }
+            catch (OperationCanceledException) { await Log("Реконнект отменён."); }
+            catch (Exception ex) { await Log($"Ошибка реконнекта: {ex.Message}"); }
             finally
             {
                 ClearExpectedDisconnect();
-                lock (_stateLock)
-                {
-                    _isReconnecting = false;
-                }
+                lock (_stateLock) { _isReconnecting = false; }
                 try { _reconnectLock.Release(); } catch { }
             }
         }
 
-        /// <summary>
-        /// Попытки подключения с увеличивающейся задержкой
-        /// </summary>
-        private async Task<bool> TryConnectWithRetries(CancellationToken cancellationToken)
+        private async Task<bool> WaitForConnectedAsync(CancellationToken ct)
         {
-            int maxAttempts = 5;
-
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                if (cancellationToken.IsCancellationRequested) break;
-                if (_isShuttingDown) break;
-
-                // Снова проверяем состояние перед попыткой
-                if (_client.ConnectionState == ConnectionState.Connected)
-                {
-                    await Log(" Клиент подключился сам");
-                    return true;
-                }
-
-                try
-                {
-                    await Log($" Попытка подключения {attempt}/{maxAttempts}...");
-
-                    // Убеждаемся, что клиент остановлен
-                    if (_client.ConnectionState != ConnectionState.Disconnected)
-                    {
-                        MarkExpectedDisconnect(TimeSpan.FromSeconds(15));
-                        await Log(" Останавливаем клиент перед попыткой...");
-                        await _client.StopAsync();
-                        await Task.Delay(1000, cancellationToken);
-                    }
-
-                    // Пробуем подключиться
-                    await _client.StartAsync();
-
-                    // Ждем подключения с таймаутом
-                    if (await WaitForConnectionAsync(attempt, cancellationToken))
-                    {
-                        return true;
-                    }
-
-                    // Если не подключились, останавливаем и пробуем снова
-                    MarkExpectedDisconnect(TimeSpan.FromSeconds(15));
-                    await _client.StopAsync();
-
-                    // Экспоненциальная задержка между попытками
-                    if (attempt < maxAttempts)
-                    {
-                        var delay = Math.Min(30000, 2000 * (int)Math.Pow(2, attempt - 1));
-                        await Log($" Подключение на попытке {attempt} не завершилось. Повтор через {delay / 1000} сек...");
-                        await Task.Delay(delay, cancellationToken);
-                    }
-                }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("already running"))
-                {
-                    await Log($" Клиент уже запущен на попытке {attempt}, останавливаем...");
-                    try
-                    {
-                        MarkExpectedDisconnect(TimeSpan.FromSeconds(15));
-                        await _client.StopAsync();
-                    }
-                    catch { }
-                    await Task.Delay(2000, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    await Log($" Ошибка попытки {attempt}: {ex.Message}");
-
-                    if (attempt < maxAttempts)
-                    {
-                        var delay = 5000 * attempt;
-                        await Task.Delay(delay, cancellationToken);
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private async Task<bool> WaitForConnectionAsync(int attempt, CancellationToken cancellationToken)
-        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(ConnectTimeoutMs);
             var regularDeadline = DateTime.UtcNow.AddSeconds(30);
-            var finalDeadline = regularDeadline.AddSeconds(60);
-            var extendedWaitLogged = false;
-
-            while (DateTime.UtcNow < finalDeadline)
+            var loggedExtended = false;
+            while (DateTime.UtcNow < deadline)
             {
-                if (_client.ConnectionState == ConnectionState.Connected)
+                if (_client.ConnectionState == ConnectionState.Connected) { ClearExpectedDisconnect(); return true; }
+                if (!loggedExtended && DateTime.UtcNow >= regularDeadline)
                 {
-                    ClearExpectedDisconnect();
-                    await Log($" Подключено на попытке {attempt}");
-                    return true;
+                    if (_client.ConnectionState == ConnectionState.Connecting) { await Log("Подключение устанавливается дольше обычного, ждём..."); loggedExtended = true; }
+                    else return false;
                 }
-
-                if (DateTime.UtcNow >= regularDeadline)
-                {
-                    if (_client.ConnectionState == ConnectionState.Connecting)
-                    {
-                        if (!extendedWaitLogged)
-                        {
-                            extendedWaitLogged = true;
-                            await Log(" Подключение ещё устанавливается. Даём клиенту дополнительное время...");
-                        }
-                    }
-                    else
-                    {
-                        return false;
-                    }
-                }
-
-                await Task.Delay(500, cancellationToken);
+                try { await Task.Delay(500, ct); } catch (OperationCanceledException) { return false; }
             }
-
             return false;
         }
 
-        /// <summary>
-        /// Экспоненциальная задержка между попытками
-        /// </summary>
-        private async Task ExponentialDelay(CancellationToken cancellationToken)
+        private async Task DoBackoffAsync(int attempt, CancellationToken ct)
         {
-            var delaySeconds = Math.Min(60, 5 * (int)Math.Pow(2, Math.Min(_connectionInfo.ReconnectAttempts - 1, 6)));
-
-            if (delaySeconds > 0)
-            {
-                await Log($"Ожидание {delaySeconds} сек перед попыткой...");
-                await Task.Delay(delaySeconds * 1000, cancellationToken);
-            }
+            var idx = Math.Min(attempt - 1, BackoffSeconds.Length - 1);
+            var secs = BackoffSeconds[idx];
+            await Log($"Пауза {secs} сек перед следующей попыткой...");
+            try { await Task.Delay(secs * 1000, ct); } catch (OperationCanceledException) { throw; }
         }
 
-        /// <summary>
-        /// Полная перезагрузка клиента (создание с нуля)
-        /// </summary>
-        public async Task FullRestartAsync()
-        {
-            await Log("ПОЛНАЯ ПЕРЕЗАГРУЗКА КЛИЕНТА");
+        public void UpdateHeartbeat() { _connectionInfo.LastHeartbeatTime = DateTime.UtcNow; _connectionInfo.HeartbeatMisses = 0; }
+        public void MissHeartbeat() { _connectionInfo.HeartbeatMisses++; }
+        public void Shutdown() { _isShuttingDown = true; try { _reconnectCts.Cancel(); } catch { } ClearExpectedDisconnect(); }
 
-            try
-            {
-                // Уведомляем о перезагрузке
-                _isShuttingDown = true;
-
-                // Полная остановка
-                try { await _client.StopAsync(); } catch (Exception ex) { await Log($"Error stopping client during FullRestart: {ex.Message}"); }
-                await Task.Delay(3000);
-
-                // Сигнал для Program.cs на пересоздание клиента
-                _connectionInfo.AddDisconnectReason("Полная перезагрузка", "Требуется пересоздание клиента");
-
-                // Program.cs должен поймать это и пересоздать клиент
-                throw new InvalidOperationException("FULL_RESTART_REQUIRED");
-            }
-            catch (Exception ex)
-            {
-                await Log($"Ошибка полной перезагрузки: {ex.Message}");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Останавливает клиент корректно
-        /// </summary>
-        private async Task StopClientGracefully()
-        {
-            try
-            {
-                if (_client.ConnectionState != ConnectionState.Disconnected)
-                {
-                    await Log("⏹️ Остановка клиента...");
-                    await _client.StopAsync();
-                    await Task.Delay(1000);
-                }
-            }
-            catch (Exception ex)
-            {
-                await Log($"⚠️ Ошибка остановки: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Обновляет heartbeat для мониторинга
-        /// </summary>
-        public void UpdateHeartbeat()
-        {
-            _connectionInfo.LastHeartbeatTime = DateTime.UtcNow;
-            _connectionInfo.HeartbeatMisses = 0;
-        }
-
-        /// <summary>
-        /// Отмечает пропущенный heartbeat
-        /// </summary>
-        public void MissHeartbeat()
-        {
-            _connectionInfo.HeartbeatMisses++;
-        }
-
-        /// <summary>
-        /// Выключает сервис (при остановке бота)
-        /// </summary>
-        public void Shutdown()
-        {
-            _isShuttingDown = true;
-            try { _reconnectCts.Cancel(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error cancelling reconnect token: {ex.Message}"); }
-            ClearExpectedDisconnect();
-        }
-
-        private bool IsExpectedDisconnectInProgress()
-        {
-            lock (_stateLock)
-            {
-                return _connectionInfo.IsExpectedDisconnect && _ignoreDisconnectEventsUntil > DateTime.UtcNow;
-            }
-        }
-
-        private void MarkExpectedDisconnect(TimeSpan duration)
-        {
-            lock (_stateLock)
-            {
-                _connectionInfo.IsExpectedDisconnect = true;
-                _ignoreDisconnectEventsUntil = DateTime.UtcNow.Add(duration);
-            }
-        }
-
-        private void ClearExpectedDisconnect()
-        {
-            lock (_stateLock)
-            {
-                _connectionInfo.IsExpectedDisconnect = false;
-                _ignoreDisconnectEventsUntil = DateTime.MinValue;
-            }
-        }
-
-        private Task Log(string message)
-        {
-            LogSink?.Invoke($"[RECONNECT] {message}");
-            return Task.CompletedTask;
-        }
+        private bool IsExpectedDisconnectInProgress() { lock (_stateLock) { return _connectionInfo.IsExpectedDisconnect && _ignoreDisconnectEventsUntil > DateTime.UtcNow; } }
+        private void MarkExpectedDisconnect(TimeSpan duration) { lock (_stateLock) { _connectionInfo.IsExpectedDisconnect = true; _ignoreDisconnectEventsUntil = DateTime.UtcNow.Add(duration); } }
+        private void ClearExpectedDisconnect() { lock (_stateLock) { _connectionInfo.IsExpectedDisconnect = false; _ignoreDisconnectEventsUntil = DateTime.MinValue; } }
+        private Task Log(string message) { LogSink?.Invoke($"[RECONNECT] {message}"); return Task.CompletedTask; }
 
         public void Dispose()
         {
             _isShuttingDown = true;
-            try { _reconnectCts?.Cancel(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error cancelling reconnect token during dispose: {ex.Message}"); }
-            try { _reconnectCts?.Dispose(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error disposing reconnect token: {ex.Message}"); }
-            try { _reconnectLock?.Dispose(); } catch (Exception ex) { LogSink?.Invoke($"[RECONNECT] Error disposing reconnect lock: {ex.Message}"); }
-
-            // Clear event subscribers to avoid keeping references
-            OnReconnectStarted = null;
-            OnReconnectCompleted = null;
-            OnDisconnectDetected = null;
-            OnFullRestartRequested = null;
+            try { _reconnectCts?.Cancel(); } catch { }
+            try { _reconnectCts?.Dispose(); } catch { }
+            try { _reconnectLock?.Dispose(); } catch { }
+            OnReconnectStarted = null; OnReconnectCompleted = null; OnDisconnectDetected = null; OnFullRestartRequested = null;
         }
     }
 }

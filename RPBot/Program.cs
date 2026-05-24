@@ -30,8 +30,8 @@ namespace RPBot
         private Dictionary<string, string> _textBlocks = null!;
         private readonly SemaphoreSlim _restartLock = new(1, 1);
         private bool _isDisposed;
-        private bool _shouldExit = false;
-        private bool _shouldRestart = false;
+        private volatile bool _shouldExit = false;
+        private volatile bool _shouldRestart = false;
 
         private ReconnectionService? _reconnectionService;
         private ConnectionPredictor? _connectionPredictor;
@@ -53,7 +53,8 @@ private MusicStats? _musicStats;
 
         private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
 
-        private Task? _backgroundMonitoringTask;
+		private Task? _backgroundMonitoringTask;
+		private CancellationTokenSource? _backgroundMonitoringCts;
 		private CancellationTokenSource? _dailyRestartCts;
 		private Task? _dailyRestartTask;
         private string _restartInitiator = "console";
@@ -920,22 +921,25 @@ private MusicStats? _musicStats;
 			_statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
 			_reconnectionService?.Shutdown();
 
-			// Stop Discord client (best-effort)
-			try { await _client.StopAsync(); } catch { }
+				// Отменяем фоновый мониторинг и ждём его завершения
+				try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
-			// Await background monitoring task to finish (with timeout)
-			if (_backgroundMonitoringTask != null)
-			{
-				try
+				// Stop Discord client (best-effort)
+				try { await _client.StopAsync(); } catch { }
+
+				// Await background monitoring task to finish (with timeout)
+				if (_backgroundMonitoringTask != null)
 				{
-					var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
-					if (t != _backgroundMonitoringTask)
+					try
 					{
-						await LogStartup("Background tasks did not complete within timeout before restart.");
+						var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
+						if (t != _backgroundMonitoringTask)
+						{
+							await LogStartup("Background tasks did not complete within timeout before restart.");
+						}
 					}
+					catch { }
 				}
-				catch { }
-			}
 
 			await LogShutdownState(isRestart: true, initiator: _restartInitiator);
 		}
@@ -966,23 +970,26 @@ private MusicStats? _musicStats;
 			}
 
 			_shouldExit = true;
-			StopDailyRestartScheduler();
-			_reconnectionService?.Shutdown();
+				StopDailyRestartScheduler();
+				_reconnectionService?.Shutdown();
 
-			try { await _client.StopAsync(); } catch { }
+				// Отменяем фоновый мониторинг
+				try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
-			if (_backgroundMonitoringTask != null)
-			{
-				try
+				try { await _client.StopAsync(); } catch { }
+
+				if (_backgroundMonitoringTask != null)
 				{
-					var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(5000));
-					if (t != _backgroundMonitoringTask)
+					try
 					{
-						await LogStartup("Background tasks did not complete within timeout before stop.");
+						var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
+						if (t != _backgroundMonitoringTask)
+						{
+							await LogStartup("Background tasks did not complete within timeout before stop.");
+						}
 					}
+					catch { }
 				}
-				catch { }
-			}
 
 			await LogShutdownState(isRestart: false, initiator: initiator);
 
@@ -1562,7 +1569,7 @@ private MusicStats? _musicStats;
                     _commandHandler = new CommandHandler(_client, _config.GuildIDs);
                     CommandHandler.SetUI(_ui);
 
-                    //await SetupDiscordEvents();
+                    await SetupDiscordEvents();
                     try
                     {
                         await _client.LoginAsync(TokenType.Bot, GetBotToken());
@@ -1584,7 +1591,10 @@ private MusicStats? _musicStats;
 						StartDailyRestartScheduler();
 
                         // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
-                        _backgroundMonitoringTask = Task.Run(BackgroundMonitoringLoopWrapper);
+                        _backgroundMonitoringCts?.Cancel();
+                        _backgroundMonitoringCts?.Dispose();
+                        _backgroundMonitoringCts = new CancellationTokenSource();
+                        _backgroundMonitoringTask = Task.Run(() => BackgroundMonitoringLoopWrapper(_backgroundMonitoringCts.Token));
 
                         while (!_shouldExit)
                         {
@@ -2551,15 +2561,15 @@ private MusicStats? _musicStats;
             }
         }
 
-        private async Task BackgroundMonitoringLoop()
+        private async Task BackgroundMonitoringLoop(CancellationToken ct = default)
         {
-            while (!_shouldExit)
+            while (!_shouldExit && !ct.IsCancellationRequested)
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(30), ct);
                 }
-                catch (TaskCanceledException)
+                catch (OperationCanceledException)
                 {
                     break;
                 }
@@ -2636,11 +2646,11 @@ private MusicStats? _musicStats;
             }
         }
 
-        private async Task BackgroundMonitoringLoopWrapper()
+        private async Task BackgroundMonitoringLoopWrapper(CancellationToken ct)
         {
             try
             {
-                await BackgroundMonitoringLoop();
+                await BackgroundMonitoringLoop(ct);
             }
             catch (Exception ex)
             {
@@ -3440,8 +3450,10 @@ await Task.CompletedTask;
             if (_isDisposed) return;
             _isDisposed = true;
 
-            _shouldExit = true;
+			_shouldExit = true;
 			StopDailyRestartScheduler();
+			try { _backgroundMonitoringCts?.Cancel(); } catch { }
+			try { _backgroundMonitoringCts?.Dispose(); _backgroundMonitoringCts = null; } catch { }
 
             try
             {
