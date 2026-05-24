@@ -700,7 +700,8 @@ private MusicStats? _musicStats;
                         !json.Contains("\"TelegramMessageThreadId\"", StringComparison.Ordinal) ||
                         !json.Contains("\"MasterRoleId\"", StringComparison.Ordinal) ||
                          !json.Contains("\"SuperUserRoleId\"", StringComparison.Ordinal) ||
-                         !json.Contains("\"RollPicturesEnabled\"", StringComparison.Ordinal))
+                         !json.Contains("\"RollPicturesEnabled\"", StringComparison.Ordinal) ||
+                         !json.Contains("\"MasterNameMap\"", StringComparison.Ordinal))
                     {
                         needsResave = true;
                     }
@@ -1878,32 +1879,37 @@ private MusicStats? _musicStats;
 
             var eventUrl  = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
-            var endLocal   = guildEvent.EndTime?.ToLocalTime();
             var imageUrl   = guildEvent.GetCoverImageUrl();
 
             string whereText;
             if (guildEvent.Channel != null)
                 whereText = $"<#{guildEvent.Channel.Id}>";
             else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
-                whereText = Truncate(guildEvent.Location, 80);
+                whereText = Truncate(guildEvent.Location, 256);
             else
                 whereText = "не указано";
 
-            var embed = new EmbedBuilder()
-                .WithTitle($"📅 {Truncate(guildEvent.Name, 100)}")
+            var embedBuilder = new EmbedBuilder()
+                .WithTitle($"📅 Событие: {Truncate(guildEvent.Name, 100)}")
                 .WithUrl(eventUrl)
-                .WithDescription(Truncate(guildEvent.Description, 512))
-                .WithColor(new Color(0x5865F2))
-                .AddField("🕐 Начало", startLocal.ToString("dd.MM.yyyy HH:mm"), true)
-                .AddField("📍 Место", whereText, true);
+                .WithColor(Color.Blue);
 
-            if (endLocal.HasValue)
-                embed.AddField("🕓 Конец", endLocal.Value.ToString("dd.MM.yyyy HH:mm"), true);
+            if (!string.IsNullOrWhiteSpace(imageUrl))
+                embedBuilder.WithThumbnailUrl(imageUrl);
 
-            if (!string.IsNullOrEmpty(imageUrl))
-                embed.WithImageUrl(imageUrl);
+            if (!string.IsNullOrWhiteSpace(guildEvent.Description))
+                embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
 
-            embed.WithFooter("Обновлено на старте бота");
+            embedBuilder.AddField("🏰 Сервер", guild.Name, true);
+            embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+            embedBuilder.AddField("📍 Где", whereText, true);
+
+            if (guildEvent.Creator != null)
+                embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+
+            embedBuilder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
+
+            var embed = embedBuilder;
 
             // Обновляем сообщение в канале
             if (entry.AnnounceMessageId != 0)

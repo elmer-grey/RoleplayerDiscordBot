@@ -332,13 +332,23 @@ namespace RPBot
                     }
                 }
 
+                var masterDisplayName = master?.DisplayName ?? "Неопознанный мастер";
+                // Проверяем маппинг имён в конфиге сервера
+                if (master != null)
+                {
+                    var serverCfg = Program.ServerConfigResolver?.Invoke(guildId);
+                    if (serverCfg?.MasterNameMap?.TryGetValue(master.Id.ToString(), out var mappedName) == true
+                        && !string.IsNullOrWhiteSpace(mappedName))
+                        masterDisplayName = mappedName;
+                }
+
                 var newSession = new GameSession
                 {
                     SessionId = (ulong)DateTime.Now.Ticks,
                     GuildId = guildId,
                     ChannelId = channelId,
                     GameName = gameName,
-                    MasterName = master?.DisplayName ?? "Неопознанный мастер",
+                    MasterName = masterDisplayName,
                     MasterId = master?.Id ?? 0,
                     GameComment = gameComment,
                     EventDescription = eventDescription,

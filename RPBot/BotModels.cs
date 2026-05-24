@@ -36,6 +36,12 @@ namespace RPBot
         public string? TelegramBotToken { get; set; } = null;
         public long TelegramChatId { get; set; } = 0;
            public int TelegramMessageThreadId { get; set; } = 0;
+
+        /// <summary>
+        /// Маппинг Discord userId (строка) → имя мастера для Google Sheets.
+        /// Если задано — используется вместо DisplayName при записи статистики.
+        /// </summary>
+        public Dictionary<string, string> MasterNameMap { get; set; } = new Dictionary<string, string>();
     }
 
         // Modal handling moved inside Program class

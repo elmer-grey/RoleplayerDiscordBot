@@ -1306,9 +1306,9 @@ namespace RPBot
             var urls = await _lavalink.GetQueueUrlsAsync(guildId.Value);
             if (urls.Count == 0) { await command.FollowupAsync("❌ Очередь пуста, нечего сохранять.", ephemeral: true); return; }
 
-            // Если существует личный плейлист этого пользователя с таким именем — спросить про перезапись
+            // Если существует плейлист этого пользователя с таким именем — спросить про перезапись
             var existing = _playlistStore.FindByName(guildId.Value, command.User.Id, name);
-            if (existing is not null && existing.OwnerId == command.User.Id && !existing.IsPublic)
+            if (existing is not null && existing.OwnerId == command.User.Id)
             {
                 var encodedName = Uri.EscapeDataString(name);
                 var uid = guildId.Value;

@@ -809,7 +809,7 @@ namespace RPBot
 
         private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, int> _volumes = new();
 
-        public int GetVolume(ulong guildId) => _volumes.GetOrAdd(guildId, 100);
+        public int GetVolume(ulong guildId) => _volumes.GetOrAdd(guildId, 35);
 
         public async Task<string> SetVolumeAsync(ulong guildId, int volume, CancellationToken ct = default)
         {
@@ -980,6 +980,11 @@ namespace RPBot
                     await Task.Delay(250, cancellationToken);
                 }
                 Log($"[Music] EnsureJoinedAsync: плеер готов (state={player.State})");
+
+                // Восстанавливаем сохранённую громкость после подключения
+                var savedVolume = GetVolume(guildId);
+                try { await player.SetVolumeAsync(savedVolume / 100f, cancellationToken); }
+                catch (Exception ex) { Log($"[Music] EnsureJoinedAsync: не удалось установить громкость — {ex.Message}"); }
             }
 
             return player;
