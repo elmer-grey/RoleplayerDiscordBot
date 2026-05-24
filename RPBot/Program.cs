@@ -740,10 +740,10 @@ private MusicStats? _musicStats;
             _client = CreateDiscordClient();
             _commandService = new CommandService();
 
-            // ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
-			_reconnectionService = new ReconnectionService(_client);
+			// ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
+			_reconnectionService = new ReconnectionService(_client) { LogSink = ServiceLogSink };
 			_connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
-			_statusNotifier = new StatusNotifier(_client, _serverConfigs);
+			_statusNotifier = new StatusNotifier(_client, _serverConfigs) { LogSink = ServiceLogSink };
           _telegramNotifier = new TelegramNotifier(guildId =>
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
@@ -1536,12 +1536,12 @@ private MusicStats? _musicStats;
 
                         _reconnectionService = new ReconnectionService(_client)
                         {
-                            LogSink = msg => _ui?.AddLog(msg)
+                            LogSink = ServiceLogSink
                         };
                         _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config.Prediction);
                         _statusNotifier = new StatusNotifier(_client, ServerConfigs)
                         {
-                            LogSink = msg => _ui?.AddLog(msg)
+                            LogSink = ServiceLogSink
                         };
                         _statusNotifier.SetStartupContext(_currentStartupType, _startupReason);
 
@@ -2932,9 +2932,45 @@ await Task.CompletedTask;
 
         private async Task LogStartupBoxAsync(string title, IEnumerable<string> lines)
         {
-            foreach (var line in BuildStartupBox(title, lines))
+            await LogStartupBatch(BuildStartupBox(title, lines));
+        }
+
+        private async Task LogStartupBatch(IEnumerable<string> messages)
+        {
+            var lines = messages is IList<string> l ? l : messages.ToList();
+            if (lines.Count == 0) return;
+
+            var logDirRaw = _config?.LogDirectory;
+            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+            Directory.CreateDirectory(logDir);
+            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+            var path = Path.Combine(logDir, $"StartupLog_{dateSuffix}.txt");
+            var timestamp = DateTime.Now.ToString("dd-MM-yyyy HH:mm:ss");
+
+            await _logSemaphore.WaitAsync();
+            try
             {
-                await LogStartup(line);
+                if (File.Exists(path))
+                {
+                    var fi = new FileInfo(path);
+                    if (fi.Length > 5 * 1024 * 1024)
+                        File.Move(path, Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
+                }
+
+                var sb = new StringBuilder();
+                foreach (var msg in lines)
+                    sb.Append($"[{timestamp}] {msg}\n");
+                await File.AppendAllTextAsync(path, sb.ToString());
+
+                if (_uiStarted && _ui != null)
+                {
+                    foreach (var msg in lines)
+                        _ui.AddLog(msg);
+                }
+            }
+            finally
+            {
+                _logSemaphore.Release();
             }
         }
 
@@ -5414,6 +5450,12 @@ if (_config.Music.Enabled)
 
             await LogStartup(message);
         }
+
+        /// <summary>
+        /// Синхронный sink для сервисов (ReconnectionService и др.).
+        /// Запускает LogStartup в фоне — гарантирует запись в StartupLog и показ в UI.
+        /// </summary>
+        private void ServiceLogSink(string message) => _ = LogStartup(message);
 
         /// <summary>
         /// Возвращает отображаемый текст типа запуска

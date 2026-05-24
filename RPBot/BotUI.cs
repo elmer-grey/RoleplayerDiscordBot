@@ -38,6 +38,8 @@ namespace RPBot
 
         // Lock to protect Terminal.Gui Init/Shutdown from concurrent calls
         private readonly object _uiLock = new object();
+        // Lock to protect _pendingLogLines / _pendingCommandLines from concurrent access
+        private readonly object _pendingLock = new object();
 
         // Permanent UI thread fields
         private Thread? _uiThread;
@@ -1310,21 +1312,28 @@ namespace RPBot
             if (Application.MainLoop == null || _isDisposed)
                 return;
 
+            List<string> logSnapshot;
+            List<string> cmdSnapshot;
+            lock (_pendingLock)
+            {
+                logSnapshot = new List<string>(_pendingLogLines);
+                _pendingLogLines.Clear();
+                cmdSnapshot = new List<string>(_pendingCommandLines);
+                _pendingCommandLines.Clear();
+            }
+
+            if (logSnapshot.Count == 0 && cmdSnapshot.Count == 0)
+                return;
+
             Application.MainLoop.Invoke(() =>
             {
                 try
                 {
-                    if (_pendingLogLines.Count > 0)
-                    {
-                        AppendLinesUnsafe(_logLines, _logPanel, _pendingLogLines, MaxLogLines);
-                        _pendingLogLines.Clear();
-                    }
+                    if (logSnapshot.Count > 0)
+                        AppendLinesUnsafe(_logLines, _logPanel, logSnapshot, MaxLogLines);
 
-                    if (_pendingCommandLines.Count > 0)
-                    {
-                        AppendLinesUnsafe(_commandLines, _commandPanel, _pendingCommandLines, MaxCommandLines);
-                        _pendingCommandLines.Clear();
-                    }
+                    if (cmdSnapshot.Count > 0)
+                        AppendLinesUnsafe(_commandLines, _commandPanel, cmdSnapshot, MaxCommandLines);
                 }
                 catch (Exception ex)
                 {
@@ -1352,9 +1361,12 @@ namespace RPBot
                             try
                             {
                                 _logLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
-                                _pendingLogLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
                                 _commandLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
-                                _pendingCommandLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                lock (_pendingLock)
+                                {
+                                    _pendingLogLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                    _pendingCommandLines.RemoveAll(l => l != null && l.Contains("Ввод команд разблокирован"));
+                                }
                             }
                             catch { }
 
@@ -1911,7 +1923,10 @@ namespace RPBot
             }
             else
             {
-                _pendingCommandLines.Add(string.Empty);
+                lock (_pendingLock)
+                {
+                    _pendingCommandLines.Add(string.Empty);
+                }
             }
         }
 
@@ -1937,7 +1952,10 @@ namespace RPBot
             }
             else
             {
-                _pendingLogLines.AddRange(formatted);
+                lock (_pendingLock)
+                {
+                    _pendingLogLines.AddRange(formatted);
+                }
             }
         }
 
@@ -1966,17 +1984,23 @@ namespace RPBot
             }
             else
             {
-                _pendingCommandLines.AddRange(lines);
+                lock (_pendingLock)
+                {
+                    _pendingCommandLines.AddRange(lines);
+                }
             }
         }
 
-        public void ShowSystemReady(string botName, int serverCount, double initTime)
+        public void ShowSystemReady(string botName, int guildCount, double initTimeSec)
         {
-            var readyShort = "Консоль готова к приёму команд. Введите 'help'";
+            var readyShort = $"✅ {botName} готов! Серверов: {guildCount}. Время инициализации: {initTimeSec:0.0}с. Введите 'help'";
 
             if (Application.MainLoop == null || _isDisposed || _logPanel == null)
             {
-                _pendingLogLines.AddRange(FormatLogLines(readyShort));
+                lock (_pendingLock)
+                {
+                    _pendingLogLines.AddRange(FormatLogLines(readyShort));
+                }
                 return;
             }
 
@@ -2262,6 +2286,11 @@ namespace RPBot
                         _lastUiRows = -1;
                         _lastLogWidth = -1;
                         _lastCommandWidth = -1;
+                        lock (_pendingLock)
+                        {
+                            _pendingLogLines.Clear();
+                            _pendingCommandLines.Clear();
+                        }
                         _logPanel?.SetNeedsDisplay();
                         _commandPanel?.SetNeedsDisplay();
 
