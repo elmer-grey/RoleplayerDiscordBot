@@ -42,6 +42,8 @@ namespace RPBot
         public ulong StatsMessageId { get; set; }
         public CancellationTokenSource PauseReminderCTS { get; set; }
         public bool TrackRolls { get; set; }
+        /// <summary>true — сбор бросков включён автоматически при старте; сбрасывается при ручном включении.</summary>
+        public bool TrackRollsAutoEnabled { get; set; }
         public ulong? EventId { get; set; }
         public ulong ChannelId { get; set; }
         public ulong? PauseReminderMessageId { get; set; }
@@ -278,7 +280,11 @@ namespace RPBot
                                 .WithDescription($"Мастер: {session.MasterName}\n" +
                                                $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
                                                $"Статус: {(session.IsPaused ? "⏸ На паузе" : "▶ В процессе")}\n" +
-                                               $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}\n" +
+                                               (session.TrackRolls
+                                                   ? (session.TrackRollsAutoEnabled
+                                                       ? "Сбор бросков: ✅ Включен (автоматически)\n"
+                                                       : "Сбор бросков: ✅ Включен\n")
+                                                   : "Сбор бросков: ❌ Выключен\n") +
                                                $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
                                 .WithColor(session.IsPaused ? Color.Orange : Color.Green)
                                 .Build();
@@ -354,7 +360,8 @@ namespace RPBot
                     EventDescription = eventDescription,
                     StartTime = DateTime.Now,
                     EventId = eventId,
-                    TrackRolls = false
+                    TrackRolls = true,
+                    TrackRollsAutoEnabled = true
                 };
 
                 if (!_sessions.TryGetValue(guildId, out var sessions))
@@ -449,7 +456,11 @@ namespace RPBot
                     $"Мастер: {session.MasterName}",
                     $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}",
                     $"Статус: {statusText}",
-                    $"Сбор бросков: {(session.TrackRolls ? "✅ Включен" : "❌ Выключен")}",
+                    session.TrackRolls
+                        ? (session.TrackRollsAutoEnabled
+                            ? "Сбор бросков: ✅ Включен (автоматически)"
+                            : "Сбор бросков: ✅ Включен")
+                        : "Сбор бросков: ❌ Выключен",
                 };
 
                 if (!string.IsNullOrWhiteSpace(session.EventDescription))
@@ -508,7 +519,7 @@ namespace RPBot
                     .WithDescription($"Мастер: {session.MasterName}\n" +
                                    $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
                                    $"Статус: ▶ В процессе\n" +
-                                   $"Сбор бросков: ❌ Выключен\n" +
+                                   $"Сбор бросков: ✅ Включен (автоматически)\n" +
                                    $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
                     .WithColor(Color.Green)
                     .Build();
@@ -562,12 +573,12 @@ namespace RPBot
             }
 
             var embed = new EmbedBuilder()
-                .WithTitle($"Сессия: \"{gameName}\"")
-                .WithDescription($"Мастер: {master.DisplayName}\n" +
+                .WithTitle($"Сессия: \"{session.GameName}\"")
+                .WithDescription($"Мастер: {session.MasterName}\n" +
                                $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
                                $"Статус: ▶ В процессе\n" +
-                               $"Сбор бросков: ❌ Выключен\n" +
-                               $"{(string.IsNullOrEmpty(gameComment) ? "" : $"Комментарий: {gameComment}")}")
+                               $"Сбор бросков: ✅ Включен (автоматически)\n" +
+                               $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
                 .WithColor(Color.Green)
                 .Build();
 
@@ -1042,6 +1053,9 @@ namespace RPBot
         private async Task HandleToggleRolls(SocketMessageComponent component, GameSession session)
         {
             session.TrackRolls = !session.TrackRolls;
+            // При ручном включении снимаем пометку "автоматически"
+            if (session.TrackRolls)
+                session.TrackRollsAutoEnabled = false;
             await UpdateControlMessage(session, component.Channel);
             await SendTemporaryEphemeralResponse(component, $"Сбор статистики бросков {(session.TrackRolls ? "включен" : "выключен")}.");
 

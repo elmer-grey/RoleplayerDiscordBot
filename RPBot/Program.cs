@@ -650,74 +650,106 @@ private MusicStats? _musicStats;
             };
         }
 
-        // Сохранение/загрузка конфигураций серверов
-        private void SaveServerConfigs()
-        {
-            try
-            {
-                var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
-                var resolved = BotConfig.ResolvePath(path);
-                var dir = Path.GetDirectoryName(resolved) ?? AppContext.BaseDirectory;
-                Directory.CreateDirectory(dir);
-
+		// Сохранение/загрузка конфигураций серверов
+		private void SaveServerConfigs()
+		{
+			// Защита: не перезаписываем файл пустым словарём
+			if (_serverConfigs == null || _serverConfigs.Count == 0)
+			{
+				_ = LogError("[ServerConfig] SaveServerConfigs: словарь пуст — сохранение отменено.");
+				return;
+			}
+			try
+			{
+				var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
+				var resolved = BotConfig.ResolvePath(path);
+				var dir = Path.GetDirectoryName(resolved) ?? AppContext.BaseDirectory;
+				Directory.CreateDirectory(dir);
 				var options = new JsonSerializerOptions
 				{
 					WriteIndented = true,
 					Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
 				};
 				var json = JsonSerializer.Serialize(_serverConfigs, options);
-                File.WriteAllText(resolved, json);
-            }
-            catch (Exception ex)
-            {
-                _ = LogError($"Ошибка сохранения serverconfigs: {ex.Message}");
-            }
-        }
+				// Атомарная запись: .tmp -> .bak -> основной
+				var tmpPath = resolved + ".tmp";
+				File.WriteAllText(tmpPath, json, System.Text.Encoding.UTF8);
+				if (File.Exists(resolved))
+					File.Copy(resolved, resolved + ".bak", overwrite: true);
+				File.Move(tmpPath, resolved, overwrite: true);
+			}
+			catch (Exception ex)
+			{
+				_ = LogError($"[ServerConfig] Ошибка сохранения serverconfigs: {ex.Message}");
+			}
+		}
 
         private void LoadServerConfigs()
         {
-            try
+            var path     = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
+            var resolved = BotConfig.ResolvePath(path);
+            var bakPath  = resolved + ".bak";
+
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
-                var resolved = BotConfig.ResolvePath(path);
-
-                if (!File.Exists(resolved))
-                    return;
-
-                var json = File.ReadAllText(resolved);
-                var options = new JsonSerializerOptions();
-              var dict = JsonSerializer.Deserialize<Dictionary<ulong, ServerConfig>>(json, options);
-                if (dict != null)
+                var targetPath = attempt == 0 ? resolved : bakPath;
+                if (!File.Exists(targetPath)) continue;
+                try
                 {
-                    // Рабочие конфиги серверов теперь целиком берём из файла
-                    _serverConfigs = dict;
-
-                    // Автодополнение serverconfigs.json новыми полями: если ключей не было в json,
-                    // пересохраняем, чтобы они появились в файле.
-                    var needsResave = false;
-                    if (!json.Contains("\"TelegramEnabled\"", StringComparison.Ordinal) ||
-                        !json.Contains("\"TelegramBotToken\"", StringComparison.Ordinal) ||
-                     !json.Contains("\"TelegramChatId\"", StringComparison.Ordinal) ||
-                        !json.Contains("\"TelegramMessageThreadId\"", StringComparison.Ordinal) ||
-                        !json.Contains("\"MasterRoleId\"", StringComparison.Ordinal) ||
-                         !json.Contains("\"SuperUserRoleId\"", StringComparison.Ordinal) ||
-                         !json.Contains("\"RollPicturesEnabled\"", StringComparison.Ordinal) ||
-                         !json.Contains("\"MasterNameMap\"", StringComparison.Ordinal))
+                    var json = File.ReadAllText(targetPath, System.Text.Encoding.UTF8);
+                    if (string.IsNullOrWhiteSpace(json))
                     {
-                        needsResave = true;
+                        _ = LogError($"[ServerConfig] {(attempt == 0 ? "Основной файл" : ".bak")} пуст.");
+                        continue;
                     }
-
-                    if (needsResave)
+                    // Файл должен начинаться и заканчиваться на { }
+                    var trimmed = json.Trim();
+                    if (!trimmed.StartsWith("{") || !trimmed.EndsWith("}"))
                     {
-                        SaveServerConfigs();
+                        _ = LogError($"[ServerConfig] {(attempt == 0 ? "Основной файл" : ".bak")} повреждён (нет внешних скобок).");
+                        continue;
                     }
+                    // Проверка парности скобок — поймает обрезанный файл и незакрытые объекты
+                    int depth = 0; bool inStr = false; bool esc = false;
+                    foreach (var ch in trimmed)
+                    {
+                        if (esc)                    { esc = false; continue; }
+                        if (ch == '\\' && inStr)   { esc = true;  continue; }
+                        if (ch == '"')             { inStr = !inStr; continue; }
+                        if (inStr)                 continue;
+                        if (ch == '{' || ch == '[') depth++;
+                        else if (ch == '}' || ch == ']') depth--;
+                    }
+                    if (depth != 0)
+                    {
+                        _ = LogError($"[ServerConfig] {(attempt == 0 ? "Основной файл" : ".bak")} повреждён: незакрытые скобки (depth={depth}). Не хватает запятой или скобки?");
+                        continue;
+                    }
+                    var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    var dict = JsonSerializer.Deserialize<Dictionary<ulong, ServerConfig>>(json, opts);
+                    if (dict != null)
+                    {
+                        _serverConfigs = dict;
+                        if (attempt == 1)
+                        {
+                            _ = LogError($"[ServerConfig] Загружено из .bak ({dict.Count} серверов). Восстанавливаем основной файл.");
+                            File.Copy(bakPath, resolved, overwrite: true);
+                        }
+                        // Успешная загрузка — НЕ пересохраняем автоматически.
+                        return;
+                    }
+                    _ = LogError($"[ServerConfig] Десериализация вернула null из {(attempt == 0 ? "основного файла" : ".bak")}.");
                 }
-
+                catch (JsonException jex)
+                {
+                    _ = LogError($"[ServerConfig] JSON-ошибка ({(attempt == 0 ? "main" : "bak")}): {jex.Message} — не хватает запятой или скобки?");
+                }
+                catch (Exception ex)
+                {
+                    _ = LogError($"[ServerConfig] Ошибка чтения ({(attempt == 0 ? "main" : "bak")}): {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                _ = LogError($"Ошибка загрузки serverconfigs: {ex.Message}");
-            }
+            _ = LogError("[ServerConfig] Не удалось загрузить ни основной файл, ни .bak. Начинаем с пустого конфига.");
         }
 
         public Program()
@@ -1892,12 +1924,34 @@ private MusicStats? _musicStats;
             var imageUrl   = guildEvent.GetCoverImageUrl();
 
             string whereText;
+            string whereTextPlain;
             if (guildEvent.Channel != null)
+            {
                 whereText = $"<#{guildEvent.Channel.Id}>";
+                whereTextPlain = guildEvent.Channel.Name;
+            }
             else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
+            {
                 whereText = Truncate(guildEvent.Location, 256);
+                whereTextPlain = whereText;
+            }
             else
+            {
                 whereText = "не указано";
+                whereTextPlain = whereText;
+            }
+
+            // Имя создателя: сначала MasterNameMap, потом Username
+            string? createdByPlain = null;
+            if (guildEvent.Creator != null)
+            {
+                if (_serverConfigs.TryGetValue(guild.Id, out var scUpd)
+                    && scUpd.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedUpd) == true
+                    && !string.IsNullOrWhiteSpace(mappedUpd))
+                    createdByPlain = mappedUpd;
+                else
+                    createdByPlain = guildEvent.Creator.Username;
+            }
 
             var embedBuilder = new EmbedBuilder()
                 .WithTitle($"📅 Событие: {Truncate(guildEvent.Name, 100)}")
@@ -1920,6 +1974,7 @@ private MusicStats? _musicStats;
             embedBuilder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
 
             var embed = embedBuilder;
+            _ = createdByPlain; // используется ниже в Telegram
 
             // Обновляем сообщение в канале
             if (entry.AnnounceMessageId != 0)
@@ -1963,10 +2018,18 @@ private MusicStats? _musicStats;
             {
                 try
                 {
-                    var tgText = $"📅 *{guildEvent.Name}*\n🕐 {startLocal:dd.MM.yyyy HH:mm}\n📍 {whereText}";
+                    var tgText = $"📅 Событие: {guildEvent.Name}\n" +
+                        $"🏰 Сервер: {guild.Name}\n" +
+                        $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
+                        $"📍 Где: {whereTextPlain}\n" +
+                        (createdByPlain != null ? $"👤 Создал: {createdByPlain}\n" : string.Empty) +
+                        $"🔗 {eventUrl}";
                     if (!string.IsNullOrWhiteSpace(guildEvent.Description))
-                        tgText += $"\n\n{Truncate(guildEvent.Description, 300)}";
-                    tgText += $"\n\n[Открыть событие]({eventUrl})";
+                    {
+                        var desc = guildEvent.Description.Trim();
+                        if (desc.Length > 800) desc = desc.Substring(0, 799) + "…";
+                        tgText += $"\n\nОписание события:\n{desc}";
+                    }
                     await _telegramNotifier.EditMessageTextAsync(guild.Id, entry.TelegramMessageId, tgText);
                 }
                 catch { }
@@ -2091,9 +2154,39 @@ private MusicStats? _musicStats;
                     var tgText = $"{prefix} {statusText}: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
                         $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
-                        $"📍 Где: {whereTextPlain}\n" +
-                        (guildEvent.Creator != null ? $"👤 Создал: {guildEvent.Creator.Username}\n" : string.Empty) +
-                        $"ℹ️ {mark}\n" +
+                        $"📍 Где: {whereTextPlain}\n";
+
+                    // При старте события подставляем имя мастера из активной сессии (учитывает MasterNameMap и ручные правки)
+                    if (isStarted && guildEvent.Creator != null)
+                    {
+                        string masterDisplayName = null;
+                        if (GameSessionCommands._sessions.TryGetValue(guild.Id, out var guildSessions))
+                        {
+                            var linkedSession = guildSessions.Values.FirstOrDefault(s => s.EventId == guildEvent.Id && !s.IsStopped);
+                            if (linkedSession != null)
+                                masterDisplayName = linkedSession.MasterName;
+                        }
+                        // Fallback: MasterNameMap по Creator.Id
+                        if (masterDisplayName == null && _serverConfigs.TryGetValue(guild.Id, out var sc))
+                        {
+                            sc.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out masterDisplayName);
+                        }
+                        masterDisplayName ??= guildEvent.Creator.Username;
+                        tgText += $"👤 Мастер: {masterDisplayName}\n";
+                    }
+                    else if (guildEvent.Creator != null)
+                    {
+                        string creatorName = null;
+                        if (_serverConfigs.TryGetValue(guild.Id, out var scSt)
+                            && scSt.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedSt) == true
+                            && !string.IsNullOrWhiteSpace(mappedSt))
+                            creatorName = mappedSt;
+                        else
+                            creatorName = guildEvent.Creator.Username;
+                        tgText += $"👤 Создал: {creatorName}\n";
+                    }
+
+                    tgText += $"ℹ️ {mark}\n" +
                         $"🔗 {eventUrl}";
 
                     if (!string.IsNullOrWhiteSpace(guildEvent.Description))
@@ -2209,7 +2302,13 @@ private MusicStats? _musicStats;
             if (guildEvent.Creator != null)
             {
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-                createdByPlain = guildEvent.Creator.Username;
+                // Telegram: сначала MasterNameMap, потом Username
+                if (_serverConfigs.TryGetValue(guild.Id, out var scCr)
+                    && scCr.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedCr) == true
+                    && !string.IsNullOrWhiteSpace(mappedCr))
+                    createdByPlain = mappedCr;
+                else
+                    createdByPlain = guildEvent.Creator.Username;
             }
 
 			embedBuilder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
@@ -2827,11 +2926,18 @@ await Task.CompletedTask;
                     _serverConfigs[g.Id] = new ServerConfig { GuildID = g.Id };
                     changed = true;
                 }
+                // Существующие конфиги не трогаем — только добавляем отсутствующие серверы.
             }
 
-            // Ensure file exists even if dictionary is still empty at first ready tick.
-            if (changed || !File.Exists(_serverConfigsPath))
+            if (changed)
+            {
                 SaveServerConfigs();
+            }
+            else if (!File.Exists(BotConfig.ResolvePath(_serverConfigsPath ?? "serverconfigs.json")))
+            {
+                // Файл исчез, но данные в памяти есть — восстанавливаем.
+                SaveServerConfigs();
+            }
         }
 
         // Фиксированная ширина логов для стабильного форматирования
