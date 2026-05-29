@@ -66,7 +66,6 @@ namespace RPBot
                 return;
             }
             if (!isManual && IsExpectedDisconnectInProgress()) return;
-            if (!isManual && IsReconnectInProgress) return;
 
             var reason = DisconnectReasonTranslator.GetFriendlyReason(exception);
             _connectionInfo.AddDisconnectReason(reason, exception?.Message);
@@ -75,6 +74,8 @@ namespace RPBot
             CancellationTokenSource cts;
             lock (_stateLock)
             {
+                // Отменяем предыдущий CTS (если реконнект уже шёл — он завершится
+                // с OperationCanceledException и освободит _reconnectLock).
                 try { _reconnectCts.Cancel(); } catch { }
                 try { _reconnectCts.Dispose(); } catch { }
                 _reconnectCts = new CancellationTokenSource();
@@ -86,7 +87,31 @@ namespace RPBot
         private async Task ReconnectLoopAsync(CancellationTokenSource cts, bool forceReconnect)
         {
             var ct = cts.Token;
-            if (!await _reconnectLock.WaitAsync(0, ct)) { await Log("Реконнект уже выполняется — пропускаем."); return; }
+
+            // Ждём блокировку без таймаута: если предыдущая петля ещё владеет ею,
+            // дождёмся пока она не освободит (после OperationCanceledException в finally).
+            // Передаём ct — если ещё один HandleDisconnect снова отменит CTS пока мы
+            // ждём, WaitAsync выбросит OperationCanceledException и мы не начнём
+            // устаревший реконнект.
+            try { await _reconnectLock.WaitAsync(ct); }
+            catch (OperationCanceledException) { return; }
+
+            // После получения блокировки ct мог уже быть отменён (ещё один Disconnect
+            // пришёл пока мы ждали). Берём актуальный CTS.
+            lock (_stateLock)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    // Текущий CTS устарел — переключаемся на последний действующий.
+                    cts = _reconnectCts;
+                    ct = cts.Token;
+                }
+            }
+            if (ct.IsCancellationRequested)
+            {
+                try { _reconnectLock.Release(); } catch { }
+                return;
+            }
             try
             {
                 lock (_stateLock) { _isReconnecting = true; }
