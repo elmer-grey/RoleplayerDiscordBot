@@ -37,7 +37,9 @@ namespace RPBot.Music
                 SavedAt    = DateTime.UtcNow,
             };
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            await File.WriteAllTextAsync(_filePath, JsonSerializer.Serialize(all, _json));
+            var tmpSave = _filePath + ".tmp";
+            await File.WriteAllTextAsync(tmpSave, JsonSerializer.Serialize(all, _json));
+            File.Move(tmpSave, _filePath, overwrite: true);
         }
 
         public async Task<PersistedQueue?> LoadAsync(ulong guildId)
@@ -52,7 +54,9 @@ namespace RPBot.Music
             if (all.Remove(guildId.ToString()))
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                await File.WriteAllTextAsync(_filePath, JsonSerializer.Serialize(all, _json));
+                var tmpClear = _filePath + ".tmp";
+                await File.WriteAllTextAsync(tmpClear, JsonSerializer.Serialize(all, _json));
+                File.Move(tmpClear, _filePath, overwrite: true);
             }
         }
 

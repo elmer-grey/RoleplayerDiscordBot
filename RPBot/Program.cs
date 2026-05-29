@@ -761,6 +761,17 @@ private MusicStats? _musicStats;
 			// Автоматически мигрируем файлы данных из Settings/ в Data/ (один раз)
 			BotConfig.MigrateDataFiles();
 
+			// Критическая проверка: GuildIDs должен быть задан в config.json
+			if (_config.GuildIDs == null || _config.GuildIDs.Count == 0)
+			{
+				Console.ForegroundColor = ConsoleColor.Red;
+				Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
+				Console.WriteLine("Укажите список ID серверов, например:");
+				Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
+				Console.ResetColor();
+				throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
+			}
+
 			_serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
             ServerConfigResolver = GetServerConfigInternal;
