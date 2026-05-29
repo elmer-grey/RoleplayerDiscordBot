@@ -1409,6 +1409,7 @@ namespace RPBot
                 {
                     Log($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
                     RemoveSession(session);
+                    _ = Task.Run(() => SaveSessionsAsync());
                 }
 
                 // Google Sheets — в последнюю очередь, после всех Discord-сообщений
@@ -1549,18 +1550,21 @@ namespace RPBot
                     case "no_stats":
                         await component.Message.DeleteAsync();
                         RemoveSession(session);
+                        _ = Task.Run(() => SaveSessionsAsync());
                         Log($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
                         break;
 
                     case "general_stats":
                         await ShowGeneralStats(component, session);
                         RemoveSession(session);
+                        _ = Task.Run(() => SaveSessionsAsync());
                         Log($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
                         break;
 
                     case "detailed_stats":
                         await ShowDetailedStats(component, session);
                         RemoveSession(session);
+                        _ = Task.Run(() => SaveSessionsAsync());
                         Log($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
                         break;
                 }
