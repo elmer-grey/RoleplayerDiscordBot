@@ -4972,9 +4972,13 @@ await Task.CompletedTask;
 
             if (channelOpt != null)
             {
-                var directId = Convert.ToUInt64(channelOpt);
-                var directChannel = await _client.GetChannelAsync(directId) as SocketGuildChannel;
-                if (directChannel != null && directChannel.Guild.Id == guildId && (!requireVoice || directChannel is SocketVoiceChannel))
+                // Discord.Net передаёт объект SocketChannel, а не ulong
+                ulong directId = channelOpt is Discord.IChannel ch
+                    ? ch.Id
+                    : Convert.ToUInt64(channelOpt);
+                var directChannel = guild.GetChannel(directId) ?? await _client.GetChannelAsync(directId) as SocketGuildChannel;
+                var sgc = directChannel as SocketGuildChannel;
+                if (sgc != null && sgc.Guild.Id == guildId && (!requireVoice || sgc is SocketVoiceChannel))
                     return directId;
             }
 
@@ -5066,16 +5070,19 @@ await Task.CompletedTask;
                         sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с ID или названием канала.");
 						sb.AppendLine("  Если указаны оба, приоритет у channel.");
                        sb.AppendLine("- Для ролей (default_role, master_role, super_user_role) указывайте ID роли или её название в value.");
-                       sb.AppendLine("- для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
-                       sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
+					   sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
+					   sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
 						sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+						sb.AppendLine("- Для swear_words укажите слова через запятую в value (например: слово1,слово2). value:clear — очистить список.");
 						sb.AppendLine();
 						sb.AppendLine("Примеры:");
 						sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
 						sb.AppendLine("/settings action:set key:moderation_channel value:123456789012345678");
-                        sb.AppendLine("/settings action:set key:default_role value:@Игрок");
-                        sb.AppendLine("/settings action:set key:master_role value:Мастер НРИ");
+						sb.AppendLine("/settings action:set key:default_role value:@Игрок");
+						sb.AppendLine("/settings action:set key:master_role value:Мастер НРИ");
 						sb.AppendLine("/settings action:set key:swear_filter toggle:true");
+						sb.AppendLine("/settings action:set key:swear_words value:слово1,слово2,слово3");
+						sb.AppendLine("/settings action:set key:swear_words value:clear");
 						sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
 						await command.RespondAsync(sb.ToString(), ephemeral: true);
 						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
@@ -5255,6 +5262,37 @@ await Task.CompletedTask;
                                     await command.RespondAsync($"super_user_role установлен: {roleId.Value}", ephemeral: true);
 								}
 								break;
+                            case "swear_words":
+                                {
+                                    if (string.IsNullOrWhiteSpace(valueOpt))
+                                    {
+                                        // Без значения — показываем текущий список
+                                        var current = sconfig.SwearWords != null && sconfig.SwearWords.Count > 0
+                                            ? string.Join(", ", sconfig.SwearWords)
+                                            : "(список пуст — используются слова по умолчанию из конфига бота)";
+                                        await command.RespondAsync($"Текущие слова фильтра: {current}", ephemeral: true);
+                                        return;
+                                    }
+                                    // Значение: через запятую или «clear» для очистки
+                                    if (valueOpt.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        sconfig.SwearWords = new List<string>();
+                                        SaveServerConfigs();
+                                        await command.RespondAsync("Список матерных слов очищен (будут использоваться слова по умолчанию).", ephemeral: true);
+                                    }
+                                    else
+                                    {
+                                        var words = valueOpt
+                                            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                            .Select(w => w.ToLowerInvariant())
+                                            .Where(w => !string.IsNullOrWhiteSpace(w))
+                                            .ToList();
+                                        sconfig.SwearWords = words;
+                                        SaveServerConfigs();
+                                        await command.RespondAsync($"Список матерных слов обновлён ({words.Count} шт.): {string.Join(", ", words)}", ephemeral: true);
+                                    }
+                                }
+                                break;
                             case "swear_filter":
                                 {
                                     bool state = false;
