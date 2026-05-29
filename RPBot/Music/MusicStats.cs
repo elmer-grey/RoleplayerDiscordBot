@@ -18,7 +18,7 @@ namespace RPBot.Music
 
         public static async Task<MusicStats> LoadAsync(string baseDirectory)
         {
-            var path = Path.Combine(baseDirectory, "Settings", "music_stats.json");
+            var path = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_stats.json");
             MusicStats stats;
             if (File.Exists(path))
             {

@@ -17,9 +17,104 @@ namespace RPBot
 		// (оба пути относительные к AppContext.BaseDirectory).
 		public const string SettingsFolderName = "Settings";
 
+		// Папка Data — файлы состояния бота (scores, queues, sessions, плейлисты и т.д.)
+		public const string DataFolderName = "Data";
+
 		public static string GetSettingsDirectory()
 		{
 			return ResolvePath(SettingsFolderName);
+		}
+
+		public static string GetDataDirectory()
+		{
+			return ResolvePath(DataFolderName);
+		}
+
+		/// <summary>
+		/// Автоматически мигрирует файлы данных из Settings/ в Data/.
+		/// Вызывается один раз при старте после загрузки конфига.
+		/// Идемпотентен: если файл уже в Data/ — не трогает его.
+		/// </summary>
+		public static void MigrateDataFiles()
+		{
+			var settingsDir = GetSettingsDirectory();
+			var dataDir = GetDataDirectory();
+			Directory.CreateDirectory(dataDir);
+
+			// Список JSON-файлов данных, которые переезжают из Settings/ в Data/
+			var filesToMigrate = new[]
+			{
+				"bwonks.json",
+				"event-notify.json",
+				"event_announcements.json",
+				"points.json",
+				"points_users.json",
+				"music_playlists.json",
+				"music_queues.json",
+				"music_stats.json",
+			};
+
+			foreach (var file in filesToMigrate)
+			{
+				var src = Path.Combine(settingsDir, file);
+				var dst = Path.Combine(dataDir, file);
+				if (File.Exists(src) && !File.Exists(dst))
+				{
+					try
+					{
+						File.Move(src, dst);
+						Console.WriteLine($"[Migration] Перемещён {file}: Settings/ → Data/");
+					}
+					catch (Exception ex)
+					{
+						Console.WriteLine($"[Migration] Ошибка перемещения {file}: {ex.Message}");
+					}
+				}
+			}
+
+			// Мигрируем Numbers/ (папку с картинками кубиков)
+			var srcNumbers = Path.Combine(settingsDir, "Numbers");
+			var dstNumbers = Path.Combine(dataDir, "Numbers");
+			if (Directory.Exists(srcNumbers) && !Directory.Exists(dstNumbers))
+			{
+				try
+				{
+					// Копируем все файлы рекурсивно, затем удаляем исходник
+					CopyDirectory(srcNumbers, dstNumbers);
+					Directory.Delete(srcNumbers, recursive: true);
+					Console.WriteLine($"[Migration] Перемещена папка Numbers/: Settings/ → Data/");
+				}
+				catch (Exception ex)
+				{
+					Console.WriteLine($"[Migration] Ошибка перемещения Numbers/: {ex.Message}");
+				}
+			}
+
+			// Мигрируем NumbersDirectory в конфиге: Settings/Numbers → Data/Numbers
+			if (Current != null)
+			{
+				var legacyNumbers = Path.Combine(SettingsFolderName, "Numbers");
+				if (string.Equals(Current.NumbersDirectory, legacyNumbers, StringComparison.OrdinalIgnoreCase))
+				{
+					Current.NumbersDirectory = Path.Combine(DataFolderName, "Numbers");
+					// Сохраняем обновлённый конфиг
+					var cfgPath = ResolvePath(Path.Combine(SettingsFolderName, "config.json"));
+					if (File.Exists(cfgPath))
+					{
+						try { Current.Save(cfgPath); }
+						catch { /* не критично */ }
+					}
+				}
+			}
+		}
+
+		private static void CopyDirectory(string src, string dst)
+		{
+			Directory.CreateDirectory(dst);
+			foreach (var file in Directory.GetFiles(src))
+				File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: false);
+			foreach (var dir in Directory.GetDirectories(src))
+				CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
 		}
 
 		// Текущая загруженная конфигурация (удобство для доступа из других классов)
@@ -98,8 +193,8 @@ namespace RPBot
         // Путь к файлу с текстовыми блоками (по умолчанию в Settings/Pastes.txt)
 		public string TextBlocksPath { get; set; } = Path.Combine(SettingsFolderName, "Pastes.txt");
 
-        // Директория с картинками для бросков (например, Numbers)
-		public string NumbersDirectory { get; set; } = Path.Combine(SettingsFolderName, "Numbers");
+		// Директория с картинками для бросков (например, Numbers)
+		public string NumbersDirectory { get; set; } = Path.Combine(DataFolderName, "Numbers");
 
 		// === GOOGLE SHEETS ===
 

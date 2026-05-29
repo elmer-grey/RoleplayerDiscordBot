@@ -38,7 +38,7 @@ namespace RPBot.Music
 
         public MusicPlaylistStore(string baseDirectory)
         {
-            _filePath = Path.Combine(baseDirectory, "Settings", "music_playlists.json");
+            _filePath = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_playlists.json");
         }
 
         // ─── CRUD ─────────────────────────────────────────────────────────

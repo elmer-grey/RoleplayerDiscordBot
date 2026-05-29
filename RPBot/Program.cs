@@ -577,10 +577,10 @@ private MusicStats? _musicStats;
         private string _serverConfigsPath;
         // Bwonk counts persisted between runs
         private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
-		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine("Settings", "bwonks.json"));
+		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "bwonks.json"));
 
 		private EventNotificationService _eventNotifications;
-		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine("Settings", "event-notify.json"));
+		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "event-notify.json"));
 
         // Слияние конфигурации сервера из статического словаря (дефолты)
         // и конфигурации из файла/памяти (переопределения).
@@ -757,6 +757,10 @@ private MusicStats? _musicStats;
 			var configRelativePath = Path.Combine("Settings", "config.json");
 			var configResolvedPath = BotConfig.ResolvePath(configRelativePath);
 			_config = BotConfig.Load(configRelativePath);
+
+			// Автоматически мигрируем файлы данных из Settings/ в Data/ (один раз)
+			BotConfig.MigrateDataFiles();
+
 			_serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
             ServerConfigResolver = GetServerConfigInternal;
@@ -780,20 +784,20 @@ private MusicStats? _musicStats;
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
-			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.SettingsFolderName, "event_announcements.json"));
+			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.DataFolderName, "event_announcements.json"));
 			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
 			if (_googleSheetsService != null)
 				_googleSheetsService.LogSink = msg => CommandLogSink?.Invoke(msg);
 
 			// Сервисы для костяшек
-			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points.json"));
+			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points.json"));
 			_pointsService = new PointsService(pointsPath);
 			// Загрузка балансов костяшек из файла
 			_pointsService.LoadAsync().GetAwaiter().GetResult();
 
-            var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, "points_users.json"));
-            _pointsUserIndex = new PointsUserIndex(pointsUsersPath);
-            _pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
+			var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points_users.json"));
+			_pointsUserIndex = new PointsUserIndex(pointsUsersPath);
+			_pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
 
 			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
 			_predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);

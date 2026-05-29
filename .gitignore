@@ -361,3 +361,18 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ─── Bot runtime data ───────────────────────────────────────────────────────
+# Settings/ — конфиги бота (секреты, токены); не коммитим
+Settings/
+
+# Data/ — файлы состояния (баллы, очереди, сессии, плейлисты)
+Data/*.json
+Data/*.log
+
+# Картинки кубиков — НЕ игнорируем, передаются через git
+!Data/Numbers/
+!Data/Numbers/**
+
+# Логи
+Logs/

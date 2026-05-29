@@ -23,7 +23,7 @@ namespace RPBot.Music
 
         public MusicQueueStore(string baseDirectory)
         {
-            _filePath = Path.Combine(baseDirectory, "Settings", "music_queues.json");
+            _filePath = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_queues.json");
         }
 
         public async Task SaveAsync(ulong guildId, string? currentUrl, IEnumerable<string> queueUrls)
