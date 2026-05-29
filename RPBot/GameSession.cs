@@ -52,6 +52,8 @@ namespace RPBot
         public object StatsSync { get; } = new();
         /// <summary>1-based номер строки в Google Sheets, куда записана эта сессия. 0 = не записано.</summary>
         public int SheetRowIndex { get; set; } = 0;
+        /// <summary>Семафор для защиты от параллельных нажатий кнопок управления одной сессией.</summary>
+        public SemaphoreSlim ButtonSemaphore { get; } = new SemaphoreSlim(1, 1);
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
@@ -548,6 +550,7 @@ namespace RPBot
                 session.ControlMessageId = message.Id;
                 session.ControlChannelId = channel.Id;
 
+                _ = Task.Run(() => SaveSessionsAsync());
                 commands.Log($"Создано сообщение управления для сессии {session.SessionId} (ID сообщения: {message.Id})");
             }
             else
@@ -605,6 +608,8 @@ namespace RPBot
             var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
             session.ControlMessageId = message.Id;
             session.ControlChannelId = command.Channel.Id;
+
+            _ = Task.Run(() => SaveSessionsAsync());
         }
 
         public async Task HandleControlButton(SocketMessageComponent component)
@@ -646,6 +651,16 @@ namespace RPBot
                     return;
                 }
 
+                // Защита от параллельных нажатий на кнопки одной сессии
+                if (!await session.ButtonSemaphore.WaitAsync(0))
+                {
+                    await component.RespondAsync("⏳ Идёт обработка предыдущего действия, подождите...", ephemeral: true);
+                    return;
+                }
+
+                try
+                {
+
                 switch (parts[0])
                 {
                     case "pause_session":
@@ -685,6 +700,12 @@ namespace RPBot
                         await HandleForceStop(component, session);
                         break;
                 }
+
+                } // end ButtonSemaphore try
+                finally
+                {
+                    session.ButtonSemaphore.Release();
+                }
             }
             catch (Exception ex)
             {
@@ -723,19 +744,32 @@ namespace RPBot
                 session.PauseReminderCTS = null;
             }
             session.PauseReminderCTS = new CancellationTokenSource();
+            // Захватываем токен локально — иначе при Resume/Dispose поля может возникнуть
+            // ObjectDisposedException внутри Task.Run при обращении к session.PauseReminderCTS
+            var pauseReminderToken = session.PauseReminderCTS.Token;
             _ = Task.Run(async () =>
             {
                 // Первое напоминание через 10 минут от начала паузы
                 var nextReminder = TimeSpan.FromMinutes(10);
 
-                while (!session.PauseReminderCTS.IsCancellationRequested)
+                while (!pauseReminderToken.IsCancellationRequested)
                 {
                     // Ждем до следующего напоминания
                     var delay = nextReminder - (DateTime.Now - pauseStartTime);
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, session.PauseReminderCTS.Token);
+                        try
+                        {
+                            await Task.Delay(delay, pauseReminderToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
                     }
+
+                    if (pauseReminderToken.IsCancellationRequested)
+                        return;
 
                     try
                     {
@@ -755,12 +789,11 @@ namespace RPBot
 
                                 session.PauseReminderMessageId = reminderMessage.Id;
 
-                                await Task.Delay(TimeSpan.FromMinutes(2));
-                                try
+                                await Task.Delay(TimeSpan.FromMinutes(2), pauseReminderToken).ContinueWith(_ => { });
+                                if (!pauseReminderToken.IsCancellationRequested)
                                 {
-                                    await reminderMessage.DeleteAsync();
+                                    try { await reminderMessage.DeleteAsync(); } catch { }
                                 }
-                                catch { }
                             }
                         }
 
@@ -772,7 +805,7 @@ namespace RPBot
                         nextReminder += TimeSpan.FromMinutes(10);
                     }
                 }
-            }, session.PauseReminderCTS.Token);
+            }, pauseReminderToken);
         }
 
         private async Task HandleResumeSession(SocketMessageComponent component, GameSession session)
@@ -1426,27 +1459,15 @@ namespace RPBot
                     // Удаляем последнее напоминание о паузе
                     if (session.PauseReminderMessageId.HasValue)
                     {
-                        try
-                        {
-                            channel.DeleteMessageAsync(session.PauseReminderMessageId.Value);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"Ошибка при удалении сообщения напоминания о паузе: {ex.Message}");
-                        }
+                        _ = channel.DeleteMessageAsync(session.PauseReminderMessageId.Value)
+                            .ContinueWith(t => { if (t.IsFaulted) Log($"Ошибка при удалении напоминания о паузе: {t.Exception?.InnerException?.Message}"); });
                     }
 
                     // Удаляем сообщение подтверждения остановки
                     if (session.ConfirmationMessageId.HasValue)
                     {
-                        try
-                        {
-                            channel.DeleteMessageAsync(session.ConfirmationMessageId.Value);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"Ошибка при удалении сообщения подтверждения остановки: {ex.Message}");
-                        }
+                        _ = channel.DeleteMessageAsync(session.ConfirmationMessageId.Value)
+                            .ContinueWith(t => { if (t.IsFaulted) Log($"Ошибка при удалении подтверждения остановки: {t.Exception?.InnerException?.Message}"); });
                     }
                 }
                 catch (Exception ex)
@@ -1477,6 +1498,7 @@ namespace RPBot
                 if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
                 {
                     Log($"[RESTART] Активные сессии для гильдии {guildId} не найдены (вероятно бот был перезагружен)");
+                    try { await component.Message.DeleteAsync(); } catch { }
                     await component.RespondAsync("❌ Сессия больше не активна.\n\nЭто может произойти если бот был перезагружен. Статистика была потеряна.", ephemeral: true);
                     return;
                 }
@@ -1485,6 +1507,7 @@ namespace RPBot
                 if (session == null)
                 {
                     Log($"[RESTART] Сессия для сообщения статистики {component.Message.Id} не найдена");
+                    try { await component.Message.DeleteAsync(); } catch { }
                     await component.RespondAsync("❌ Сессия не найдена.\n\nЭто может произойти если бот был перезагружен.", ephemeral: true);
                     return;
                 }
