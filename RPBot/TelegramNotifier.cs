@@ -15,10 +15,10 @@ namespace RPBot
 
 		public sealed record TelegramProbeResult(bool Success, string Message, int? TelegramMessageId = null);
 
-     public TelegramNotifier(Func<ulong, ServerConfig?> serverConfigAccessor, HttpClient? httpClient = null)
+	 public TelegramNotifier(Func<ulong, ServerConfig?> serverConfigAccessor, HttpClient? httpClient = null)
 		{
-            _serverConfigAccessor = serverConfigAccessor ?? throw new ArgumentNullException(nameof(serverConfigAccessor));
-			_httpClient = httpClient ?? new HttpClient();
+			_serverConfigAccessor = serverConfigAccessor ?? throw new ArgumentNullException(nameof(serverConfigAccessor));
+			_httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 		}
 
 		public async Task<bool> SendPhotoAsync(ulong guildId, string photoUrl, string? caption = null, CancellationToken ct = default)

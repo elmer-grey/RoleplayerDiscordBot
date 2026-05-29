@@ -42,17 +42,21 @@ namespace RPBot
 			Directory.CreateDirectory(dataDir);
 
 			// Список JSON-файлов данных, которые переезжают из Settings/ в Data/
-			var filesToMigrate = new[]
-			{
-				"bwonks.json",
-				"event-notify.json",
-				"event_announcements.json",
-				"points.json",
-				"points_users.json",
-				"music_playlists.json",
-				"music_queues.json",
-				"music_stats.json",
-			};
+				var filesToMigrate = new[]
+				{
+					"bwonks.json",
+					"event-notify.json",
+					"event_announcements.json",
+					"points.json",
+					"points_users.json",
+					"music_playlists.json",
+					"music_queues.json",
+					"music_stats.json",
+					"predictions_state.json",
+					"predictions_history.json",
+					"predictions_stats.json",
+					"predictions_achievements.json",
+				};
 
 			foreach (var file in filesToMigrate)
 			{

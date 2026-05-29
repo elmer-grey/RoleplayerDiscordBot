@@ -116,7 +116,9 @@ namespace RPBot
 
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(snapshot, options);
-                await File.WriteAllTextAsync(_statePath, json).ConfigureAwait(false);
+                var tmpPath = _statePath + ".tmp";
+                await File.WriteAllTextAsync(tmpPath, json).ConfigureAwait(false);
+                File.Move(tmpPath, _statePath, overwrite: true);
             }
             catch
             {

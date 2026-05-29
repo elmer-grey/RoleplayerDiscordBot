@@ -247,7 +247,24 @@ namespace RPBot
             string directoryPath = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? Path.Combine("Logs"));
             Directory.CreateDirectory(directoryPath);
 
-            string filePath = Path.Combine(directoryPath, $"{user.Username}.txt");
+            // Санируем имя файла: убираем любые символы, недопустимые в именах файлов
+            var safeUsername = string.Concat(user.Username
+                .Split(Path.GetInvalidFileNameChars()))
+                .Replace("..", "_")
+                .Trim('.');
+            if (string.IsNullOrWhiteSpace(safeUsername))
+                safeUsername = user.Id.ToString();
+
+            string filePath = Path.Combine(directoryPath, $"{safeUsername}.txt");
+
+            // Защита от выхода за пределы директории (path traversal)
+            var resolvedFile = Path.GetFullPath(filePath);
+            var resolvedDir  = Path.GetFullPath(directoryPath);
+            if (!resolvedFile.StartsWith(resolvedDir, StringComparison.OrdinalIgnoreCase))
+            {
+                await command.RespondAsync("Ошибка: недопустимое имя пользователя.", ephemeral: true);
+                return;
+            }
 
             using (StreamWriter writer = new StreamWriter(filePath, true))
             {

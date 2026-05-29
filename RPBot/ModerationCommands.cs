@@ -95,13 +95,6 @@ namespace RPBot
                 // Если это текстовый канал, перемещаем его в архив и закрываем доступ
                 SocketCategoryChannel archiveCategory = guild.CategoryChannels.FirstOrDefault(cat => cat.Name == "Архив");
 
-                /*if (archiveCategory != null && textChannel.CategoryId == archiveCategory.Id)
-                {
-                    Console.WriteLine($"[{DateTime.UtcNow}] Чат {textChannel.Name} уже находится в архиве.");
-                    await command.FollowupAsync($"Чат {textChannel.Mention} уже находится в архиве.", ephemeral: true);
-                    return;
-                }*/
-
                 if (archiveCategory == null)
                 {
                     Console.WriteLine($"[{DateTime.UtcNow}] Категория 'Архив' не найдена. Создание новой категории.");
@@ -114,68 +107,22 @@ namespace RPBot
                         return;
                     }
 
-                    // Используем restCategory напрямую
-                    await textChannel.ModifyAsync(prop =>
-                    {
-                        prop.CategoryId = restCategory.Id;
-                    });
-
+                    await textChannel.ModifyAsync(prop => { prop.CategoryId = restCategory.Id; });
                     Console.WriteLine($"[{DateTime.UtcNow}] Канал {textChannel.Name} перемещён в категорию 'Архив'.");
                 }
                 else
                 {
-                    // Используем существующую категорию
-                    await textChannel.ModifyAsync(prop =>
-                    {
-                        prop.CategoryId = archiveCategory.Id;
-                    });
-
+                    await textChannel.ModifyAsync(prop => { prop.CategoryId = archiveCategory.Id; });
                     Console.WriteLine($"[{DateTime.UtcNow}] Канал {textChannel.Name} перемещён в категорию 'Архив'.");
                 }
 
-                // Закрываем доступ на отправку сообщений для всех пользователей
-                // Получаем всех пользователей на сервере
-                var users = await guild.GetUsersAsync().Flatten().ToListAsync();
-
-                // Закрываем доступ на отправку сообщений для пользователей, у которых есть доступ к каналу
-                foreach (var guildUser in users)
-                {
-                    // Проверяем, есть ли у пользователя доступ к каналу
-                    var permissions = guildUser.GetPermissions(textChannel);
-
-                    if (permissions.ViewChannel) // Если пользователь имеет доступ к каналу
-                    {
-                        // Получаем текущие переопределения прав для пользователя
-                        var overwrite = textChannel.GetPermissionOverwrite(guildUser);
-
-                        if (overwrite != null)
-                        {
-                            // Получаем текущие разрешения и запреты
-                            var allow = overwrite.Value.AllowValue; // Разрешения
-                            var deny = overwrite.Value.DenyValue;  // Запреты
-
-                            // Убираем разрешение на отправку сообщений
-                            allow &= ~(ulong)Discord.ChannelPermission.SendMessages;
-
-                            // Добавляем запрет на отправку сообщений
-                            deny |= (ulong)Discord.ChannelPermission.SendMessages;
-
-                            // Создаём новые переопределения
-                            var newOverwrite = new OverwritePermissions(allow, deny);
-
-                            // Обновляем переопределение прав
-                            await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
-                            await LogStartup($"Запрещена отправка сообщений для пользователя {guildUser.Username}.");
-                        }
-                        else
-                        {
-                            // Если переопределения нет, создаём новое с запретом на отправку сообщений
-                            await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Deny));
-                            await LogStartup($"Запрещена отправка сообщений для пользователя {guildUser.Username}.");
-                        }
-                    }
-                    await Task.Delay(100);
-                }
+                // Запрещаем отправку сообщений через overwrite роли @everyone (один API-вызов вместо цикла по пользователям)
+                var everyoneRole = guild.EveryoneRole;
+                var existing = textChannel.GetPermissionOverwrite(everyoneRole);
+                var updatedOverwrite = (existing ?? OverwritePermissions.InheritAll)
+                    .Modify(sendMessages: PermValue.Deny, sendMessagesInThreads: PermValue.Deny);
+                await textChannel.AddPermissionOverwriteAsync(everyoneRole, updatedOverwrite);
+                await LogStartup($"Запрещена отправка сообщений для @everyone в канале {textChannel.Name}.");
 
                 await LogStartup($"Чат {textChannel.Name} перемещён в архив и закрыт. Причина: {reason}");
                 await command.FollowupAsync($"Чат {textChannel.Mention} был перемещён в архив и закрыт. Причина: {reason}");
@@ -240,47 +187,14 @@ namespace RPBot
                 return;
             }
 
-            // Получаем всех пользователей на сервере
-            var users = await guild.GetUsersAsync().Flatten().ToListAsync();
-
-            // Возвращаем доступ на запись только тем, кто уже есть в чате
-            foreach (var guildUser in users)
+            // Снимаем запрет отправки сообщений для @everyone через один overwrite
+            var everyoneRole = guild.EveryoneRole;
+            var existingOverwrite = textChannel.GetPermissionOverwrite(everyoneRole);
+            if (existingOverwrite.HasValue)
             {
-                // Проверяем, есть ли у пользователя доступ к каналу
-                var permissions = guildUser.GetPermissions(textChannel);
-
-                if (permissions.ViewChannel) // Если пользователь имеет доступ к каналу
-                {
-                    // Получаем текущие переопределения прав для пользователя
-                    var overwrite = textChannel.GetPermissionOverwrite(guildUser);
-
-                    if (overwrite != null)
-                    {
-                        // Получаем текущие разрешения и запреты
-                        var allow = overwrite.Value.AllowValue; // Разрешения
-                        var deny = overwrite.Value.DenyValue;  // Запреты
-
-                        // Убираем запрет на отправку сообщений
-                        deny &= ~(ulong)Discord.ChannelPermission.SendMessages;
-
-                        // Добавляем разрешение на отправку сообщений
-                        allow |= (ulong)Discord.ChannelPermission.SendMessages;
-
-                        // Создаём новые переопределения
-                        var newOverwrite = new OverwritePermissions(allow, deny);
-
-                        // Обновляем переопределение прав
-                        await textChannel.AddPermissionOverwriteAsync(guildUser, newOverwrite);
-                        await LogStartup($"Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
-                    }
-                    else
-                    {
-                        // Если переопределения нет, создаём новое с разрешением на отправку сообщений
-                        await textChannel.AddPermissionOverwriteAsync(guildUser, new OverwritePermissions(sendMessages: PermValue.Allow));
-                        await LogStartup($"Возвращена возможность отправки сообщений для пользователя {guildUser.Username}.");
-                    }
-                }
-                await Task.Delay(100);
+                var updatedOverwrite = existingOverwrite.Value.Modify(sendMessages: PermValue.Inherit, sendMessagesInThreads: PermValue.Inherit);
+                await textChannel.AddPermissionOverwriteAsync(everyoneRole, updatedOverwrite);
+                await LogStartup($"Снят запрет отправки сообщений для @everyone в канале {textChannel.Name}.");
             }
 
             // Перемещаем канал в указанную категорию

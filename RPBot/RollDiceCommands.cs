@@ -17,6 +17,20 @@ namespace RPBot
     public class RollDiceCommands : ModuleBase<SocketCommandContext>
     {
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
+
+        // Per-user cooldown: не чаще 1 броска в 2 секунды
+        private static readonly ConcurrentDictionary<ulong, DateTime> _lastRollTime = new();
+        private static readonly TimeSpan _rollCooldown = TimeSpan.FromSeconds(2);
+
+        private static bool IsOnCooldown(ulong userId)
+        {
+            if (_lastRollTime.TryGetValue(userId, out var last))
+                return DateTime.UtcNow - last < _rollCooldown;
+            return false;
+        }
+
+        private static void UpdateCooldown(ulong userId)
+            => _lastRollTime[userId] = DateTime.UtcNow;
         private string ValidateRollInput(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -146,6 +160,13 @@ namespace RPBot
                 await command.FollowupAsync("Команда доступна только на сервере.", ephemeral: true);
                 return;
             }
+
+            if (IsOnCooldown(command.User.Id))
+            {
+                await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                return;
+            }
+            UpdateCooldown(command.User.Id);
 
             // Получаем ID канала статистики из конфига
             var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
@@ -379,6 +400,13 @@ namespace RPBot
                 await command.FollowupAsync("Команда доступна только на сервере.");
                 return;
             }
+
+            if (IsOnCooldown(command.User.Id))
+            {
+                await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                return;
+            }
+            UpdateCooldown(command.User.Id);
 
             // Получаем ID канала статистики из конфига
             var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);

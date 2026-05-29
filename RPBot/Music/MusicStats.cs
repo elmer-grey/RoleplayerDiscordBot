@@ -42,7 +42,9 @@ namespace RPBot.Music
             if (_filePath is not null)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                await File.WriteAllTextAsync(_filePath, JsonSerializer.Serialize(this, _json));
+                var tmpPath = _filePath + ".tmp";
+                await File.WriteAllTextAsync(tmpPath, JsonSerializer.Serialize(this, _json));
+                File.Move(tmpPath, _filePath, overwrite: true);
             }
         }
     }

@@ -45,12 +45,12 @@ namespace RPBot
             // State file for persisting active predictions across restarts
             try
             {
-                var settingsDir = BotConfig.ResolvePath(BotConfig.SettingsFolderName);
-                Directory.CreateDirectory(settingsDir);
-                _stateFilePath = Path.Combine(settingsDir, "predictions_state.json");
-                _historyFilePath = Path.Combine(settingsDir, "predictions_history.json");
-                _statsFilePath = Path.Combine(settingsDir, "predictions_stats.json");
-                _achievementsFilePath = Path.Combine(settingsDir, "predictions_achievements.json");
+                var dataDir = BotConfig.GetDataDirectory();
+                Directory.CreateDirectory(dataDir);
+                _stateFilePath = Path.Combine(dataDir, "predictions_state.json");
+                _historyFilePath = Path.Combine(dataDir, "predictions_history.json");
+                _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
+                _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
             }
             catch
             {
