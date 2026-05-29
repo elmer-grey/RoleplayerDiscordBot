@@ -1287,7 +1287,13 @@ private MusicStats? _musicStats;
                 case "swear_words":
                     if (!string.IsNullOrWhiteSpace(value))
                     {
-                        sconfig.SwearWords = value.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                        if (value.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase))
+                            sconfig.SwearWords = new List<string>();
+                        else
+                            sconfig.SwearWords = value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(x => x.Trim().ToLowerInvariant())
+                                .Where(x => x.Length > 0)
+                                .ToList();
                     }
                     break;
                 case "predictions":

@@ -648,19 +648,21 @@ namespace RPBot
 				{
 					("moderation_channel", "Канал модерации"),
 					("welcome_channel", "Приветственный канал"),
-					("general_rg_channel", "Основной РГ-канал"),
-					("roll_channel", "Канал бросков"),
-					("stats_channel", "Канал статистики"),
-					("record_channel", "Канал записей"),
-                    ("event_voice_channel", "Event-голосовой канал"),
-					("welcome_message", "Приветственное сообщение"),
-					("line_message", "Сообщение для команды LINE"),
-					("default_role", "Роль по умолчанию"),
-					("super_user_role", "Роль суперпользователя"),
-					("swear_filter", "Фильтр мата включён"),
-					("swear_words", "Слова фильтра мата"),
-					("predictions", "Прогнозы отключения включены")
-				};
+						("general_rg_channel", "Основной РГ-канал"),
+						("roll_channel", "Канал бросков"),
+						("stats_channel", "Канал статистики"),
+						("record_channel", "Канал записей"),
+						("event_voice_channel", "Event-голосовой канал"),
+						("welcome_message", "Приветственное сообщение"),
+						("line_message", "Сообщение для команды LINE"),
+						("default_role", "Роль по умолчанию"),
+						("master_role", "Роль мастера"),
+						("super_user_role", "Роль суперпользователя"),
+						("swear_filter", "Фильтр мата включён"),
+						("swear_words", "Слова фильтра мата"),
+						("predictions", "Прогнозы включены"),
+						("roll_pictures", "Картинки для бросков")
+					};
 				
 				var labels = keyDefinitions.Select(k => k.label).ToArray();
 				int keyIndex = await ShowSelectionDialog("Выберите параметр", labels);
@@ -679,13 +681,16 @@ namespace RPBot
 						"roll_channel" => cfg.RollChannelID.ToString(),
 						"stats_channel" => cfg.StatsChannelID.ToString(),
 						"record_channel" => cfg.RecordChannelID.ToString(),
+						"event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
 						"welcome_message" => cfg.WelcomeMessage ?? "",
 						"line_message" => cfg.LineMessage ?? "",
 						"default_role" => cfg.DefaultRoleID.ToString(),
+						"master_role" => cfg.MasterRoleId.HasValue ? cfg.MasterRoleId.Value.ToString() : "",
 						"super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
 						"swear_filter" => cfg.SwearFilterEnabled.ToString(),
 						"swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
 						"predictions" => cfg.PredictionsEnabled.ToString(),
+						"roll_pictures" => cfg.RollPicturesEnabled.ToString(),
 						_ => "Неизвестный ключ"
 					};
                     AddCommandOutput(res);
@@ -732,21 +737,27 @@ namespace RPBot
                         }
                     }
                 }
-				else if (key == "default_role" || key == "super_user_role")
-                {
-                    var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
-                    var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
-                    int rIndex = await ShowSelectionDialog("Выберите роль", items);
-                    if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-                    value = roles[rIndex].Id.ToString();
-                }
-                else if (key == "swear_filter")
-                {
-                    var opts = new[] { "true", "false" };
-                    int idx = await ShowSelectionDialog("Включить фильтр мата?", opts);
-                    if (idx < 0) { AddCommandOutput("Операция отменена."); return; }
-                    toggle = opts[idx] == "true";
-                }
+				else if (key == "default_role" || key == "master_role" || key == "super_user_role")
+				{
+					var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
+					var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
+					int rIndex = await ShowSelectionDialog("Выберите роль", items);
+					if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+					value = roles[rIndex].Id.ToString();
+				}
+				else if (key == "swear_filter" || key == "predictions" || key == "roll_pictures")
+				{
+					var opts = new[] { "true", "false" };
+					string prompt = key switch
+					{
+						"swear_filter" => "Включить фильтр мата?",
+						"predictions" => "Включить прогнозы?",
+						_ => "Включить картинки для бросков?"
+					};
+					int idx = await ShowSelectionDialog(prompt, opts);
+					if (idx < 0) { AddCommandOutput("Операция отменена."); return; }
+					toggle = opts[idx] == "true";
+				}
                 else
                 {
                     // Запросим текстовое значение
@@ -1768,16 +1779,20 @@ namespace RPBot
                                             AddCommandOutput($"Настройки для {gid}:");
                                             AddCommandOutput($"moderation_channel: {cfg.ModerateChannelID}");
                                             AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
+                                            AddCommandOutput($"general_rg_channel: {cfg.GeneralRGChannelID}");
                                             AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
                                             AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
                                             AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
+                                            AddCommandOutput($"event_voice_channel: {cfg.EventVoiceChannelID}");
                                             AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
                                             AddCommandOutput($"line_message: {cfg.LineMessage}");
                                             AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
+                                            AddCommandOutput($"master_role: {(cfg.MasterRoleId.HasValue ? cfg.MasterRoleId.Value.ToString() : "null")}");
+                                            AddCommandOutput($"super_user_role: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
                                             AddCommandOutput($"swear_filter: {cfg.SwearFilterEnabled}");
-                                            AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")} ");
+                                            AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
                                             AddCommandOutput($"predictions: {cfg.PredictionsEnabled}");
-                                            AddCommandOutput($"event_voice_channel: {cfg.EventVoiceChannelID}");
+                                            AddCommandOutput($"roll_pictures: {cfg.RollPicturesEnabled}");
                                         }
                                     }
                                     else
@@ -1806,16 +1821,20 @@ namespace RPBot
                                         {
                                             "moderation_channel" => cfg.ModerateChannelID.ToString(),
                                             "welcome_channel" => cfg.WelcomeChannelID.ToString(),
+                                            "general_rg_channel" => cfg.GeneralRGChannelID.ToString(),
                                             "roll_channel" => cfg.RollChannelID.ToString(),
                                             "stats_channel" => cfg.StatsChannelID.ToString(),
                                             "record_channel" => cfg.RecordChannelID.ToString(),
+                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
                                             "welcome_message" => cfg.WelcomeMessage ?? "",
                                             "line_message" => cfg.LineMessage ?? "",
                                             "default_role" => cfg.DefaultRoleID.ToString(),
+                                            "master_role" => cfg.MasterRoleId.HasValue ? cfg.MasterRoleId.Value.ToString() : "",
+                                            "super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
                                             "swear_filter" => cfg.SwearFilterEnabled.ToString(),
                                             "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
                                             "predictions" => cfg.PredictionsEnabled.ToString(),
-                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
+                                            "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
                                             _ => "Неизвестный ключ"
                                         };
                                         AddCommandOutput(res);
