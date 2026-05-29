@@ -4171,6 +4171,7 @@ await Task.CompletedTask;
                 case "confirm_stop":
                 case "cancel_stop":
                 case "toggle_rolls":
+                case "force_stop":
                     await new GameSessionCommands(_client, _googleSheetsService).HandleControlButton(component);
                     break;
 

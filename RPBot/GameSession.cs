@@ -150,6 +150,9 @@ namespace RPBot
 
                 var commands = new GameSessionCommands(client);
                 int restorCount = 0;
+                int skippedOldCount = 0;
+                // Сессии старше этого порога считаются устаревшими и не восстанавливаются
+                const int MaxSessionAgeHours = 48;
 
                 foreach (var prop in doc.RootElement.EnumerateObject())
                 {
@@ -162,6 +165,14 @@ namespace RPBot
                         var masterName = elem.GetProperty("MasterName").GetString() ?? "Unknown";
                         var masterId = elem.GetProperty("MasterId").GetUInt64();
                         var startTime = DateTime.Parse(elem.GetProperty("StartTime").GetString() ?? DateTime.Now.ToString());
+
+                        // Пропускаем слишком старые сессии — они не восстанавливаются
+                        if ((DateTime.Now - startTime).TotalHours > MaxSessionAgeHours)
+                        {
+                            skippedOldCount++;
+                            Console.WriteLine($"[SESSIONS] Пропущена устаревшая сессия {sessionId}: \"{gameName}\" (начало: {startTime:dd.MM.yyyy HH:mm}, прошло: {(DateTime.Now - startTime).TotalHours:0}ч > {MaxSessionAgeHours}ч)");
+                            continue;
+                        }
                         var eventDescription = elem.TryGetProperty("EventDescription", out var ed) ? ed.GetString() : null;
                         var gameComment = elem.TryGetProperty("GameComment", out var gc) ? gc.GetString() : null;
                         var eventId = elem.TryGetProperty("EventId", out var eid) && eid.ValueKind != System.Text.Json.JsonValueKind.Null ? (ulong?)eid.GetUInt64() : null;
@@ -227,12 +238,13 @@ namespace RPBot
                     }
                 }
 
-                if (restorCount > 0)
+                if (restorCount > 0 || skippedOldCount > 0)
                 {
                     var totalRestorRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
-                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков)");
+                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков), пропущено устаревших: {skippedOldCount}");
 
-                    _ = RecreateControlMessagesAsync(client);
+                    if (restorCount > 0)
+                        _ = RecreateControlMessagesAsync(client);
                 }
             }
             catch (Exception ex)
@@ -276,7 +288,7 @@ namespace RPBot
                             }
 
                             var embed = new EmbedBuilder()
-                                .WithTitle($"Сессия: \"{session.GameName}\"")
+                                .WithTitle($"Сессия: \"{session.GameName}\" ⚠️ Восстановлено")
                                 .WithDescription($"Мастер: {session.MasterName}\n" +
                                                $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
                                                $"Статус: {(session.IsPaused ? "⏸ На паузе" : "▶ В процессе")}\n" +
@@ -285,11 +297,18 @@ namespace RPBot
                                                        ? "Сбор бросков: ✅ Включен (автоматически)\n"
                                                        : "Сбор бросков: ✅ Включен\n")
                                                    : "Сбор бросков: ❌ Выключен\n") +
-                                               $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
-                                .WithColor(session.IsPaused ? Color.Orange : Color.Green)
+                                               $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}\n")}" +
+                                               $"⚠️ *Сообщение управления было пересоздано после перезапуска бота*")
+                                .WithColor(Color.DarkOrange)
                                 .Build();
 
-                            var buttons = commands.CreateControlButtons(session);
+                            // Используем кнопку force_stop для пересозданных сообщений, т.к. обычный
+                            // confirm_stop требует DeferAsync который не работает на "свежих" interaction
+                            var buttons = new ComponentBuilder()
+                                .WithButton("⏸ Пауза", $"pause_session:{session.SessionId}", ButtonStyle.Primary, disabled: session.IsPaused)
+                                .WithButton("▶ Продолжить", $"resume_session:{session.SessionId}", ButtonStyle.Success, disabled: !session.IsPaused)
+                                .WithButton("✏️ Изменить", $"edit_session:{session.SessionId}", ButtonStyle.Secondary)
+                                .WithButton("⚠️ Завершить", $"force_stop:{session.SessionId}", ButtonStyle.Danger);
                             var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                             session.ControlMessageId = message.Id;
                             session.ControlChannelId = channel.Id;
@@ -618,6 +637,15 @@ namespace RPBot
                     return;
                 }
 
+                // Edge case: сессия помечена как завершённая, но ещё в словаре
+                if (session.IsStopped)
+                {
+                    RemoveSession(session);
+                    await SaveSessionsAsync().ConfigureAwait(false);
+                    await component.RespondAsync("ℹ️ Эта сессия уже была завершена.", ephemeral: true);
+                    return;
+                }
+
                 switch (parts[0])
                 {
                     case "pause_session":
@@ -652,6 +680,9 @@ namespace RPBot
                         break;
                     case "toggle_rolls":
                         await HandleToggleRolls(component, session);
+                        break;
+                    case "force_stop":
+                        await HandleForceStop(component, session);
                         break;
                 }
             }
@@ -1048,6 +1079,57 @@ namespace RPBot
             }
 
             await SendTemporaryEphemeralResponse(component, "Отмена завершения игры.");
+        }
+
+        /// <summary>
+        /// Принудительное завершение сессии для пересозданных control messages после перезапуска бота.
+        /// Использует RespondAsync вместо DeferAsync + FollowupAsync, так как это свежий interaction.
+        /// </summary>
+        private async Task HandleForceStop(SocketMessageComponent component, GameSession session)
+        {
+            Log($"Принудительное завершение сессии {session.SessionId} ({session.GameName}) пользователем {component.User.Id}");
+
+            try
+            {
+                await component.RespondAsync("⏳ Завершение сессии...", ephemeral: true);
+
+                if (session.IsPaused)
+                {
+                    session.PauseReminderCTS?.Cancel();
+                    var lastPause = session.PausePeriods.LastOrDefault();
+                    if (lastPause.Start != default)
+                        session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                    session.IsPaused = false;
+                }
+
+                session.EndTime = DateTime.Now;
+
+                if (session.EventId.HasValue)
+                {
+                    try
+                    {
+                        var guild = _client.GetGuild(session.GuildId);
+                        var guildEvent = guild != null ? await guild.GetEventAsync(session.EventId.Value) : null;
+                        if (guildEvent?.Status == GuildScheduledEventStatus.Active)
+                        {
+                            await guildEvent.ModifyAsync(props => props.Status = GuildScheduledEventStatus.Completed);
+                            Log($"Связанное событие {session.EventId} помечено как завершённое");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка завершения события: {ex.Message}");
+                    }
+                }
+
+                await DeleteControlMessageAsync(session, component.Channel);
+                await SendSessionStats(session, component.Channel);
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка в HandleForceStop для сессии {session.SessionId}: {ex.Message}");
+                try { await component.ModifyOriginalResponseAsync(m => m.Content = "❌ Ошибка при завершении сессии."); } catch { }
+            }
         }
 
         private async Task HandleToggleRolls(SocketMessageComponent component, GameSession session)

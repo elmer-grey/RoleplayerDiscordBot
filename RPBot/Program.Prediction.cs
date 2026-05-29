@@ -91,7 +91,7 @@ namespace RPBot
                         var isMaster = sconfig.MasterRoleId.HasValue && sconfig.MasterRoleId.Value != 0 && user.Roles.Any(r => r.Id == sconfig.MasterRoleId.Value);
                         if (!isAdmin && !isMaster)
                         {
-                            await command.RespondAsync("Создавать прогнозы могут только мастера или администраторы.", ephemeral: true);
+                            await command.RespondAsync("Создавать прогнозы могут только мастера или пользователи с правами администратора.", ephemeral: true);
                             return;
                         }
 
