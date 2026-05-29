@@ -302,6 +302,7 @@ namespace RPBot
                                                $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}\n")}" +
                                                $"⚠️ *Сообщение управления было пересоздано после перезапуска бота*")
                                 .WithColor(Color.DarkOrange)
+                                .WithFooter($"session:{session.SessionId}")
                                 .Build();
 
                             // Используем кнопку force_stop для пересозданных сообщений, т.к. обычный
@@ -447,10 +448,10 @@ namespace RPBot
                 var message = await channel.GetMessageAsync(session.ControlMessageId) as IUserMessage;
                 if (message == null)
                 {
-                    Log($"Сообщение {session.ControlMessageId} не найдено, попытка найти по содержимому...");
-                    var messages = await channel.GetMessagesAsync(10).FlattenAsync();
+                    Log($"Сообщение {session.ControlMessageId} не найдено, попытка найти по footer сессии...");
+                    var messages = await channel.GetMessagesAsync(20).FlattenAsync();
                     message = messages.FirstOrDefault(m =>
-                        m.Embeds.FirstOrDefault()?.Title?.Contains(session.GameName) == true) as IUserMessage;
+                        m.Embeds.FirstOrDefault()?.Footer?.Text == $"session:{session.SessionId}") as IUserMessage;
 
                     if (message == null)
                     {
@@ -458,7 +459,7 @@ namespace RPBot
                         return;
                     }
                     session.ControlMessageId = message.Id;
-                    Log($"Найдено сообщение по содержимому: ID {message.Id}");
+                    Log($"Найдено сообщение по footer: ID {message.Id}");
                 }
 
                 // Получаем последний период паузы (текущий)
@@ -494,6 +495,7 @@ namespace RPBot
                     .WithTitle($"Сессия: \"{session.GameName}\"")
                     .WithDescription(string.Join("\n", descriptionLines))
                     .WithColor(session.IsStopped ? Color.DarkGrey : session.IsPaused ? Color.Orange : Color.Green)
+                    .WithFooter($"session:{session.SessionId}")
                     .Build();
 
                 await message.ModifyAsync(m =>
@@ -543,6 +545,7 @@ namespace RPBot
                                    $"Сбор бросков: ✅ Включен (автоматически)\n" +
                                    $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
                     .WithColor(Color.Green)
+                    .WithFooter($"session:{session.SessionId}")
                     .Build();
 
                 var buttons = commands.CreateControlButtons(session);
@@ -602,6 +605,7 @@ namespace RPBot
                                $"Сбор бросков: ✅ Включен (автоматически)\n" +
                                $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
                 .WithColor(Color.Green)
+                .WithFooter($"session:{session.SessionId}")
                 .Build();
 
             var buttons = CreateControlButtons(session);
@@ -648,6 +652,14 @@ namespace RPBot
                     RemoveSession(session);
                     await SaveSessionsAsync().ConfigureAwait(false);
                     await component.RespondAsync("ℹ️ Эта сессия уже была завершена.", ephemeral: true);
+                    return;
+                }
+
+                // Проверка прав: только мастер сессии, пользователь с ролью мастера или администратор
+                var guildUser = component.User as SocketGuildUser;
+                if (!IsMasterOrAdmin(guildUser, guildId.Value, session))
+                {
+                    await component.RespondAsync("❌ Только мастер может управлять сессией.", ephemeral: true);
                     return;
                 }
 
@@ -929,6 +941,23 @@ namespace RPBot
             return value.Trim();
         }
 
+        /// <summary>
+        /// Возвращает true если пользователь — администратор, имеет роль мастера,
+        /// или является мастером этой конкретной сессии.
+        /// </summary>
+        private static bool IsMasterOrAdmin(SocketGuildUser? user, ulong guildId, GameSession session)
+        {
+            if (user == null) return false;
+            if (user.GuildPermissions.Administrator) return true;
+            // Мастер самой сессии всегда имеет право
+            if (session.MasterId != 0 && user.Id == session.MasterId) return true;
+            // Пользователь с ролью мастера в конфиге сервера
+            var config = Program.ServerConfigResolver?.Invoke(guildId);
+            if (config?.MasterRoleId.HasValue == true && user.Roles.Any(r => r.Id == config.MasterRoleId.Value))
+                return true;
+            return false;
+        }
+
         private async Task HandleStopSession(SocketMessageComponent component, GameSession session)
         {
             Log($"Пользователь {component.User.Id} запросил остановку сессии {session.SessionId} ({session.GameName})");
@@ -962,6 +991,7 @@ namespace RPBot
                     await confirmMessage.DeleteAsync();
                 }
                 catch { }
+                session.ConfirmationMessageId = null;
             });
         }
 
