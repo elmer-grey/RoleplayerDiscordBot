@@ -148,6 +148,11 @@ namespace RPBot
                 }
 
                 var json = await File.ReadAllTextAsync(_sessionsStatePath).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    Console.WriteLine("[SESSIONS] Файл сессий пуст, загрузка пропущена");
+                    return;
+                }
                 var doc = System.Text.Json.JsonDocument.Parse(json);
 
                 var commands = new GameSessionCommands(client);
