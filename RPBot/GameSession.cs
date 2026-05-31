@@ -74,9 +74,16 @@ namespace RPBot
         }
 
         private void Log(string message)
-        {
-            BotLogger.Info(LogCategory.Session, message);
-        }
+            => BotLogger.Info(LogCategory.Session, message);
+
+        private static void LogDebug(string message)
+            => BotLogger.Debug(LogCategory.Session, message);
+
+        private static void LogWarn(string message)
+            => BotLogger.Warn(LogCategory.Session, message);
+
+        private static void LogError(string message)
+            => BotLogger.Error(LogCategory.Session, message);
 
         private static async Task SaveSessionsAsync()
         {
@@ -1139,11 +1146,11 @@ namespace RPBot
             try
             {
                 await UpdateControlMessage(session, component.Channel);
-                Log($"Сообщение управления сессии {session.SessionId} успешно восстановлено");
+                LogDebug($"Сообщение управления сессии {session.SessionId} успешно восстановлено");
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при восстановлении сообщения управления: {ex.Message}");
+                LogWarn($"Ошибка при восстановлении сообщения управления: {ex.Message}");
             }
 
             await SendTemporaryEphemeralResponse(component, "Отмена завершения игры.");
@@ -1195,7 +1202,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Log($"Ошибка в HandleForceStop для сессии {session.SessionId}: {ex.Message}");
+                LogError($"Ошибка в HandleForceStop для сессии {session.SessionId}: {ex.Message}");
                 try { await component.ModifyOriginalResponseAsync(m => m.Content = "❌ Ошибка при завершении сессии."); } catch { }
             }
         }
@@ -1217,7 +1224,7 @@ namespace RPBot
         {
             var commands = new GameSessionCommands(client, googleSheets);
             commands._logSinkOverride = logSink;
-            commands.Log($"Событие {guildEvent.Id} завершено - обработка связанной сессии...");
+            LogDebug($"Событие {guildEvent.Id} завершено - обработка связанной сессии...");
 
             try
             {
@@ -1226,18 +1233,18 @@ namespace RPBot
                 await _sessionSemaphore.WaitAsync();
                 try
                 {
-                    commands.Log($"Поиск сессий для гильдии {guildId} и события {guildEvent.Id}...");
+                    LogDebug($"Поиск сессий для гильдии {guildId} и события {guildEvent.Id}...");
 
                     if (_sessions.TryGetValue(guildId, out var guildSessions))
                     {
                         var session = guildSessions.Values.FirstOrDefault(s => s.EventId == guildEvent.Id);
                         if (session != null)
                         {
-                            commands.Log($"Найдена сессия {session.SessionId} для завершения");
+                            LogDebug($"Найдена сессия {session.SessionId} для завершения");
 
                             if (session.IsPaused)
                             {
-                                commands.Log($"Снятие паузы для сессии {session.SessionId}...");
+                                LogDebug($"Снятие паузы для сессии {session.SessionId}...");
                                 try { session.PauseReminderCTS?.Cancel(); } catch { }
                                 try { session.PauseReminderCTS?.Dispose(); } catch { }
                                 session.PauseReminderCTS = null;
@@ -1247,7 +1254,7 @@ namespace RPBot
                             }
 
                             session.EndTime = DateTime.Now;
-                            commands.Log($"Установлено время окончания для сессии {session.SessionId}");
+                            LogDebug($"Установлено время окончания для сессии {session.SessionId}");
 
                             var recordChannelId = Program.ServerConfigResolver?.Invoke(guildId)?.RecordChannelID ?? 0;
                             // Fallback: если RecordChannelID не задан — используем канал control message
@@ -1258,25 +1265,25 @@ namespace RPBot
 
                             if (channel != null)
                             {
-                                commands.Log($"Отправка статистики для сессии {session.SessionId} в канал {recordChannelId}...");
+                                LogDebug($"Отправка статистики для сессии {session.SessionId} в канал {recordChannelId}...");
                                 // Сначала удаляем сообщение управления, затем отправляем статистику
                                 await commands.DeleteControlMessageAsync(session);
                                 await commands.SendSessionStats(session, channel);
                             }
                             else
                             {
-                                commands.Log($"Канал для статистики не найден (RecordChannelID={recordChannelId})");
+                                LogWarn($"Канал для статистики не найден (RecordChannelID={recordChannelId})");
                                 await commands.DeleteControlMessageAsync(session);
                             }
                         }
                         else
                         {
-                            commands.Log($"Активная сессия для события {guildEvent.Id} не найдена");
+                            LogDebug($"Активная сессия для события {guildEvent.Id} не найдена");
                         }
                     }
                     else
                     {
-                        commands.Log($"Активные сессии для гильдии {guildId} не найдены");
+                        LogDebug($"Активные сессии для гильдии {guildId} не найдены");
                     }
                 }
                 finally
@@ -1286,7 +1293,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                commands.Log($"Критическая ошибка при обработке завершения события: {ex}");
+                LogError($"Критическая ошибка при обработке завершения события: {ex}");
             }
         }
 
@@ -1360,24 +1367,24 @@ namespace RPBot
             {
                 if (session.StatsSent)
                 {
-                    Log($"Статистика для сессии {session.SessionId} уже была отправлена");
+                    LogDebug($"Статистика для сессии {session.SessionId} уже была отправлена");
                     return;
                 }
 
                 session.StatsSent = true;
             }
 
-            Log($"Формирование статистики для сессии {session.SessionId}...");
+            LogDebug($"Формирование статистики для сессии {session.SessionId}...");
 
             try
             {
                 var statsMessage = BuildSessionStats(session);
                 await channel.SendMessageAsync(statsMessage);
-                Log($"Статистика по времени для сессии {session.SessionId} отправлена");
+                LogDebug($"Статистика по времени для сессии {session.SessionId} отправлена");
 
                 if (session.Rolls.Count > 0)
                 {
-                    Log($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
+                    LogDebug($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
 
                     if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config))
                     {
@@ -1398,21 +1405,21 @@ namespace RPBot
                                 components: buttons);
 
                             session.StatsMessageId = buttonsMsg.Id;
-                            Log($"Кнопки статистики отправлены в канал {statsChannel.Id}, ID сообщения: {buttonsMsg.Id}");
+                            LogDebug($"Кнопки статистики отправлены в канал {statsChannel.Id}, ID сообщения: {buttonsMsg.Id}");
                         }
                         else
                         {
-                            Log($"Канал статистики {config.StatsChannelID} не найден");
+                            LogWarn($"Канал статистики {config.StatsChannelID} не найден");
                         }
                     }
                     else
                     {
-                        Log($"Конфигурация сервера {session.GuildId} не найдена");
+                        LogWarn($"Конфигурация сервера {session.GuildId} не найдена");
                     }
                 }
                 else
                 {
-                    Log($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
+                    LogDebug($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
                     RemoveSession(session);
                     _ = Task.Run(() => SaveSessionsAsync());
                 }
@@ -1429,22 +1436,22 @@ namespace RPBot
                         }
                         else
                         {
-                            Log($"[Sheets] Запись не удалась — AppendSessionAsync вернул {row}");
+                            LogWarn($"[Sheets] Запись не удалась — AppendSessionAsync вернул {row}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Log($"[Sheets] Ошибка записи: {ex.GetType().Name}: {ex.Message}");
+                        LogError($"[Sheets] Ошибка записи: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
                 else
                 {
-                    Log($"[Sheets] Сервис не инициализирован — запись пропущена");
+                    LogDebug($"[Sheets] Сервис не инициализирован — запись пропущена");
                 }
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при отправке статистики: {ex.Message}");
+                LogError($"Ошибка при отправке статистики: {ex.Message}");
             }
         }
 
@@ -1460,24 +1467,24 @@ namespace RPBot
                 {
                     if (guildSessions.TryRemove(session.SessionId, out _))
                     {
-                        Log($"Сессия {session.SessionId} успешно удалена из словаря");
+                        LogDebug($"Сессия {session.SessionId} успешно удалена из словаря");
                     }
                     else
                     {
-                        Log($"Не удалось удалить сессию {session.SessionId} из словаря");
+                        LogWarn($"Не удалось удалить сессию {session.SessionId} из словаря");
                     }
 
                     if (guildSessions.IsEmpty)
                     {
                         if (_sessions.TryRemove(session.GuildId, out _))
                         {
-                            Log($"Словарь сессий для гильдии {session.GuildId} удален (пуст)");
+                            LogDebug($"Словарь сессий для гильдии {session.GuildId} удален (пуст)");
                         }
                     }
                 }
                 else
                 {
-                    Log($"Не найден словарь сессий для гильдии {session.GuildId} при удалении");
+                    LogDebug($"Не найден словарь сессий для гильдии {session.GuildId} при удалении");
                 }
 
                 try
@@ -1496,24 +1503,24 @@ namespace RPBot
                     if (session.PauseReminderMessageId.HasValue)
                     {
                         _ = channel.DeleteMessageAsync(session.PauseReminderMessageId.Value)
-                            .ContinueWith(t => { if (t.IsFaulted) Log($"Ошибка при удалении напоминания о паузе: {t.Exception?.InnerException?.Message}"); });
+                            .ContinueWith(t => { if (t.IsFaulted) LogWarn($"Ошибка при удалении напоминания о паузе: {t.Exception?.InnerException?.Message}"); });
                     }
 
                     // Удаляем сообщение подтверждения остановки
                     if (session.ConfirmationMessageId.HasValue)
                     {
                         _ = channel.DeleteMessageAsync(session.ConfirmationMessageId.Value)
-                            .ContinueWith(t => { if (t.IsFaulted) Log($"Ошибка при удалении подтверждения остановки: {t.Exception?.InnerException?.Message}"); });
+                            .ContinueWith(t => { if (t.IsFaulted) LogWarn($"Ошибка при удалении подтверждения остановки: {t.Exception?.InnerException?.Message}"); });
                     }
                 }
                 catch (Exception ex)
                 {
-                    Log($"Ошибка при очистке сообщений сессии: {ex.Message}");
+                    LogWarn($"Ошибка при очистке сообщений сессии: {ex.Message}");
                 }
             }
             catch (Exception ex)
             {
-                Log($"Ошибка при очистке ресурсов сессии: {ex.Message}");
+                LogWarn($"Ошибка при очистке ресурсов сессии: {ex.Message}");
             }
         }
 
@@ -1522,18 +1529,18 @@ namespace RPBot
             var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null)
             {
-                Log("Не удалось получить ID гильдии при обработке кнопки статистики");
+                LogWarn("Не удалось получить ID гильдии при обработке кнопки статистики");
                 return;
             }
 
             await _sessionSemaphore.WaitAsync();
             try
             {
-                Log($"Обработка кнопки статистики для гильдии {guildId}");
+                LogDebug($"Обработка кнопки статистики для гильдии {guildId}");
 
                 if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
                 {
-                    Log($"[RESTART] Активные сессии для гильдии {guildId} не найдены (вероятно бот был перезагружен)");
+                    LogWarn($"[RESTART] Активные сессии для гильдии {guildId} не найдены (вероятно бот был перезагружен)");
                     try { await component.Message.DeleteAsync(); } catch { }
                     await component.RespondAsync("❌ Сессия больше не активна.\n\nЭто может произойти если бот был перезагружен. Статистика была потеряна.", ephemeral: true);
                     return;
@@ -1542,13 +1549,13 @@ namespace RPBot
                 var session = guildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
                 if (session == null)
                 {
-                    Log($"[RESTART] Сессия для сообщения статистики {component.Message.Id} не найдена");
+                    LogWarn($"[RESTART] Сессия для сообщения статистики {component.Message.Id} не найдена");
                     try { await component.Message.DeleteAsync(); } catch { }
                     await component.RespondAsync("❌ Сессия не найдена.\n\nЭто может произойти если бот был перезагружен.", ephemeral: true);
                     return;
                 }
 
-                Log($"Найдена сессия {session.SessionId} для обработки статистики");
+                LogDebug($"Найдена сессия {session.SessionId} для обработки статистики");
 
                 switch (component.Data.CustomId)
                 {
@@ -1556,21 +1563,21 @@ namespace RPBot
                         await component.Message.DeleteAsync();
                         RemoveSession(session);
                         _ = Task.Run(() => SaveSessionsAsync());
-                        Log($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
+                        LogDebug($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
                         break;
 
                     case "general_stats":
                         await ShowGeneralStats(component, session);
                         RemoveSession(session);
                         _ = Task.Run(() => SaveSessionsAsync());
-                        Log($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
+                        LogDebug($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
                         break;
 
                     case "detailed_stats":
                         await ShowDetailedStats(component, session);
                         RemoveSession(session);
                         _ = Task.Run(() => SaveSessionsAsync());
-                        Log($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
+                        LogDebug($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
                         break;
                 }
             }
@@ -1582,7 +1589,7 @@ namespace RPBot
 
         private async Task ShowGeneralStats(SocketMessageComponent component, GameSession session)
         {
-            Log($"Формирование общей статистики для сессии {session.SessionId}");
+            LogDebug($"Формирование общей статистики для сессии {session.SessionId}");
 
             // ✅ УЛУЧШЕНО: Группируем по типам кубиков
             var rollsByDiceType = session.Rolls
@@ -1638,7 +1645,7 @@ namespace RPBot
 
         private async Task ShowDetailedStats(SocketMessageComponent component, GameSession session)
         {
-            Log($"Формирование детальной статистики для сессии {session.SessionId}");
+            LogDebug($"Формирование детальной статистики для сессии {session.SessionId}");
 
             // ✅ УЛУЧШЕНО: Группируем по типам кубиков для каждого игрока
             var players = session.Rolls
