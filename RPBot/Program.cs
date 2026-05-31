@@ -968,7 +968,13 @@ private MusicStats? _musicStats;
 			_statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
 			_reconnectionService?.Shutdown();
 
-				// Отменяем фоновый мониторинг и ждём его завершения
+			// При ежедневной перезагрузке — очищаем висящие сессии со статистикой
+			if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
+			{
+				try { await GameSessionCommands.ClearSessionsOnDailyRestartAsync(_client); } catch { }
+			}
+
+			// Отменяем фоновый мониторинг и ждём его завершения
 				try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
 				// Stop Discord client (best-effort)

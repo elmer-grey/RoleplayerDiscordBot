@@ -1703,6 +1703,51 @@ namespace RPBot
                 try { await response.DeleteAsync(); } catch { }
             });
         }
+
+        /// <summary>
+        /// Вызывается при ежедневной перезагрузке: удаляет висящие кнопки статистики
+        /// и отправляет сообщение об очистке вместо них. Затем очищает все сессии.
+        /// </summary>
+        public static async Task ClearSessionsOnDailyRestartAsync(DiscordSocketClient client)
+        {
+            foreach (var guildEntry in _sessions)
+            {
+                var guildId = guildEntry.Key;
+                if (!Program.ServerConfigs.TryGetValue(guildId, out var config))
+                    continue;
+
+                var statsChannel = client.GetChannel(config.StatsChannelID) as ITextChannel;
+
+                foreach (var session in guildEntry.Value.Values)
+                {
+                    try
+                    {
+                        // Удаляем висящее сообщение с кнопками, если оно есть
+                        if (session.StatsMessageId != 0 && statsChannel != null)
+                        {
+                            try
+                            {
+                                var msg = await statsChannel.GetMessageAsync(session.StatsMessageId);
+                                if (msg != null)
+                                    await msg.DeleteAsync();
+                            }
+                            catch { }
+                        }
+
+                        // Отправляем замену только если сессия имела броски (иначе сообщения не было)
+                        if (session.Rolls.Count > 0 && statsChannel != null)
+                        {
+                            await statsChannel.SendMessageAsync(
+                                $"📋 Статистика бросков по игре **{session.GameName}** очищена (ежедневная перезагрузка).");
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            _sessions.Clear();
+            await SaveSessionsAsync();
+        }
     }
 
 
