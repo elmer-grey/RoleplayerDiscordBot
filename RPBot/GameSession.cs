@@ -75,7 +75,7 @@ namespace RPBot
 
         private void Log(string message)
         {
-            (_logSinkOverride ?? Program.CommandLogSink)?.Invoke(message);
+            BotLogger.Info(LogCategory.Session, message);
         }
 
         private static async Task SaveSessionsAsync()

@@ -26,7 +26,7 @@ namespace RPBot
 
         private static Task LogStartup(string message)
         {
-            Program.CommandLogSink?.Invoke(message);
+            BotLogger.Info(LogCategory.Cmd, message);
             return Task.CompletedTask;
         }
 

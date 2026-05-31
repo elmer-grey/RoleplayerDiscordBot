@@ -45,7 +45,7 @@ namespace RPBot
             int totalCommands = 0;
             int processedGuilds = 0;
 
-            _ui?.AddLog("┌──────────── СПИСОК ЗАРЕГИСТРИРОВАННЫХ КОМАНД ────────────┐");
+            BotLogger.Info(LogCategory.Cmd, "┌──────────── СПИСОК ЗАРЕГИСТРИРОВАННЫХ КОМАНД ────────────┐");
 
             foreach (var guildId in _guildIDs)
             {
@@ -53,7 +53,7 @@ namespace RPBot
 
                 if (guild == null)
                 {
-                    _ui?.AddLog($"│ Гильдия {guildId} недоступна, команды пропущены");
+                    BotLogger.Info(LogCategory.Cmd, $"│ Гильдия {guildId} недоступна, команды пропущены");
                     continue;
                 }
 
@@ -61,22 +61,22 @@ namespace RPBot
                 totalCommands += commands.Count;
 
                 processedGuilds++;
-                _ui?.AddLog($"│ {guild.Name} ({guildId}) — {commands.Count} команд");
+                BotLogger.Info(LogCategory.Cmd, $"│ {guild.Name} ({guildId}) — {commands.Count} команд");
 
                 if (commands.Count > 0)
                 {
                     foreach (var cmd in commands)
                     {
-                        _ui?.AddLog($"│   • /{cmd.Name}");
+                        BotLogger.Info(LogCategory.Cmd, $"│   • /{cmd.Name}");
                     }
                 }
                 else
                 {
-                    _ui?.AddLog("│   • Нет команд");
+                    BotLogger.Info(LogCategory.Cmd, "│   • Нет команд");
                 }
             }
 
-            _ui?.AddLog("└──────────────────────────────────────────────────────────┘");
+            BotLogger.Info(LogCategory.Cmd, "└──────────────────────────────────────────────────────────┘");
         }
 
         private async Task RegisterCommandsAsync()
@@ -96,11 +96,11 @@ namespace RPBot
 
                 if (guild == null)
                 {
-                    _ui?.AddLog($"│  Гильдия {guildId} не найдена, пропускаем...            │");
+                    BotLogger.Info(LogCategory.Cmd, $"│  Гильдия {guildId} не найдена, пропускаем...            │");
                     continue;
                 }
 
-                _ui?.AddLog($"│  Регистрация на сервере: {guild.Name} ({guildId})       │");
+                BotLogger.Info(LogCategory.Cmd, $"│  Регистрация на сервере: {guild.Name} ({guildId})       │");
 
                 int guildCommandIndex = 0;
                 foreach (var command in allCommands)
@@ -118,21 +118,21 @@ namespace RPBot
                         var estimatedTotal = TimeSpan.FromTicks((long)(elapsed.Ticks * (totalCommands / (double)completedCommands)));
                         var remaining = estimatedTotal - elapsed;
 
-                        _ui?.AddLog($"│  [{percent,3}%] Команда: {command.Name,-20} | Выполнено: {completedCommands}/{totalCommands} | Время: {elapsed:mm\\:ss}");
+                        BotLogger.Info(LogCategory.Cmd, $"│  [{percent,3}%] Команда: {command.Name,-20} | Выполнено: {completedCommands}/{totalCommands} | Время: {elapsed:mm\\:ss}");
 
                         await Task.Delay(200);
                     }
                     catch (Exception ex)
                     {
-                        _ui?.AddLog($"│   Ошибка регистрации {command.Name}: {ex.Message}     │");
+                        BotLogger.Info(LogCategory.Cmd, $"│   Ошибка регистрации {command.Name}: {ex.Message}     │");
                     }
                 }
 
-                _ui?.AddLog($"│   Завершено: {guild.Name} ({guildCommandIndex} команд)             │");
+                BotLogger.Info(LogCategory.Cmd, $"│   Завершено: {guild.Name} ({guildCommandIndex} команд)             │");
             }
 
             var totalTime = DateTime.UtcNow - _registrationStartTime;
-            _ui?.AddLog($"└─────────────────────────────────── ({totalTime:mm\\:ss} сек) ────────────────────┘\n");
+            BotLogger.Info(LogCategory.Cmd, $"└─────────────────────────────────── ({totalTime:mm\\:ss} сек) ────────────────────┘\n");
         }
 
         private List<SlashCommandBuilder> GetAllCommands()

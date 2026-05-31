@@ -138,12 +138,8 @@ namespace RPBot
         // Токен бота — хранится в config.json или в переменной окружения DISCORD_BOT_TOKEN
         public string? BotToken { get; set; } = null;
 
-        // ID серверов, где бот работает
-        public List<ulong> GuildIDs { get; set; } = new List<ulong>
-        {
-            295189463376855040, // Канал "КнР"
-            1288192593137635359  // Канал "Тест"
-        };
+        // ID серверов, где бот работает (задаются в Settings/config.json)
+        public List<ulong> GuildIDs { get; set; } = new List<ulong>();
 
         // Версия бота (отображается в логах/статусах)
         public string BotVersion { get; set; } = "1.0.0.0";

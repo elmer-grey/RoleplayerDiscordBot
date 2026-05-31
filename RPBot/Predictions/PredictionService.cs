@@ -19,7 +19,6 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly PointsService _points;
-        private readonly string _logPath;
         private readonly ConcurrentDictionary<ulong, ActivePrediction> _active = new();
         private readonly ConcurrentDictionary<ulong, ISocketMessageChannel> _activeChannels = new();
         private readonly CancellationTokenSource _cts = new();
@@ -41,7 +40,6 @@ namespace RPBot
         {
             _client = client;
             _points = points;
-            _logPath = logPath;
             // State file for persisting active predictions across restarts
             try
             {
@@ -1196,39 +1194,17 @@ namespace RPBot
             }
         }
 
-        private async Task LogAsync(string message)
+        private Task LogAsync(string message)
         {
-            try
-            {
-                var dir = Path.GetDirectoryName(_logPath) ?? AppContext.BaseDirectory;
-                Directory.CreateDirectory(dir);
-                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-                await File.AppendAllTextAsync(_logPath, line, Encoding.UTF8).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("LogAsync", ex, message).ConfigureAwait(false);
-            }
+            BotLogger.Info(LogCategory.Predict, message);
+            return Task.CompletedTask;
         }
 
-        private async Task LogPayoutsAsync(List<string> payoutLines)
+        private Task LogPayoutsAsync(List<string> payoutLines)
         {
-            try
-            {
-                var dir = Path.GetDirectoryName(_logPath) ?? AppContext.BaseDirectory;
-                Directory.CreateDirectory(dir);
-
-                // Создаём отдельный файл для выплат с датой
-                var payoutsFileName = $"PredictionPayouts_{DateTime.Now:yyyyMMdd}.log";
-                var payoutsPath = Path.Combine(dir, payoutsFileName);
-
-                var content = string.Join(Environment.NewLine, payoutLines) + Environment.NewLine + Environment.NewLine;
-                await File.AppendAllTextAsync(payoutsPath, content, Encoding.UTF8).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("LogPayoutsAsync", ex, "Failed to log payouts").ConfigureAwait(false);
-            }
+            foreach (var line in payoutLines)
+                BotLogger.Info(LogCategory.Predict, line);
+            return Task.CompletedTask;
         }
 
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)

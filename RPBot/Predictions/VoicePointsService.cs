@@ -20,8 +20,6 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         private readonly PointsService _points;
         private readonly Func<ulong, ServerConfig?> _getServerConfig;
-        private readonly string _logPath;
-        private readonly SemaphoreSlim _logLock = new(1, 1);
 
         private const int BasePointsPerTick = 10;
         private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(5);
@@ -51,7 +49,6 @@ namespace RPBot
             _client = client;
             _points = points;
             _getServerConfig = getServerConfig;
-            _logPath = logPath;
 
             _client.UserVoiceStateUpdated += OnUserVoiceStateUpdatedAsync;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStartedAsync;
@@ -314,24 +311,10 @@ namespace RPBot
             return (long)(baseAmount * 1.5);
         }
 
-        private async Task LogAsync(string message)
+        private Task LogAsync(string message)
         {
-            await _logLock.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                var dir = Path.GetDirectoryName(_logPath) ?? AppContext.BaseDirectory;
-                Directory.CreateDirectory(dir);
-                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-                await File.AppendAllTextAsync(_logPath, line, Encoding.UTF8).ConfigureAwait(false);
-            }
-            catch
-            {
-                // ignore
-            }
-            finally
-            {
-                _logLock.Release();
-            }
+            BotLogger.Info(LogCategory.Points, message);
+            return Task.CompletedTask;
         }
 
         public void Shutdown()

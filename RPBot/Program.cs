@@ -798,7 +798,7 @@ private MusicStats? _musicStats;
 			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.DataFolderName, "event_announcements.json"));
 			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
 			if (_googleSheetsService != null)
-				_googleSheetsService.LogSink = msg => CommandLogSink?.Invoke(msg);
+				_googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
 
 			// Сервисы для костяшек
 			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points.json"));
@@ -818,21 +818,13 @@ private MusicStats? _musicStats;
 			if (_config.Music.Enabled)
 			{
 				_lavalinkService = new LavalinkService(() => _client, _config.Music);
-				_lavalinkService.LogSink = msg => _ui?.AddLog(msg);
-				_lavalinkService.FileSink = msg =>
-				{
-					var logDir = BotConfig.ResolvePath("Logs");
-					Directory.CreateDirectory(logDir);
-					var path = System.IO.Path.Combine(logDir, $"MusicDebug_{DateTime.Now:yyyyMMdd}.txt");
-					File.AppendAllText(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {msg}\n");
-				};
-				_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
-					_ = _playlistStore.LoadAsync();
-					_musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
-					_musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
-					_musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats,
-						logSink: msg => _ui?.AddLog(msg));
-			}
+					_lavalinkService.LogSink = msg => BotLogger.Info(LogCategory.Music, msg);
+					_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
+						_ = _playlistStore.LoadAsync();
+						_musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
+						_musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
+						_musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats);
+				}
 
 			// ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
@@ -1451,7 +1443,7 @@ private MusicStats? _musicStats;
                 if (restartCount > 0)
                 {
                 // Очистка консоли отключена; уведомление через UI
-                _ = Task.Run(() => _ui?.AddLog($"ПЕРЕЗАПУСК #{restartCount} в {DateTime.Now:HH:mm:ss}"));
+                _ = Task.Run(() => BotLogger.Info(LogCategory.Boot, $"ПЕРЕЗАПУСК #{restartCount} в {DateTime.Now:HH:mm:ss}"));
                 }
 
                 using (var program = new Program())
@@ -1467,13 +1459,13 @@ private MusicStats? _musicStats;
 
                 if (restart)
                 {
-                    _ = Task.Run(() => _ui?.AddLog("Подготовка к перезапуску..."));
+                    BotLogger.Info(LogCategory.Boot, "Подготовка к перезапуску...");
                     await Task.Delay(2000); // Небольшая пауза перед перезапуском
                 }
 
             } while (restart);
 
-			_ = Task.Run(() => _ui?.AddLog("Бот остановлен."));
+			BotLogger.Info(LogCategory.Boot, "Бот остановлен.");
 		}
 
 		/// <summary>
@@ -1505,11 +1497,16 @@ private MusicStats? _musicStats;
         private static bool _uiStarted = false;
 
         public async Task RunBotAsync()
-        {
-            _startupTime = DateTime.UtcNow;
+		{
+			_startupTime = DateTime.UtcNow;
 
 			if (_ui == null)
 			{
+				var logDirRaw = _config?.LogDirectory;
+				var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+				BotLogger.Initialize(logDir, DateTime.Now);
+				BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
+
 				_ui = new BotUI(
 					_client,
 					this,
@@ -1542,7 +1539,10 @@ private MusicStats? _musicStats;
                 await Task.Delay(2000);
                 _uiStarted = true;
 
-                CommandLogSink = msg => _ui?.AddLog(msg);
+                // Подключаем BotLogger к UI-терминалу
+                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
+
+                CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
                 // Перенаправляем весь Console в UI-панель логов
                 if (_originalOut == null) _originalOut = Console.Out;
@@ -1559,7 +1559,9 @@ private MusicStats? _musicStats;
                 _ui.UpdateServices(_client, _reconnectionService, _connectionPredictor, _statusNotifier);
                 _ui.AddLog("Перезапуск бота...");
 
-                CommandLogSink = msg => _ui?.AddLog(msg);
+                BotLogger.Info(LogCategory.Boot, "=== Рестарт ===");
+                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
+                CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
             }
 
 			// Загрузка текстовых блоков из пути конфига (относительные пути считаем от каталога приложения)
@@ -2935,7 +2937,7 @@ private MusicStats? _musicStats;
             try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
 
             // ОТПРАВЛЯЕМ В UI
-            _ui?.AddLog($"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+            BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
 
 // ✅ НОВОЕ: Загружаем сохранённые сессии игр
 _ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
@@ -3071,40 +3073,8 @@ await Task.CompletedTask;
         private async Task LogStartupBatch(IEnumerable<string> messages)
         {
             var lines = messages is IList<string> l ? l : messages.ToList();
-            if (lines.Count == 0) return;
-
-            var logDirRaw = _config?.LogDirectory;
-            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-            Directory.CreateDirectory(logDir);
-            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-            var path = Path.Combine(logDir, $"StartupLog_{dateSuffix}.txt");
-            var timestamp = DateTime.Now.ToString("dd-MM-yyyy HH:mm:ss");
-
-            await _logSemaphore.WaitAsync();
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var fi = new FileInfo(path);
-                    if (fi.Length > 5 * 1024 * 1024)
-                        File.Move(path, Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
-                }
-
-                var sb = new StringBuilder();
-                foreach (var msg in lines)
-                    sb.Append($"[{timestamp}] {msg}\n");
-                await File.AppendAllTextAsync(path, sb.ToString());
-
-                if (_uiStarted && _ui != null)
-                {
-                    foreach (var msg in lines)
-                        _ui.AddLog(msg);
-                }
-            }
-            finally
-            {
-                _logSemaphore.Release();
-            }
+            foreach (var msg in lines)
+                await BotLogger.InfoAsync(LogCategory.Boot, msg).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -5575,42 +5545,8 @@ if (_config.Music.Enabled)
             return checks;
         }
 
-        private async Task LogStartup(string message)
-        {
-            var logDirRaw = _config?.LogDirectory;
-            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-            Directory.CreateDirectory(logDir);
-			// Ежедневный лог запуска: StartupLog_yyyyMMdd.txt
-			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-			string path = Path.Combine(logDir, $"StartupLog_{dateSuffix}.txt");
-
-            await _logSemaphore.WaitAsync();
-            try
-            {
-				// Ротация логов по размеру (5 МБ)
-                if (File.Exists(path))
-                {
-                    var fileInfo = new FileInfo(path);
-                    if (fileInfo.Length > 5 * 1024 * 1024)
-                    {
-                        string archivedPath = Path.Combine(logDir, $"StartupLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                        File.Move(path, archivedPath);
-                    }
-                }
-
-                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}\n");
-
-                // ТОЛЬКО В UI, не в консоль
-                if (_uiStarted && _ui != null)
-                {
-                    _ui.AddLog(message);
-                }
-            }
-            finally
-            {
-                _logSemaphore.Release();
-            }
-        }
+		private async Task LogStartup(string message)
+			=> await BotLogger.InfoAsync(LogCategory.Boot, message).ConfigureAwait(false);
 
         private async Task LogShutdownState(bool isRestart, string initiator)
         {
@@ -5627,7 +5563,7 @@ if (_config.Music.Enabled)
         /// Синхронный sink для сервисов (ReconnectionService и др.).
         /// Запускает LogStartup в фоне — гарантирует запись в StartupLog и показ в UI.
         /// </summary>
-        private void ServiceLogSink(string message) => _ = LogStartup(message);
+        private void ServiceLogSink(string message) => BotLogger.Info(LogCategory.System, message);
 
         /// <summary>
         /// Возвращает отображаемый текст типа запуска
@@ -5643,77 +5579,10 @@ if (_config.Music.Enabled)
         }
 
         private async Task LogError(string errorMessage)
-        {
-            var logDirRaw = _config?.LogDirectory;
-            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-            Directory.CreateDirectory(logDir);
-
-            // Логи ошибок теперь пишутся в ежедневные файлы вида ErrorLog_yyyyMMdd.txt,
-            // чтобы после каждого ежедневного рестарта начинался новый лог.
-            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-            string path = Path.Combine(logDir, $"ErrorLog_{dateSuffix}.txt");
-
-            await _logSemaphore.WaitAsync();
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var fileInfo = new FileInfo(path);
-                    if (fileInfo.Length > 5 * 1024 * 1024)
-                    {
-                        string archivedPath = Path.Combine(logDir, $"ErrorLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                        File.Move(path, archivedPath);
-                    }
-                }
-
-                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {errorMessage}\n");
-
-                if (_uiStarted && _ui != null)
-                {
-                    _ui.AddLog($"❌ {errorMessage}");
-                }
-            }
-            finally
-            {
-                _logSemaphore.Release();
-            }
-        }
+            => await BotLogger.ErrorAsync(LogCategory.System, errorMessage).ConfigureAwait(false);
 
         private async Task LogInfo(string infoMessage)
-        {
-            var logDirRaw = _config?.LogDirectory;
-            var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-            Directory.CreateDirectory(logDir);
-
-            // Информационные логи также разделяем по дням: InfoLog_yyyyMMdd.txt
-            var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-            string path = Path.Combine(logDir, $"InfoLog_{dateSuffix}.txt");
-
-            await _logSemaphore.WaitAsync();
-            try
-            {
-                if (File.Exists(path))
-                {
-                    var fileInfo = new FileInfo(path);
-                    if (fileInfo.Length > 5 * 1024 * 1024)
-                    {
-                        string archivedPath = Path.Combine(logDir, $"InfoLog_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                        File.Move(path, archivedPath);
-                    }
-                }
-
-                await File.AppendAllTextAsync(path, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {infoMessage}\n");
-
-                if (_uiStarted && _ui != null)
-                {
-                    _ui.AddLog(infoMessage);
-                }
-            }
-            finally
-            {
-                _logSemaphore.Release();
-            }
-        }
+            => await BotLogger.InfoAsync(LogCategory.Discord, infoMessage).ConfigureAwait(false);
 
         private async Task UserJoined(SocketGuildUser user)
         {

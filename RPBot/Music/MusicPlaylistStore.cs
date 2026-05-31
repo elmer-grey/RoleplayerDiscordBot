@@ -59,7 +59,9 @@ namespace RPBot.Music
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
             var json = JsonSerializer.Serialize(_data, _json);
-            await File.WriteAllTextAsync(_filePath, json);
+            var tmpPath = _filePath + ".tmp";
+            await File.WriteAllTextAsync(tmpPath, json);
+            File.Move(tmpPath, _filePath, overwrite: true);
         }
 
         public MusicPlaylist? Get(ulong guildId, ulong userId, string name)

@@ -412,7 +412,7 @@ namespace RPBot
                 opts.ReadyTimeout = TimeSpan.FromSeconds(_config.StartupTimeoutSeconds);
             });
 
-            services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+            services.AddLogging(b => b.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Warning));
             services.AddHttpClient();
             services.AddMemoryCache();
 
@@ -1302,14 +1302,10 @@ namespace RPBot
 
         private void Log(string message)
         {
-            // Если активен буфер запуска — перехватываем в него (не дублируем в консоль),
-            // в файловый sink пишем всегда.
             if (_startupLogBuffer is not null)
                 _startupLogBuffer.Add(message);
-            else
-                LogSink?.Invoke(message);
 
-            FileSink?.Invoke(message);
+            BotLogger.Info(LogCategory.Music, message);
         }
 
         /// <summary>

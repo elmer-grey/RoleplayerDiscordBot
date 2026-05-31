@@ -234,7 +234,7 @@ namespace RPBot
         private bool IsExpectedDisconnectInProgress() { lock (_stateLock) { return _connectionInfo.IsExpectedDisconnect && _ignoreDisconnectEventsUntil > DateTime.UtcNow; } }
         private void MarkExpectedDisconnect(TimeSpan duration) { lock (_stateLock) { _connectionInfo.IsExpectedDisconnect = true; _ignoreDisconnectEventsUntil = DateTime.UtcNow.Add(duration); } }
         private void ClearExpectedDisconnect() { lock (_stateLock) { _connectionInfo.IsExpectedDisconnect = false; _ignoreDisconnectEventsUntil = DateTime.MinValue; } }
-        private Task Log(string message) { LogSink?.Invoke($"[RECONNECT] {message}"); return Task.CompletedTask; }
+        private Task Log(string message) { BotLogger.Info(LogCategory.Discord, $"[RECONNECT] {message}"); return Task.CompletedTask; }
 
         public void Dispose()
         {

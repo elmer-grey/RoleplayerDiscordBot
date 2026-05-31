@@ -51,7 +51,7 @@ namespace RPBot
 
         private static Task Log(string message)
         {
-            Program.CommandLogSink?.Invoke(message);
+            BotLogger.Info(LogCategory.Cmd, message);
             return Task.CompletedTask;
         }
 

@@ -88,7 +88,6 @@ namespace RPBot
             _playlistStore = playlistStore;
             _queueStore    = queueStore;
             _stats         = stats;
-            LogSink        = logSink; // устанавливаем ДО подписки на события
 
             // Обновляем прогресс-бар каждые 5 секунд (#9)
             _progressTimer = new Timer(OnProgressTick, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
@@ -100,7 +99,7 @@ namespace RPBot
 
             // Авто-пауза: слушаем изменения голосового канала (#4)
             _discord.UserVoiceStateUpdated += OnVoiceStateUpdatedAsync;
-            Log($"[Music] MusicCommands инициализирован, LogSink={LogSink is not null}, client={_discord.GetHashCode()}");
+            Log($"[Music] MusicCommands инициализирован, client={_discord.GetHashCode()}");
         }
 
         /// <summary>Переподписывает обработчик голосовых событий на новый клиент (после рестарта бота).</summary>
@@ -1620,20 +1619,7 @@ namespace RPBot
 
         private void Log(string message)
         {
-            // Пишем в GUI
-            if (LogSink is not null)
-                LogSink(message);
-            else
-                Console.WriteLine($"[MusicCommands/NoSink] {message}");
-
-            // Дублируем во временный файл для отладки
-            try
-            {
-                var line = $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}\n";
-                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_tempLogPath)!);
-                System.IO.File.AppendAllText(_tempLogPath, line);
-            }
-            catch { /* не ломаем основную логику из-за файла */ }
+            BotLogger.Info(LogCategory.Music, message);
         }
     }
 }

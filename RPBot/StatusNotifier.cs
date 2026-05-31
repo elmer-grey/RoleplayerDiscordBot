@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.WebSocket;
 using System;
 using System.Collections.Concurrent;
@@ -135,16 +135,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                LogSink?.Invoke($"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
-                try
-                {
-                    var logDirRaw = BotConfig.Current?.LogDirectory;
-                    var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-                    System.IO.Directory.CreateDirectory(logDir);
-                    var path = System.IO.Path.Combine(logDir, "ErrorLog.txt");
-                    System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex}\n");
-                }
-                catch { }
+                BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] Ошибка отправки статуса на {guild.Name}: {ex.Message}");
                 return false;
             }
         }
@@ -177,20 +168,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch (Exception ex)
-                    {
-					LogSink?.Invoke($"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
-					try
+					catch (Exception ex)
 					{
-						var logDirRaw = BotConfig.Current?.LogDirectory;
-						var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-						System.IO.Directory.CreateDirectory(logDir);
-						var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-						var path = System.IO.Path.Combine(logDir, $"ErrorLog_{dateSuffix}.txt");
-						System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex}\n");
+					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
 					}
-					catch { }
-                    }
                 }
             }
         }
@@ -221,20 +202,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch (Exception ex)
-                    {
-					LogSink?.Invoke($"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
-					try
+					catch (Exception ex)
 					{
-						var logDirRaw = BotConfig.Current?.LogDirectory;
-						var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-						System.IO.Directory.CreateDirectory(logDir);
-						var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-						var path = System.IO.Path.Combine(logDir, $"ErrorLog_{dateSuffix}.txt");
-						System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendRestartNotification error for {guild.Name}: {ex}\n");
+					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
 					}
-					catch { }
-                    }
                 }
             }
         }
@@ -262,20 +233,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch (Exception ex)
-                    {
-					LogSink?.Invoke($"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
-					try
+					catch (Exception ex)
 					{
-						var logDirRaw = BotConfig.Current?.LogDirectory;
-						var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-						System.IO.Directory.CreateDirectory(logDir);
-						var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-						var path = System.IO.Path.Combine(logDir, $"ErrorLog_{dateSuffix}.txt");
-						System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex}\n");
+					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
 					}
-					catch { }
-                    }
                 }
             }
         }
@@ -309,13 +270,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        LogSink?.Invoke($"[StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex.Message}");
-                        try
-                        {
-                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex}\n");
-                        }
-                        catch { }
+                        BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex.Message}");
                     }
                 }
             }
@@ -351,13 +306,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        LogSink?.Invoke($"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex.Message}");
-                        try
-                        {
-                            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "ErrorLog.txt");
-                            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex}\n");
-                        }
-                        catch { }
+                        BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendReconnectSuccess error for {guild.Name}: {ex.Message}");
                     }
                 }
             }
