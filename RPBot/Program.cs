@@ -1547,9 +1547,7 @@ private MusicStats? _musicStats;
                 // Перенаправляем весь Console в UI-панель логов
                 if (_originalOut == null) _originalOut = Console.Out;
                 if (_originalErr == null) _originalErr = Console.Error;
-                 var terminalLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(_config?.LogDirectory) ? "Logs" : _config!.LogDirectory);
-                    var terminalLogPath = Path.Combine(terminalLogDir, $"TerminalLog_{DateTime.Now:yyyyMMdd}.txt");
-                    var uiWriter = new UiTextWriter(() => _ui, terminalLogPath);
+                var uiWriter = new UiTextWriter(() => _ui);
                 Console.SetOut(uiWriter);
                 Console.SetError(uiWriter);
             }

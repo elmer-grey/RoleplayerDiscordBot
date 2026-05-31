@@ -157,7 +157,6 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Music/ERR] OnVoiceStateUpdatedAsync: {ex}");
                 Log($"[Music] OnVoiceStateUpdatedAsync ошибка: {ex.Message}");
             }
         }

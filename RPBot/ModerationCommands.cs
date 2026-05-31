@@ -81,12 +81,12 @@ namespace RPBot
                         prop.Archived = true; // Убедитесь, что это свойство поддерживается
                     });
 
-                    Console.WriteLine($"[{DateTime.UtcNow}] Ветка {threadChannel.Name} закрыта. Причина: {reason}");
+                    BotLogger.Info(LogCategory.Cmd, $"Ветка {threadChannel.Name} закрыта. Причина: {reason}");
                     await command.FollowupAsync($"Ветка {threadChannel.Mention} была закрыта. Причина: {reason}");
                 }
                 catch (NotSupportedException ex)
                 {
-                    Console.WriteLine($"Ошибка при закрытии ветки: {ex.Message}");
+                    BotLogger.Error(LogCategory.Cmd, $"Ошибка при закрытии ветки: {ex.Message}");
                     await command.FollowupAsync("Не удалось закрыть ветку. Пожалуйста, проверьте права доступа или тип канала.");
                 }
             }
@@ -97,23 +97,23 @@ namespace RPBot
 
                 if (archiveCategory == null)
                 {
-                    Console.WriteLine($"[{DateTime.UtcNow}] Категория 'Архив' не найдена. Создание новой категории.");
+                    BotLogger.Info(LogCategory.Cmd, "Категория 'Архив' не найдена. Создание новой категории.");
                     var restCategory = await guild.CreateCategoryChannelAsync("Архив");
 
                     if (restCategory == null)
                     {
-                        Console.WriteLine($"[{DateTime.UtcNow}] Ошибка: не удалось создать категорию 'Архив'.");
+                        BotLogger.Error(LogCategory.Cmd, "Ошибка: не удалось создать категорию 'Архив'.");
                         await command.FollowupAsync("Не удалось создать категорию 'Архив'.", ephemeral: true);
                         return;
                     }
 
                     await textChannel.ModifyAsync(prop => { prop.CategoryId = restCategory.Id; });
-                    Console.WriteLine($"[{DateTime.UtcNow}] Канал {textChannel.Name} перемещён в категорию 'Архив'.");
+                    BotLogger.Info(LogCategory.Cmd, $"Канал {textChannel.Name} перемещён в 'Архив'.");
                 }
                 else
                 {
                     await textChannel.ModifyAsync(prop => { prop.CategoryId = archiveCategory.Id; });
-                    Console.WriteLine($"[{DateTime.UtcNow}] Канал {textChannel.Name} перемещён в категорию 'Архив'.");
+                    BotLogger.Info(LogCategory.Cmd, $"Канал {textChannel.Name} перемещён в 'Архив'.");
                 }
 
                 // Запрещаем отправку сообщений через overwrite роли @everyone (один API-вызов вместо цикла по пользователям)

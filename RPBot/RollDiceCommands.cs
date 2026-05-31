@@ -113,27 +113,17 @@ namespace RPBot
 
         private static void WriteCompletedRollLog(string input, IReadOnlyList<int> results, bool hasRange, int minValue, int maxValue, int modifier)
         {
-            Console.WriteLine($"Условие броска: {input}");
-
-            if (hasRange)
-                Console.WriteLine($"Диапазон: {minValue}-{maxValue}");
-
-            Console.WriteLine($"{(results.Count == 1 ? "Результат броска" : "Результаты броска")}: {string.Join(", ", results)}");
-
-            if (modifier != 0)
-            {
-                Console.WriteLine($"Модификатор: {(modifier >= 0 ? "+" : string.Empty)}{modifier}");
-                Console.WriteLine($"{(results.Count == 1 ? "Итоговый результат" : "Итоговые результаты")}: {string.Join(", ", results.Select(r => r + modifier))}");
-            }
-
-            Console.WriteLine();
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Бросок: {input}");
+            if (hasRange) sb.Append($" [{minValue}-{maxValue}]");
+            sb.Append($" → {string.Join(", ", results)}");
+            if (modifier != 0) sb.Append($" (мод {(modifier >= 0 ? "+" : string.Empty)}{modifier} → {string.Join(", ", results.Select(r => r + modifier))})");
+            BotLogger.Debug(LogCategory.Cmd, sb.ToString());
         }
 
         private static void WriteCompletedRollLog(string input, int result)
         {
-            Console.WriteLine($"Условие броска: {input}");
-            Console.WriteLine($"Результат броска: {result}");
-            Console.WriteLine();
+            BotLogger.Debug(LogCategory.Cmd, $"Бросок: {input} → {result}");
         }
 
         private static async Task DeleteOriginalResponseSafeAsync(SocketSlashCommand command, int delayMs)
@@ -190,7 +180,7 @@ namespace RPBot
             if (errorMessage != null)
             {
                 await command.FollowupAsync($"Ошибка: {errorMessage}");
-                Console.WriteLine($"Предупреждение: Был введён неверный формат. Ошибка: {errorMessage}");
+                BotLogger.Warn(LogCategory.Cmd, $"Неверный формат броска: {errorMessage}");
                 return;
             }
 
@@ -201,7 +191,7 @@ namespace RPBot
             if (!match.Success)
             {
                 await command.FollowupAsync("Неверный формат! Используйте `XdY`, `dY`, `XdY+Z` или `XdY-Z`, где `X`, `Y`, `Z` — строго больше 0.");
-                Console.WriteLine("Предупреждение: Был введён неверный формат.");
+                BotLogger.Warn(LogCategory.Cmd, "Неверный формат броска (regex не совпал).");
                 return;
             }
 

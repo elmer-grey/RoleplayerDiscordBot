@@ -130,7 +130,7 @@ namespace RPBot
                     if (sessionsToSave.Count > 0)
                     {
                         var totalRolls = _sessions.Values.SelectMany(g => g.Values.Where(s => !s.IsStopped)).Sum(s => s.Rolls.Count);
-                        Console.WriteLine($"[SESSIONS] Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
+                        BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
                     }
                 }
                 finally
@@ -140,7 +140,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SESSIONS] Ошибка при сохранении сессий: {ex.Message}");
+                BotLogger.Error(LogCategory.Session, $"Ошибка при сохранении сессий: {ex.Message}");
             }
         }
 
@@ -150,14 +150,14 @@ namespace RPBot
             {
                 if (!File.Exists(_sessionsStatePath))
                 {
-                    Console.WriteLine("[SESSIONS] Файл сохранённых сессий не найден");
+                    BotLogger.Debug(LogCategory.Session, "Файл сохранённых сессий не найден");
                     return;
                 }
 
                 var json = await File.ReadAllTextAsync(_sessionsStatePath).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(json))
                 {
-                    Console.WriteLine("[SESSIONS] Файл сессий пуст, загрузка пропущена");
+                    BotLogger.Debug(LogCategory.Session, "Файл сессий пуст, загрузка пропущена");
                     return;
                 }
                 var doc = System.Text.Json.JsonDocument.Parse(json);
@@ -184,7 +184,7 @@ namespace RPBot
                         if ((DateTime.Now - startTime).TotalHours > MaxSessionAgeHours)
                         {
                             skippedOldCount++;
-                            Console.WriteLine($"[SESSIONS] Пропущена устаревшая сессия {sessionId}: \"{gameName}\" (начало: {startTime:dd.MM.yyyy HH:mm}, прошло: {(DateTime.Now - startTime).TotalHours:0}ч > {MaxSessionAgeHours}ч)");
+                            BotLogger.Debug(LogCategory.Session, $"Пропущена устаревшая сессия {sessionId}: \"{gameName}\" (начало: {startTime:dd.MM.yyyy HH:mm}, прошло: {(DateTime.Now - startTime).TotalHours:0}ч > {MaxSessionAgeHours}ч)");
                             continue;
                         }
                         var eventDescription = elem.TryGetProperty("EventDescription", out var ed) ? ed.GetString() : null;
@@ -243,19 +243,19 @@ namespace RPBot
                         if (guildSessions.TryAdd(sessionId, session))
                         {
                             restorCount++;
-                            Console.WriteLine($"[SESSIONS] Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName}, бросков: {rolls.Count})");
+                            BotLogger.Info(LogCategory.Session, $"Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName}, бросков: {rolls.Count})");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[SESSIONS] Ошибка при восстановлении сессии из {prop.Name}: {ex.Message}");
+                        BotLogger.Error(LogCategory.Session, $"Ошибка при восстановлении сессии из {prop.Name}: {ex.Message}");
                     }
                 }
 
                 if (restorCount > 0 || skippedOldCount > 0)
                 {
                     var totalRestorRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
-                    Console.WriteLine($"[SESSIONS] Восстановлено {restorCount} сессий ({totalRestorRolls} бросков), пропущено устаревших: {skippedOldCount}");
+                    BotLogger.Info(LogCategory.Session, $"Восстановлено {restorCount} сессий ({totalRestorRolls} бросков), пропущено устаревших: {skippedOldCount}");
 
                     if (restorCount > 0)
                         _ = RecreateControlMessagesAsync(client);
@@ -263,7 +263,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SESSIONS] Ошибка при загрузке сессий: {ex.Message}");
+                BotLogger.Error(LogCategory.Session, $"Ошибка при загрузке сессий: {ex.Message}");
             }
         }
 
@@ -329,22 +329,22 @@ namespace RPBot
                             session.ControlChannelId = channel.Id;
 
                             recreatedCount++;
-                            Console.WriteLine($"[SESSIONS] Пересоздано сообщение управления для сессии {session.SessionId}");
+                            BotLogger.Info(LogCategory.Session, $"Пересоздано сообщение управления для сессии {session.SessionId}");
                             await SaveSessionsAsync().ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[SESSIONS] Ошибка при пересоздании сообщения для сессии {session.SessionId}: {ex.Message}");
+                            BotLogger.Error(LogCategory.Session, $"Ошибка при пересоздании сообщения для сессии {session.SessionId}: {ex.Message}");
                         }
                     }
                 }
 
                 if (recreatedCount > 0)
-                    Console.WriteLine($"[SESSIONS] Пересоздано {recreatedCount} сообщений управления");
+                    BotLogger.Info(LogCategory.Session, $"Пересоздано {recreatedCount} сообщений управления");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[SESSIONS] Ошибка при пересоздании сообщений: {ex.Message}");
+                BotLogger.Error(LogCategory.Session, $"Ошибка при пересоздании сообщений: {ex.Message}");
             }
         }
 

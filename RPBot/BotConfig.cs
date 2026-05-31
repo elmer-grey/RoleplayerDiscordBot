@@ -67,11 +67,11 @@ namespace RPBot
 					try
 					{
 						File.Move(src, dst);
-						Console.WriteLine($"[Migration] Перемещён {file}: Settings/ → Data/");
+						BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Settings/ → Data/");
 					}
 					catch (Exception ex)
 					{
-						Console.WriteLine($"[Migration] Ошибка перемещения {file}: {ex.Message}");
+						BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
 					}
 				}
 			}
@@ -86,11 +86,11 @@ namespace RPBot
 					// Копируем все файлы рекурсивно, затем удаляем исходник
 					CopyDirectory(srcNumbers, dstNumbers);
 					Directory.Delete(srcNumbers, recursive: true);
-					Console.WriteLine($"[Migration] Перемещена папка Numbers/: Settings/ → Data/");
+					BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещена папка Numbers/: Settings/ → Data/");
 				}
 				catch (Exception ex)
 				{
-					Console.WriteLine($"[Migration] Ошибка перемещения Numbers/: {ex.Message}");
+					BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения Numbers/: {ex.Message}");
 				}
 			}
 
@@ -296,7 +296,7 @@ namespace RPBot
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"BotConfig.Load error reading '{resolvedPath}': {ex}");
+                    BotLogger.Error(LogCategory.Boot, $"BotConfig.Load: ошибка чтения '{resolvedPath}': {ex.Message}");
                     var cfg = new BotConfig();
                     Current = cfg;
                     return cfg;
@@ -354,7 +354,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"BotConfig.Save error writing '{path}': {ex}");
+                BotLogger.Error(LogCategory.Boot, $"BotConfig.Save: ошибка записи '{path}': {ex.Message}");
             }
         }
     }

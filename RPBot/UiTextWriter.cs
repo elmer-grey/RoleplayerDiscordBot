@@ -7,13 +7,10 @@ namespace RPBot
     internal sealed class UiTextWriter : TextWriter
     {
         private readonly Func<BotUI?> _uiProvider;
-        private readonly string? _terminalLogPath;
-        private readonly object _fileLock = new();
 
-        public UiTextWriter(Func<BotUI?> uiProvider, string? terminalLogPath = null)
+        public UiTextWriter(Func<BotUI?> uiProvider)
         {
             _uiProvider = uiProvider;
-           _terminalLogPath = terminalLogPath;
         }
 
         public override Encoding Encoding => Encoding.UTF8;
@@ -32,40 +29,18 @@ namespace RPBot
 
                 var ui = _uiProvider?.Invoke();
                 ui?.AddLog(cleaned);
-               AppendToTerminalLog(cleaned);
             }
             catch
             {
                 // В случае проблем с очисткой просто отправим оригинал
                 var ui = _uiProvider?.Invoke();
                 ui?.AddLog(value);
-               AppendToTerminalLog(value);
             }
         }
 
         public override void WriteLine(string? value)
         {
-           Write(value);
-        }
-
-        private void AppendToTerminalLog(string message)
-        {
-            if (string.IsNullOrWhiteSpace(_terminalLogPath))
-                return;
-
-            try
-            {
-                lock (_fileLock)
-                {
-                    var dir = Path.GetDirectoryName(_terminalLogPath) ?? AppContext.BaseDirectory;
-                    Directory.CreateDirectory(dir);
-                    File.AppendAllText(_terminalLogPath, $"[{DateTime.Now:dd-MM-yyyy HH:mm:ss}] {message}{Environment.NewLine}", Encoding.UTF8);
-                }
-            }
-            catch
-            {
-                // ignore
-            }
+            Write(value);
         }
     }
 }

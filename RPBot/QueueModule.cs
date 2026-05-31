@@ -75,7 +75,7 @@ namespace RPBot
                 if (!guildUser.GuildPermissions.Administrator && !hasMasterRole)
                 {
                     await command.RespondAsync("У вас нет необходимой роли для выполнения этой команды.", ephemeral: true);
-                    Console.WriteLine($"Ошибка: У пользователя {guildUser.DisplayName} недостаточно прав");
+                    BotLogger.Warn(LogCategory.Cmd, $"Недостаточно прав у пользователя {guildUser.DisplayName} для команды очереди.");
                     return;
                 }
             }
@@ -84,7 +84,7 @@ namespace RPBot
 
             if (state.IsActive)
             {
-                Console.WriteLine("Предупреждение: Попытка создания новой очереди, когда одна уже активна.");
+                BotLogger.Warn(LogCategory.Cmd, "Попытка создания новой очереди, когда одна уже активна.");
                 await command.RespondAsync($"Очередь уже создана на {state.MaxRolls} бросков. Если вы хотите её остановить принудительно, введите `/stop_q`.", ephemeral: true);
                 return;
             }
@@ -92,7 +92,7 @@ namespace RPBot
             if (count <= 0)
             {
                 await command.RespondAsync("Пожалуйста, укажите положительное число.");
-                Console.WriteLine($"Ошибка: при создании очереди указано не положительное число ({count})!");
+                BotLogger.Warn(LogCategory.Cmd, $"При создании очереди указано не положительное число ({count}).");
                 return;
             }
 
@@ -317,7 +317,7 @@ namespace RPBot
             foreach (var msg in state.MessagesToDelete)
             {
                 try { await msg.DeleteAsync(); }
-                catch (Exception ex) { Console.WriteLine($"Ошибка (остановка очереди): {ex.Message}"); }
+                catch (Exception ex) { BotLogger.Error(LogCategory.Cmd, $"Ошибка удаления сообщения очереди", ex); }
             }
 
             state.Reset();

@@ -76,7 +76,7 @@ namespace RPBot
 
                 if (string.IsNullOrWhiteSpace(cfg.GoogleSpreadsheetId))
                 {
-                    Console.WriteLine("[GoogleSheets] GoogleSpreadsheetId не задан в config.json — интеграция отключена.");
+                    BotLogger.Warn(LogCategory.Sheets, "GoogleSpreadsheetId не задан в config.json — интеграция отключена.");
                     return null;
                 }
 
@@ -87,7 +87,7 @@ namespace RPBot
 
                 if (!File.Exists(credPath))
                 {
-                    Console.WriteLine($"[GoogleSheets] Файл credentials не найден: {credPath} — интеграция отключена.");
+                    BotLogger.Warn(LogCategory.Sheets, $"Файл credentials не найден: {credPath} — интеграция отключена.");
                     return null;
                 }
 
@@ -113,7 +113,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[GoogleSheets] Ошибка инициализации: {ex.Message}");
+                BotLogger.Error(LogCategory.Sheets, $"Ошибка инициализации: {ex.Message}");
                 return null;
             }
         }

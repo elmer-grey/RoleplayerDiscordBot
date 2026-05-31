@@ -724,7 +724,6 @@ namespace RPBot
             CancellationToken ct)
         {
             var result = await _audioService!.Tracks.LoadTracksAsync(url, TrackSearchMode.None, cancellationToken: ct);
-            Console.WriteLine($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
             Log($"[Music][DBG] Playlist load: isPlaylist={result.IsPlaylist}, hasMatches={result.HasMatches}, count={result.Count}, playlist={result.Playlist?.Name}, exception={result.Exception?.Message}");
             var tracks = result.Tracks;
             if (tracks.IsDefaultOrEmpty)

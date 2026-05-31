@@ -88,7 +88,7 @@ namespace RPBot
             int totalCommands = allCommands.Count * _guildIDs.Count;
             int completedCommands = 0;
 
-            Console.WriteLine($"\n┌──────────── ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД ({totalCommands} операций) ────────────┐");
+            BotLogger.Info(LogCategory.Cmd, $"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u043a\u043e\u043c\u0430\u043d\u0434 \u2014 \u042d\u0422\u0410\u041f 1/4 ({totalCommands} \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0439)");
 
             foreach (var guildId in _guildIDs)
             {

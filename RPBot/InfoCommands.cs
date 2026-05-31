@@ -93,7 +93,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Ошибка в serverinfo: {ex.Message}");
+                BotLogger.Error(LogCategory.Cmd, $"Ошибка в serverinfo: {ex.Message}");
                 await command.FollowupAsync("Произошла ошибка при обработке команды.");
             }
         }
