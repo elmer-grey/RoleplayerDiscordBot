@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -32,59 +33,64 @@ namespace RPBot
 
     /// <summary>
     /// Центральный логгер бота.
-    /// Один файл на жизненный цикл (имя по времени старта).
-    /// Пишет в файл всегда; в UI — только Info/Warn/Error.
+    /// Каждая категория пишется в отдельный файл с одинаковым суффиксом времени запуска:
+    ///   Boot_20250615_143022.log, Discord_20250615_143022.log, Music_20250615_143022.log …
+    /// Новые файлы создаются только при запуске/рестарте.
     /// </summary>
     public static class BotLogger
     {
-        private static readonly SemaphoreSlim _fileLock = new(1, 1);
+        // Один семафор на категорию — файлы не блокируют друг друга
+        private static readonly Dictionary<LogCategory, SemaphoreSlim> _locks  = new();
+        private static readonly Dictionary<LogCategory, string>        _paths  = new();
 
-        private static string? _logFilePath;
-        private static Action<string>? _uiSink;         // callback → _ui.AddLog
-        private static LogLevel _minLevel = LogLevel.Debug;
-        private static long _maxFileSizeBytes = 20 * 1024 * 1024; // 20 МБ
+        private static string?        _logDirectory;
+        private static string?        _startupStamp;
+        private static Action<string>? _uiSink;
+        private static LogLevel        _minLevel         = LogLevel.Debug;
+        private static long            _maxFileSizeBytes = 20 * 1024 * 1024; // 20 МБ
 
         // ───── Инициализация ──────────────────────────────────────────────
 
         /// <summary>
-        /// Вызывается один раз при запуске.
-        /// <paramref name="logDirectory"/> — папка Logs/.
-        /// <paramref name="startupTime"/> — время старта (используется в имени файла).
+        /// Вызывается один раз при запуске/рестарте.
+        /// Создаёт имена файлов вида: <Category>_yyyyMMdd_HHmmss.log
         /// </summary>
         public static void Initialize(string logDirectory, DateTime startupTime)
         {
             Directory.CreateDirectory(logDirectory);
-            var stamp = startupTime.ToString("yyyyMMdd_HHmmss");
-            _logFilePath = Path.Combine(logDirectory, $"Bot_{stamp}.log");
+            _logDirectory = logDirectory;
+            _startupStamp = startupTime.ToString("yyyyMMdd_HHmmss");
+
+            _locks.Clear();
+            _paths.Clear();
+
+            foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+            {
+                _locks[cat] = new SemaphoreSlim(1, 1);
+                _paths[cat] = Path.Combine(logDirectory, $"{cat}_{_startupStamp}.log");
+            }
         }
 
         /// <summary>Устанавливает (или снимает) callback для вывода в терминальный UI.</summary>
-        public static void SetUiSink(Action<string>? sink)
-        {
-            _uiSink = sink;
-        }
+        public static void SetUiSink(Action<string>? sink) => _uiSink = sink;
 
         /// <summary>Минимальный уровень для записи в файл (по умолчанию Debug).</summary>
-        public static void SetMinLevel(LogLevel level)
-        {
-            _minLevel = level;
-        }
+        public static void SetMinLevel(LogLevel level) => _minLevel = level;
 
         // ───── Публичный API ─────────────────────────────────────────────
 
         public static void Debug(LogCategory category, string message)
-            => Write(LogLevel.Debug, category, message, null);
+            => Write(LogLevel.Debug, category, message);
 
         public static void Info(LogCategory category, string message)
-            => Write(LogLevel.Info, category, message, null);
+            => Write(LogLevel.Info, category, message);
 
         public static void Warn(LogCategory category, string message)
-            => Write(LogLevel.Warn, category, message, null);
+            => Write(LogLevel.Warn, category, message);
 
         public static void Error(LogCategory category, string message, Exception? ex = null)
-            => Write(LogLevel.Error, category, ex != null ? $"{message}: {ex.Message}" : message, null);
+            => Write(LogLevel.Error, category, ex != null ? $"{message}: {ex.Message}" : message);
 
-        /// <summary>Асинхронные варианты (для использования в async-методах).</summary>
         public static Task DebugAsync(LogCategory category, string message)
             => WriteAsync(LogLevel.Debug, category, message);
 
@@ -99,15 +105,13 @@ namespace RPBot
 
         // ───── Ядро ──────────────────────────────────────────────────────
 
-        private static void Write(LogLevel level, LogCategory category, string message, string? unused = null)
+        private static void Write(LogLevel level, LogCategory category, string message)
         {
             if (level < _minLevel) return;
-            var line = FormatLine(level, category, message);
-            // Запись в файл — fire-and-forget, ошибки проглатываем
+            var line = FormatLine(level, message);
 #pragma warning disable CS4014
-            AppendToFileAsync(line);
+            AppendToFileAsync(category, line);
 #pragma warning restore CS4014
-            // UI — только Info и выше, синхронно (вызывается из UI-потока или фона)
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
@@ -115,20 +119,19 @@ namespace RPBot
         private static async Task WriteAsync(LogLevel level, LogCategory category, string message)
         {
             if (level < _minLevel) return;
-            var line = FormatLine(level, category, message);
-            await AppendToFileAsync(line).ConfigureAwait(false);
+            var line = FormatLine(level, message);
+            await AppendToFileAsync(category, line).ConfigureAwait(false);
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
 
         // ───── Форматирование ────────────────────────────────────────────
 
-        private static string FormatLine(LogLevel level, LogCategory category, string message)
+        private static string FormatLine(LogLevel level, string message)
         {
             var time = DateTime.Now.ToString("HH:mm:ss");
             var lvl  = LevelLabel(level);
-            var cat  = CategoryLabel(category);
-            return $"[{time}] [{lvl}] [{cat}] {message}";
+            return $"[{time}] [{lvl}] {message}";
         }
 
         private static string LevelLabel(LogLevel level) => level switch
@@ -137,22 +140,7 @@ namespace RPBot
             LogLevel.Info  => "INFO ",
             LogLevel.Warn  => "WARN ",
             LogLevel.Error => "ERROR",
-            _              => "?????"
-        };
-
-        private static string CategoryLabel(LogCategory cat) => cat switch
-        {
-            LogCategory.Boot    => "BOOT   ",
-            LogCategory.Session => "SESSION",
-            LogCategory.Music   => "MUSIC  ",
-            LogCategory.Predict => "PREDICT",
-            LogCategory.Points  => "POINTS ",
-            LogCategory.Discord => "DISCORD",
-            LogCategory.Sheets  => "SHEETS ",
-            LogCategory.Cmd     => "CMD    ",
-            LogCategory.Config  => "CONFIG ",
-            LogCategory.System  => "SYSTEM ",
-            _                   => "MISC   ",
+            _              => "?????",
         };
 
         private static string UiPrefix(LogLevel level) => level switch
@@ -164,53 +152,50 @@ namespace RPBot
 
         // ───── Запись в файл ─────────────────────────────────────────────
 
-        private static async Task AppendToFileAsync(string line)
+        private static async Task AppendToFileAsync(LogCategory category, string line)
         {
-            if (_logFilePath == null) return;
-            await _fileLock.WaitAsync().ConfigureAwait(false);
+            if (!_paths.TryGetValue(category, out var path)) return;
+            var sem = _locks[category];
+
+            await sem.WaitAsync().ConfigureAwait(false);
             try
             {
-                // Ротация по размеру
-                if (File.Exists(_logFilePath))
+                // Ротация по размеру — переименовываем, продолжаем в том же имени
+                if (File.Exists(path))
                 {
-                    var fi = new FileInfo(_logFilePath);
+                    var fi = new FileInfo(path);
                     if (fi.Length > _maxFileSizeBytes)
                     {
-                        var rotated = _logFilePath.Replace(".log", $"_rotated_{DateTime.Now:HHmmss}.log");
-                        File.Move(_logFilePath, rotated);
+                        var rotated = path.Replace(".log", $"_rot_{DateTime.Now:HHmmss}.log");
+                        File.Move(path, rotated);
                     }
                 }
 
-                await File.AppendAllTextAsync(_logFilePath, line + Environment.NewLine, Encoding.UTF8)
+                await File.AppendAllTextAsync(path, line + Environment.NewLine, Encoding.UTF8)
                           .ConfigureAwait(false);
             }
             catch
             {
-                // Игнорируем ошибки файлового вывода — не падаем из-за лога
+                // Не падаем из-за ошибок файлового вывода
             }
             finally
             {
-                _fileLock.Release();
+                sem.Release();
             }
         }
 
-        // ───── Вспомогательные методы для совместимости ──────────────────
+        // ───── Вспомогательное ───────────────────────────────────────────
 
-        /// <summary>
-        /// Записывает блок строк (для startup-боксов) как Info/Boot.
-        /// </summary>
-        public static async Task WriteBatchAsync(LogCategory category, System.Collections.Generic.IEnumerable<string> lines)
+        public static async Task WriteBatchAsync(LogCategory category, IEnumerable<string> lines)
         {
             foreach (var line in lines)
                 await WriteAsync(LogLevel.Info, category, line).ConfigureAwait(false);
         }
 
-        /// <summary>
-        /// Закрывает логгер (записывает финальную строку).
-        /// </summary>
         public static void Shutdown(string reason)
         {
-            _ = AppendToFileAsync(FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
+            _ = AppendToFileAsync(LogCategory.Boot,
+                FormatLine(LogLevel.Info, $"=== Логгер завершён: {reason} ==="));
         }
     }
 }
