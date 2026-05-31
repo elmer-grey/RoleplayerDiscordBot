@@ -140,6 +140,16 @@ namespace RPBot
             var serverTs = Path.Combine(ytCipherDir, "server.ts");
             if (!File.Exists(serverTs))
             {
+                // Fallback: поиск вверх по дереву директорий (до 5 уровней), как у Lavalink
+                var foundServerTs = FindFileUpward(Path.Combine(_config.YtCipherPath, "server.ts"), AppContext.BaseDirectory, 5);
+                if (foundServerTs is not null)
+                {
+                    ytCipherDir = Path.GetDirectoryName(foundServerTs)!;
+                    serverTs = foundServerTs;
+                }
+            }
+            if (!File.Exists(serverTs))
+            {
                 Log($"[Music] server.ts не найден: {serverTs} — yt-cipher не будет запущен.");
                 return;
             }
