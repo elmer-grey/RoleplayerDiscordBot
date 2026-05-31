@@ -62,7 +62,7 @@ namespace RPBot
             var isManual = exception is ManualReconnectException;
             if (!isManual && exception is GatewayReconnectException)
             {
-                await Log("Плановый реконнект Discord Gateway — не вмешиваемся.");
+                BotLogger.Debug(LogCategory.Discord, "Плановый реконнект Discord Gateway — не вмешиваемся.");
                 return;
             }
             if (!isManual && IsExpectedDisconnectInProgress()) return;
