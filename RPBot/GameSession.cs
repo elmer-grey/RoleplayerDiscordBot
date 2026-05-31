@@ -1706,10 +1706,13 @@ namespace RPBot
 
         /// <summary>
         /// Вызывается при ежедневной перезагрузке: удаляет висящие кнопки статистики
-        /// и отправляет сообщение об очистке вместо них. Затем очищает все сессии.
+        /// и отправляет сообщение об очистке вместо них. Затем очищает только завершённые сессии.
+        /// Активные (незавершённые) сессии не трогаются.
         /// </summary>
         public static async Task ClearSessionsOnDailyRestartAsync(DiscordSocketClient client)
         {
+            var sessionsToRemove = new List<GameSession>();
+
             foreach (var guildEntry in _sessions)
             {
                 var guildId = guildEntry.Key;
@@ -1720,10 +1723,16 @@ namespace RPBot
 
                 foreach (var session in guildEntry.Value.Values)
                 {
+                    // Трогаем только завершённые сессии с висящим сообщением статистики
+                    if (!session.IsStopped || session.StatsMessageId == 0)
+                        continue;
+
+                    sessionsToRemove.Add(session);
+
                     try
                     {
-                        // Удаляем висящее сообщение с кнопками, если оно есть
-                        if (session.StatsMessageId != 0 && statsChannel != null)
+                        // Удаляем висящее сообщение с кнопками
+                        if (statsChannel != null)
                         {
                             try
                             {
@@ -1732,11 +1741,7 @@ namespace RPBot
                                     await msg.DeleteAsync();
                             }
                             catch { }
-                        }
 
-                        // Отправляем замену только если сессия имела броски (иначе сообщения не было)
-                        if (session.Rolls.Count > 0 && statsChannel != null)
-                        {
                             await statsChannel.SendMessageAsync(
                                 $"📋 Статистика бросков по игре **{session.GameName}** очищена (ежедневная перезагрузка).");
                         }
@@ -1745,8 +1750,19 @@ namespace RPBot
                 }
             }
 
-            _sessions.Clear();
-            await SaveSessionsAsync();
+            // Удаляем только завершённые сессии с висящей статистикой
+            foreach (var session in sessionsToRemove)
+            {
+                if (_sessions.TryGetValue(session.GuildId, out var guildSessions))
+                {
+                    guildSessions.TryRemove(session.SessionId, out _);
+                    if (guildSessions.IsEmpty)
+                        _sessions.TryRemove(session.GuildId, out _);
+                }
+            }
+
+            if (sessionsToRemove.Count > 0)
+                await SaveSessionsAsync();
         }
     }
 
