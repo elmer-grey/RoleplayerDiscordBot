@@ -1604,6 +1604,14 @@ private MusicStats? _musicStats;
                         };
                         _statusNotifier.SetStartupContext(_currentStartupType, _startupReason);
 
+                        // TelegramNotifier не зависит от DiscordSocketClient напрямую, но пересоздаём его
+                        // вместе с остальными сервисами при рестарте/реконнекте — на случай "протухшего"
+                        // HttpClient или устаревшего замыкания на _serverConfigs.
+                        _telegramNotifier = new TelegramNotifier(guildId =>
+                        {
+                            return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
+                        });
+
                         var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
                         _predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
                         _voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
@@ -1948,6 +1956,9 @@ private MusicStats? _musicStats;
 
             var eventUrl  = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
+            var startMsk = TryGetMoscowTime(guildEvent.StartTime.UtcDateTime, out var mskStartTime)
+                ? mskStartTime
+                : startLocal.DateTime;
             var imageUrl   = guildEvent.GetCoverImageUrl();
 
             string whereText;
@@ -1992,7 +2003,7 @@ private MusicStats? _musicStats;
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
 
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
             embedBuilder.AddField("📍 Где", whereText, true);
 
             if (guildEvent.Creator != null)
@@ -2047,7 +2058,7 @@ private MusicStats? _musicStats;
                 {
                     var tgText = $"📅 Событие: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
-                        $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
+                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
                         $"📍 Где: {whereTextPlain}\n" +
                         (createdByPlain != null ? $"👤 Создал: {createdByPlain}\n" : string.Empty) +
                         $"🔗 {eventUrl}";
@@ -2080,6 +2091,9 @@ private MusicStats? _musicStats;
 
                 var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
+            var startMsk = TryGetMoscowTime(guildEvent.StartTime.UtcDateTime, out var mskStartTime)
+                ? mskStartTime
+                : startLocal.DateTime;
             var imageUrl = guildEvent.GetCoverImageUrl();
 
            var isCancelled = string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase);
@@ -2088,6 +2102,7 @@ private MusicStats? _musicStats;
             var prefix = isCancelled ? "❌" : isStarted ? "▶️" : isCompleted ? "✅" : "ℹ️";
             var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
             var mark = $"{prefix} {statusText}: {DateTime.Now:dd.MM.yyyy HH:mm}";
+            var markDiscord = $"{prefix} {statusText}: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
 
             string whereText;
             string whereTextPlain;
@@ -2117,11 +2132,11 @@ private MusicStats? _musicStats;
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(guildEvent.Description.Length <= 2048 ? guildEvent.Description : guildEvent.Description.Substring(0, 2047) + "…");
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-               embedBuilder.AddField("Статус", mark, false);
+               embedBuilder.AddField("Статус", markDiscord, false);
             var embed = embedBuilder.Build();
 
             // Discord channel
@@ -2180,7 +2195,7 @@ private MusicStats? _musicStats;
 
                     var tgText = $"{prefix} {statusText}: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
-                        $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
+                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
                         $"📍 Где: {whereTextPlain}\n";
 
                     // При старте события подставляем имя мастера из активной сессии (учитывает MasterNameMap и ручные правки)
@@ -2282,6 +2297,9 @@ private MusicStats? _musicStats;
 
 			var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
 			var startLocal = guildEvent.StartTime.ToLocalTime();
+			var startMsk = TryGetMoscowTime(guildEvent.StartTime.UtcDateTime, out var mskStartTime)
+				? mskStartTime
+				: startLocal.DateTime;
 			var endLocal = guildEvent.EndTime?.ToLocalTime();
 
            // Определяем, в каком канале будет проходить событие
@@ -2322,7 +2340,7 @@ private MusicStats? _musicStats;
 			}
 
 			embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-			embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+			embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
 			embedBuilder.AddField("📍 Где", whereText, true);
 
          string? createdByPlain = null;
@@ -2353,7 +2371,7 @@ private MusicStats? _musicStats;
                 {
                  var tgText = $"📅 Новое событие: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
-                        $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
+                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
                         $"📍 Где: {whereTextPlain}\n" +
                         (createdByPlain != null ? $"👤 Создал: {createdByPlain}\n" : string.Empty) +
                         $"🔗 {eventUrl}";
@@ -2483,34 +2501,63 @@ private MusicStats? _musicStats;
                 return;
 
          List<string> changes = new();
+            List<string> changesDiscord = new();
             try
             {
                 if (before != null)
                 {
                     if (!string.Equals(before.Name, guildEvent.Name, StringComparison.Ordinal))
-                        changes.Add($"Название: '{before.Name}' → '{guildEvent.Name}'");
+                    {
+                        var text = $"Название: '{before.Name}' → '{guildEvent.Name}'";
+                        changes.Add(text);
+                        changesDiscord.Add(text);
+                    }
                     if (!string.Equals(before.Description ?? string.Empty, guildEvent.Description ?? string.Empty, StringComparison.Ordinal))
+                    {
                         changes.Add("Описание изменено");
+                        changesDiscord.Add("Описание изменено");
+                    }
                     if (before.StartTime != guildEvent.StartTime)
+                    {
                         changes.Add($"Начало: {before.StartTime.ToLocalTime():dd.MM.yyyy HH:mm} → {guildEvent.StartTime.ToLocalTime():dd.MM.yyyy HH:mm}");
+                        changesDiscord.Add($"Начало: {DiscordTimeFormatter.FullDateTime(before.StartTime.ToLocalTime())} → {DiscordTimeFormatter.FullDateTime(guildEvent.StartTime.ToLocalTime())}");
+                    }
                     if (before.EndTime != guildEvent.EndTime)
                     {
                         var bEnd = before.EndTime?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "—";
                         var aEnd = guildEvent.EndTime?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "—";
                         changes.Add($"Окончание: {bEnd} → {aEnd}");
+
+                        var bEndDiscord = before.EndTime.HasValue
+                            ? DiscordTimeFormatter.FullDateTime(before.EndTime.Value.ToLocalTime())
+                            : "—";
+                        var aEndDiscord = guildEvent.EndTime.HasValue
+                            ? DiscordTimeFormatter.FullDateTime(guildEvent.EndTime.Value.ToLocalTime())
+                            : "—";
+                        changesDiscord.Add($"Окончание: {bEndDiscord} → {aEndDiscord}");
                     }
                     if ((before.Channel?.Id ?? 0) != (guildEvent.Channel?.Id ?? 0) ||
                         !string.Equals(before.Location ?? string.Empty, guildEvent.Location ?? string.Empty, StringComparison.Ordinal))
+                    {
                         changes.Add("Место проведения изменено");
+                        changesDiscord.Add("Место проведения изменено");
+                    }
                     if (!string.Equals(before.GetCoverImageUrl() ?? string.Empty, guildEvent.GetCoverImageUrl() ?? string.Empty, StringComparison.Ordinal))
+                    {
                         changes.Add("Изображение изменено");
+                        changesDiscord.Add("Изображение изменено");
+                    }
                 }
             }
             catch { }
 
              var updatedMark = $"Обновлено: {DateTime.Now:dd.MM.yyyy HH:mm}";
+             var updatedMarkDiscord = $"Обновлено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
+            var startMsk = TryGetMoscowTime(guildEvent.StartTime.UtcDateTime, out var mskStartTime)
+                ? mskStartTime
+                : startLocal.DateTime;
 
             static string Truncate(string? value, int max)
             {
@@ -2553,13 +2600,13 @@ private MusicStats? _musicStats;
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
             }
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", startLocal.ToString("dd.MM.yyyy HH:mm"), true);
+            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-            if (changes.Count > 0)
-                embedBuilder.AddField("✏️ Изменения", string.Join("\n", changes.Take(10)), false);
-                embedBuilder.AddField("Статус", updatedMark, false);
+            if (changesDiscord.Count > 0)
+                embedBuilder.AddField("✏️ Изменения", string.Join("\n", changesDiscord.Take(10)), false);
+                embedBuilder.AddField("Статус", updatedMarkDiscord, false);
             var embed = embedBuilder.Build();
 
             // Update announce message in channel
@@ -2621,7 +2668,7 @@ private MusicStats? _musicStats;
                 {
                  var tgText = $"📅 Событие обновлено: {guildEvent.Name}\n" +
                         $"🏰 Сервер: {guild.Name}\n" +
-                        $"🕒 Когда: {startLocal:dd.MM.yyyy HH:mm}\n" +
+                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
                         $"📍 Где: {whereTextPlain}\n" +
                         (guildEvent.Creator != null ? $"👤 Создал: {guildEvent.Creator.Username}\n" : string.Empty) +
                      (changes.Count > 0 ? $"\n✏️ Изменения:\n- {string.Join("\n- ", changes.Take(10))}\n" : string.Empty) +
@@ -2823,21 +2870,18 @@ private MusicStats? _musicStats;
                     await LogStartup($"Ошибка при отправке уведомления о переподключении: {ex.Message}");
                 }
 
-                // Попытка уведомить все сервера о восстановлении; логируем результат
+                // Обновляем контекст запуска (используется командами вроде !status),
+                // но повторное сообщение "ВСЕ СИСТЕМЫ АКТИВНЫ" не шлём — SendReconnectSuccess уже сообщил об этом
                 try
                 {
                     var reconnectReason = $"Переподключение после: {info.LastDisconnectReason}";
                     _currentStartupType = StartupType.Reconnect;
                     _startupReason = reconnectReason;
                     _statusNotifier?.SetStartupContext(StartupType.Reconnect, reconnectReason);
-
-                    var ok = await _statusNotifier.SendAllSystemsActive($"Переподключение после: {info.LastDisconnectReason}");
-                    if (!ok)
-                        await LogStartup("SendAllSystemsActive завершился с ошибками. Смотрите подробности в логах.");
                 }
                 catch (Exception ex)
                 {
-                    await LogStartup($"Ошибка при массовой отправке статусов после реконнекта: {ex.Message}");
+                    await LogStartup($"Ошибка при обновлении контекста после реконнекта: {ex.Message}");
                 }
 
                 // Восстанавливаем музыкальные очереди после переподключения

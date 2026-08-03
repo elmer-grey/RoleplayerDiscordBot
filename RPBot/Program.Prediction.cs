@@ -310,7 +310,7 @@ namespace RPBot
                             }
 
                             if (!prediction.IsLocked && TryGetMoscowTime(prediction.BetsCloseAtUtc.UtcDateTime, out var mskTime))
-                                sb.AppendLine($"Приём ставок до: {mskTime:dd.MM.yyyy HH:mm} по МСК");
+                                sb.AppendLine($"Приём ставок до: {DiscordTimeFormatter.FullDateTime(prediction.BetsCloseAtUtc)}");
                             else if (prediction.IsLocked)
                                 sb.AppendLine("Приём ставок завершён.");
                         }
@@ -427,7 +427,7 @@ namespace RPBot
             var sb = new StringBuilder();
             foreach (var entry in history)
             {
-                sb.AppendLine($"**📅 {entry.EndTime:dd.MM.yyyy HH:mm}**");
+                sb.AppendLine($"**📅 {DiscordTimeFormatter.FullDateTime(entry.EndTime)}**");
                 sb.AppendLine($"🎯 **{entry.Title}**");
 
                 if (entry.WasCancelled)

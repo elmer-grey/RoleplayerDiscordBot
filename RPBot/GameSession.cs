@@ -41,6 +41,7 @@ namespace RPBot
         public ulong ControlChannelId { get; set; }
         public ulong StatsMessageId { get; set; }
         public CancellationTokenSource PauseReminderCTS { get; set; }
+        public CancellationTokenSource? ControlMessageUpdateCTS { get; set; }
         public bool TrackRolls { get; set; }
         /// <summary>true — сбор бросков включён автоматически при старте; сбрасывается при ручном включении.</summary>
         public bool TrackRollsAutoEnabled { get; set; }
@@ -294,18 +295,23 @@ namespace RPBot
                                 {
                                     var existingMessage = await channel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
                                     if (existingMessage != null)
+                                    {
+                                        commands.StartControlMessageAutoRefresh(session, channel);
                                         continue;
+                                    }
                                 }
                                 catch
                                 {
                                 }
                             }
 
+                            var activeDuration = CalculateActiveDuration(session, DateTime.Now);
                             var embed = new EmbedBuilder()
                                 .WithTitle($"Сессия: \"{session.GameName}\" ⚠️ Восстановлено")
                                 .WithDescription($"Мастер: {session.MasterName}\n" +
-                                               $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                                               $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
                                                $"Статус: {(session.IsPaused ? "⏸ На паузе" : "▶ В процессе")}\n" +
+                                               $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
                                                (session.TrackRolls
                                                    ? (session.TrackRollsAutoEnabled
                                                        ? "Сбор бросков: ✅ Включен (автоматически)\n"
@@ -314,7 +320,6 @@ namespace RPBot
                                                $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}\n")}" +
                                                $"⚠️ *Сообщение управления было пересоздано после перезапуска бота*")
                                 .WithColor(Color.DarkOrange)
-                                .WithFooter($"session:{session.SessionId}")
                                 .Build();
 
                             // Используем кнопку force_stop для пересозданных сообщений, т.к. обычный
@@ -327,6 +332,7 @@ namespace RPBot
                             var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                             session.ControlMessageId = message.Id;
                             session.ControlChannelId = channel.Id;
+                            commands.StartControlMessageAutoRefresh(session, channel);
 
                             recreatedCount++;
                             BotLogger.Info(LogCategory.Session, $"Пересоздано сообщение управления для сессии {session.SessionId}");
@@ -445,6 +451,33 @@ namespace RPBot
             return builder;
         }
 
+        private static TimeSpan CalculateActiveDuration(GameSession session, DateTime now)
+        {
+            var end = session.EndTime ?? now;
+            if (end < session.StartTime)
+                return TimeSpan.Zero;
+
+            var total = end - session.StartTime;
+            var pause = TimeSpan.Zero;
+            foreach (var p in session.PausePeriods)
+            {
+                var pauseEnd = p.End ?? now;
+                if (pauseEnd <= p.Start)
+                    continue;
+                pause += pauseEnd - p.Start;
+            }
+
+            var active = total - pause;
+            return active < TimeSpan.Zero ? TimeSpan.Zero : active;
+        }
+
+        private static string FormatDurationCompact(TimeSpan value)
+        {
+            if (value.TotalHours >= 1)
+                return $"{(int)value.TotalHours}ч {value.Minutes:00}м";
+            return $"{value.Minutes}м";
+        }
+
         private async Task UpdateControlMessage(GameSession session, IMessageChannel channel)
         {
             try
@@ -463,7 +496,9 @@ namespace RPBot
                     Log($"Сообщение {session.ControlMessageId} не найдено, попытка найти по footer сессии...");
                     var messages = await channel.GetMessagesAsync(20).FlattenAsync();
                     message = messages.FirstOrDefault(m =>
-                        m.Embeds.FirstOrDefault()?.Footer?.Text == $"session:{session.SessionId}") as IUserMessage;
+                        m.Components.Any(c => c is ActionRowComponent row &&
+                            row.Components.Any(b => b is ButtonComponent btn &&
+                                btn.CustomId != null && btn.CustomId.EndsWith($":{session.SessionId}")))) as IUserMessage;
 
                     if (message == null)
                     {
@@ -477,7 +512,7 @@ namespace RPBot
                 // Получаем последний период паузы (текущий)
                 var currentPause = session.PausePeriods.LastOrDefault();
                 var pauseTimeInfo = currentPause.Start != DateTime.MinValue ?
-                    $"\nНа паузе с: {currentPause.Start:HH:mm}" : "";
+                    $"\nНа паузе с: {DiscordTimeFormatter.TimeOnly(currentPause.Start)}" : "";
 
                 var statusText = session.IsStopped
                     ? "✅ Завершена"
@@ -485,11 +520,15 @@ namespace RPBot
                         ? $"⏸ На паузе{pauseTimeInfo}"
                         : "▶ В процессе";
 
+                var now = DateTime.Now;
+                var activeDuration = CalculateActiveDuration(session, now);
+
                 var descriptionLines = new List<string>
                 {
                     $"Мастер: {session.MasterName}",
-                    $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}",
+                    $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}",
                     $"Статус: {statusText}",
+                    $"Длительность (активная): {FormatDurationCompact(activeDuration)}",
                     session.TrackRolls
                         ? (session.TrackRollsAutoEnabled
                             ? "Сбор бросков: ✅ Включен (автоматически)"
@@ -507,7 +546,6 @@ namespace RPBot
                     .WithTitle($"Сессия: \"{session.GameName}\"")
                     .WithDescription(string.Join("\n", descriptionLines))
                     .WithColor(session.IsStopped ? Color.DarkGrey : session.IsPaused ? Color.Orange : Color.Green)
-                    .WithFooter($"session:{session.SessionId}")
                     .Build();
 
                 await message.ModifyAsync(m =>
@@ -522,6 +560,49 @@ namespace RPBot
             {
                 Log($"Ошибка при обновлении сообщения управления: {ex.Message}");
             }
+        }
+
+        private void StartControlMessageAutoRefresh(GameSession session, IMessageChannel channel)
+        {
+            try
+            {
+                session.ControlMessageUpdateCTS?.Cancel();
+                session.ControlMessageUpdateCTS?.Dispose();
+            }
+            catch
+            {
+            }
+
+            var cts = new CancellationTokenSource();
+            session.ControlMessageUpdateCTS = cts;
+            var token = cts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(10), token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    if (token.IsCancellationRequested || session.IsStopped)
+                        return;
+
+                    try
+                    {
+                        await UpdateControlMessage(session, channel).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка автообновления control message для сессии {session.SessionId}: {ex.Message}");
+                    }
+                }
+            }, token);
         }
 
         public static async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent, DiscordSocketClient client)
@@ -549,21 +630,23 @@ namespace RPBot
 
             if (client.GetChannel(channelId) is ITextChannel channel)
             {
+                var activeDuration = CalculateActiveDuration(session, DateTime.Now);
                 var embed = new EmbedBuilder()
                     .WithTitle($"Сессия: \"{session.GameName}\"")
                     .WithDescription($"Мастер: {session.MasterName}\n" +
-                                   $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                                   $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
                                    $"Статус: ▶ В процессе\n" +
+                                   $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
                                    $"Сбор бросков: ✅ Включен (автоматически)\n" +
                                    $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
                     .WithColor(Color.Green)
-                    .WithFooter($"session:{session.SessionId}")
                     .Build();
 
                 var buttons = commands.CreateControlButtons(session);
                 var message = await channel.SendMessageAsync(embed: embed, components: buttons.Build());
                 session.ControlMessageId = message.Id;
                 session.ControlChannelId = channel.Id;
+                commands.StartControlMessageAutoRefresh(session, channel);
 
                 _ = Task.Run(() => SaveSessionsAsync());
                 commands.Log($"Создано сообщение управления для сессии {session.SessionId} (ID сообщения: {message.Id})");
@@ -588,8 +671,9 @@ namespace RPBot
             var user = command.User as SocketGuildUser;
             var config = Program.ServerConfigResolver?.Invoke(guildId.Value);
             var hasMasterRole = config?.MasterRoleId.HasValue == true && user != null && user.Roles.Any(r => r.Id == config.MasterRoleId.Value);
+            var hasSuperUserRole = config?.SuperUserRoleId.HasValue == true && user != null && user.Roles.Any(r => r.Id == config.SuperUserRoleId.Value);
             var isAdmin = user?.GuildPermissions.Administrator ?? false;
-            if (!isAdmin && !hasMasterRole)
+            if (!isAdmin && !hasMasterRole && !hasSuperUserRole)
             {
                 await SendTemporaryEphemeralResponse(command, "Только мастера могут запускать игру.");
                 return;
@@ -609,21 +693,23 @@ namespace RPBot
                 return;
             }
 
+            var activeDuration = CalculateActiveDuration(session, DateTime.Now);
             var embed = new EmbedBuilder()
                 .WithTitle($"Сессия: \"{session.GameName}\"")
                 .WithDescription($"Мастер: {session.MasterName}\n" +
-                               $"Начало: {session.StartTime:dd.MM.yyyy HH:mm}\n" +
+                               $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
                                $"Статус: ▶ В процессе\n" +
+                               $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
                                $"Сбор бросков: ✅ Включен (автоматически)\n" +
                                $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
                 .WithColor(Color.Green)
-                .WithFooter($"session:{session.SessionId}")
                 .Build();
 
             var buttons = CreateControlButtons(session);
             var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
             session.ControlMessageId = message.Id;
             session.ControlChannelId = command.Channel.Id;
+            StartControlMessageAutoRefresh(session, command.Channel);
 
             _ = Task.Run(() => SaveSessionsAsync());
         }
@@ -955,6 +1041,7 @@ namespace RPBot
 
         /// <summary>
         /// Возвращает true если пользователь — администратор, имеет роль мастера,
+        /// имеет специальную роль суперпользователя,
         /// или является мастером этой конкретной сессии.
         /// </summary>
         private static bool IsMasterOrAdmin(SocketGuildUser? user, ulong guildId, GameSession session)
@@ -966,6 +1053,9 @@ namespace RPBot
             // Пользователь с ролью мастера в конфиге сервера
             var config = Program.ServerConfigResolver?.Invoke(guildId);
             if (config?.MasterRoleId.HasValue == true && user.Roles.Any(r => r.Id == config.MasterRoleId.Value))
+                return true;
+            // Пользователь со специальной ролью суперпользователя
+            if (config?.SuperUserRoleId.HasValue == true && user.Roles.Any(r => r.Id == config.SuperUserRoleId.Value))
                 return true;
             return false;
         }
@@ -1308,8 +1398,8 @@ namespace RPBot
             var message = new StringBuilder();
             message.AppendLine($"# Игра **\"{session.GameName}\"** завершена");
             message.AppendLine($"- **Мастер:** {session.MasterName}");
-            message.AppendLine($"- **Начало:** {session.StartTime:dd.MM.yyyy HH:mm}");
-            message.AppendLine($"- **Конец:** {session.EndTime:dd.MM.yyyy HH:mm}");
+            message.AppendLine($"- **Начало:** {DiscordTimeFormatter.FullDateTime(session.StartTime)}");
+            message.AppendLine($"- **Конец:** {DiscordTimeFormatter.FullDateTime(session.EndTime!.Value)}");
             message.AppendLine($"- **Общее время:** {FormatTimeSpan(totalDuration)}");
             if (session.PausePeriods.Any())
             {
@@ -1338,7 +1428,7 @@ namespace RPBot
             {
                 message.AppendLine("## Перерывы:");
                 foreach (var pause in session.PausePeriods)
-                    message.AppendLine($"- {pause.Start:HH:mm} — {pause.End?.ToString("HH:mm") ?? "не завершён"}");
+                    message.AppendLine($"- {DiscordTimeFormatter.TimeOnly(pause.Start)} — {(pause.End.HasValue ? DiscordTimeFormatter.TimeOnly(pause.End.Value) : "не завершён")}");
             }
 
             return message.ToString();
@@ -1462,6 +1552,8 @@ namespace RPBot
                 // Отменяем все pending операции
                 session.PauseReminderCTS?.Cancel();
                 session.PauseReminderCTS?.Dispose();
+                session.ControlMessageUpdateCTS?.Cancel();
+                session.ControlMessageUpdateCTS?.Dispose();
 
                 if (_sessions.TryGetValue(session.GuildId, out var guildSessions))
                 {
@@ -1610,12 +1702,12 @@ namespace RPBot
 
                 var averageValue = rollsByDiceType[0].Average(r => r.RollValue);
 
-                message.AppendLine($"**{diceType}:**\n");
+                message.AppendLine($"**{diceType}:**");
                 foreach (var roll in rolls)
                 {
-                    message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                    message.AppendLine($"{roll.Value}: {roll.Count} раз");
                 }
-                message.AppendLine($"  **Среднее:** {averageValue:F2}\n");
+                message.AppendLine($"**Среднее:** {averageValue:F2}");
             }
             else
             {
@@ -1633,9 +1725,10 @@ namespace RPBot
                     message.AppendLine($"**{diceType}:**");
                     foreach (var roll in rolls)
                     {
-                        message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                        message.AppendLine($"{roll.Value}: {roll.Count} раз");
                     }
-                    message.AppendLine($"  Среднее: {averageValue:F2}\n");
+                    message.AppendLine($"Среднее: {averageValue:F2}");
+                    message.AppendLine();
                 }
             }
 
@@ -1677,23 +1770,25 @@ namespace RPBot
                     var diceStats = player.RollsByDiceType[0];
                     foreach (var roll in diceStats.Rolls)
                     {
-                        message.AppendLine($"  - {roll.Value}: {roll.Count} раз");
+                        message.AppendLine($"{roll.Value}: {roll.Count} раз");
                     }
-                    message.AppendLine($"  **Среднее:** {diceStats.Average:F2}\n");
+                    message.AppendLine($"**Среднее:** {diceStats.Average:F2}");
+                    message.AppendLine();
                 }
                 else
                 {
                     // Если несколько типов - показываем с разделением
                     foreach (var diceStats in player.RollsByDiceType)
                     {
-                        message.AppendLine($"  **{diceStats.DiceType}:**");
+                        message.AppendLine($"**{diceStats.DiceType}:**");
                         foreach (var roll in diceStats.Rolls)
                         {
-                            message.AppendLine($"    - {roll.Value}: {roll.Count} раз");
+                            message.AppendLine($"{roll.Value}: {roll.Count} раз");
                         }
-                        message.AppendLine($"    Среднее: {diceStats.Average:F2}");
+                        message.AppendLine($"Среднее: {diceStats.Average:F2}");
                     }
-                    message.AppendLine($"  **Общее среднее:** {player.OverallAverage:F2}\n");
+                    message.AppendLine($"**Общее среднее:** {player.OverallAverage:F2}");
+                    message.AppendLine();
                 }
             }
 

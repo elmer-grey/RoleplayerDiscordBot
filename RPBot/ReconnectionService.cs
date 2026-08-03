@@ -23,6 +23,10 @@ namespace RPBot
         private readonly SemaphoreSlim _reconnectLock = new SemaphoreSlim(1, 1);
         private readonly object _stateLock = new();
         private CancellationTokenSource _reconnectCts = new();
+        // Хранится вместе с текущим CTS, чтобы при "перехвате" более свежего запроса
+        // (см. ReconnectLoopAsync) мы брали актуальный флаг forceReconnect, а не устаревший
+        // параметр из уже отменённого вызова.
+        private bool _pendingForceReconnect;
 
         private const int InitialWaitMs = 5000;
         private const int ConnectTimeoutMs = 60000;
@@ -66,6 +70,11 @@ namespace RPBot
                 return;
             }
             if (!isManual && IsExpectedDisconnectInProgress()) return;
+            // Если автоматический реконнект уже идёт (не ручной запрос) — не перезапускаем цикл заново.
+            // Иначе повторный Disconnected-эвент от Discord.NET (например, за пределами 20-сек окна
+            // MarkExpectedDisconnect, но всё ещё внутри текущей попытки/паузы) сбросит счётчик попыток
+            // и заново зашлёт уведомление "ПРОБЛЕМЫ С ПОДКЛЮЧЕНИЕМ", хотя цикл и так уже работает.
+            if (!isManual && IsReconnectInProgress) return;
 
             var reason = DisconnectReasonTranslator.GetFriendlyReason(exception);
             _connectionInfo.AddDisconnectReason(reason, exception?.Message);
@@ -80,6 +89,7 @@ namespace RPBot
                 try { _reconnectCts.Dispose(); } catch { }
                 _reconnectCts = new CancellationTokenSource();
                 cts = _reconnectCts;
+                _pendingForceReconnect = isManual;
             }
             _ = Task.Run(() => ReconnectLoopAsync(cts, isManual));
         }
@@ -102,9 +112,12 @@ namespace RPBot
             {
                 if (ct.IsCancellationRequested)
                 {
-                    // Текущий CTS устарел — переключаемся на последний действующий.
+                    // Текущий CTS устарел — переключаемся на последний действующий,
+                    // а также подхватываем актуальный флаг forceReconnect (он мог измениться,
+                    // например если после автоматического реконнекта пришёл ручной запрос).
                     cts = _reconnectCts;
                     ct = cts.Token;
+                    forceReconnect = _pendingForceReconnect;
                 }
             }
             if (ct.IsCancellationRequested)

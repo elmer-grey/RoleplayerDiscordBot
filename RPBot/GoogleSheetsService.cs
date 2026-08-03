@@ -344,18 +344,39 @@ namespace RPBot
         private static IList<object> BuildRowValues(GameSession session)
         {
             var pauseText = BuildPauseText(session);
+            var startMsk = ToMoscowTime(session.StartTime);
+            var endMsk = session.EndTime.HasValue ? ToMoscowTime(session.EndTime.Value) : (DateTime?)null;
 
             return new List<object>
             {
-                session.StartTime.ToString("dd/MM"),              // A – Дата
-                session.MasterName ?? "",                           // B – Мастер
-                session.GameName ?? "",                             // C – Название
-                session.StartTime.ToString("HH:mm"),               // D – Время старта
-                session.EndTime.HasValue
-                    ? session.EndTime.Value.ToString("HH:mm")
-                    : "",                                           // E – Время конца
-                pauseText                                           // F – Время перерывов
+                startMsk.ToString("dd/MM"),                        // A – Дата (МСК)
+                session.MasterName ?? "",                          // B – Мастер
+                session.GameName ?? "",                            // C – Название
+                startMsk.ToString("HH:mm"),                        // D – Время старта (МСК)
+                endMsk.HasValue
+                    ? endMsk.Value.ToString("HH:mm")
+                    : "",                                          // E – Время конца (МСК)
+                pauseText                                            // F – Время перерывов
             };
+        }
+
+        private static DateTime ToMoscowTime(DateTime dt)
+        {
+            var utc = dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
+            var candidates = new[] { "Europe/Moscow", "Russian Standard Time" };
+            foreach (var id in candidates)
+            {
+                try
+                {
+                    var tz = TimeZoneInfo.FindSystemTimeZoneById(id);
+                    return TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+                }
+                catch
+                {
+                }
+            }
+
+            return utc;
         }
 
         /// <summary>

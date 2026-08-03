@@ -634,6 +634,7 @@ namespace RPBot
             try { player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
             catch { player = null; }
 
+            bool freshJoin = player is null;
             if (player is null)
             {
                 try
@@ -645,6 +646,13 @@ namespace RPBot
                         cancellationToken).AsTask(), cancellationToken);
                 }
                 catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
+            }
+
+            if (freshJoin && player is not null)
+            {
+                var savedVolume = GetVolume(guildId);
+                try { await player.SetVolumeAsync(savedVolume / 100f, cancellationToken); }
+                catch (Exception ex) { Log($"[Music] PlayRichAsync: не удалось установить громкость — {ex.Message}"); }
             }
 
             // Для YouTube-плейлистов (URL содержит list=) используем загрузку всего плейлиста
@@ -818,7 +826,7 @@ namespace RPBot
 
         private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, int> _volumes = new();
 
-        public int GetVolume(ulong guildId) => _volumes.GetOrAdd(guildId, 35);
+        public int GetVolume(ulong guildId) => _volumes.GetOrAdd(guildId, 10);
 
         public async Task<string> SetVolumeAsync(ulong guildId, int volume, CancellationToken ct = default)
         {
@@ -1154,11 +1162,18 @@ namespace RPBot
             _ = Task.Run(async () =>
             {
                 await state.MasterQueueLock.WaitAsync();
-                var afterUrls = state.MasterQueue
-                    .Skip(targetIndex + 1)
-                    .Select(e => e.Url)
-                    .ToList();
-                state.MasterQueueLock.Release();
+                List<string> afterUrls;
+                try
+                {
+                    afterUrls = state.MasterQueue
+                        .Skip(targetIndex + 1)
+                        .Select(e => e.Url)
+                        .ToList();
+                }
+                finally
+                {
+                    state.MasterQueueLock.Release();
+                }
 
                 foreach (var url in afterUrls)
                 {
