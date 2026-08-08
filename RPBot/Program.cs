@@ -1620,9 +1620,9 @@ private MusicStats? _musicStats;
 
 		/// <summary>
 		/// Простой классификатор сообщения лога по категории (по подстроке в тексте).
-		/// Используется только для подсветки в реальной консоли — не влияет на содержимое.
+		/// Используется только для подсветки в дашборде — не влияет на содержимое.
 		/// </summary>
-		private static LogCategory? DetectCategory(string msg)
+		public static LogCategory? DetectCategory(string msg)
 		{
 		    foreach (LogCategory cat in Enum.GetValues<LogCategory>())
 		    {
@@ -1633,53 +1633,31 @@ private MusicStats? _musicStats;
 		    return null;
 		}
 
-		/// <summary>
-		/// Раскрашивает строку согласно её уровню/категории и пишет в Console.
-		/// </summary>
-		public static void WriteColoredLine(string msg, LogLevel level, LogCategory? category = null)
+		/// <summary>Маппинг категории на CSS-класс для дашборда.</summary>
+		public static string CategoryCssClass(LogCategory category) => category switch
 		{
-		    try
-		    {
-		        var detected = category ?? DetectCategory(msg);
-		        var prevFg = Console.ForegroundColor;
-		        Console.ForegroundColor = LevelColor(level);
-		        Console.Write(msg);
-		        Console.ForegroundColor = prevFg;
-		        if (detected.HasValue && detected.Value != LogCategory.System)
-		        {
-		            var prevFg2 = Console.ForegroundColor;
-		            Console.ForegroundColor = CategoryColor(detected.Value);
-		            Console.Write($" [{detected.Value}]");
-		            Console.ForegroundColor = prevFg2;
-		        }
-		        Console.WriteLine();
-		    }
-		    catch { /* цветной вывод — не критично */ }
-		}
-
-		private static ConsoleColor LevelColor(LogLevel level) => level switch
-		{
-		    LogLevel.Debug => ConsoleColor.DarkGray,
-		    LogLevel.Info  => ConsoleColor.Cyan,
-		    LogLevel.Warn  => ConsoleColor.Yellow,
-		    LogLevel.Error => ConsoleColor.Red,
-		    _              => ConsoleColor.Gray,
+		    LogCategory.Rolls   => "cat-rolls",
+		    LogCategory.Music   => "cat-music",
+		    LogCategory.Predict => "cat-predict",
+		    LogCategory.Points  => "cat-points",
+		    LogCategory.Session => "cat-session",
+		    LogCategory.System  => "cat-system",
+		    LogCategory.Boot    => "cat-boot",
+		    LogCategory.Discord => "cat-discord",
+		    LogCategory.Sheets  => "cat-sheets",
+		    LogCategory.Config  => "cat-config",
+		    LogCategory.Cmd     => "cat-cmd",
+		    _                   => "cat-other",
 		};
 
-		private static ConsoleColor CategoryColor(LogCategory category) => category switch
+		/// <summary>Маппинг уровня лога на CSS-класс для дашборда.</summary>
+		public static string LevelCssClass(LogLevel level) => level switch
 		{
-		    LogCategory.Rolls   => ConsoleColor.Magenta,
-		    LogCategory.Music   => ConsoleColor.Green,
-		    LogCategory.Predict => ConsoleColor.DarkCyan,
-		    LogCategory.Points  => ConsoleColor.DarkMagenta,
-		    LogCategory.Session => ConsoleColor.DarkGreen,
-		    LogCategory.System  => ConsoleColor.Gray,
-		    LogCategory.Boot    => ConsoleColor.White,
-		    LogCategory.Discord => ConsoleColor.Blue,
-		    LogCategory.Sheets  => ConsoleColor.DarkYellow,
-		    LogCategory.Config  => ConsoleColor.DarkYellow,
-		    LogCategory.Cmd     => ConsoleColor.DarkGray,
-		    _                   => ConsoleColor.Gray,
+		    LogLevel.Debug => "lv-debug",
+		    LogLevel.Info  => "lv-info",
+		    LogLevel.Warn  => "lv-warn",
+		    LogLevel.Error => "lv-error",
+		    _              => "lv-other",
 		};
 
 		private static BotUI? _ui;
@@ -1798,16 +1776,15 @@ private MusicStats? _musicStats;
                 await Task.Delay(2000);
                 _uiStarted = true;
 
-                // Подключаем BotLogger к UI-терминалу. Цветной вывод в реальную
-                // консоль делает UiTextWriter ниже — он уже пишет и в Console, и в UI.
+                // Подключаем BotLogger к UI-терминалу (цветная индикация — в дашборде)
                 BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
 
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
-                // Перенаправляем весь Console в UI-панель логов + цветной вывод
+                // Перенаправляем весь Console в UI-панель логов
                 if (_originalOut == null) _originalOut = Console.Out;
                 if (_originalErr == null) _originalErr = Console.Error;
-                var uiWriter = new UiTextWriter(() => _ui, includeConsoleColors: true);
+                var uiWriter = new UiTextWriter(() => _ui);
                 Console.SetOut(uiWriter);
                 Console.SetError(uiWriter);
             }

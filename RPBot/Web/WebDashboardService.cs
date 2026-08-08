@@ -199,12 +199,13 @@ namespace RPBot.Web
                         var logs = snapshot.Select(x => new
                         {
                             timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                            x.Level,
-                            x.Category,
-                            x.Message,
-                            x.IsUser,
+                            level = x.Level.ToString(),
+                            category = x.Category.ToString(),
+                            message = x.Message,
+                            isUser = x.IsUser,
+                            levelClass = Program.LevelCssClass(x.Level),
+                            categoryClass = Program.CategoryCssClass(x.Category),
                         }).ToList();
-                        // Отдаём в порядке возрастания времени (от старых к новым)
                         logs.Reverse();
                         await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
                         break;

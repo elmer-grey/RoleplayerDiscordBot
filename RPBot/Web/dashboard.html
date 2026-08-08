@@ -23,9 +23,21 @@
   .logs .ts{color:#888}
   .logs .lv-info{color:#9cf}
   .logs .lv-warn{color:#fc8}
-  .logs .lv-error{color:#f88}
+  .logs .lv-error{color:#f88;font-weight:600}
   .logs .lv-debug{color:#888}
-  .logs .cat{color:#8af}
+  .logs .cat{color:#8af;font-weight:600}
+  .logs .cat-rolls{color:#f6f}
+  .logs .cat-music{color:#8f8}
+  .logs .cat-predict{color:#8ff}
+  .logs .cat-points{color:#f8f}
+  .logs .cat-session{color:#cf8}
+  .logs .cat-system{color:#888}
+  .logs .cat-boot{color:#fff;font-weight:700}
+  .logs .cat-discord{color:#88f}
+  .logs .cat-sheets{color:#ff8}
+  .logs .cat-config{color:#fc8}
+  .logs .cat-cmd{color:#aaa}
+  .logs .cat-other{color:#ccc}
   .logs .user-tag{color:#fc8;font-weight:600}
   .controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:center}
   .controls label{cursor:pointer;user-select:none;font-size:12px}
@@ -177,12 +189,14 @@ function renderActivity(d){
 
 function logLineHtml(rec){
   const ts = esc(rec.timestamp ?? '');
-  const lvl = (rec.level ?? '');
-  const lv = esc(lvl.toLowerCase());
-  const cat = rec.Category ?? rec.category ?? '';
-  const msg = rec.Message ?? rec.message ?? '';
-  const userTag = rec.IsUser === true || rec.isUser === true ? `<span class="user-tag">[user]</span> ` : '';
-  return `<div><span class="ts">[${ts}]</span> <span class="lv-${lv}">[${esc(lvl)}]</span> ${userTag}<span class="cat">[${esc(cat)}]</span> ${esc(msg)}</div>`;
+  const lvl = rec.level ?? 'Info';
+  const cat = rec.category ?? '';
+  const msg = rec.message ?? '';
+  const isUser = rec.isUser === true;
+  const lvCls = esc(rec.levelClass ?? ('lv-' + (lvl||'info').toLowerCase()));
+  const catCls = esc(rec.categoryClass ?? 'cat-other');
+  const userTag = isUser ? `<span class="user-tag">[user]</span> ` : '';
+  return `<div><span class="ts">[${ts}]</span> <span class="${lvCls}">[${esc(lvl)}]</span> ${userTag}<span class="${catCls}">[${esc(cat)}]</span> ${esc(msg)}</div>`;
 }
 
 function renderLogs(){

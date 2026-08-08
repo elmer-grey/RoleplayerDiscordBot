@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -8,13 +7,10 @@ namespace RPBot
     internal sealed class UiTextWriter : TextWriter
     {
         private readonly Func<BotUI?> _uiProvider;
-        private readonly bool _includeConsoleColors;
-        private static readonly object _consoleLock = new();
 
-        public UiTextWriter(Func<BotUI?> uiProvider, bool includeConsoleColors = false)
+        public UiTextWriter(Func<BotUI?> uiProvider)
         {
             _uiProvider = uiProvider;
-            _includeConsoleColors = includeConsoleColors;
         }
 
         public override Encoding Encoding => Encoding.UTF8;
@@ -44,34 +40,15 @@ namespace RPBot
         {
             if (string.IsNullOrEmpty(value)) { WriteLine(); return; }
             Write(value);
-            // Дописываем перевод строки в UI-панель и в реальную консоль
+            // Дописываем пустую строку, чтобы UI отрисовал перевод строки
             var ui = _uiProvider?.Invoke();
             ui?.AddLog(string.Empty);
-            if (_includeConsoleColors)
-            {
-                try
-                {
-                    lock (_consoleLock)
-                    {
-                        Console.WriteLine();
-                    }
-                }
-                catch { }
-            }
         }
 
         public override void WriteLine()
         {
             var ui = _uiProvider?.Invoke();
             ui?.AddLog(string.Empty);
-            if (_includeConsoleColors)
-            {
-                try
-                {
-                    lock (_consoleLock) { Console.WriteLine(); }
-                }
-                catch { }
-            }
         }
     }
 }
