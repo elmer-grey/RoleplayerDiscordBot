@@ -26,14 +26,14 @@ namespace RPBot
         private int _predictionsThisHour = 0;
         private int _currentHour = DateTime.Now.Hour;
 
-        public event Func<PredictionResult, Task> OnPredictionMade;
+        public event Func<PredictionResult, Task>? OnPredictionMade;
 
         public class PredictionResult
         {
             public DateTime PredictedTime { get; set; }
-            public string Reason { get; set; }
+                    public string Reason { get; set; } = string.Empty;
             public int Confidence { get; set; } // 0-100%
-            public string Recommendation { get; set; }
+                    public string Recommendation { get; set; } = string.Empty;
             public bool IsCooldown { get; set; }
             public bool IsSuppressed { get; set; } // was suppressed awaiting confirmation
         }
@@ -154,8 +154,9 @@ namespace RPBot
             // Отправляем прогноз
             UpdatePredictionCounters();
             ResetCandidate();
-            await OnPredictionMade?.Invoke(candidate);
-            return candidate;
+                        if (OnPredictionMade != null)
+                            await OnPredictionMade.Invoke(candidate);
+                        return candidate;
         }
 
         private void ResetCandidate()

@@ -69,26 +69,31 @@ namespace RPBot
 
         // ───── Инициализация ──────────────────────────────────────────────
 
+        private static readonly object _initLock = new();
+
         /// <summary>
         /// Вызывается один раз при запуске/рестарте.
         /// Создаёт имена файлов вида: <Category>_yyyyMMdd_HHmmss.log
         /// </summary>
         public static void Initialize(string logDirectory, DateTime startupTime)
         {
-            _startupStamp = startupTime.ToString("yyyyMMdd_HHmmss");
-
-            // Каждый запуск — своя подпапка: Logs/20250615_143022/
-            var sessionDir = Path.Combine(logDirectory, _startupStamp);
-            Directory.CreateDirectory(sessionDir);
-            _logDirectory = sessionDir;
-
-            _locks.Clear();
-            _paths.Clear();
-
-            foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+            lock (_initLock)
             {
-                _locks[cat] = new SemaphoreSlim(1, 1);
-                _paths[cat] = Path.Combine(sessionDir, $"{cat}.log");
+                _startupStamp = startupTime.ToString("yyyyMMdd_HHmmss");
+
+                // Каждый запуск — своя подпапка: Logs/20250615_143022/
+                var sessionDir = Path.Combine(logDirectory, _startupStamp);
+                Directory.CreateDirectory(sessionDir);
+                _logDirectory = sessionDir;
+
+                foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+                {
+                    if (!_locks.TryGetValue(cat, out var existing))
+                    {
+                        _locks[cat] = new SemaphoreSlim(1, 1);
+                    }
+                    _paths[cat] = Path.Combine(sessionDir, $"{cat}.log");
+                }
             }
         }
 

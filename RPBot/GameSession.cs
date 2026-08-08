@@ -16,18 +16,18 @@ namespace RPBot
 {
     public class RollStatistic
     {
-        public string PlayerName { get; set; }
+        public string PlayerName { get; set; } = string.Empty;
         public int RollValue { get; set; }
-        public string DiceType { get; set; }
+        public string DiceType { get; set; } = string.Empty;
     }
 
     public class GameSession
     {
         public ulong SessionId { get; set; }
         public ulong GuildId { get; set; }
-        public string GameName { get; set; }
-        public string GameComment { get; set; }
-        public string MasterName { get; set; }
+        public string GameName { get; set; } = string.Empty;
+        public string GameComment { get; set; } = string.Empty;
+        public string MasterName { get; set; } = string.Empty;
         public ulong MasterId { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime? EndTime { get; set; }
@@ -35,7 +35,7 @@ namespace RPBot
         public bool IsPaused { get; set; }
         public bool IsStopped => EndTime.HasValue;
         public List<RollStatistic> Rolls { get; set; } = new();
-        public string EventDescription { get; set; }
+        public string EventDescription { get; set; } = string.Empty;
         public ulong ControlMessageId { get; set; }
         /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
         public ulong ControlChannelId { get; set; }
@@ -91,7 +91,7 @@ namespace RPBot
             try
             {
                 var dataDir = Path.GetDirectoryName(_sessionsStatePath);
-                if (!Directory.Exists(dataDir))
+                if (dataDir != null && !Directory.Exists(dataDir))
                     Directory.CreateDirectory(dataDir);
 
                 await _saveSessionsSemaphore.WaitAsync().ConfigureAwait(false);
@@ -208,7 +208,7 @@ namespace RPBot
                                     {
                                         PlayerName = rollElem.GetProperty("PlayerName").GetString() ?? "Unknown",
                                         RollValue = rollElem.GetProperty("RollValue").GetInt32(),
-                                        DiceType = rollElem.TryGetProperty("DiceType", out var dt) ? dt.GetString() : "unknown"
+                                        DiceType = rollElem.TryGetProperty("DiceType", out var dt) ? (dt.GetString() ?? "unknown") : "unknown"
                                     };
                                     rolls.Add(roll);
                                 }
@@ -225,8 +225,8 @@ namespace RPBot
                             MasterName = masterName,
                             MasterId = masterId,
                             StartTime = startTime,
-                            EventDescription = eventDescription,
-                            GameComment = gameComment,
+                            EventDescription = eventDescription ?? string.Empty,
+                            GameComment = gameComment ?? string.Empty,
                             EventId = eventId,
                             ControlMessageId = controlMessageId,
                             ControlChannelId = controlChannelId,
@@ -396,8 +396,8 @@ namespace RPBot
                     GameName = gameName,
                     MasterName = masterDisplayName,
                     MasterId = master?.Id ?? 0,
-                    GameComment = gameComment,
-                    EventDescription = eventDescription,
+                    GameComment = gameComment ?? string.Empty,
+                    EventDescription = eventDescription ?? string.Empty,
                     StartTime = DateTime.Now,
                     EventId = eventId,
                     TrackRolls = true,
@@ -680,6 +680,11 @@ namespace RPBot
             }
 
             var master = masterUser as SocketGuildUser ?? user;
+            if (master == null)
+            {
+                await SendTemporaryEphemeralResponse(command, "Не удалось определить мастера.");
+                return;
+            }
             var session = await StartSessionInternal(
                 guildId.Value,
                 gameName,
@@ -987,14 +992,14 @@ namespace RPBot
                 var newName = (modal.Data.Components.First(x => x.CustomId == "game_name").Value ?? string.Empty).Trim();
                 var newMaster = (modal.Data.Components.First(x => x.CustomId == "game_master").Value ?? string.Empty).Trim();
                 var newCommentRaw = modal.Data.Components.First(x => x.CustomId == "game_comment").Value;
-                var newComment = NormalizeOptionalText(newCommentRaw);
-                var oldComment = NormalizeOptionalText(session.GameComment);
+                var newComment = NormalizeOptionalText(newCommentRaw) ?? string.Empty;
+                var oldComment = NormalizeOptionalText(session.GameComment) ?? string.Empty;
 
                 var changes = new List<string>();
                 if (session.GameName != newName) changes.Add($"Название: {session.GameName} → {newName}");
                 if (session.MasterName != newMaster) changes.Add($"Мастер: {session.MasterName} → {newMaster}");
                 if (!string.Equals(oldComment, newComment, StringComparison.Ordinal))
-                    changes.Add($"Комментарий: {(oldComment ?? "(пусто)")} → {(newComment ?? "(пусто)")}");
+                    changes.Add($"Комментарий: {(string.IsNullOrEmpty(oldComment) ? "(пусто)" : oldComment)} → {(string.IsNullOrEmpty(newComment) ? "(пусто)" : newComment)}");
 
                 if (changes.Count == 0)
                 {

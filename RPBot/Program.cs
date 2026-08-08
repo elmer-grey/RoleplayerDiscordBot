@@ -91,7 +91,7 @@ private MusicPlaylistStore? _playlistStore;
 private MusicQueueStore? _musicQueueStore;
 private MusicStats? _musicStats;
 
-        private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
+        private readonly ConcurrentDictionary<string, SocketMessageComponent?> _pendingBetUi = new();
 
         private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
         private readonly ConcurrentDictionary<string, DateTimeOffset> _masterGuideSentAt = new();
@@ -174,37 +174,40 @@ private MusicStats? _musicStats;
 
         private Task SetupDiscordEvents()
         {
-            _client.Ready -= OnReady;
-            _client.Disconnected -= OnDisconnected;
-            _client.UserJoined -= UserJoined;
-            _client.MessageReceived -= HandleCommandAsync;
-            _client.SlashCommandExecuted -= OnSlashCommandExecuted;
-            _client.SlashCommandExecuted -= BwonkCommand;
-            _client.ModalSubmitted -= HandleModalSubmitted;
-            _client.ButtonExecuted -= HandleButtonExecuted;
-            _client.SelectMenuExecuted -= HandleSelectMenuExecuted;
-            _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
-            _client.GuildMemberUpdated -= OnGuildMemberUpdated;
+            if (_client != null)
+            {
+                _client.Ready -= OnReady;
+                _client.Disconnected -= OnDisconnected;
+                _client.UserJoined -= UserJoined;
+                _client.MessageReceived -= HandleCommandAsync;
+                _client.SlashCommandExecuted -= OnSlashCommandExecuted;
+                _client.SlashCommandExecuted -= BwonkCommand;
+                _client.ModalSubmitted -= HandleModalSubmitted;
+                _client.ButtonExecuted -= HandleButtonExecuted;
+                _client.SelectMenuExecuted -= HandleSelectMenuExecuted;
+                _client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
+                _client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
+                _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
+                _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
+                _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
+                _client.GuildMemberUpdated -= OnGuildMemberUpdated;
 
-            _client.Ready += OnReady;
-            _client.Disconnected += OnDisconnected;
-            _client.UserJoined += UserJoined;
-            _client.MessageReceived += HandleCommandAsync;
-            _client.SlashCommandExecuted += OnSlashCommandExecuted;
-            _client.SlashCommandExecuted += BwonkCommand;
-            _client.ModalSubmitted += HandleModalSubmitted;
-            _client.ButtonExecuted += HandleButtonExecuted;
-            _client.SelectMenuExecuted += HandleSelectMenuExecuted;
-            _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
-            _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
-            _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
-            _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
-            _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
-            _client.GuildMemberUpdated += OnGuildMemberUpdated;
+                _client.Ready += OnReady;
+                _client.Disconnected += OnDisconnected;
+                _client.UserJoined += UserJoined;
+                _client.MessageReceived += HandleCommandAsync;
+                _client.SlashCommandExecuted += OnSlashCommandExecuted;
+                _client.SlashCommandExecuted += BwonkCommand;
+                _client.ModalSubmitted += HandleModalSubmitted;
+                _client.ButtonExecuted += HandleButtonExecuted;
+                _client.SelectMenuExecuted += HandleSelectMenuExecuted;
+                _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
+                _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
+                _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
+                _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
+                _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
+                _client.GuildMemberUpdated += OnGuildMemberUpdated;
+            }
 
             return LogStartup("│   События Discord настроены    │");
         }
@@ -226,7 +229,8 @@ private MusicStats? _musicStats;
                 _ = Task.Run(() => _pointsUserIndex.SaveAsync());
             }
             catch { }
-            var active = _predictionService.GetActive(guildId);
+            var predictionService = _predictionService;
+            var active = predictionService?.GetActive(guildId);
             if (active == null || active.IsResolved)
             {
                 try { await component.RespondAsync("Сейчас нет активного прогноза.", ephemeral: true); } catch { }
@@ -308,7 +312,7 @@ private MusicStats? _musicStats;
         /// </summary>
         private bool IsActiveEventOnChannel(ulong guildId, ulong channelId)
         {
-            var guild = _client.GetGuild(guildId);
+            var guild = _client?.GetGuild(guildId);
             if (guild == null) return false;
 
             return guild.Events.Any(e =>
@@ -334,7 +338,7 @@ private MusicStats? _musicStats;
                     return;
                 }
 
-                var existingPrediction = _predictionService.GetActive(guildId);
+                var existingPrediction = _predictionService?.GetActive(guildId);
                 if (existingPrediction != null)
                 {
                     await component.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
@@ -477,7 +481,7 @@ private MusicStats? _musicStats;
                   try
                     {
                         // Followups are real messages; delete them via channel REST fetch.
-                        var ch = _client.GetChannel(message.Channel.Id) as IMessageChannel;
+                        var ch = _client?.GetChannel(message.Channel.Id) as IMessageChannel;
                         if (ch != null)
                         {
                             var msg = await ch.GetMessageAsync(message.Id).ConfigureAwait(false) as IUserMessage;
@@ -501,7 +505,13 @@ private MusicStats? _musicStats;
             var isAdmin = user?.GuildPermissions.Administrator ?? false;
 
             var resolverId = user?.Id ?? 0UL;
-            var (ok, error) = await _predictionService.CancelAsync(guildId, resolverId, isAdmin);
+            var predictionService = _predictionService;
+            if (predictionService == null)
+            {
+                try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                return;
+            }
+            var (ok, error) = await predictionService.CancelAsync(guildId, resolverId, isAdmin);
             if (ok)
             {
                 try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
@@ -523,7 +533,13 @@ private MusicStats? _musicStats;
             var isAdmin = user?.GuildPermissions.Administrator ?? false;
 
             var resolverId = user?.Id ?? 0UL;
-            var (ok, error) = await _predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
+            var predictionService = _predictionService;
+            if (predictionService == null)
+            {
+                try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                return;
+            }
+            var (ok, error) = await predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
             if (!ok)
             {
                 // Avoid responding if the original message was deleted — try update quietly
@@ -638,7 +654,7 @@ private MusicStats? _musicStats;
         private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
 		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "bwonks.json"));
 
-		private EventNotificationService _eventNotifications;
+		private EventNotificationService? _eventNotifications;
 		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "event-notify.json"));
 
         // Слияние конфигурации сервера из статического словаря (дефолты)
@@ -876,9 +892,9 @@ private MusicStats? _musicStats;
             _commandService = new CommandService();
 
 			// ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
-			_reconnectionService = new ReconnectionService(_client) { LogSink = ServiceLogSink };
+			_reconnectionService = new ReconnectionService(_client!) { LogSink = ServiceLogSink };
 			_connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
-			_statusNotifier = new StatusNotifier(_client, _serverConfigs) { LogSink = ServiceLogSink };
+			_statusNotifier = new StatusNotifier(_client!, _serverConfigs!) { LogSink = ServiceLogSink };
           _telegramNotifier = new TelegramNotifier(guildId =>
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
@@ -887,11 +903,11 @@ private MusicStats? _musicStats;
 			var eventOpsRenderer = new EventOpsRenderer();
 			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
 			_eventAnnouncer = new EventAnnouncer(
-				_client,
-				() => _serverConfigs,
+				_client!,
+				() => _serverConfigs!,
 				_telegramNotifier,
 				_eventAnnouncementStore,
-				_eventNotifications);
+				_eventNotifications!);
 			_eventOpsOrchestrator.OnCreatedAsync = e => _eventAnnouncer!.AnnounceCreatedAsync(e);
 			_eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(default, current);
 			_eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
@@ -910,7 +926,7 @@ private MusicStats? _musicStats;
 					Version = BotVersion,
 					Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
 				},
-				serverConfigsProvider: () => _serverConfigs,
+				serverConfigsProvider: () => _serverConfigs!,
 				sessionsProvider: () => GameSessionCommands._sessions
 					.ToDictionary(
 						g => g.Key,
@@ -933,7 +949,7 @@ private MusicStats? _musicStats;
 				uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc);
 			_webDashboard.Start();
 
-			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
+			_googleSheetsService = GoogleSheetsService.TryCreate(_config!);
 			if (_googleSheetsService != null)
 				_googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
 
@@ -947,14 +963,14 @@ private MusicStats? _musicStats;
 			_pointsUserIndex = new PointsUserIndex(pointsUsersPath);
 			_pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
 
-			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
-			_predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
-			_voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
+			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
+			_predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+			_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
 			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
 			if (_config.Music.Enabled)
 			{
-				_lavalinkService = new LavalinkService(() => _client, _config.Music);
+				_lavalinkService = new LavalinkService(() => _client!, _config.Music);
 					_lavalinkService.LogSink = msg => BotLogger.Info(LogCategory.Music, msg);
 					_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
 						_ = _playlistStore.LoadAsync();
@@ -1100,14 +1116,14 @@ private MusicStats? _musicStats;
 			// При ежедневной перезагрузке — очищаем висящие сессии со статистикой
 			if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
 			{
-				try { await GameSessionCommands.ClearSessionsOnDailyRestartAsync(_client); } catch { }
+				try { await GameSessionCommands.ClearSessionsOnDailyRestartAsync(_client!); } catch { }
 			}
 
 			// Отменяем фоновый мониторинг и ждём его завершения
 				try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
 				// Stop Discord client (best-effort)
-				try { await _client.StopAsync(); } catch { }
+				try { if (_client != null) await _client.StopAsync(); } catch { }
 
 				// Await background monitoring task to finish (with timeout)
 				if (_backgroundMonitoringTask != null)
@@ -1158,7 +1174,7 @@ private MusicStats? _musicStats;
 				// Отменяем фоновый мониторинг
 				try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
-				try { await _client.StopAsync(); } catch { }
+				try { if (_client != null) await _client.StopAsync(); } catch { }
 
 				if (_backgroundMonitoringTask != null)
 				{
@@ -1356,7 +1372,7 @@ private MusicStats? _musicStats;
                 _serverConfigs[guildId] = sconfig;
             }
 
-            var guild = _client.GetGuild(guildId);
+            var guild = _client?.GetGuild(guildId);
 
             switch (key.ToLowerInvariant())
             {
@@ -1461,7 +1477,7 @@ private MusicStats? _musicStats;
 
             try
             {
-                var validationGuild = _client.GetGuild(guildId);
+                var validationGuild = _client?.GetGuild(guildId);
                 if (validationGuild != null)
                 {
                     if (sconfig.ModerateChannelID != 0)
@@ -1770,7 +1786,7 @@ private MusicStats? _musicStats;
 				BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
 
 				_ui = new BotUI(
-					_client,
+					_client!,
 					this,
 					_reconnectionService!,
 					_connectionPredictor!,
@@ -1816,7 +1832,7 @@ private MusicStats? _musicStats;
             else
             {
                 // При рестарте просто обновляем сервисы
-                _ui.UpdateServices(_client, _reconnectionService, _connectionPredictor, _statusNotifier);
+                _ui!.UpdateServices(_client!, _reconnectionService!, _connectionPredictor!, _statusNotifier!);
                 _ui.AddLog("Перезапуск бота...");
 
                 BotLogger.Info(LogCategory.Boot, "=== Рестарт ===");
@@ -1825,7 +1841,7 @@ private MusicStats? _musicStats;
             }
 
 			// Загрузка текстовых блоков из пути конфига (относительные пути считаем от каталога приложения)
-			_textBlocks = LoadTextFromFile(BotConfig.ResolvePath(_config.TextBlocksPath));
+			_textBlocks = LoadTextFromFile(BotConfig.ResolvePath(_config!.TextBlocksPath));
 
             while (!_isDisposed && !_shouldExit)
             {
@@ -1855,12 +1871,12 @@ private MusicStats? _musicStats;
 
                         CleanupServices();
 
-                        _reconnectionService = new ReconnectionService(_client)
+                        _reconnectionService = new ReconnectionService(_client!)
                         {
                             LogSink = ServiceLogSink
                         };
-                        _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config.Prediction);
-                        _statusNotifier = new StatusNotifier(_client, ServerConfigs)
+                        _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config!.Prediction);
+                        _statusNotifier = new StatusNotifier(_client!, ServerConfigs)
                         {
                             LogSink = ServiceLogSink
                         };
@@ -1874,9 +1890,9 @@ private MusicStats? _musicStats;
                             return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
                         });
 
-                        var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config.LogDirectory ?? "Logs", "predictions.log"));
-                        _predictionService = new PredictionService(_client, _pointsService, predictionsLogPath);
-                        _voicePointsService = new VoicePointsService(_client, _pointsService, GetServerConfigInternal, predictionsLogPath);
+                        var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
+                        _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+                        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -1895,7 +1911,7 @@ private MusicStats? _musicStats;
                             _musicCommands.UpdateDiscordClient(_client);
                     }
 
-                    _commandHandler = new CommandHandler(_client, _config.GuildIDs);
+                    _commandHandler = new CommandHandler(_client!, _config!.GuildIDs);
                     CommandHandler.SetUI(_ui);
 
                     await SetupDiscordEvents();
@@ -2056,7 +2072,7 @@ private MusicStats? _musicStats;
         {
             try
             {
-                await GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client);
+                await GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client!);
                try
                 {
                     Console.WriteLine($"[EVENT] started guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
@@ -2083,7 +2099,7 @@ private MusicStats? _musicStats;
         {
             try
             {
-                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client, _googleSheetsService, CommandLogSink);
+                await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client!, _googleSheetsService, CommandLogSink);
                try
                 {
                     Console.WriteLine($"[EVENT] completed guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
@@ -2236,11 +2252,13 @@ private MusicStats? _musicStats;
         {
             try
             {
-                var prediction = _predictionService.GetActive(guildId);
+                var predictionService = _predictionService;
+                if (predictionService == null) return;
+                var prediction = predictionService.GetActive(guildId);
                 if (prediction != null && !prediction.IsResolved)
                 {
                     // Отменяем прогноз от имени системы с административным доступом
-                    var (ok, error) = await _predictionService.CancelAsync(
+                    var (ok, error) = await predictionService.CancelAsync(
                         guildId,
                         resolverId: prediction.CreatorId, // используем ID создателя
                         isAdminOverride: true, // административная отмена
@@ -2285,7 +2303,7 @@ private MusicStats? _musicStats;
             {
                 try
                 {
-                    var guild = _client.GetGuild(entry.GuildId);
+                    var guild = _client?.GetGuild(entry.GuildId);
                     if (guild == null)
                     {
                         failed++;
@@ -2331,7 +2349,7 @@ private MusicStats? _musicStats;
             }
 
             // ── Шаг 2: анонсировать события, созданные пока бот был оффлайн ─────
-            foreach (var guild in _client.Guilds)
+            foreach (var guild in _client!.Guilds)
             {
                 try
                 {
@@ -2379,11 +2397,11 @@ private MusicStats? _musicStats;
                 return Task.CompletedTask;
             }
 
-            _client.Ready += OnReadyOnce;
+            _client!.Ready += OnReadyOnce;
 
             try
             {
-                if (_client.CurrentUser != null)
+                if (_client!.CurrentUser != null)
                 {
                     readyTcs.TrySetResult(true);
                 }
@@ -2395,7 +2413,7 @@ private MusicStats? _musicStats;
                 var deadline = DateTime.UtcNow.AddSeconds(10);
                 while (DateTime.UtcNow < deadline && !_shouldExit)
                 {
-                    if (_client.CurrentUser != null)
+                    if (_client!.CurrentUser != null)
                         return;
 
                     await Task.Delay(250);
@@ -2403,7 +2421,7 @@ private MusicStats? _musicStats;
             }
             finally
             {
-                _client.Ready -= OnReadyOnce;
+                _client!.Ready -= OnReadyOnce;
             }
         }
 
@@ -2506,16 +2524,19 @@ private MusicStats? _musicStats;
 
         private async Task OnDisconnectDetected(Exception exception)
         {
-            var reason = _reconnectionService.ConnectionInfo.LastDisconnectReason;
+            var recon = _reconnectionService;
+            if (recon == null) return;
+            var reason = recon.ConnectionInfo.LastDisconnectReason;
 
             if (exception is not GatewayReconnectException)
             {
                 await LogStartup($"Отключение: {reason}");
 
-                await _statusNotifier.SendConnectionIssue(
-                    reason,
-                    _reconnectionService.ConnectionInfo.ReconnectAttempts + 1
-                );
+                if (_statusNotifier != null)
+                    await _statusNotifier.SendConnectionIssue(
+                        reason,
+                        recon.ConnectionInfo.ReconnectAttempts + 1
+                    );
             }
         }
 
@@ -2528,15 +2549,18 @@ private MusicStats? _musicStats;
         {
             if (success)
             {
-                var info = _reconnectionService.ConnectionInfo;
+                var recon = _reconnectionService;
+                if (recon == null) return;
+                var info = recon.ConnectionInfo;
 
                 // Отправляем уведомление об успешном реконнекте
                 try
                 {
-                    await _statusNotifier.SendReconnectSuccess(
-                        info.ReconnectAttempts,
-                        info.LastDisconnectReason
-                    );
+                    if (_statusNotifier != null)
+                        await _statusNotifier.SendReconnectSuccess(
+                            info.ReconnectAttempts,
+                            info.LastDisconnectReason
+                        );
                 }
                 catch (Exception ex)
                 {
@@ -2601,7 +2625,7 @@ private MusicStats? _musicStats;
 				if (_config?.Prediction != null && !_config.Prediction.EnableConnectionPredictions)
 					return;
 
-				foreach (var guild in _client.Guilds)
+				foreach (var guild in _client!.Guilds)
 				{
 					if (!_serverConfigs.TryGetValue(guild.Id, out var config))
 						continue;
@@ -2645,13 +2669,13 @@ private MusicStats? _musicStats;
                 {
                     _readyTime = DateTime.UtcNow;
 
-                    try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
+                    try { await LogInfo($"Ready: connected as {_client!.CurrentUser?.Username}"); } catch { }
 
             // ОТПРАВЛЯЕМ В UI
-            BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
+            BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
 
 // ✅ НОВОЕ: Загружаем сохранённые сессии игр
-_ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client));
+_ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client!));
 
 await Task.CompletedTask;
         }
@@ -2659,7 +2683,7 @@ await Task.CompletedTask;
         private void EnsureServerConfigsForConnectedGuilds()
         {
             var changed = false;
-            foreach (var g in _client.Guilds)
+            foreach (var g in _client!.Guilds)
             {
                 if (!_serverConfigs.ContainsKey(g.Id))
                 {
@@ -2917,7 +2941,7 @@ await Task.CompletedTask;
                 try
                 {
                     var balancesByGuild = _pointsService.GetSnapshot();
-                    foreach (var guild in _client.Guilds)
+                    foreach (var guild in _client!.Guilds)
                     {
                         if (!balancesByGuild.TryGetValue(guild.Id, out var guildBalances))
                             continue;
@@ -2930,7 +2954,7 @@ await Task.CompletedTask;
                             IUser? u = guild.GetUser(userId) as IUser;
                             if (u == null)
                             {
-                                try { u = await _client.Rest.GetUserAsync(userId).ConfigureAwait(false); } catch { }
+                                try { u = await _client!.Rest.GetUserAsync(userId).ConfigureAwait(false); } catch { }
                             }
 
                             if (u != null)
@@ -2973,7 +2997,7 @@ await Task.CompletedTask;
                     "Telegram startup probe: begin"
                 };
 
-                foreach (var guild in _client.Guilds)
+                foreach (var guild in _client!.Guilds)
                 {
                     if (!_serverConfigs.TryGetValue(guild.Id, out var sc) || !sc.TelegramEnabled)
                     {
@@ -2981,8 +3005,11 @@ await Task.CompletedTask;
                         continue;
                     }
 
-                    var probe = await _telegramNotifier.ProbeAsync(guild.Id).ConfigureAwait(false);
-                    lines.Add($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
+                    if (_telegramNotifier != null)
+                    {
+                        var probe = await _telegramNotifier.ProbeAsync(guild.Id).ConfigureAwait(false);
+                        lines.Add($"Telegram startup probe for {guild.Name}: {(probe.Success ? "OK" : "FAIL")} - {probe.Message}");
+                    }
                 }
 
                 foreach (var line in BuildStartupBox("ЭТАП 0/5: ПЕРВИЧНАЯ ИНИЦИАЛИЗАЦИЯ SETTINGS", lines))
@@ -3025,7 +3052,7 @@ await Task.CompletedTask;
 				}
 				else
 				{
-					if (await _ui.AskYesNoQuestion(
+					if (_ui != null && await _ui.AskYesNoQuestion(
 							"Нужно ли перерегистрировать команды?",
 							"Y - Да, N - Нет, таймаут 60 секунд",
 							60
@@ -3066,7 +3093,7 @@ await Task.CompletedTask;
 
                     // Best-effort log: PredictionService restores state on start; here we log a snapshot.
                     var anyPred = false;
-                    foreach (var g in _client.Guilds)
+                    foreach (var g in _client!.Guilds)
                     {
                         var ap = _predictionService?.GetActive(g.Id);
                         if (ap == null || ap.IsResolved)
@@ -3204,7 +3231,7 @@ await Task.CompletedTask;
 
                 // Отправляем статусы на серверы
                 stage4Lines.Add("═══ ОТПРАВКА СТАТУСОВ ═══");
-                var guildsList = _client.Guilds.ToList();
+                var guildsList = _client!.Guilds.ToList();
                 for (int i = 0; i < guildsList.Count; i++)
                 {
                     var guild = guildsList[i];
@@ -3216,15 +3243,18 @@ await Task.CompletedTask;
                         }
                         else
                         {
-                            // Передаём результаты проверки в StatusNotifier
-                            var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
-                                $"Тип запуска: {GetStartupTypeDisplay()}",
-                                healthChecks);
+                            if (_statusNotifier != null)
+                            {
+                                // Передаём результаты проверки в StatusNotifier
+                                var ok = await _statusNotifier.SendSystemsActiveToGuild(guild, config,
+                                    $"Тип запуска: {GetStartupTypeDisplay()}",
+                                    healthChecks);
 
-                            if (ok)
-                                stage4Lines.Add($"✅ {guild.Name}");
-                            else
-                                stage4Lines.Add($"❌ {guild.Name}: ошибка отправки");
+                                if (ok)
+                                    stage4Lines.Add($"✅ {guild.Name}");
+                                else
+                                    stage4Lines.Add($"❌ {guild.Name}: ошибка отправки");
+                            }
                         }
                     }
                     await Task.Delay(200);
@@ -3380,7 +3410,7 @@ await Task.CompletedTask;
                 // Existing edit modal handling
                 if (parts.Length >= 2 && parts[0] == "edit_modal")
                 {
-                    await new GameSessionCommands(_client, _googleSheetsService).HandleEditModal(modal);
+                    await new GameSessionCommands(_client!, _googleSheetsService).HandleEditModal(modal);
                     return;
                 }
 
@@ -3409,9 +3439,9 @@ await Task.CompletedTask;
                     // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
                     try
                     {
-                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
+                        if (modal.User != null && _pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
                         {
-                            try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
+                            try { await pending!.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
                         }
                     }
                     catch { }
@@ -3434,7 +3464,7 @@ await Task.CompletedTask;
                     }
 
                     // ✅ Проверка: исход существует в активном прогнозе
-                    var activePrediction = _predictionService.GetActive(guildId);
+                    var activePrediction = _predictionService!.GetActive(guildId);
                     if (activePrediction == null || activePrediction.GetOutcomeById(outcomeNum) == null)
                     {
                         var maxOutcome = activePrediction?.Outcomes.Count ?? 2;
@@ -3450,25 +3480,31 @@ await Task.CompletedTask;
                         return;
                     }
 
-                    var userId = modal.User.Id;
-                  try
+                    var userId = modal.User?.Id ?? 0;
+                    if (modal.User != null)
                     {
-                        _pointsUserIndex.UpsertFromUser(guildId, modal.User);
-                        _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                        try
+                        {
+                            _pointsUserIndex.UpsertFromUser(guildId, modal.User);
+                            _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                        }
+                        catch { }
                     }
-                    catch { }
-                    var res = await _predictionService.PlaceBetAsync(guildId, userId, outcomeNum, amount);
-                    await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
-                    if (res.ok)
+                    if (userId != 0)
                     {
-                        try { await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true).ConfigureAwait(false); } catch { }
-                    }
-                    else
-                    {
-                        try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
-                    }
+                        var res = await _predictionService!.PlaceBetAsync(guildId, userId, outcomeNum, amount);
+                        await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
+                        if (res.ok)
+                        {
+                            try { await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true).ConfigureAwait(false); } catch { }
+                        }
+                        else
+                        {
+                            try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                        }
 
-                  ScheduleDeleteOriginalResponse(modal);
+                        ScheduleDeleteOriginalResponse(modal);
+                    }
 
                     return;
                 }
@@ -3493,7 +3529,7 @@ await Task.CompletedTask;
                     // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
                     try
                     {
-                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
+                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User?.Id}", out var pending) && pending != null)
                         {
                             try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
                         }
@@ -3508,7 +3544,7 @@ await Task.CompletedTask;
                         return;
                     }
 
-                    if (!active.Bets.TryGetValue(modal.User.Id, out var existingBet))
+                    if (modal.User == null || !active.Bets.TryGetValue(modal.User.Id, out var existingBet) || existingBet == null)
                     {
                         await modal.FollowupAsync("Вы ещё не делали ставку. Используйте обычную ставку.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
@@ -3530,21 +3566,27 @@ await Task.CompletedTask;
                     }
 
                     var outcomeNum = existingBet.OutcomeId;
-                  try
+                    if (modal.User != null)
                     {
-                        _pointsUserIndex.UpsertFromUser(guildId, modal.User);
-                        _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                        try
+                        {
+                            _pointsUserIndex.UpsertFromUser(guildId, modal.User);
+                            _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                        }
+                        catch { }
                     }
-                    catch { }
-                    var res = await _predictionService!.PlaceBetAsync(guildId, modal.User.Id, outcomeNum, amount);
-                    await LogInfo($"PlaceBet(add) result: ok={res.ok} error={res.error}");
-                    if (res.ok)
+                    if (_predictionService != null && modal.User != null)
                     {
-                        try { await modal.RespondAsync($"Ставка увеличена на {amount} (исход {outcomeNum}).", ephemeral: true).ConfigureAwait(false); } catch { }
-                    }
-                    else
-                    {
-                        try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                        var res = await _predictionService.PlaceBetAsync(guildId, modal.User.Id, outcomeNum, amount);
+                        await LogInfo($"PlaceBet(add) result: ok={res.ok} error={res.error}");
+                        if (res.ok)
+                        {
+                            try { await modal.RespondAsync($"Ставка увеличена на {amount} (исход {outcomeNum}).", ephemeral: true).ConfigureAwait(false); } catch { }
+                        }
+                        else
+                        {
+                            try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                        }
                     }
 
                     ScheduleDeleteOriginalResponse(modal);
@@ -3585,7 +3627,7 @@ await Task.CompletedTask;
                         if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
                     }
 
-                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' oc3='{oc3}' duration='{durationStr}' user={modal.User.Id}");
+                    await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' oc3='{oc3}' duration='{durationStr}' user={modal.User?.Id}");
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
                     {
@@ -3603,6 +3645,12 @@ await Task.CompletedTask;
 
                     await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
 
+                    if (modal.User == null)
+                    {
+                        try { await modal.FollowupAsync("Не удалось определить пользователя.", ephemeral: true).ConfigureAwait(false); } catch { }
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
                     var creatorId = modal.User.Id;
 
                     // ✅ Обновлено: создание прогноза с N исходами
@@ -3612,7 +3660,7 @@ await Task.CompletedTask;
                         outcomeNames.Add(oc3);
                     }
 
-                    var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                    var channel = _client!.GetChannel(channelId) as ISocketMessageChannel;
                     if (channel == null)
                     {
                         await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
@@ -3620,7 +3668,7 @@ await Task.CompletedTask;
                         return;
                     }
 
-                    var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                    var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                     if (createRes.ok)
                     {
@@ -3682,15 +3730,7 @@ await Task.CompletedTask;
                         }
 
                         // ✅ Сохраняем данные в словарь для второго шага
-                        var key = $"{guildId}:{channelId}:{modal.User.Id}";
-                        if (_pendingPredictionCreate == null)
-                        {
-                            await PredictionErrorLogger.LogAsync("pred_create_step1", new Exception("_pendingPredictionCreate is null"), $"guild={guildId}").ConfigureAwait(false);
-                            await modal.FollowupAsync("Внутренняя ошибка. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false);
-                            ScheduleDeleteOriginalResponse(modal);
-                            return;
-                        }
-
+                        var key = $"{guildId}:{channelId}:{modal.User?.Id}";
                         _pendingPredictionCreate[key] = (title, minutes);
 
                         // ✅ Отправляем кнопку для перехода ко второму шагу (нельзя модал → модал)
@@ -3736,7 +3776,7 @@ await Task.CompletedTask;
                         }
 
                         // ✅ Читаем данные из словаря
-                        var key = $"{guildId}:{channelId}:{modal.User.Id}";
+                        var key = $"{guildId}:{channelId}:{modal.User?.Id}";
                         if (!_pendingPredictionCreate.TryRemove(key, out var data))
                         {
                             await modal.FollowupAsync("Данные первого шага не найдены. Начните сначала.", ephemeral: true).ConfigureAwait(false);
@@ -3766,6 +3806,12 @@ await Task.CompletedTask;
 
                         await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
 
+                        if (modal.User == null)
+                        {
+                            try { await modal.FollowupAsync("Не удалось определить пользователя.", ephemeral: true).ConfigureAwait(false); } catch { }
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
                         var creatorId = modal.User.Id;
 
                         // Собираем исходы
@@ -3774,7 +3820,7 @@ await Task.CompletedTask;
                         if (!string.IsNullOrWhiteSpace(oc4)) outcomeNames.Add(oc4);
                         if (!string.IsNullOrWhiteSpace(oc5)) outcomeNames.Add(oc5);
 
-                        var channel = _client.GetChannel(channelId) as ISocketMessageChannel;
+                        var channel = _client!.GetChannel(channelId) as ISocketMessageChannel;
                         if (channel == null)
                         {
                             await modal.FollowupAsync("Не удалось найти канал для создания прогноза.", ephemeral: true).ConfigureAwait(false);
@@ -3782,7 +3828,7 @@ await Task.CompletedTask;
                             return;
                         }
 
-                        var createRes = await _predictionService.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                        var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
                         await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                         if (createRes.ok)
                         {
@@ -3883,13 +3929,13 @@ await Task.CompletedTask;
                 case "cancel_stop":
                 case "toggle_rolls":
                 case "force_stop":
-                    await new GameSessionCommands(_client, _googleSheetsService).HandleControlButton(component);
+                    await new GameSessionCommands(_client!, _googleSheetsService).HandleControlButton(component);
                     break;
 
                 case "no_stats":
                 case "general_stats":
                 case "detailed_stats":
-                    await new GameSessionCommands(_client, _googleSheetsService).HandleStatsButton(component);
+                    await new GameSessionCommands(_client!, _googleSheetsService).HandleStatsButton(component);
                     break;
 
                 case "music_prev":
@@ -3935,11 +3981,14 @@ await Task.CompletedTask;
 			var normalized = Regex.Replace(text, "\\s+", " ").Trim().ToLowerInvariant();
 			var userId = message.Author.Id;
 
+			if (_eventNotifications == null)
+				return false;
+
 			if (normalized is "стоп" or "хватит" or "stop")
 			{
 				_eventNotifications.Pause(userId);
 				await message.AddReactionAsync(new Emoji("✅"));
-				await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши «хочу» или подпишись заново через /event_notify subscribe на сервере.");
+				await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши мне «хочу» или подпишись заново через /event_notify subscribe на сервере.");
 				return true;
 			}
 
@@ -4003,7 +4052,7 @@ await Task.CompletedTask;
                             // логируем в модерационный канал
                             if (sconfig.ModerateChannelID != 0)
                             {
-                                var modChan = await _client.GetChannelAsync(sconfig.ModerateChannelID) as ITextChannel;
+                                var modChan = await _client!.GetChannelAsync(sconfig.ModerateChannelID) as ITextChannel;
                                 if (modChan != null)
                                 {
                                     await modChan.SendMessageAsync($"Сообщение пользователя {message.Author.Username} удалено — найдено запрещённое слово.");
@@ -4224,12 +4273,12 @@ await Task.CompletedTask;
             }
         };
 
-        private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string? lineMessages, string? emoteKappa, string? emoteAga) GetResponseData(SocketMessage message)
+        private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string lineMessages, string emoteKappa, string emoteAga) GetResponseData(SocketMessage message)
         {
             var channel = message.Channel as SocketGuildChannel;
 			if (channel == null || !_serverConfigs.TryGetValue(channel.Guild.Id, out var config))
             {
-             return (0, 0, 0, null, null, null);
+             return (0, 0, 0, string.Empty, string.Empty, string.Empty);
             }
 
             // Для тестового сервера
@@ -4245,10 +4294,10 @@ await Task.CompletedTask;
                     "<:kappa:1100150992428871720>", "<:Agakakskagesh:1316461730569916557>");
             }
 
-         return (0, 0, 0, null, null, null);
+         return (0, 0, 0, string.Empty, string.Empty, string.Empty);
         }
 
-        private async Task HandleDictatorCommand(SocketGuildUser user, SocketMessage message)
+        private async Task HandleDictatorCommand(SocketGuildUser? user, SocketMessage message)
         {
             await message.DeleteAsync();
 
@@ -4276,7 +4325,7 @@ await Task.CompletedTask;
             }
         }
 
-        private async Task HandleMasteryArbitrarinessCommand(SocketGuildUser user, SocketMessage message, string emoteKappa, string emoteAga)
+        private async Task HandleMasteryArbitrarinessCommand(SocketGuildUser? user, SocketMessage message, string emoteKappa, string emoteAga)
         {
             if (user != null)
             {
@@ -4293,7 +4342,7 @@ await Task.CompletedTask;
             await LogInfo("Произволит");
         }
 
-        private async Task HandleLineCommand(SocketGuildUser user, SocketMessage message, string lineMessages)
+        private async Task HandleLineCommand(SocketGuildUser? user, SocketMessage message, string lineMessages)
         {
             if (user != null)
             {
@@ -4413,6 +4462,12 @@ await Task.CompletedTask;
 			if (!guildId.HasValue)
 			{
 				await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
+				return;
+			}
+
+			if (_eventNotifications == null)
+			{
+				await command.RespondAsync("Сервис уведомлений не инициализирован.", ephemeral: true);
 				return;
 			}
 
@@ -4677,7 +4732,7 @@ await Task.CompletedTask;
 
         private async Task<ulong?> ResolveChannelIdAsync(ulong guildId, object? channelOpt, string? value, bool requireVoice = false)
         {
-            var guild = _client.GetGuild(guildId);
+            var guild = _client!.GetGuild(guildId);
             if (guild == null)
                 return null;
 
@@ -4941,7 +4996,7 @@ await Task.CompletedTask;
                             case "default_role":
                             case "master_role":
                                 {
-                                var guild = _client.GetGuild(guildId);
+                                var guild = _client!.GetGuild(guildId);
                                 var roleId = guild == null ? null : ResolveRoleId(guild, valueOpt);
                                 if (!roleId.HasValue)
                                 {
@@ -4960,7 +5015,7 @@ await Task.CompletedTask;
                                 break;
 							case "super_user_role":
 								{
-                                    var guild = _client.GetGuild(guildId);
+                                    var guild = _client!.GetGuild(guildId);
                                     var roleId = guild == null ? null : ResolveRoleId(guild, valueOpt);
                                     if (!roleId.HasValue)
                                     {
@@ -5231,7 +5286,7 @@ await Task.CompletedTask;
 }
 
 // 9. Проверка музыкального сервиса (Lavalink)
-if (_config.Music.Enabled)
+if (_config!.Music.Enabled)
 {
     string musicMsg;
     bool musicHealthy;
@@ -5324,7 +5379,7 @@ if (_config.Music.Enabled)
                     await user.AddRoleAsync(defaultRole);
                     await LogInfo($"Пользователю {user.Mention} выдана роль {defaultRole.Name}");
 
-                    var welcomeChannel = _client.GetChannel(config.WelcomeChannelID) as IMessageChannel;
+                    var welcomeChannel = _client!.GetChannel(config.WelcomeChannelID) as IMessageChannel;
                     if (welcomeChannel != null)
                     {
                         await LogInfo($"Отправка приветственного сообщения в {welcomeChannel.Name}");

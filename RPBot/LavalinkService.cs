@@ -576,8 +576,12 @@ namespace RPBot
             if (track is null)
                 return $"❌ Трек не найден: `{query}`";
 
-            // Если уже играет — в очередь (задел на многотрековую очередь)
-            if (player.CurrentItem is not null)
+                        // Если player не удалось получить после JoinAsync — сообщим об ошибке
+                        if (player is null)
+                            return "❌ Не удалось получить плеер для воспроизведения.";
+
+                        // Если уже играет — в очередь (задел на многотрековую очередь)
+                        if (player.CurrentItem is not null)
             {
                 await player.Queue.AddAsync(new TrackQueueItem(track), cancellationToken);
                 return $"📋 Добавлено в очередь: **{track.Title}** ({FormatDuration(track.Duration)})";
@@ -649,7 +653,10 @@ namespace RPBot
                 catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
             }
 
-            if (freshJoin && player is not null)
+                        if (player is null)
+                            return new PlayResult { Message = "❌ Не удалось получить плеер." };
+
+                        if (freshJoin)
             {
                 var savedVolume = GetVolume(guildId);
                 try { await player.SetVolumeAsync(savedVolume / 100f, cancellationToken); }
@@ -884,10 +891,11 @@ namespace RPBot
                 var future = state.MasterQueue.Skip(state.MasterCurrentIndex + 1).ToList();
                 foreach (var entry in future)
                 {
-                    var loaded = await _audioService.Tracks.LoadTrackAsync(entry.Url, TrackSearchMode.None, cancellationToken: ct);
-                    if (loaded is not null)
-                        await player.Queue.AddAsync(new TrackQueueItem(loaded), ct);
-                }
+                                    if (_audioService is null) break;
+                                    var loaded = await _audioService.Tracks.LoadTrackAsync(entry.Url, TrackSearchMode.None, cancellationToken: ct);
+                                    if (loaded is not null)
+                                        await player.Queue.AddAsync(new TrackQueueItem(loaded), ct);
+                                }
             }
             finally { state.MasterQueueLock.Release(); }
 

@@ -77,8 +77,8 @@ namespace RPBot
             if (!isManual && IsReconnectInProgress) return;
 
             var reason = DisconnectReasonTranslator.GetFriendlyReason(exception);
-            _connectionInfo.AddDisconnectReason(reason, exception?.Message);
-            if (!isManual && OnDisconnectDetected != null) await OnDisconnectDetected.Invoke(exception);
+            _connectionInfo.AddDisconnectReason(reason, exception?.Message ?? string.Empty);
+            if (!isManual && OnDisconnectDetected != null) await OnDisconnectDetected.Invoke(exception!);
 
             CancellationTokenSource cts;
             lock (_stateLock)

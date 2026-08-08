@@ -12,11 +12,11 @@ namespace RPBot
 {
     public class BotUI : IDisposable
     {
-        private DiscordSocketClient _client;
-        private IBotController _botController;
-        private ReconnectionService _reconnectionService;
-        private ConnectionPredictor _connectionPredictor;
-        private StatusNotifier _statusNotifier;
+        private DiscordSocketClient? _client;
+                private IBotController _botController = null!;
+                private ReconnectionService _reconnectionService = null!;
+                private ConnectionPredictor _connectionPredictor = null!;
+                private StatusNotifier _statusNotifier = null!;
         private PointsService? _pointsService;
 
         // Элементы интерфейса
@@ -487,7 +487,12 @@ namespace RPBot
         {
             try
             {
-                var guilds = _client.Guilds.ToList();
+                        if (_client == null)
+                        {
+                            AddCommandOutput("Клиент не инициализирован.");
+                            return;
+                        }
+                        var guilds = _client.Guilds.ToList();
                 if (guilds.Count == 0)
                 {
                     AddCommandOutput("Нет доступных серверов для выбора.");
@@ -1589,7 +1594,9 @@ namespace RPBot
                 return;
             }
 
-            if (args.KeyEvent.Key == Key.Tab)
+                    if (_inputField == null) return;
+
+                    if (args.KeyEvent.Key == Key.Tab)
             {
                 args.Handled = TryCycleCommandCompletion();
                 return;
@@ -1704,15 +1711,17 @@ namespace RPBot
                         AddCommandOutput("Принудительный реконнект...");
                         try
                         {
-                            if (_client.ConnectionState == Discord.ConnectionState.Connected)
-                                await _statusNotifier.SendReconnectNotification("Ручной реконнект из UI");
-                        }
-                        catch (Exception ex)
-                        {
-                            TryAppendErrorToFile($"ExecuteCommand reconnect notification error: {ex}");
-                        }
-                        await _reconnectionService.RequestManualReconnectAsync("Ручной реконнект из UI");
-                        break;
+                                                if (_client != null && _client.ConnectionState == Discord.ConnectionState.Connected)
+                                                    if (_statusNotifier != null)
+                                                        await _statusNotifier.SendReconnectNotification("Ручной реконнект из UI");
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                TryAppendErrorToFile($"ExecuteCommand reconnect notification error: {ex}");
+                                            }
+                                            if (_reconnectionService != null)
+                                                await _reconnectionService.RequestManualReconnectAsync("Ручной реконнект из UI");
+                                            break;
 
                     case "announce":
                     case "systems":
@@ -2220,7 +2229,23 @@ namespace RPBot
         {
             try
             {
-                var info = _reconnectionService.ConnectionInfo;
+                        if (_client == null)
+                        {
+                            AddCommandOutput("Клиент не инициализирован.");
+                            return;
+                        }
+                        if (_reconnectionService == null)
+                        {
+                            AddCommandOutput("ReconnectionService не инициализирован.");
+                            return;
+                        }
+                        if (_connectionPredictor == null)
+                        {
+                            AddCommandOutput("ConnectionPredictor не инициализирован.");
+                            return;
+                        }
+
+                        var info = _reconnectionService.ConnectionInfo;
 
                 AddCommandOutput("\n=== СТАТУС БОТА ===");
                 AddCommandOutput($"Состояние: {_client.ConnectionState}");
@@ -2241,7 +2266,12 @@ namespace RPBot
         {
             try
             {
-                AddCommandOutput($"\n=== СЕРВЕРЫ ({_client.Guilds.Count}) ===");
+                        if (_client == null)
+                        {
+                            AddCommandOutput("Клиент не инициализирован.");
+                            return;
+                        }
+                        AddCommandOutput($"\n=== СЕРВЕРЫ ({_client.Guilds.Count}) ===");
                 foreach (var guild in _client.Guilds)
                 {
                     AddCommandOutput($"{guild.Name} ({guild.Id}) - {guild.MemberCount} участников");

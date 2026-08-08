@@ -11,8 +11,8 @@ namespace RPBot
         private readonly List<string> _registeredCommands = new();
         private DateTime _startTime;
 
-        public event Func<int, int, string, Task> OnProgressUpdated;
-        public event Func<Task> OnRegistrationCompleted;
+        public event Func<int, int, string, Task>? OnProgressUpdated;
+                public event Func<Task>? OnRegistrationCompleted;
 
         public void StartRegistration(IEnumerable<string> commands)
         {
@@ -26,7 +26,9 @@ namespace RPBot
                 // Имитация прогресса - в реальности вызывайте CommandRegistered()
                 if (_allCommands.Count == 0)
                 {
-                    await OnProgressUpdated?.Invoke(0, 0, "Нет команд для регистрации");
+                    var noCommandsHandler = OnProgressUpdated;
+                    if (noCommandsHandler != null)
+                        await noCommandsHandler(0, 0, "Нет команд для регистрации");
                 }
                 else
                 {
@@ -34,12 +36,16 @@ namespace RPBot
                     {
                         await Task.Delay(50); // Симуляция
                         var percent = (int)((double)(i + 1) / _allCommands.Count * 100);
-                        await OnProgressUpdated?.Invoke(i + 1, _allCommands.Count,
-                            $"Регистрация команд: {percent}% ({i + 1}/{_allCommands.Count})");
+                        var progressHandler = OnProgressUpdated;
+                        if (progressHandler != null)
+                            await progressHandler(i + 1, _allCommands.Count,
+                                $"Регистрация команд: {percent}% ({i + 1}/{_allCommands.Count})");
                     }
                 }
 
-                await OnRegistrationCompleted?.Invoke();
+                var completedHandler = OnRegistrationCompleted;
+                if (completedHandler != null)
+                    await completedHandler();
             });
         }
 

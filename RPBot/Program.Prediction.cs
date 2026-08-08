@@ -30,6 +30,13 @@ namespace RPBot
                 var amountOpt = command.Data.Options.FirstOrDefault(o => o.Name == "amount")?.Value;
                 var userOpt = command.Data.Options.FirstOrDefault(o => o.Name == "user")?.Value as SocketUser;
 
+                var predictionService = _predictionService;
+                if (predictionService == null)
+                {
+                    await command.RespondAsync("Сервис прогнозов недоступен. Попробуйте позже.", ephemeral: true);
+                    return;
+                }
+
                 var sconfig = GetServerConfigInternal(guildId);
                 if (sconfig == null || !sconfig.PredictionsEnabled)
                 {
@@ -56,11 +63,11 @@ namespace RPBot
                 }
 
                 // Если прогноз активен, но событие на его канале уже не активно — принудительно отменяем с возвратом ставок
-                var activePrediction = _predictionService.GetActive(guildId);
+                var activePrediction = predictionService.GetActive(guildId);
                 if (activePrediction != null && !IsActiveEventOnChannel(activePrediction.ChannelId))
                 {
-                    var resolverId = _client.CurrentUser?.Id ?? 0;
-                    var (closed, closeError) = await _predictionService.CancelAsync(
+                    var resolverId = _client?.CurrentUser?.Id ?? 0;
+                    var (closed, closeError) = await predictionService.CancelAsync(
                         guildId,
                         resolverId,
                         isAdminOverride: true,
@@ -140,7 +147,7 @@ namespace RPBot
                         }
                         catch { }
 
-                        if (!IsActiveEventOnChannel(userVoiceChannel.Id))
+                        if (userVoiceChannel != null && !IsActiveEventOnChannel(userVoiceChannel.Id))
                         {
                             await command.RespondAsync("Чтобы создать прогноз, вы должны находиться в голосовом канале с активным событием.", ephemeral: true);
                             ScheduleDeleteOriginalResponse(command);
@@ -156,7 +163,7 @@ namespace RPBot
                         }
 
                         // ✅ БАГ 8: Проверка наличия активного прогноза ПЕРЕД показом кнопок
-                        var existingPrediction = _predictionService.GetActive(guildId);
+                        var existingPrediction = predictionService.GetActive(guildId);
                         if (existingPrediction != null)
                         {
                             await command.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
@@ -198,7 +205,7 @@ namespace RPBot
                         }
 
                         // ✅ Проверка: исход существует
-                        var activePred = _predictionService.GetActive(guildId);
+                        var activePred = predictionService.GetActive(guildId);
                         if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
                         {
                             var maxOutcome = activePred?.Outcomes.Count ?? 2;
@@ -214,7 +221,7 @@ namespace RPBot
                             return;
                         }
 
-                        var (ok, error) = await _predictionService.PlaceBetAsync(guildId, user.Id, outcomeNum, amount);
+                        var (ok, error) = await predictionService.PlaceBetAsync(guildId, user.Id, outcomeNum, amount);
                         await command.RespondAsync(ok ? $"Ставка {amount} костяшек на исход {outcomeNum} принята." : error, ephemeral: true);
                         ScheduleDeleteOriginalResponse(command);
                         break;
@@ -237,7 +244,7 @@ namespace RPBot
                         }
 
                         // ✅ Проверка: исход существует
-                        var activePred = _predictionService.GetActive(guildId);
+                        var activePred = predictionService.GetActive(guildId);
                         if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
                         {
                             var maxOutcome = activePred?.Outcomes.Count ?? 2;
@@ -247,7 +254,7 @@ namespace RPBot
                         }
 
                         var isAdmin = user.GuildPermissions.Administrator;
-                        var (ok, error) = await _predictionService.ResolveAsync(guildId, user.Id, isAdmin, outcomeNum);
+                        var (ok, error) = await predictionService.ResolveAsync(guildId, user.Id, isAdmin, outcomeNum);
                         await command.RespondAsync(ok ? "Прогноз завершён." : error, ephemeral: true);
                         ScheduleDeleteOriginalResponse(command);
                         break;
@@ -263,7 +270,7 @@ namespace RPBot
                         }
 
                         var isAdmin = user.GuildPermissions.Administrator;
-                        var (ok, error) = await _predictionService.CancelAsync(guildId, user.Id, isAdmin);
+                        var (ok, error) = await predictionService.CancelAsync(guildId, user.Id, isAdmin);
                         await command.RespondAsync(ok ? "Прогноз отменён. Все ставки возвращены." : error, ephemeral: true);
                         ScheduleDeleteOriginalResponse(command);
                         break;
@@ -286,7 +293,7 @@ namespace RPBot
                         }
                         catch { }
 
-                        var prediction = _predictionService.GetActive(guildId);
+                        var prediction = predictionService.GetActive(guildId);
                         var balance = _pointsService.GetBalance(guildId, user.Id);
                         var sb = new StringBuilder();
 
@@ -410,8 +417,17 @@ namespace RPBot
         private Embed BuildHistoryEmbed(ulong guildId, int page)
         {
             const int pageSize = 10;
-            var history = _predictionService.GetHistory(guildId, page, pageSize);
-            var totalPages = _predictionService.GetHistoryPageCount(guildId, pageSize);
+            var predictionService = _predictionService;
+            if (predictionService == null)
+            {
+                return new EmbedBuilder()
+                    .WithTitle("📜 История прогнозов")
+                    .WithColor(Color.Blue)
+                    .WithDescription("Сервис прогнозов недоступен.")
+                    .Build();
+            }
+            var history = predictionService.GetHistory(guildId, page, pageSize);
+            var totalPages = predictionService.GetHistoryPageCount(guildId, pageSize);
 
             var eb = new EmbedBuilder()
                 .WithTitle("📜 История прогнозов")
@@ -455,7 +471,10 @@ namespace RPBot
         private ComponentBuilder? BuildHistoryComponents(ulong guildId, int page)
         {
             const int pageSize = 10;
-            var totalPages = _predictionService.GetHistoryPageCount(guildId, pageSize);
+            var predictionService = _predictionService;
+            if (predictionService == null)
+                return null;
+            var totalPages = predictionService.GetHistoryPageCount(guildId, pageSize);
 
             if (totalPages <= 1)
                 return null;
@@ -477,8 +496,17 @@ namespace RPBot
 
         private Embed BuildStatsEmbed(ulong guildId, ulong userId, string username)
         {
-            var stats = _predictionService.GetUserStats(guildId, userId);
-            var achievements = _predictionService.GetUserAchievements(guildId, userId);
+            var predictionService = _predictionService;
+            if (predictionService == null)
+            {
+                return new EmbedBuilder()
+                    .WithTitle($"📊 Статистика игрока: {username}")
+                    .WithColor(Color.Red)
+                    .WithDescription("Сервис прогнозов недоступен.")
+                    .Build();
+            }
+            var stats = predictionService.GetUserStats(guildId, userId);
+            var achievements = predictionService.GetUserAchievements(guildId, userId);
             var totalAchievements = RPBot.Predictions.AchievementDefinitions.All.Count;
 
             var eb = new EmbedBuilder()
@@ -561,6 +589,16 @@ namespace RPBot
 
         private Embed BuildAchievementsListEmbed(ulong guildId)
         {
+            var predictionService = _predictionService;
+            if (predictionService == null)
+            {
+                return new EmbedBuilder()
+                    .WithTitle($"🏅 Все достижения ({RPBot.Predictions.AchievementDefinitions.All.Count})")
+                    .WithColor(Color.Purple)
+                    .WithDescription("Сервис прогнозов недоступен.")
+                    .Build();
+            }
+
             var eb = new EmbedBuilder()
                 .WithTitle($"🏅 Все достижения ({RPBot.Predictions.AchievementDefinitions.All.Count})")
                 .WithColor(Color.Purple);
@@ -594,10 +632,10 @@ namespace RPBot
                 {
                     // Считаем сколько людей получили это достижение
                     int ownersCount = 0;
-                    var allStats = _predictionService.GetAllUserStats(guildId);
+                    var allStats = predictionService.GetAllUserStats(guildId);
                     foreach (var userStats in allStats)
                     {
-                        var userAchievements = _predictionService.GetUserAchievements(guildId, userStats.UserId);
+                        var userAchievements = predictionService.GetUserAchievements(guildId, userStats.UserId);
                         if (userAchievements.Any(a => a.AchievementId == def.Id))
                         {
                             ownersCount++;
