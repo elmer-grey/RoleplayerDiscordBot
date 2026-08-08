@@ -29,6 +29,9 @@ namespace RPBot.Web
         private readonly object _logsLock = new();
         private readonly LinkedList<BotLogRecord> _logs = new();
         private readonly int _maxLogs;
+        private readonly object _rateLimitLock = new();
+        private readonly Dictionary<string, RateLimitBucket> _rateLimitBuckets = new(StringComparer.Ordinal);
+        private readonly int _rateLimitPerMinute;
         private CancellationTokenSource? _cts;
         private Task? _loopTask;
 
@@ -59,6 +62,7 @@ namespace RPBot.Web
             _versionProvider = versionProvider;
             _uptimeProvider = uptimeProvider;
             _maxLogs = Math.Max(100, maxLogs);
+            _rateLimitPerMinute = 60;
         }
 
         public void Start()
@@ -119,6 +123,16 @@ namespace RPBot.Web
             try { cts.Dispose(); } catch { }
         }
 
+        public int RateLimitPerMinute => _rateLimitPerMinute;
+
+        public IReadOnlyDictionary<string, (DateTimeOffset WindowStart, int Count)> GetRateLimitSnapshot()
+        {
+            lock (_rateLimitLock)
+            {
+                return _rateLimitBuckets.ToDictionary(kv => kv.Key, kv => (kv.Value.WindowStart, kv.Value.Count));
+            }
+        }
+
         private async Task AcceptLoopAsync(CancellationToken token)
         {
             while (!token.IsCancellationRequested)
@@ -150,6 +164,21 @@ namespace RPBot.Web
             var path = context.Request.Url?.AbsolutePath?.TrimEnd('/') ?? string.Empty;
             if (string.IsNullOrEmpty(path)) path = "/";
 
+            var clientIp = ResolveClientIp(context);
+            if (!CheckRateLimit(clientIp))
+            {
+                context.Response.StatusCode = 429;
+                context.Response.Headers["Retry-After"] = "60";
+                try
+                {
+                    await WriteTextAsync(context.Response,
+                        "{\"error\":\"rate limit exceeded (60 req/min per IP)\"}",
+                        "application/json; charset=utf-8", token).ConfigureAwait(false);
+                }
+                catch { }
+                return;
+            }
+
             try
             {
                 switch (path)
@@ -158,7 +187,7 @@ namespace RPBot.Web
                         await WriteHtmlAsync(context.Response, LoadDashboardHtml(), token).ConfigureAwait(false);
                         break;
                     case "/api/health":
-                        await WriteJsonAsync(context.Response, SafeInvoke(_healthProvider), token).ConfigureAwait(false);
+                        await WriteJsonAsync(context.Response, BuildHealthPayload(), token).ConfigureAwait(false);
                         break;
                     case "/api/servers":
                         var servers = SafeInvoke(_serverConfigsProvider) as IReadOnlyDictionary<ulong, ServerConfig>;
@@ -305,6 +334,94 @@ namespace RPBot.Web
                 while (_logs.Count > _maxLogs)
                     _logs.RemoveLast();
             }
+        }
+
+        private object BuildHealthPayload()
+        {
+            object raw;
+            try
+            {
+                raw = _healthProvider();
+            }
+            catch (Exception ex)
+            {
+                raw = new { Error = ex.Message };
+            }
+
+            // Машиночитаемый JSON со всеми доступными полями: состояние подключения,
+            // число серверов, время старта/версия/аптайм, текущие счётчики из /api/stats,
+            // размер буферов дашборда. Health-провайдер уже отдаёт Connected/Guilds/StartupType/
+            // UtcNow/Version/Uptime — добавляем Timestamp и снапшот статистики.
+            int rolls, activeSessions, chatMessages, usersInVoice, totalLogs;
+            try { rolls = SafeInvokeInt(_rollsTodayProvider); }
+            catch { rolls = 0; }
+            try { activeSessions = SafeInvokeInt(_activeSessionsProvider); }
+            catch { activeSessions = 0; }
+            try { chatMessages = SafeInvokeInt(_chatMessagesTodayProvider); }
+            catch { chatMessages = 0; }
+            try { usersInVoice = SafeInvokeInt(_usersInVoiceProvider); }
+            catch { usersInVoice = 0; }
+            lock (_logsLock) totalLogs = _logs.Count;
+
+            return new
+            {
+                Provider = raw,
+                Timestamp = DateTimeOffset.UtcNow,
+                Stats = new
+                {
+                    RollsToday = rolls,
+                    ActiveSessions = activeSessions,
+                    ChatMessagesToday = chatMessages,
+                    UsersInVoice = usersInVoice,
+                    LogRecords = totalLogs,
+                },
+            };
+        }
+
+        private bool CheckRateLimit(string clientIp)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var cutoff = now.AddMinutes(-1);
+
+            lock (_rateLimitLock)
+            {
+                // Чистим протухшие корзины и удаляем IP с нулевым счётчиком.
+                if (_rateLimitBuckets.Count > 64)
+                {
+                    var expired = _rateLimitBuckets.Where(kv => kv.Value.WindowStart < cutoff && kv.Value.Count == 0).Select(kv => kv.Key).ToList();
+                    foreach (var key in expired) _rateLimitBuckets.Remove(key);
+                }
+
+                if (!_rateLimitBuckets.TryGetValue(clientIp, out var bucket) || bucket.WindowStart < cutoff)
+                {
+                    bucket = new RateLimitBucket { WindowStart = now, Count = 0 };
+                    _rateLimitBuckets[clientIp] = bucket;
+                }
+                bucket.Count++;
+                return bucket.Count <= _rateLimitPerMinute;
+            }
+        }
+
+        private static string ResolveClientIp(HttpListenerContext context)
+        {
+            // Для localhost HttpListener.RemoteEndPoint выглядит как [::1]:port — нормализуем до "::1" / "127.0.0.1".
+            try
+            {
+                var remote = context.Request.RemoteEndPoint;
+                if (remote == null) return "unknown";
+                var addr = remote.Address?.ToString();
+                return string.IsNullOrWhiteSpace(addr) ? "unknown" : addr;
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        private sealed class RateLimitBucket
+        {
+            public DateTimeOffset WindowStart;
+            public int Count;
         }
 
         private static string LoadDashboardHtml()
