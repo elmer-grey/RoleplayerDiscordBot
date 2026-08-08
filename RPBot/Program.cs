@@ -62,7 +62,7 @@ namespace RPBot
             }
             catch { }
         }
-        private DiscordSocketClient _client;
+        private DiscordSocketClient? _client;
         private CommandService _commandService;
         private IServiceProvider _services;
         private CommandHandler _commandHandler = null!;
@@ -5408,7 +5408,7 @@ if (_config.Music.Enabled)
             try
             {
                 var lines = File.ReadAllLines(filePath);
-                string currentKey = null;
+                                string? currentKey = null;
                 var currentText = new StringBuilder();
 
                 foreach (var line in lines)

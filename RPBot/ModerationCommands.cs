@@ -93,7 +93,7 @@ namespace RPBot
             else if (channel is SocketTextChannel textChannel)
             {
                 // Если это текстовый канал, перемещаем его в архив и закрываем доступ
-                SocketCategoryChannel archiveCategory = guild.CategoryChannels.FirstOrDefault(cat => cat.Name == "Архив");
+                SocketCategoryChannel? archiveCategory = guild.CategoryChannels.FirstOrDefault(cat => cat.Name == "Архив");
 
                 if (archiveCategory == null)
                 {

@@ -40,7 +40,7 @@ namespace RPBot
         /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
         public ulong ControlChannelId { get; set; }
         public ulong StatsMessageId { get; set; }
-        public CancellationTokenSource PauseReminderCTS { get; set; }
+        public CancellationTokenSource? PauseReminderCTS { get; set; }
         public CancellationTokenSource? ControlMessageUpdateCTS { get; set; }
         public bool TrackRolls { get; set; }
         /// <summary>true — сбор бросков включён автоматически при старте; сбрасывается при ручном включении.</summary>
@@ -358,8 +358,8 @@ namespace RPBot
         ulong guildId,
         string gameName,
         SocketGuildUser master,
-        string gameComment = null,
-        string eventDescription = null,
+                string? gameComment = null,
+                string? eventDescription = null,
         ulong? eventId = null,
         ulong channelId = 0)
         {
@@ -1389,10 +1389,10 @@ namespace RPBot
 
         private string BuildSessionStats(GameSession session)
         {
-            var totalDuration = session.EndTime.Value - session.StartTime;
+            var totalDuration = session.EndTime!.Value - session.StartTime;
             var pauseDuration = session.PausePeriods
                 .Where(p => p.End.HasValue)
-                .Sum(p => (p.End.Value - p.Start).TotalSeconds);
+                            .Sum(p => (p.End!.Value - p.Start).TotalSeconds);
             var activeDuration = totalDuration.TotalSeconds - pauseDuration;
 
             var message = new StringBuilder();

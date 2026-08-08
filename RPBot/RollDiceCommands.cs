@@ -31,7 +31,7 @@ namespace RPBot
 
         private static void UpdateCooldown(ulong userId)
             => _lastRollTime[userId] = DateTime.UtcNow;
-        private string ValidateRollInput(string input)
+        private string? ValidateRollInput(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
                 return "Ввод не может быть пустым.";
