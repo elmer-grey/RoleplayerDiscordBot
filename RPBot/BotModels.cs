@@ -42,6 +42,21 @@ namespace RPBot
         /// Если задано — используется вместо DisplayName при записи статистики.
         /// </summary>
         public Dictionary<string, string> MasterNameMap { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Включена ли авто-отправка памятки мастеру при выдаче MasterRoleId.
+        /// </summary>
+        public bool MasterGuideEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Кастомный шаблон памятки мастеру (если пусто — используется встроенный шаблон).
+        /// </summary>
+        public string MasterGuideTemplate { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Кулдаун повторной отправки памятки одному пользователю (часы). По умолчанию 168 часов (7 дней).
+        /// </summary>
+        public int MasterGuideCooldownHours { get; set; } = 168;
     }
 
         // Modal handling moved inside Program class

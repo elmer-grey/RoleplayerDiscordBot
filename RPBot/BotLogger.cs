@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace RPBot
 {
@@ -48,6 +49,9 @@ namespace RPBot
         private static Action<string>? _uiSink;
         private static LogLevel        _minLevel         = LogLevel.Debug;
         private static long            _maxFileSizeBytes = 20 * 1024 * 1024; // 20 МБ
+        private static readonly ConcurrentDictionary<Guid, Action<BotLogRecord>> _observers = new();
+        // Обратный индекс для O(1) удаления observer по ссылке
+        private static readonly ConcurrentDictionary<Action<BotLogRecord>, List<Guid>> _observerBackRef = new();
 
         // ───── Инициализация ──────────────────────────────────────────────
 
@@ -106,6 +110,46 @@ namespace RPBot
         public static Task ErrorAsync(LogCategory category, string message, Exception? ex = null)
             => WriteAsync(LogLevel.Error, category, ex != null ? $"{message}: {ex.Message}" : message);
 
+        public static Guid RegisterObserver(Action<BotLogRecord> observer)
+        {
+            var id = Guid.NewGuid();
+            _observers[id] = observer;
+            // Добавляем в обратный индекс для быстрого удаления
+            _observerBackRef.AddOrUpdate(
+                observer,
+                _ => new List<Guid> { id },
+                (_, list) => { lock (list) { list.Add(id); } return list; });
+            return id;
+        }
+
+        public static void UnregisterObserver(Guid observerId)
+        {
+            if (_observers.TryRemove(observerId, out var observer))
+            {
+                // Удаляем из обратного индекса
+                if (_observerBackRef.TryGetValue(observer, out var list))
+                {
+                    lock (list)
+                    {
+                        list.Remove(observerId);
+                        if (list.Count == 0)
+                            _observerBackRef.TryRemove(observer, out _);
+                    }
+                }
+            }
+        }
+
+        public static void UnregisterObserver(Action<BotLogRecord> observer)
+        {
+            if (!_observerBackRef.TryRemove(observer, out var ids))
+                return;
+            lock (ids)
+            {
+                foreach (var id in ids)
+                    _observers.TryRemove(id, out _);
+            }
+        }
+
         // ───── Ядро ──────────────────────────────────────────────────────
 
         private static void Write(LogLevel level, LogCategory category, string message)
@@ -115,6 +159,7 @@ namespace RPBot
 #pragma warning disable CS4014
             AppendToFileAsync(category, line);
 #pragma warning restore CS4014
+            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line));
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
@@ -124,6 +169,7 @@ namespace RPBot
             if (level < _minLevel) return;
             var line = FormatLine(level, message);
             await AppendToFileAsync(category, line).ConfigureAwait(false);
+            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line));
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
@@ -152,6 +198,21 @@ namespace RPBot
             LogLevel.Error => "❌ ",
             _              => string.Empty,
         };
+
+        private static void NotifyObservers(BotLogRecord record)
+        {
+            foreach (var observer in _observers.Values)
+            {
+                try
+                {
+                    observer(record);
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Warn(LogCategory.System, $"[Observer] Исключение в observer: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
 
         // ───── Запись в файл ─────────────────────────────────────────────
 

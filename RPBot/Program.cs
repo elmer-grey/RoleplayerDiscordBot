@@ -4,6 +4,8 @@ using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using RPBot;
 using RPBot.Music;
+using RPBot.EventOps;
+using RPBot.Web;
 using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
@@ -18,11 +20,46 @@ using System.Text.Json;
 using System.Text.Encodings.Web;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using System.IO;
 
 namespace RPBot
 {
- public partial class Program : IDisposable, IBotController
+    public partial class Program : IDisposable, IBotController
     {
+        static Program()
+        {
+            AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+            TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        }
+
+        private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs args)
+        {
+            try
+            {
+                var ex = args.ExceptionObject as Exception;
+                var timestamp = DateTimeOffset.Now.ToString("yyyyMMdd_HHmmss");
+                var crashDir = Path.Combine(BotConfig.DataFolderName, "crashes");
+                Directory.CreateDirectory(crashDir);
+                var crashFile = Path.Combine(crashDir, $"crash_{timestamp}.txt");
+                var content = $"{ex?.GetType().FullName}: {ex?.Message}\n{ex?.StackTrace}\n";
+                File.WriteAllText(crashFile, content);
+                BotLogger.Error(LogCategory.System, $"[Crash] Необработанное исключение записано в {crashFile}");
+            }
+            catch
+            {
+                // Последний рубеж — ничего не делаем, чтобы не усугублять
+            }
+        }
+
+        private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            try
+            {
+                BotLogger.Error(LogCategory.System, $"[Task] Unobserved: {args.Exception?.GetType().Name}: {args.Exception?.Message}");
+                args.SetObserved();
+            }
+            catch { }
+        }
         private DiscordSocketClient _client;
         private CommandService _commandService;
         private IServiceProvider _services;
@@ -42,6 +79,8 @@ namespace RPBot
 		private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
+        private EventOpsOrchestrator? _eventOpsOrchestrator;
+        private WebDashboardService? _webDashboard;
 private GoogleSheetsService? _googleSheetsService;
 private LavalinkService? _lavalinkService;
 private MusicCommands? _musicCommands;
@@ -52,6 +91,7 @@ private MusicStats? _musicStats;
         private readonly ConcurrentDictionary<string, SocketMessageComponent> _pendingBetUi = new();
 
         private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
+        private readonly ConcurrentDictionary<string, DateTimeOffset> _masterGuideSentAt = new();
 
 		private Task? _backgroundMonitoringTask;
 		private CancellationTokenSource? _backgroundMonitoringCts;
@@ -131,6 +171,7 @@ private MusicStats? _musicStats;
             _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
             _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
+            _client.GuildMemberUpdated -= OnGuildMemberUpdated;
 
             _client.Ready += OnReady;
             _client.Disconnected += OnDisconnected;
@@ -146,6 +187,7 @@ private MusicStats? _musicStats;
             _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
             _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
             _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
+            _client.GuildMemberUpdated += OnGuildMemberUpdated;
 
             return LogStartup("│   События Discord настроены    │");
         }
@@ -644,6 +686,14 @@ private MusicStats? _musicStats;
                 RollPicturesEnabled = overrides.RollPicturesEnabled,
                 EventVoiceChannelID = overrides.EventVoiceChannelID != 0 ? overrides.EventVoiceChannelID : defaults.EventVoiceChannelID,
 
+                MasterGuideEnabled = overrides.MasterGuideEnabled,
+                MasterGuideTemplate = !string.IsNullOrWhiteSpace(overrides.MasterGuideTemplate)
+                    ? overrides.MasterGuideTemplate
+                    : defaults.MasterGuideTemplate,
+                MasterGuideCooldownHours = overrides.MasterGuideCooldownHours > 0
+                    ? overrides.MasterGuideCooldownHours
+                    : defaults.MasterGuideCooldownHours,
+
                 SwearWords = (overrides.SwearWords != null && overrides.SwearWords.Count > 0)
                     ? overrides.SwearWords
                     : defaults.SwearWords
@@ -776,6 +826,23 @@ private MusicStats? _musicStats;
             LoadServerConfigs();
             ServerConfigResolver = GetServerConfigInternal;
 
+			// Создаём файлы шаблонов памятки мастера для всех загруженных серверов при первом запуске
+			try
+			{
+			    if (_serverConfigs != null && _serverConfigs.Count > 0)
+			    {
+			        MasterGuideService.EnsureAllTemplates(_serverConfigs.Keys);
+			    }
+			    else if (_config?.GuildIDs != null)
+			    {
+			        MasterGuideService.EnsureAllTemplates(_config.GuildIDs);
+			    }
+			}
+			catch (Exception ex)
+			{
+			    BotLogger.Warn(LogCategory.System, $"[MasterGuide] Ошибка при массовом создании шаблонов: {ex.Message}");
+			}
+
 			// Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
 			try
 			{
@@ -796,6 +863,35 @@ private MusicStats? _musicStats;
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
 			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.DataFolderName, "event_announcements.json"));
+			var eventOpsRenderer = new EventOpsRenderer();
+			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
+
+			_webDashboard = new WebDashboardService(
+				host: "127.0.0.1",
+				port: 5057,
+				healthProvider: () => new
+				{
+					Connected = _client?.ConnectionState == ConnectionState.Connected,
+					Guilds = _client?.Guilds?.Count ?? 0,
+					StartupType = GetStartupTypeDisplay(),
+					UtcNow = DateTimeOffset.UtcNow,
+				},
+				serverConfigsProvider: () => _serverConfigs,
+				sessionsProvider: () => GameSessionCommands._sessions
+					.ToDictionary(
+						g => g.Key,
+						g => g.Value.Values.Select(s => new
+						{
+							s.SessionId,
+							s.GameName,
+							s.MasterName,
+							s.IsPaused,
+							s.StartTime,
+							s.ControlChannelId,
+							s.ControlMessageId,
+						}).ToList()));
+			_webDashboard.Start();
+
 			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
 			if (_googleSheetsService != null)
 				_googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
@@ -1709,7 +1805,15 @@ private MusicStats? _musicStats;
                 }
                 catch { }
 
-                await AnnounceGuildScheduledEventCreated(guildEvent);
+                if (_eventOpsOrchestrator != null)
+                {
+                    _eventOpsOrchestrator.OnCreatedAsync = e => AnnounceGuildScheduledEventCreated(e);
+                    await _eventOpsOrchestrator.HandleCreatedAsync(guildEvent);
+                }
+                else
+                {
+                    await AnnounceGuildScheduledEventCreated(guildEvent);
+                }
             }
             catch (Exception ex)
             {
@@ -1727,7 +1831,24 @@ private MusicStats? _musicStats;
                 }
                 catch { }
 
-                await AnnounceGuildScheduledEventUpdated(before, after);
+                SocketGuildEvent? beforeEvent = null;
+                try { beforeEvent = await before.GetOrDownloadAsync(); } catch { }
+
+                // Сохраняем before в локальную переменную — иначе при асинхронной обработке
+                // лямбда может захватить другой before
+                var capturedBefore = before;
+                var capturedBeforeEvent = beforeEvent;
+
+                if (_eventOpsOrchestrator != null)
+                {
+                    _eventOpsOrchestrator.OnUpdatedAsync = (current, previous) =>
+                        AnnounceGuildScheduledEventUpdated(capturedBefore, current);
+                    await _eventOpsOrchestrator.HandleUpdatedAsync(after, capturedBeforeEvent);
+                }
+                else
+                {
+                    await AnnounceGuildScheduledEventUpdated(capturedBefore, after);
+                }
             }
             catch (Exception ex)
             {
@@ -1751,7 +1872,15 @@ private MusicStats? _musicStats;
                     await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие было отменено");
                 }
 
-                await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "cancelled");
+                if (_eventOpsOrchestrator != null)
+                {
+                    _eventOpsOrchestrator.OnCancelledAsync = e => AnnounceGuildScheduledEventStatusChanged(e, status: "cancelled");
+                    await _eventOpsOrchestrator.HandleCancelledAsync(guildEvent);
+                }
+                else
+                {
+                    await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "cancelled");
+                }
             }
             catch (Exception ex)
             {
@@ -1770,7 +1899,15 @@ private MusicStats? _musicStats;
                 }
                 catch { }
 
-                await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "started");
+                if (_eventOpsOrchestrator != null)
+                {
+                    _eventOpsOrchestrator.OnStartedAsync = e => AnnounceGuildScheduledEventStatusChanged(e, status: "started");
+                    await _eventOpsOrchestrator.HandleStartedAsync(guildEvent);
+                }
+                else
+                {
+                    await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "started");
+                }
             }
             catch (Exception ex)
             {
@@ -1795,13 +1932,96 @@ private MusicStats? _musicStats;
                     await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие завершено");
                 }
 
-                await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "completed");
+                if (_eventOpsOrchestrator != null)
+                {
+                    _eventOpsOrchestrator.OnCompletedAsync = e => AnnounceGuildScheduledEventStatusChanged(e, status: "completed");
+                    await _eventOpsOrchestrator.HandleCompletedAsync(guildEvent);
+                }
+                else
+                {
+                    await AnnounceGuildScheduledEventStatusChanged(guildEvent, status: "completed");
+                }
             }
             catch (Exception ex)
             {
                 await LogError($"Ошибка в OnGuildScheduledEventCompleted: {ex.Message}");
             }
         }
+
+        private async Task OnGuildMemberUpdated(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
+        {
+            try
+            {
+                var beforeUser = await before.GetOrDownloadAsync();
+                if (beforeUser == null)
+                    return;
+
+                if (!_serverConfigs.TryGetValue(after.Guild.Id, out var config))
+                    return;
+
+                if (!config.MasterRoleId.HasValue || config.MasterRoleId.Value == 0)
+                    return;
+
+                if (!config.MasterGuideEnabled)
+                    return;
+
+                var masterRoleId = config.MasterRoleId.Value;
+                var hadRoleBefore = beforeUser.Roles.Any(r => r.Id == masterRoleId);
+                var hasRoleNow = after.Roles.Any(r => r.Id == masterRoleId);
+
+                if (hadRoleBefore || !hasRoleNow)
+                    return;
+
+                var cooldownHours = config.MasterGuideCooldownHours <= 0 ? 168 : config.MasterGuideCooldownHours;
+                var key = $"{after.Guild.Id}:{after.Id}";
+                if (_masterGuideSentAt.TryGetValue(key, out var lastSentAt))
+                {
+                    if (DateTimeOffset.UtcNow - lastSentAt < TimeSpan.FromHours(cooldownHours))
+                        return;
+                }
+
+                // Проверяем, можем ли открыть DM-канал до отправки
+                IDMChannel? dmChannel = null;
+                try
+                {
+                    dmChannel = await after.CreateDMChannelAsync();
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[MasterGuide] DM закрыт у пользователя {after.Id} на сервере {after.Guild.Id}: {ex.Message}");
+                    return;
+                }
+
+                if (dmChannel == null)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[MasterGuide] DM-канал не создан для {after.Id} на сервере {after.Guild.Id}");
+                    return;
+                }
+
+                // Гарантируем наличие файла шаблона (создаётся при первом запуске для всех серверов)
+                var template = MasterGuideService.LoadTemplate(after.Guild.Id);
+                var guide = MasterGuideService.Render(template, after.Guild, after, config);
+
+                try
+                {
+                    await dmChannel.SendMessageAsync(guide);
+                    _masterGuideSentAt[key] = DateTimeOffset.UtcNow;
+                    BotLogger.Info(LogCategory.Discord, $"[MasterGuide] Отправлена памятка пользователю {after.Id} на сервере {after.Guild.Id}");
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Warn(LogCategory.Discord, $"[MasterGuide] Не удалось отправить ЛС пользователю {after.Id}: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                await LogError($"Ошибка в OnGuildMemberUpdated: {ex.Message}");
+            }
+        }
+
+        // BuildMasterGuideMessage перенесён в MasterGuideService.GetBuiltinTemplate/Render
 
         /// <summary>
         /// Автоматическая отмена активного прогноза при завершении/отмене события
@@ -3640,6 +3860,9 @@ await Task.CompletedTask;
             {
                 // Останавливаем реконнект-сервис корректно и затем очищаем
                 try { _reconnectionService?.Shutdown(); } catch (Exception ex) { Console.WriteLine($"Error shutting reconnection service: {ex}"); }
+                try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch (Exception ex) { Console.WriteLine($"Error stopping web dashboard: {ex}"); }
+                try { _webDashboard?.Dispose(); } catch { }
+                _webDashboard = null;
                 CleanupServices();
 
                 // Остановим UI корректно
@@ -3667,6 +3890,7 @@ await Task.CompletedTask;
                         try { _client.SelectMenuExecuted -= HandleSelectMenuExecuted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing SelectMenuExecuted: {ex}"); }
                         try { _client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventStarted: {ex}"); }
                         try { _client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildScheduledEventCompleted: {ex}"); }
+                        try { _client.GuildMemberUpdated -= OnGuildMemberUpdated; } catch (Exception ex) { Console.WriteLine($"Error unsubscribing GuildMemberUpdated: {ex}"); }
 
                         try { await _client.StopAsync(); } catch (Exception ex) { Console.WriteLine($"Error stopping client: {ex}"); }
                         try { _client.Dispose(); } catch (Exception ex) { Console.WriteLine($"Error disposing client: {ex}"); }
