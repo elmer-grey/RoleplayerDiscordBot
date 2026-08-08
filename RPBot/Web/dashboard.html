@@ -42,6 +42,7 @@
   .controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:center}
   .controls label{cursor:pointer;user-select:none;font-size:12px}
   .controls input[type=text]{background:#222;border:1px solid #444;color:#eee;padding:4px 8px;border-radius:6px;flex:1;min-width:160px}
+  .controls select{background:#222;border:1px solid #444;color:#eee;padding:4px 8px;border-radius:6px;font-size:12px}
   .empty{color:#888;font-style:italic}
   .small{color:#888;font-size:11px}
   .err{color:#f88;font-size:12px}
@@ -82,6 +83,21 @@
       <label><input type="checkbox" id="filter-system" checked /> System</label>
       <label><input type="checkbox" id="filter-user" checked /> User</label>
       <label><input type="checkbox" id="filter-errors" /> Только ошибки</label>
+      <label><input type="checkbox" id="filter-autoscroll" checked /> Автоскролл</label>
+      <select id="filter-category">
+        <option value="">Все категории</option>
+        <option value="Rolls">Rolls</option>
+        <option value="Music">Music</option>
+        <option value="Predict">Predict</option>
+        <option value="Points">Points</option>
+        <option value="Session">Session</option>
+        <option value="System">System</option>
+        <option value="Boot">Boot</option>
+        <option value="Discord">Discord</option>
+        <option value="Sheets">Sheets</option>
+        <option value="Config">Config</option>
+        <option value="Cmd">Cmd</option>
+      </select>
       <input type="text" id="filter-text" placeholder="Поиск по тексту..." />
     </div>
     <div id="logs" class="logs empty">загрузка...</div>
@@ -203,6 +219,7 @@ function renderLogs(){
   const showSys = $('filter-system').checked;
   const showUsr = $('filter-user').checked;
   const errOnly = $('filter-errors').checked;
+  const cat = ($('filter-category')?.value || '');
   const q = ($('filter-text').value || '').toLowerCase();
   const all = window._allLogs || [];
   const filtered = all.filter(rec => {
@@ -211,16 +228,24 @@ function renderLogs(){
     if (!isUser && !showSys) return false;
     const lvl = (rec.level || '');
     if (errOnly && !/error/i.test(lvl)) return false;
+    const recCat = rec.Category ?? rec.category ?? '';
+    if (cat && recCat !== cat) return false;
     const msg = rec.Message ?? rec.message ?? '';
     if (q && !msg.toLowerCase().includes(q)) return false;
     return true;
   });
   const node = $('logs');
+  // Автоскролл: применяется только если пользователь не «отстал» от верха более чем на 30px
+  // (т.е. находится у самого верха списка). Если проскроллил вниз — не сбиваем позицию.
+  const stickToTop = (node.scrollTop <= 30);
   if (filtered.length === 0){
     node.classList.add('empty'); node.innerHTML = '(нет записей)'; return;
   }
   node.classList.remove('empty');
   node.innerHTML = filtered.map(logLineHtml).join('');
+  if (stickToTop){
+    node.scrollTop = 0;
+  }
 }
 
 async function loadLogs(){
@@ -257,9 +282,10 @@ async function tick(){
   await loadLogs();
 }
 
-['filter-system','filter-user','filter-errors'].forEach(id => {
+['filter-system','filter-user','filter-errors','filter-autoscroll'].forEach(id => {
   const n = $(id); if (n) n.addEventListener('change', renderLogs);
 });
+const fc = $('filter-category'); if (fc) fc.addEventListener('change', renderLogs);
 const ft = $('filter-text'); if (ft) ft.addEventListener('input', renderLogs);
 
 tick();
