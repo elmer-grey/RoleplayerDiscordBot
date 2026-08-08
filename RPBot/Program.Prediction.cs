@@ -309,8 +309,8 @@ namespace RPBot
                                     : "Вы ещё не участвовали в этом прогнозе.");
                             }
 
-                            if (!prediction.IsLocked && TryGetMoscowTime(prediction.BetsCloseAtUtc.UtcDateTime, out var mskTime))
-                                sb.AppendLine($"Приём ставок до: {DiscordTimeFormatter.FullDateTime(prediction.BetsCloseAtUtc)}");
+                            if (!prediction.IsLocked && MoscowTime.TryConvertFromUtc(prediction.BetsCloseAtUtc.UtcDateTime, out var mskTime))
+                                                            sb.AppendLine($"Приём ставок до: {mskTime:dd.MM.yyyy HH:mm} (по МСК)");
                             else if (prediction.IsLocked)
                                 sb.AppendLine("Приём ставок завершён.");
                         }
