@@ -1180,6 +1180,28 @@ private MusicStats? _musicStats;
 			Environment.Exit(0);
 		}
 
+		/// <summary>
+		/// Корректная остановка без выхода из процесса (graceful shutdown без Environment.Exit).
+		/// Используется в качестве хука на сигналы Windows (Ctrl+C / logoff) — дашборд и фоновые
+		/// таймеры гасятся в том же порядке, что и в DisposeAsync, но процесс продолжает жить.
+		/// </summary>
+		public async Task GracefulShutdownAsync(string reason)
+		{
+			_shouldExit = true;
+			try { await LogStartup($"[SHUTDOWN] graceful shutdown: {reason}"); } catch { }
+
+			try { _backgroundMonitoringCts?.Cancel(); } catch { }
+			StopDailyRestartScheduler();
+
+			try { _reconnectionService?.Shutdown(); } catch { }
+
+			try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
+			try { _webDashboard?.Dispose(); } catch { }
+			_webDashboard = null;
+
+			try { if (_ui != null && _uiStarted) { _ui.Dispose(); _ui = null; _uiStarted = false; } } catch { }
+		}
+
 		private void StartDailyRestartScheduler()
 		{
 			if (_config != null && !_config.DailyRestartEnabled)
@@ -1568,6 +1590,24 @@ private MusicStats? _musicStats;
             AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
 
+            // Хук на корректную остановку без Environment.Exit — при SIGINT/SIGTERM
+            // (taskkill, Ctrl+C, диспетчер задач "Завершить") бот успевает погасить
+            // дашборд и UI до того, как процесс начнут снимать принудительно.
+            Program? activeProgram = null;
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                var prog = activeProgram;
+                if (prog == null) return;
+                try { _ = prog.GracefulShutdownAsync("Ctrl+C"); } catch { }
+            };
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            {
+                var prog = activeProgram;
+                if (prog == null) return;
+                try { prog.GracefulShutdownAsync("ProcessExit").GetAwaiter().GetResult(); } catch { }
+            };
+
             bool restart;
             int restartCount = 0;
             var pendingStartupType = StartupType.FirstStart;
@@ -1586,12 +1626,14 @@ private MusicStats? _musicStats;
                 using (var program = new Program())
                 {
                     program.SetStartupContext(pendingStartupType, pendingStartupReason);
+                    activeProgram = program;
 
                     await program.RunBotAsync();
                     restart = program.ShouldRestart;
                     pendingStartupType = restart ? program.NextStartupType : StartupType.FirstStart;
                     pendingStartupReason = restart ? program.NextStartupReason : null;
                     restartCount++;
+                    activeProgram = null;
                 }
 
                 if (restart)
