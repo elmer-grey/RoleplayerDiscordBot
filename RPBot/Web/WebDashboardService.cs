@@ -194,7 +194,8 @@ namespace RPBot.Web
                         List<BotLogRecord> snapshot;
                         lock (_logsLock)
                         {
-                            snapshot = _logs.Reverse().Take(200).ToList();
+                            // Отдаём самые свежие сверху (последняя запись первая)
+                            snapshot = _logs.Take(200).ToList();
                         }
                         var logs = snapshot.Select(x => new
                         {
@@ -205,8 +206,7 @@ namespace RPBot.Web
                             isUser = x.IsUser,
                             levelClass = Program.LevelCssClass(x.Level),
                             categoryClass = Program.CategoryCssClass(x.Category),
-                        }).ToList();
-                        logs.Reverse();
+                        });
                         await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
                         break;
                     case "/api/stats":
