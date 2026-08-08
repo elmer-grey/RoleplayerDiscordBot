@@ -61,9 +61,11 @@ namespace RPBot
 
             if (CurrentMode == TimerMode.GlobalLoop)
             {
-                _ = Task.Run(() => GlobalLoopAsync(_cts.Token));
-            }
-        }
+            #pragma warning disable CS0162 // Переключатель режима: код GlobalLoop-ветки выполняется только при CurrentMode == GlobalLoop
+                            _ = Task.Run(() => GlobalLoopAsync(_cts.Token));
+            #pragma warning restore CS0162
+                        }
+                    }
 
         private Task OnClientReadyAsync()
         {
@@ -191,11 +193,13 @@ namespace RPBot
                 guildStates[userId] = state;
                 _ = Task.Run(() => PerUserTimerLoopAsync(guildId, userId, state, cts.Token));
             }
-            else
-            {
-                guildStates[userId] = state;
-            }
-        }
+            #pragma warning disable CS0162 // Переключатель режима: GlobalLoop-ветка закомментирована, но сохранена для повторного включения
+                        else
+                        {
+                            guildStates[userId] = state;
+                        }
+            #pragma warning restore CS0162
+                    }
 
         private async Task PerUserTimerLoopAsync(ulong guildId, ulong userId, UserState state, CancellationToken token)
         {

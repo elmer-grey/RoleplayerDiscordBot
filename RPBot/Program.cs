@@ -2638,18 +2638,14 @@ private MusicStats? _musicStats;
 			throw new InvalidOperationException($"Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in '{cfgPath}'.");
         }
 
-        private bool _readyCompleted = false;
-        private bool _initializationStarted = false;
-        private bool _initializationCompleted = false;
         private DateTime _readyTime = DateTime.MinValue; // Инициализируем MinValue
-        private DateTime _fullReadyTime;
+                private DateTime _fullReadyTime;
 
         private async Task OnReady()
-        {
-            _readyTime = DateTime.UtcNow;
-            _readyCompleted = true;
+                {
+                    _readyTime = DateTime.UtcNow;
 
-            try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
+                    try { await LogInfo($"Ready: connected as {_client.CurrentUser?.Username}"); } catch { }
 
             // ОТПРАВЛЯЕМ В UI
             BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client.CurrentUser.Username} в {DateTime.Now:HH:mm:ss}");
@@ -3245,9 +3241,8 @@ await Task.CompletedTask;
                 // используем время старта инициализации как начало, чтобы не получить отрицательное время.
                 var startTime = _readyTime == DateTime.MinValue ? _startupTime : _readyTime;
                 var initTime = (_fullReadyTime - startTime).TotalSeconds;
-                _initializationCompleted = true;
 
-                _ui?.EnableInput();
+                                _ui?.EnableInput();
 
                 var botName = _client.CurrentUser?.Username;
                 if (string.IsNullOrWhiteSpace(botName))

@@ -16,11 +16,8 @@ namespace RPBot
 
         private static BotUI? _ui;
 
-        // 👇 ДОБАВЛЯЕМ СОБЫТИЕ ДЛЯ ОТСЛЕЖИВАНИЯ ПРОГРЕССА
-        public event Func<int, int, string, Task>? OnCommandProgress;
-
-        // 👇 ДЛЯ РАСЧЕТА ВРЕМЕНИ
-        private DateTime _registrationStartTime;
+                // 👇 ДЛЯ РАСЧЕТА ВРЕМЕНИ
+                private DateTime _registrationStartTime;
 
         public CommandHandler(DiscordSocketClient client, List<ulong> guildIDs)
         {

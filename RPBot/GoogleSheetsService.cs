@@ -94,10 +94,16 @@ namespace RPBot
                 GoogleCredential credential;
                 using (var stream = new FileStream(credPath, FileMode.Open, FileAccess.Read))
                 {
-                    credential = GoogleCredential
-                        .FromStream(stream)
-                        .CreateScoped(SheetsService.Scope.Spreadsheets);
-                }
+                                    // GoogleCredential.FromStream помечен deprecated в Google.Apis.Auth 1.68+,
+                                    // рекомендуется использовать CredentialFactory. Однако CredentialFactory требует
+                                    // отдельного пакета Google.Apis.Auth.AspNetCore или ручной десериализации JSON —
+                                    // это отдельный рефакторинг. Подавляем CS0618 точечно до перехода.
+                #pragma warning disable CS0618 // GoogleCredential.FromStream — deprecated, см. комментарий выше
+                                    credential = GoogleCredential
+                                        .FromStream(stream)
+                                        .CreateScoped(SheetsService.Scope.Spreadsheets);
+                #pragma warning restore CS0618
+                                }
 
                 var service = new SheetsService(new BaseClientService.Initializer
                 {
