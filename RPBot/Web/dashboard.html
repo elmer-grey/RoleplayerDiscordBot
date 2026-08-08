@@ -8,9 +8,10 @@
   h1{margin:0 0 16px}
   h2{margin:0 0 8px;font-size:15px;color:#9cf}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
-  .card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  td,th{padding:4px 6px;text-align:left;border-bottom:1px solid #2a2a2a;vertical-align:top}
+  .card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;min-width:0;overflow:hidden;word-break:break-word}
+  .card>div{min-width:0}
+  table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;word-break:break-word}
+  td,th{padding:4px 6px;text-align:left;border-bottom:1px solid #2a2a2a;vertical-align:top;overflow-wrap:anywhere}
   th{color:#9cf;font-weight:600}
   .badge{display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600}
   .b-ok{background:#143;color:#8f8}
@@ -140,15 +141,12 @@ function renderServers(d){
   if (!Array.isArray(d) || d.length === 0){ setText('servers','серверы ещё не загружены'); return; }
   const rows = d.map(s => `<tr>
     <td><code>${esc(s.GuildId ?? s.GuildID ?? '?')}</code></td>
-    <td>${s.PredictionsEnabled?'<span class="badge b-ok">predictions</span>':'—'}</td>
-    <td>${s.TelegramEnabled?'<span class="badge b-ok">telegram</span>':'—'}</td>
+    <td>${s.PredictionsEnabled?'<span class="badge b-ok">pred</span>':'—'}</td>
+    <td>${s.TelegramEnabled?'<span class="badge b-ok">tg</span>':'—'}</td>
     <td>${esc(s.MasterRoleId ?? '—')}</td>
-    <td>${esc(s.ModerateChannelID ?? '—')}</td>
-    <td>${esc(s.GeneralRGChannelID ?? '—')}</td>
-    <td>${esc(s.RecordChannelID ?? '—')}</td>
   </tr>`).join('');
   setHtml('servers', `<table>
-    <thead><tr><th>Guild</th><th>Pred</th><th>TG</th><th>Master role</th><th>Moderate</th><th>General</th><th>Records</th></tr></thead>
+    <thead><tr><th style="width:30%">Guild</th><th style="width:15%">Pred</th><th style="width:15%">TG</th><th style="width:40%">Master</th></tr></thead>
     <tbody>${rows}</tbody></table>`);
 }
 
@@ -159,11 +157,10 @@ function renderSessions(d){
     <td><code>${esc(s.GuildId ?? s.GuildID ?? s.Guild ?? '?')}</code></td>
     <td>${esc(s.Name ?? s.SessionName ?? '—')}</td>
     <td>${esc(s.Status ?? '—')}</td>
-    <td>${esc(s.CreatedAt ?? s.StartedAt ?? '—')}</td>
     <td>${esc(s.LeaderId ?? s.MasterId ?? '—')}</td>
   </tr>`).join('');
   setHtml('sessions', `<table>
-    <thead><tr><th>Guild</th><th>Session</th><th>Status</th><th>Created</th><th>Leader</th></tr></thead>
+    <thead><tr><th style="width:25%">Guild</th><th style="width:35%">Session</th><th style="width:20%">Status</th><th style="width:20%">Leader</th></tr></thead>
     <tbody>${rows}</tbody></table>`);
 }
 
@@ -180,10 +177,12 @@ function renderActivity(d){
 
 function logLineHtml(rec){
   const ts = esc(rec.timestamp ?? '');
-  const lv = esc((rec.level || '').toLowerCase());
-  const cat = rec.category ? `<span class="cat">[${esc(rec.category)}]</span> ` : '';
-  const userTag = rec.isUser ? `<span class="user-tag">[user]</span> ` : '';
-  return `<div><span class="ts">[${ts}]</span> <span class="lv-${lv}">[${esc(rec.level||'')}]</span> ${userTag}${cat}${esc(rec.message||'')}</div>`;
+  const lvl = (rec.level ?? '');
+  const lv = esc(lvl.toLowerCase());
+  const cat = rec.Category ?? rec.category ?? '';
+  const msg = rec.Message ?? rec.message ?? '';
+  const userTag = rec.IsUser === true || rec.isUser === true ? `<span class="user-tag">[user]</span> ` : '';
+  return `<div><span class="ts">[${ts}]</span> <span class="lv-${lv}">[${esc(lvl)}]</span> ${userTag}<span class="cat">[${esc(cat)}]</span> ${esc(msg)}</div>`;
 }
 
 function renderLogs(){
@@ -193,11 +192,13 @@ function renderLogs(){
   const q = ($('filter-text').value || '').toLowerCase();
   const all = window._allLogs || [];
   const filtered = all.filter(rec => {
-    const isUser = rec.isUser === true;
+    const isUser = rec.IsUser === true || rec.isUser === true;
     if (isUser && !showUsr) return false;
     if (!isUser && !showSys) return false;
-    if (errOnly && !/error/i.test(rec.level || '')) return false;
-    if (q && !(rec.message||'').toLowerCase().includes(q)) return false;
+    const lvl = (rec.level || '');
+    if (errOnly && !/error/i.test(lvl)) return false;
+    const msg = rec.Message ?? rec.message ?? '';
+    if (q && !msg.toLowerCase().includes(q)) return false;
     return true;
   });
   const node = $('logs');

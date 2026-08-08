@@ -1619,42 +1619,53 @@ private MusicStats? _musicStats;
 		}
 
 		/// <summary>
-		/// Пишет строку в реальную консоль с цветом по уровню/категории.
-		/// В UI-панель BotUI.AddLog() строка уже уходит через UiSink, сюда попадает только терминал.
+		/// Простой классификатор сообщения лога по категории (по подстроке в тексте).
+		/// Используется только для подсветки в реальной консоли — не влияет на содержимое.
 		/// </summary>
-		private static readonly object _consoleColorLock = new();
-		private static void WriteToConsoleWithColor(string msg)
+		private static LogCategory? DetectCategory(string msg)
+		{
+		    foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+		    {
+		        var token = cat.ToString();
+		        if (msg.Contains(token, StringComparison.OrdinalIgnoreCase))
+		            return cat;
+		    }
+		    return null;
+		}
+
+		/// <summary>
+		/// Раскрашивает строку согласно её уровню/категории и пишет в Console.
+		/// </summary>
+		public static void WriteColoredLine(string msg, LogLevel level, LogCategory? category = null)
 		{
 		    try
 		    {
-		        var orig = Console.Out;
-		        ConsoleColor levelColor = ConsoleColor.Gray;
-		        ConsoleColor categoryColor = ConsoleColor.DarkGray;
-		        string prefix = string.Empty;
-
-		        if (msg.StartsWith("❌")) { levelColor = ConsoleColor.Red; prefix = "❌"; }
-		        else if (msg.StartsWith("⚠️")) { levelColor = ConsoleColor.Yellow; prefix = "⚠️ "; }
-
-		        foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+		        var detected = category ?? DetectCategory(msg);
+		        var prevFg = Console.ForegroundColor;
+		        Console.ForegroundColor = LevelColor(level);
+		        Console.Write(msg);
+		        Console.ForegroundColor = prevFg;
+		        if (detected.HasValue && detected.Value != LogCategory.System)
 		        {
-		            if (msg.Contains(cat.ToString(), StringComparison.OrdinalIgnoreCase))
-		            { categoryColor = CategoryColor(cat); break; }
+		            var prevFg2 = Console.ForegroundColor;
+		            Console.ForegroundColor = CategoryColor(detected.Value);
+		            Console.Write($" [{detected.Value}]");
+		            Console.ForegroundColor = prevFg2;
 		        }
-
-		        lock (_consoleColorLock)
-		        {
-		            var fg = orig is ColorTextWriter ? Console.ForegroundColor : levelColor;
-		            Console.ForegroundColor = levelColor;
-		            Console.Write(prefix);
-		            Console.ForegroundColor = categoryColor;
-		            Console.WriteLine(msg.Substring(prefix.Length));
-		            Console.ResetColor();
-		        }
+		        Console.WriteLine();
 		    }
-		    catch { /* цветной вывод — не критичная функциональность */ }
+		    catch { /* цветной вывод — не критично */ }
 		}
 
-		// Простое расширение для категорий (дубликат из BotLogger, чтобы не светить internal-наружу)
+		private static ConsoleColor LevelColor(LogLevel level) => level switch
+		{
+		    LogLevel.Debug => ConsoleColor.DarkGray,
+		    LogLevel.Info  => ConsoleColor.Cyan,
+		    LogLevel.Warn  => ConsoleColor.Yellow,
+		    LogLevel.Error => ConsoleColor.Red,
+		    _              => ConsoleColor.Gray,
+		};
+
 		private static ConsoleColor CategoryColor(LogCategory category) => category switch
 		{
 		    LogCategory.Rolls   => ConsoleColor.Magenta,
@@ -1666,13 +1677,10 @@ private MusicStats? _musicStats;
 		    LogCategory.Boot    => ConsoleColor.White,
 		    LogCategory.Discord => ConsoleColor.Blue,
 		    LogCategory.Sheets  => ConsoleColor.DarkYellow,
+		    LogCategory.Config  => ConsoleColor.DarkYellow,
+		    LogCategory.Cmd     => ConsoleColor.DarkGray,
 		    _                   => ConsoleColor.Gray,
 		};
-
-		private sealed class ColorTextWriter : TextWriter
-		{
-		    public override Encoding Encoding => Encoding.UTF8;
-		}
 
 		private static BotUI? _ui;
         private static bool _uiStarted = false;
@@ -1790,19 +1798,16 @@ private MusicStats? _musicStats;
                 await Task.Delay(2000);
                 _uiStarted = true;
 
-                // Подключаем BotLogger к UI-терминалу + цветной вывод в реальную консоль
-                BotLogger.SetUiSink(msg =>
-                {
-                    _ui?.AddLog(msg);
-                    WriteToConsoleWithColor(msg);
-                });
+                // Подключаем BotLogger к UI-терминалу. Цветной вывод в реальную
+                // консоль делает UiTextWriter ниже — он уже пишет и в Console, и в UI.
+                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
 
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
-                // Перенаправляем весь Console в UI-панель логов
+                // Перенаправляем весь Console в UI-панель логов + цветной вывод
                 if (_originalOut == null) _originalOut = Console.Out;
                 if (_originalErr == null) _originalErr = Console.Error;
-                var uiWriter = new UiTextWriter(() => _ui);
+                var uiWriter = new UiTextWriter(() => _ui, includeConsoleColors: true);
                 Console.SetOut(uiWriter);
                 Console.SetError(uiWriter);
             }
@@ -1813,11 +1818,7 @@ private MusicStats? _musicStats;
                 _ui.AddLog("Перезапуск бота...");
 
                 BotLogger.Info(LogCategory.Boot, "=== Рестарт ===");
-                BotLogger.SetUiSink(msg =>
-                {
-                    _ui?.AddLog(msg);
-                    WriteToConsoleWithColor(msg);
-                });
+                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
             }
 

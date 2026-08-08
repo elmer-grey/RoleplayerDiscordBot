@@ -203,7 +203,9 @@ namespace RPBot.Web
                             x.Category,
                             x.Message,
                             x.IsUser,
-                        });
+                        }).ToList();
+                        // Отдаём в порядке возрастания времени (от старых к новым)
+                        logs.Reverse();
                         await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
                         break;
                     case "/api/stats":
