@@ -360,24 +360,7 @@ namespace RPBot
             };
         }
 
-        private static DateTime ToMoscowTime(DateTime dt)
-        {
-            var utc = dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
-            var candidates = new[] { "Europe/Moscow", "Russian Standard Time" };
-            foreach (var id in candidates)
-            {
-                try
-                {
-                    var tz = TimeZoneInfo.FindSystemTimeZoneById(id);
-                    return TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
-                }
-                catch
-                {
-                }
-            }
-
-            return utc;
-        }
+        private static DateTime ToMoscowTime(DateTime dt) => MoscowTime.Convert(dt);
 
         /// <summary>
         /// Форматирует суммарное время перерывов.

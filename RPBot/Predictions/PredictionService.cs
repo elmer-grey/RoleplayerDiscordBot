@@ -1208,19 +1208,7 @@ namespace RPBot
         }
 
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
-        {
-            try
-            {
-                var tz = TimeZoneInfo.FindSystemTimeZoneById("Russian Standard Time");
-                msk = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
-                return true;
-            }
-            catch
-            {
-                msk = utc;
-                return false;
-            }
-        }
+                    => MoscowTime.TryConvertFromUtc(utc, out msk);
 
         // ==================== ИСТОРИЯ ПРОГНОЗОВ ====================
 

@@ -1306,48 +1306,19 @@ private MusicStats? _musicStats;
 				throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
 
 			if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
-				TryGetMoscowTimeZone(out var mskTz) && mskTz != null &&
-				string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
-				TryParseTime(_config?.DailyRestartMoscowTime, out var mskTarget))
-			{
-				var nextUtc = NextInZoneUtc(mskTz, mskTarget, nowUtc);
-				var nextMsk = TimeZoneInfo.ConvertTime(nextUtc, mskTz);
-				return (nextUtc, $"{nextMsk:dd.MM.yyyy HH:mm:ss} (МСК)");
-			}
+							MoscowTime.TryGetTimeZone(out var mskTz) && mskTz != null &&
+							string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
+							TryParseTime(_config?.DailyRestartMoscowTime, out var mskTarget))
+						{
+							var nextUtc = NextInZoneUtc(mskTz, mskTarget, nowUtc);
+							var nextMsk = TimeZoneInfo.ConvertTime(nextUtc, mskTz);
+							return (nextUtc, $"{nextMsk:dd.MM.yyyy HH:mm:ss} (МСК)");
+						}
 
-			var nextLocalUtc = NextInZoneUtc(localTz, localTarget, nowUtc);
-			var nextLocal = TimeZoneInfo.ConvertTime(nextLocalUtc, localTz);
-			return (nextLocalUtc, $"{nextLocal:dd.MM.yyyy HH:mm:ss} (локальное)");
-		}
-
-		private static bool TryGetMoscowTimeZone(out TimeZoneInfo? mskTz)
-		{
-			var candidates = new[] { "Europe/Moscow", "Russian Standard Time" };
-			foreach (var id in candidates)
-			{
-				try
-				{
-					mskTz = TimeZoneInfo.FindSystemTimeZoneById(id);
-					return true;
-				}
-				catch { }
-			}
-
-			mskTz = null;
-			return false;
-		}
-
-		private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
-		{
-			if (TryGetMoscowTimeZone(out var tz) && tz != null)
-			{
-				msk = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
-				return true;
-			}
-
-			msk = utc;
-			return false;
-		}
+						var nextLocalUtc = NextInZoneUtc(localTz, localTarget, nowUtc);
+						var nextLocal = TimeZoneInfo.ConvertTime(nextLocalUtc, localTz);
+						return (nextLocalUtc, $"{nextLocal:dd.MM.yyyy HH:mm:ss} (локальное)");
+					}
 
         // Методы для доступа из UI (реализация IBotController)
         public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
@@ -2398,8 +2369,6 @@ private MusicStats? _musicStats;
             if (_eventAnnouncer == null) return Task.CompletedTask;
             return _eventAnnouncer.AnnounceUpdatedAsync(default, guildEvent);
         }
-
-
         private async Task WaitForReadyAsync()
         {
             var readyTcs = new TaskCompletionSource<bool>();
