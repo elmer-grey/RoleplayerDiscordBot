@@ -30,6 +30,20 @@ namespace RPBot
         Cmd,
         Config,
         System,
+    Rolls,
+    }
+
+    public static class LogCategoryExtensions
+    {
+    /// <summary>События, порождённые действиями пользователей (броски, сессии, прогнозы).</summary>
+    public static bool IsUser(this LogCategory cat) => cat switch
+    {
+        LogCategory.Rolls    => true,
+        LogCategory.Session  => true,
+        LogCategory.Predict  => true,
+        LogCategory.Points   => true,
+        _                     => false,
+    };
     }
 
     /// <summary>
@@ -159,7 +173,7 @@ namespace RPBot
 #pragma warning disable CS4014
             AppendToFileAsync(category, line);
 #pragma warning restore CS4014
-            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line));
+            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
@@ -169,7 +183,7 @@ namespace RPBot
             if (level < _minLevel) return;
             var line = FormatLine(level, message);
             await AppendToFileAsync(category, line).ConfigureAwait(false);
-            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line));
+            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);
         }
@@ -197,6 +211,29 @@ namespace RPBot
             LogLevel.Warn  => "⚠️ ",
             LogLevel.Error => "❌ ",
             _              => string.Empty,
+        };
+
+        private static ConsoleColor LevelColor(LogLevel level) => level switch
+        {
+            LogLevel.Debug => ConsoleColor.DarkGray,
+            LogLevel.Info  => ConsoleColor.Cyan,
+            LogLevel.Warn  => ConsoleColor.Yellow,
+            LogLevel.Error => ConsoleColor.Red,
+            _              => ConsoleColor.Gray,
+        };
+
+        private static ConsoleColor CategoryColor(LogCategory category) => category switch
+        {
+            LogCategory.Rolls   => ConsoleColor.Magenta,
+            LogCategory.Music   => ConsoleColor.Green,
+            LogCategory.Predict => ConsoleColor.DarkCyan,
+            LogCategory.Points  => ConsoleColor.DarkMagenta,
+            LogCategory.Session => ConsoleColor.DarkGreen,
+            LogCategory.System  => ConsoleColor.Gray,
+            LogCategory.Boot    => ConsoleColor.White,
+            LogCategory.Discord => ConsoleColor.Blue,
+            LogCategory.Sheets  => ConsoleColor.DarkYellow,
+            _                   => ConsoleColor.Gray,
         };
 
         private static void NotifyObservers(BotLogRecord record)

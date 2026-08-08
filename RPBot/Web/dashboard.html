@@ -4,130 +4,248 @@
 <meta charset="utf-8" />
 <title>RPBot Dashboard</title>
 <style>
-body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:20px}
-.card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:12px}
-pre{white-space:pre-wrap;word-break:break-word;background:#0f0f0f;padding:10px;border-radius:8px;max-height:400px;overflow:auto}
-h1,h2{margin:0 0 10px}
-small{color:#aaa}
-.error{color:#f88}
-.controls{margin-bottom:8px}
-.controls label{margin-right:12px;cursor:pointer}
-.controls input{cursor:pointer}
+  body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:20px}
+  h1{margin:0 0 16px}
+  h2{margin:0 0 8px;font-size:15px;color:#9cf}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+  .card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:4px 6px;text-align:left;border-bottom:1px solid #2a2a2a;vertical-align:top}
+  th{color:#9cf;font-weight:600}
+  .badge{display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600}
+  .b-ok{background:#143;color:#8f8}
+  .b-err{background:#411;color:#f88}
+  .b-warn{background:#422;color:#fc8}
+  .kv{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:13px}
+  .kv .k{color:#9aa}
+  .logs{font-family:Consolas,monospace;font-size:12px;background:#0f0f0f;padding:8px;border-radius:6px;max-height:340px;overflow:auto;line-height:1.45}
+  .logs .ts{color:#888}
+  .logs .lv-info{color:#9cf}
+  .logs .lv-warn{color:#fc8}
+  .logs .lv-error{color:#f88}
+  .logs .lv-debug{color:#888}
+  .logs .cat{color:#8af}
+  .logs .user-tag{color:#fc8;font-weight:600}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;align-items:center}
+  .controls label{cursor:pointer;user-select:none;font-size:12px}
+  .controls input[type=text]{background:#222;border:1px solid #444;color:#eee;padding:4px 8px;border-radius:6px;flex:1;min-width:160px}
+  .empty{color:#888;font-style:italic}
+  .small{color:#888;font-size:11px}
+  .err{color:#f88;font-size:12px}
 </style>
 </head>
 <body>
 <h1>RPBot Web Dashboard</h1>
 
-<div class="card">
-  <h2>Health</h2>
-  <pre id="health">loading...</pre>
-</div>
-
-<div class="card">
-  <h2>Servers</h2>
-  <pre id="servers">loading...</pre>
-</div>
-
-<div class="card">
-  <h2>Sessions</h2>
-  <pre id="sessions">loading...</pre>
-</div>
-
-<div class="card">
-  <h2>Stats (за сегодня)</h2>
-  <pre id="stats">loading...</pre>
-</div>
-
-<div class="card">
-  <h2>Activity (последний час, по минутам)</h2>
-  <pre id="activity">loading...</pre>
-</div>
-
-<div class="card">
-  <h2>Logs (последние 200)</h2>
-  <div class="controls">
-    <label><input type="checkbox" id="filter-system" checked /> System</label>
-    <label><input type="checkbox" id="filter-user" checked /> User</label>
-    <label><input type="text" id="filter-text" placeholder="Поиск..." /></label>
+<div class="grid">
+  <div class="card">
+    <h2>Health</h2>
+    <div id="health" class="empty">загрузка...</div>
   </div>
-  <pre id="logs">loading...</pre>
-  <small>Автообновление раз в 5 секунд</small>
+
+  <div class="card">
+    <h2>Stats (за сегодня)</h2>
+    <div id="stats" class="empty">загрузка...</div>
+  </div>
+
+  <div class="card">
+    <h2>Servers</h2>
+    <div id="servers" class="empty">загрузка...</div>
+  </div>
+
+  <div class="card">
+    <h2>Sessions</h2>
+    <div id="sessions" class="empty">загрузка...</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Activity (последний час, по минутам)</h2>
+    <div id="activity" class="empty">загрузка...</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Logs (последние 200)</h2>
+    <div class="controls">
+      <label><input type="checkbox" id="filter-system" checked /> System</label>
+      <label><input type="checkbox" id="filter-user" checked /> User</label>
+      <label><input type="checkbox" id="filter-errors" /> Только ошибки</label>
+      <input type="text" id="filter-text" placeholder="Поиск по тексту..." />
+    </div>
+    <div id="logs" class="logs empty">загрузка...</div>
+    <div class="small">Автообновление каждые 5 секунд</div>
+  </div>
 </div>
 
 <script>
-const ids = ['health','servers','sessions','stats','activity','logs'];
+const $ = (id) => document.getElementById(id);
 
-function el(id){ return document.getElementById(id); }
+function setHtml(id, html){ var n = $(id); if (n) n.innerHTML = html; }
+function setText(id, text){ var n = $(id); if (n) n.textContent = text; }
 
-function setText(id, text){
-  var node = el(id);
-  if (!node) return;
-  node.textContent = text;
+function esc(s){
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
 
-async function loadJson(id, url){
-  try {
-    var r = await fetch(url, {cache:'no-store'});
-    var j;
-    try { j = await r.json(); }
-    catch(parseErr){ setText(id, '['+r.status+'] Невалидный JSON: '+parseErr.message); return; }
-    if (j && j.error) {
-      setText(id, '[error] '+j.error);
-    } else {
-      setText(id, JSON.stringify(j, null, 2));
-    }
-  } catch(e){
-    setText(id, '[fetch error] ' + e.message);
+async function fetchJson(url){
+  const r = await fetch(url, {cache:'no-store'});
+  const text = await r.text();
+  if (!r.ok){
+    try { return { ok:false, status:r.status, data:JSON.parse(text) }; }
+    catch { return { ok:false, status:r.status, error:text || ('HTTP '+r.status) }; }
   }
+  try { return { ok:true, status:r.status, data:JSON.parse(text) }; }
+  catch(e){ return { ok:false, status:r.status, error:'Невалидный JSON: '+e.message+' / ответ: '+text.slice(0,80) }; }
 }
 
-function applyLogFilters(){
-  var showSystem = el('filter-system').checked;
-  var showUser = el('filter-user').checked;
-  var search = (el('filter-text').value || '').toLowerCase();
-  var lines = window._allLogs || [];
-  var filtered = lines.filter(function(rec){
-    var isUser = rec.isUser === true;
-    if (isUser && !showUser) return false;
-    if (!isUser && !showSystem) return false;
-    if (search && (rec.message||'').toLowerCase().indexOf(search) < 0) return false;
+function kvTable(obj){
+  const rows = Object.entries(obj).map(([k,v]) =>
+    `<tr><td class="k">${esc(k)}</td><td>${esc(v===null||v===undefined?'':String(v))}</td></tr>`
+  ).join('');
+  return `<table class="kv">${rows}</table>`;
+}
+
+function renderHealth(d){
+  if (!d || typeof d !== 'object'){ setText('health', '—'); return; }
+  if (d.error){ setHtml('health', `<span class="err">${esc(d.error)}</span>`); return; }
+  const badge = d.Connected
+    ? '<span class="badge b-ok">online</span>'
+    : '<span class="badge b-err">offline</span>';
+  const html = `
+    <div style="margin-bottom:6px">${badge}</div>
+    ${kvTable({
+      'Серверов': d.Guilds ?? '—',
+      'Тип запуска': d.StartupType ?? '—',
+      'Время UTC': d.UtcNow ?? '—',
+      'Версия бота': d.Version ?? '—',
+      'Аптайм': d.Uptime ?? '—'
+    })}`;
+  setHtml('health', html);
+}
+
+function renderStats(d){
+  if (!d || typeof d !== 'object'){ setText('stats','—'); return; }
+  if (d.error){ setHtml('stats', `<span class="err">${esc(d.error)}</span>`); return; }
+  setHtml('stats', kvTable({
+    'Бросков сегодня': d.RollsToday ?? 0,
+    'Сообщений в чате': d.ChatMessagesToday ?? 0,
+    'Активных сессий': d.ActiveSessions ?? 0,
+    'Записей в логах': d.LogRecords ?? 0,
+    'Пользователей в голосе': d.UsersInVoice ?? 0
+  }));
+}
+
+function renderServers(d){
+  if (d && d.error){ setHtml('servers', `<span class="err">${esc(d.error)}</span>`); return; }
+  if (!Array.isArray(d) || d.length === 0){ setText('servers','серверы ещё не загружены'); return; }
+  const rows = d.map(s => `<tr>
+    <td><code>${esc(s.GuildId ?? s.GuildID ?? '?')}</code></td>
+    <td>${s.PredictionsEnabled?'<span class="badge b-ok">predictions</span>':'—'}</td>
+    <td>${s.TelegramEnabled?'<span class="badge b-ok">telegram</span>':'—'}</td>
+    <td>${esc(s.MasterRoleId ?? '—')}</td>
+    <td>${esc(s.ModerateChannelID ?? '—')}</td>
+    <td>${esc(s.GeneralRGChannelID ?? '—')}</td>
+    <td>${esc(s.RecordChannelID ?? '—')}</td>
+  </tr>`).join('');
+  setHtml('servers', `<table>
+    <thead><tr><th>Guild</th><th>Pred</th><th>TG</th><th>Master role</th><th>Moderate</th><th>General</th><th>Records</th></tr></thead>
+    <tbody>${rows}</tbody></table>`);
+}
+
+function renderSessions(d){
+  if (d && d.error){ setHtml('sessions', `<span class="err">${esc(d.error)}</span>`); return; }
+  if (!Array.isArray(d) || d.length === 0){ setText('sessions','активных сессий нет'); return; }
+  const rows = d.map(s => `<tr>
+    <td><code>${esc(s.GuildId ?? s.GuildID ?? s.Guild ?? '?')}</code></td>
+    <td>${esc(s.Name ?? s.SessionName ?? '—')}</td>
+    <td>${esc(s.Status ?? '—')}</td>
+    <td>${esc(s.CreatedAt ?? s.StartedAt ?? '—')}</td>
+    <td>${esc(s.LeaderId ?? s.MasterId ?? '—')}</td>
+  </tr>`).join('');
+  setHtml('sessions', `<table>
+    <thead><tr><th>Guild</th><th>Session</th><th>Status</th><th>Created</th><th>Leader</th></tr></thead>
+    <tbody>${rows}</tbody></table>`);
+}
+
+function renderActivity(d){
+  if (d && d.error){ setHtml('activity', `<span class="err">${esc(d.error)}</span>`); return; }
+  if (!Array.isArray(d) || d.length === 0){ setText('activity','нет активности за последний час'); return; }
+  const max = Math.max(1, ...d.map(b => b.Count || 0));
+  const bars = d.map(b => {
+    const h = Math.round((b.Count / max) * 60);
+    return `<div title="${esc(b.Minute)}: ${b.Count}" style="display:inline-block;width:14px;height:${Math.max(2,h)}px;background:#9cf;margin-right:1px;vertical-align:bottom"></div>`;
+  }).join('');
+  setHtml('activity', `<div style="line-height:60px">${bars}</div><div class="small">макс: ${max} событий/мин, ${d.length} минут с активностью</div>`);
+}
+
+function logLineHtml(rec){
+  const ts = esc(rec.timestamp ?? '');
+  const lv = esc((rec.level || '').toLowerCase());
+  const cat = rec.category ? `<span class="cat">[${esc(rec.category)}]</span> ` : '';
+  const userTag = rec.isUser ? `<span class="user-tag">[user]</span> ` : '';
+  return `<div><span class="ts">[${ts}]</span> <span class="lv-${lv}">[${esc(rec.level||'')}]</span> ${userTag}${cat}${esc(rec.message||'')}</div>`;
+}
+
+function renderLogs(){
+  const showSys = $('filter-system').checked;
+  const showUsr = $('filter-user').checked;
+  const errOnly = $('filter-errors').checked;
+  const q = ($('filter-text').value || '').toLowerCase();
+  const all = window._allLogs || [];
+  const filtered = all.filter(rec => {
+    const isUser = rec.isUser === true;
+    if (isUser && !showUsr) return false;
+    if (!isUser && !showSys) return false;
+    if (errOnly && !/error/i.test(rec.level || '')) return false;
+    if (q && !(rec.message||'').toLowerCase().includes(q)) return false;
     return true;
   });
-  setText('logs', filtered.map(function(r){
-    return '[' + r.timestamp + '] [' + r.level + '] ' + (r.isUser?'[user] ':'') + r.message;
-  }).join('\n') || '(нет записей)');
+  const node = $('logs');
+  if (filtered.length === 0){
+    node.classList.add('empty'); node.innerHTML = '(нет записей)'; return;
+  }
+  node.classList.remove('empty');
+  node.innerHTML = filtered.map(logLineHtml).join('');
 }
 
 async function loadLogs(){
+  const node = $('logs');
   try {
-    var r = await fetch('/api/logs', {cache:'no-store'});
-    var j = await r.json();
-    window._allLogs = Array.isArray(j) ? j : [];
-    applyLogFilters();
+    const r = await fetchJson('/api/logs');
+    if (!r.ok){ node.classList.add('empty'); node.innerHTML = `<span class="err">[${r.status}] ${esc(r.error||('HTTP '+r.status))}</span>`; return; }
+    window._allLogs = Array.isArray(r.data) ? r.data : [];
+    renderLogs();
   } catch(e){
-    setText('logs', '[fetch error] ' + e.message);
+    node.classList.add('empty'); node.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }
+}
+
+async function loadCard(id, url, renderer){
+  try {
+    const r = await fetchJson(url);
+    if (!r.ok){
+      setHtml(id, `<span class="err">[${r.status}] ${esc(r.error || ('HTTP '+r.status))}</span>`);
+      return;
+    }
+    renderer(r.data);
+  } catch(e){
+    setHtml(id, `<span class="err">${esc(e.message)}</span>`);
   }
 }
 
 async function tick(){
-  await loadJson('health','/api/health');
-  await loadJson('servers','/api/servers');
-  await loadJson('sessions','/api/sessions');
-  await loadJson('stats','/api/stats');
-  await loadJson('activity','/api/activity');
+  await loadCard('health',  '/api/health',   renderHealth);
+  await loadCard('stats',   '/api/stats',    renderStats);
+  await loadCard('servers', '/api/servers',  renderServers);
+  await loadCard('sessions','/api/sessions', renderSessions);
+  await loadCard('activity','/api/activity', renderActivity);
   await loadLogs();
 }
 
-ids.forEach(function(id){
-  var node = el(id);
-  if (!node) console.warn('element not found:', id);
+['filter-system','filter-user','filter-errors'].forEach(id => {
+  const n = $(id); if (n) n.addEventListener('change', renderLogs);
 });
-
-['filter-system','filter-user','filter-text'].forEach(function(id){
-  var n = el(id);
-  if (n) n.addEventListener('input', applyLogFilters);
-  if (n) n.addEventListener('change', applyLogFilters);
-});
+const ft = $('filter-text'); if (ft) ft.addEventListener('input', renderLogs);
 
 tick();
 setInterval(tick, 5000);

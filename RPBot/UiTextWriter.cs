@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -41,6 +42,12 @@ namespace RPBot
         public override void WriteLine(string? value)
         {
             Write(value);
+        }
+
+        public override void WriteLine()
+        {
+            var ui = _uiProvider?.Invoke();
+            ui?.AddLog(string.Empty);
         }
     }
 }

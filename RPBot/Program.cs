@@ -26,6 +26,8 @@ namespace RPBot
 {
     public partial class Program : IDisposable, IBotController
     {
+        public static Program? Instance { get; private set; }
+
         static Program()
         {
             AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
@@ -92,6 +94,20 @@ private MusicStats? _musicStats;
 
         private readonly ConcurrentDictionary<string, (string title, int minutes)> _pendingPredictionCreate = new();
         private readonly ConcurrentDictionary<string, DateTimeOffset> _masterGuideSentAt = new();
+
+        // Счётчики для дашборда /api/stats
+        private int _rollsTodayCount;
+        private int _chatMessagesTodayCount;
+        private int _usersInVoiceCount;
+        private DateTimeOffset _startupTimeUtc = DateTimeOffset.UtcNow;
+        private DateTime _lastCountersResetDate = DateTime.UtcNow.Date;
+        // Скользящее окно активности (последний час, по минутам)
+        private readonly ConcurrentQueue<ActivityBucket> _activityBuckets = new();
+        private readonly object _activityLock = new();
+        private const int ActivityWindowMinutes = 60;
+
+        // Простая версия бота для /api/health (читается из атрибута сборки при наличии, иначе — константа)
+        public const string BotVersion = "dev";
 
 		private Task? _backgroundMonitoringTask;
 		private CancellationTokenSource? _backgroundMonitoringCts;
@@ -804,6 +820,7 @@ private MusicStats? _musicStats;
 
         public Program()
         {
+			Instance = this;
 			var configRelativePath = Path.Combine("Settings", "config.json");
 			var configResolvedPath = BotConfig.ResolvePath(configRelativePath);
 			_config = BotConfig.Load(configRelativePath);
@@ -878,6 +895,8 @@ private MusicStats? _musicStats;
 					Guilds = _client?.Guilds?.Count ?? 0,
 					StartupType = GetStartupTypeDisplay(),
 					UtcNow = DateTimeOffset.UtcNow,
+					Version = BotVersion,
+					Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
 				},
 				serverConfigsProvider: () => _serverConfigs,
 				sessionsProvider: () => GameSessionCommands._sessions
@@ -886,13 +905,20 @@ private MusicStats? _musicStats;
 						g => g.Value.Values.Select(s => new
 						{
 							s.SessionId,
-							s.GameName,
-							s.MasterName,
-							s.IsPaused,
-							s.StartTime,
-							s.ControlChannelId,
-							s.ControlMessageId,
-						}).ToList()));
+							GuildId = g.Key,
+							Name = s.GameName,
+							Status = s.IsPaused ? "paused" : "active",
+							CreatedAt = s.StartTime,
+							LeaderId = s.MasterId,
+							MasterName = s.MasterName,
+						}).ToList()),
+				rollsTodayProvider: () => _rollsTodayCount,
+				activeSessionsProvider: () => GameSessionCommands._sessions.Sum(g => g.Value.Count(s => !s.Value.IsPaused)),
+				chatMessagesTodayProvider: () => _chatMessagesTodayCount,
+				usersInVoiceProvider: () => _usersInVoiceCount,
+				activityProvider: () => GetActivityBuckets(),
+				versionProvider: () => BotVersion,
+				uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc);
 			_webDashboard.Start();
 
 			_googleSheetsService = GoogleSheetsService.TryCreate(_config);
@@ -1592,12 +1618,138 @@ private MusicStats? _musicStats;
 			catch { }
 		}
 
+		/// <summary>
+		/// Пишет строку в реальную консоль с цветом по уровню/категории.
+		/// В UI-панель BotUI.AddLog() строка уже уходит через UiSink, сюда попадает только терминал.
+		/// </summary>
+		private static readonly object _consoleColorLock = new();
+		private static void WriteToConsoleWithColor(string msg)
+		{
+		    try
+		    {
+		        var orig = Console.Out;
+		        ConsoleColor levelColor = ConsoleColor.Gray;
+		        ConsoleColor categoryColor = ConsoleColor.DarkGray;
+		        string prefix = string.Empty;
+
+		        if (msg.StartsWith("❌")) { levelColor = ConsoleColor.Red; prefix = "❌"; }
+		        else if (msg.StartsWith("⚠️")) { levelColor = ConsoleColor.Yellow; prefix = "⚠️ "; }
+
+		        foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+		        {
+		            if (msg.Contains(cat.ToString(), StringComparison.OrdinalIgnoreCase))
+		            { categoryColor = CategoryColor(cat); break; }
+		        }
+
+		        lock (_consoleColorLock)
+		        {
+		            var fg = orig is ColorTextWriter ? Console.ForegroundColor : levelColor;
+		            Console.ForegroundColor = levelColor;
+		            Console.Write(prefix);
+		            Console.ForegroundColor = categoryColor;
+		            Console.WriteLine(msg.Substring(prefix.Length));
+		            Console.ResetColor();
+		        }
+		    }
+		    catch { /* цветной вывод — не критичная функциональность */ }
+		}
+
+		// Простое расширение для категорий (дубликат из BotLogger, чтобы не светить internal-наружу)
+		private static ConsoleColor CategoryColor(LogCategory category) => category switch
+		{
+		    LogCategory.Rolls   => ConsoleColor.Magenta,
+		    LogCategory.Music   => ConsoleColor.Green,
+		    LogCategory.Predict => ConsoleColor.DarkCyan,
+		    LogCategory.Points  => ConsoleColor.DarkMagenta,
+		    LogCategory.Session => ConsoleColor.DarkGreen,
+		    LogCategory.System  => ConsoleColor.Gray,
+		    LogCategory.Boot    => ConsoleColor.White,
+		    LogCategory.Discord => ConsoleColor.Blue,
+		    LogCategory.Sheets  => ConsoleColor.DarkYellow,
+		    _                   => ConsoleColor.Gray,
+		};
+
+		private sealed class ColorTextWriter : TextWriter
+		{
+		    public override Encoding Encoding => Encoding.UTF8;
+		}
+
 		private static BotUI? _ui;
         private static bool _uiStarted = false;
+
+        /// <summary>
+        /// Регистрирует событие для счётчиков дашборда.
+        /// Вызывается из обработчиков бросков / сообщений / голосовых событий.
+        /// </summary>
+        public void RegisterActivity()
+        {
+            // Скользящее окно: добавляем текущую минуту + чистим старые
+            var minute = new DateTimeOffset(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day,
+                                            DateTime.UtcNow.Hour, DateTime.UtcNow.Minute, 0, TimeSpan.Zero);
+            lock (_activityLock)
+            {
+                _activityBuckets.Enqueue(new ActivityBucket(minute, 1));
+                var cutoff = DateTimeOffset.UtcNow.AddMinutes(-ActivityWindowMinutes);
+                while (_activityBuckets.TryPeek(out var oldest) && oldest.Minute < cutoff)
+                    _activityBuckets.TryDequeue(out _);
+            }
+
+            // Сброс дневных счётчиков при переходе через полночь UTC
+            var today = DateTime.UtcNow.Date;
+            if (today != _lastCountersResetDate)
+            {
+                Interlocked.Exchange(ref _rollsTodayCount, 0);
+                Interlocked.Exchange(ref _chatMessagesTodayCount, 0);
+                Interlocked.Exchange(ref _usersInVoiceCount, 0);
+                _lastCountersResetDate = today;
+            }
+        }
+
+        public void IncrementRollsToday() { RegisterActivity(); Interlocked.Increment(ref _rollsTodayCount); }
+        public void IncrementChatToday()   { RegisterActivity(); Interlocked.Increment(ref _chatMessagesTodayCount); }
+
+        private void RefreshUsersInVoice()
+        {
+            try
+            {
+                if (_client == null) return;
+                int total = 0;
+                foreach (var g in _client.Guilds)
+                    total += g.Users.Count(u => !u.IsBot && u.VoiceChannel != null);
+                Interlocked.Exchange(ref _usersInVoiceCount, total);
+            }
+            catch { /* для счётчика безопаснее молча */ }
+        }
+
+        private IReadOnlyList<ActivityBucket> GetActivityBuckets()
+        {
+            // Обновляем счётчик пользователей в голосе раз в обращение
+            RefreshUsersInVoice();
+            // Склеиваем корзинки по минутам и отдаём в порядке возрастания времени
+            Dictionary<DateTimeOffset, int> agg;
+            lock (_activityLock)
+            {
+                var cutoff = DateTimeOffset.UtcNow.AddMinutes(-ActivityWindowMinutes);
+                agg = _activityBuckets
+                    .Where(b => b.Minute >= cutoff)
+                    .GroupBy(b => b.Minute)
+                    .ToDictionary(g => g.Key, g => g.Sum(b => b.Count));
+            }
+            return agg
+                .OrderBy(kv => kv.Key)
+                .Select(kv => new ActivityBucket(kv.Key, kv.Value))
+                .ToList();
+        }
 
         public async Task RunBotAsync()
 		{
 			_startupTime = DateTime.UtcNow;
+			_startupTimeUtc = DateTimeOffset.UtcNow;
+			_rollsTodayCount = 0;
+			_chatMessagesTodayCount = 0;
+			_usersInVoiceCount = 0;
+			_lastCountersResetDate = DateTime.UtcNow.Date;
+			lock (_activityLock) _activityBuckets.Clear();
 
 			if (_ui == null)
 			{
@@ -1638,8 +1790,12 @@ private MusicStats? _musicStats;
                 await Task.Delay(2000);
                 _uiStarted = true;
 
-                // Подключаем BotLogger к UI-терминалу
-                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
+                // Подключаем BotLogger к UI-терминалу + цветной вывод в реальную консоль
+                BotLogger.SetUiSink(msg =>
+                {
+                    _ui?.AddLog(msg);
+                    WriteToConsoleWithColor(msg);
+                });
 
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
@@ -1657,7 +1813,11 @@ private MusicStats? _musicStats;
                 _ui.AddLog("Перезапуск бота...");
 
                 BotLogger.Info(LogCategory.Boot, "=== Рестарт ===");
-                BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
+                BotLogger.SetUiSink(msg =>
+                {
+                    _ui?.AddLog(msg);
+                    WriteToConsoleWithColor(msg);
+                });
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
             }
 

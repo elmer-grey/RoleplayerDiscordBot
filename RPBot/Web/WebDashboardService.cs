@@ -10,12 +10,21 @@ using System.Threading.Tasks;
 
 namespace RPBot.Web
 {
+    public sealed record ActivityBucket(DateTimeOffset Minute, int Count);
+
     public sealed class WebDashboardService : IDisposable
     {
         private readonly string _prefix;
         private readonly Func<object> _healthProvider;
         private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
         private readonly Func<object> _sessionsProvider;
+        private readonly Func<int> _rollsTodayProvider;
+        private readonly Func<int> _activeSessionsProvider;
+        private readonly Func<int> _chatMessagesTodayProvider;
+        private readonly Func<int> _usersInVoiceProvider;
+        private readonly Func<IReadOnlyList<ActivityBucket>> _activityProvider;
+        private readonly Func<string> _versionProvider;
+        private readonly Func<TimeSpan> _uptimeProvider;
         private readonly HttpListener _listener = new();
         private readonly object _logsLock = new();
         private readonly LinkedList<BotLogRecord> _logs = new();
@@ -29,12 +38,26 @@ namespace RPBot.Web
             Func<object> healthProvider,
             Func<IReadOnlyDictionary<ulong, ServerConfig>> serverConfigsProvider,
             Func<object> sessionsProvider,
+            Func<int> rollsTodayProvider,
+            Func<int> activeSessionsProvider,
+            Func<int> chatMessagesTodayProvider,
+            Func<int> usersInVoiceProvider,
+            Func<IReadOnlyList<ActivityBucket>> activityProvider,
+            Func<string> versionProvider,
+            Func<TimeSpan> uptimeProvider,
             int maxLogs = 1000)
         {
             _prefix = $"http://{host}:{port}/";
             _healthProvider = healthProvider;
             _serverConfigsProvider = serverConfigsProvider;
             _sessionsProvider = sessionsProvider;
+            _rollsTodayProvider = rollsTodayProvider;
+            _activeSessionsProvider = activeSessionsProvider;
+            _chatMessagesTodayProvider = chatMessagesTodayProvider;
+            _usersInVoiceProvider = usersInVoiceProvider;
+            _activityProvider = activityProvider;
+            _versionProvider = versionProvider;
+            _uptimeProvider = uptimeProvider;
             _maxLogs = Math.Max(100, maxLogs);
         }
 
@@ -175,12 +198,38 @@ namespace RPBot.Web
                         }
                         var logs = snapshot.Select(x => new
                         {
-                            x.Timestamp,
+                            timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
                             x.Level,
                             x.Category,
                             x.Message,
+                            x.IsUser,
                         });
                         await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
+                        break;
+                    case "/api/stats":
+                        int rolls = SafeInvokeInt(_rollsTodayProvider);
+                        int sess  = SafeInvokeInt(_activeSessionsProvider);
+                        int chat  = SafeInvokeInt(_chatMessagesTodayProvider);
+                        int voice = SafeInvokeInt(_usersInVoiceProvider);
+                        int totalLogs;
+                        lock (_logsLock) totalLogs = _logs.Count;
+                        await WriteJsonAsync(context.Response, new
+                        {
+                            RollsToday = rolls,
+                            ChatMessagesToday = chat,
+                            ActiveSessions = sess,
+                            UsersInVoice = voice,
+                            LogRecords = totalLogs,
+                        }, token).ConfigureAwait(false);
+                        break;
+                    case "/api/activity":
+                        var activity = SafeInvoke(_activityProvider) as IReadOnlyList<ActivityBucket>
+                                       ?? Array.Empty<ActivityBucket>();
+                        await WriteJsonAsync(context.Response, activity.Select(b => new
+                        {
+                            Minute = b.Minute.ToString("HH:mm"),
+                            b.Count,
+                        }), token).ConfigureAwait(false);
                         break;
                     default:
                         context.Response.StatusCode = 404;
@@ -210,6 +259,16 @@ namespace RPBot.Web
             {
                 BotLogger.Warn(LogCategory.System, $"[WebDashboard] Провайдер вернул ошибку: {ex.Message}");
                 return new { error = ex.Message };
+            }
+        }
+
+        private static int SafeInvokeInt(Func<int> provider)
+        {
+            try { return provider(); }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.System, $"[WebDashboard] Провайдер счётчика вернул ошибку: {ex.Message}");
+                return 0;
             }
         }
 

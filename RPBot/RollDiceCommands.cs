@@ -118,12 +118,15 @@ namespace RPBot
             if (hasRange) sb.Append($" [{minValue}-{maxValue}]");
             sb.Append($" → {string.Join(", ", results)}");
             if (modifier != 0) sb.Append($" (мод {(modifier >= 0 ? "+" : string.Empty)}{modifier} → {string.Join(", ", results.Select(r => r + modifier))})");
-            BotLogger.Debug(LogCategory.Cmd, sb.ToString());
+            var msg = sb.ToString();
+            BotLogger.Info(LogCategory.Rolls, msg);
+            Program.Instance?.IncrementRollsToday();
         }
 
         private static void WriteCompletedRollLog(string input, int result)
         {
-            BotLogger.Debug(LogCategory.Cmd, $"Бросок: {input} → {result}");
+            BotLogger.Info(LogCategory.Rolls, $"Бросок: {input} → {result}");
+            Program.Instance?.IncrementRollsToday();
         }
 
         private static async Task DeleteOriginalResponseSafeAsync(SocketSlashCommand command, int delayMs)

@@ -7,5 +7,6 @@ namespace RPBot
         LogLevel Level,
         LogCategory Category,
         string Message,
-        string FormattedLine);
+        string FormattedLine,
+        bool IsUser = false);
 }
