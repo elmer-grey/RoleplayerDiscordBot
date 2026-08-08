@@ -143,6 +143,9 @@ namespace RPBot
             // Игнорируем бота
             if (user.IsBot) return;
 
+            // Быстрый выход: канал не менялся (это могло быть mute/deafen/видео)
+            if (before.VoiceChannel?.Id == after.VoiceChannel?.Id) return;
+
             var guild = (after.VoiceChannel ?? before.VoiceChannel)?.Guild;
             if (guild == null) return;
 

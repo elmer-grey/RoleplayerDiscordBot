@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>RPBot Dashboard</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:20px}
+.card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:12px}
+pre{white-space:pre-wrap;word-break:break-word;background:#0f0f0f;padding:10px;border-radius:8px;max-height:400px;overflow:auto}
+h1,h2{margin:0 0 10px}
+small{color:#aaa}
+.error{color:#f88}
+.controls{margin-bottom:8px}
+.controls label{margin-right:12px;cursor:pointer}
+.controls input{cursor:pointer}
+</style>
+</head>
+<body>
+<h1>RPBot Web Dashboard</h1>
+
+<div class="card">
+  <h2>Health</h2>
+  <pre id="health">loading...</pre>
+</div>
+
+<div class="card">
+  <h2>Servers</h2>
+  <pre id="servers">loading...</pre>
+</div>
+
+<div class="card">
+  <h2>Sessions</h2>
+  <pre id="sessions">loading...</pre>
+</div>
+
+<div class="card">
+  <h2>Stats (за сегодня)</h2>
+  <pre id="stats">loading...</pre>
+</div>
+
+<div class="card">
+  <h2>Activity (последний час, по минутам)</h2>
+  <pre id="activity">loading...</pre>
+</div>
+
+<div class="card">
+  <h2>Logs (последние 200)</h2>
+  <div class="controls">
+    <label><input type="checkbox" id="filter-system" checked /> System</label>
+    <label><input type="checkbox" id="filter-user" checked /> User</label>
+    <label><input type="text" id="filter-text" placeholder="Поиск..." /></label>
+  </div>
+  <pre id="logs">loading...</pre>
+  <small>Автообновление раз в 5 секунд</small>
+</div>
+
+<script>
+const ids = ['health','servers','sessions','stats','activity','logs'];
+
+function el(id){ return document.getElementById(id); }
+
+function setText(id, text){
+  var node = el(id);
+  if (!node) return;
+  node.textContent = text;
+}
+
+async function loadJson(id, url){
+  try {
+    var r = await fetch(url, {cache:'no-store'});
+    var j;
+    try { j = await r.json(); }
+    catch(parseErr){ setText(id, '['+r.status+'] Невалидный JSON: '+parseErr.message); return; }
+    if (j && j.error) {
+      setText(id, '[error] '+j.error);
+    } else {
+      setText(id, JSON.stringify(j, null, 2));
+    }
+  } catch(e){
+    setText(id, '[fetch error] ' + e.message);
+  }
+}
+
+function applyLogFilters(){
+  var showSystem = el('filter-system').checked;
+  var showUser = el('filter-user').checked;
+  var search = (el('filter-text').value || '').toLowerCase();
+  var lines = window._allLogs || [];
+  var filtered = lines.filter(function(rec){
+    var isUser = rec.isUser === true;
+    if (isUser && !showUser) return false;
+    if (!isUser && !showSystem) return false;
+    if (search && (rec.message||'').toLowerCase().indexOf(search) < 0) return false;
+    return true;
+  });
+  setText('logs', filtered.map(function(r){
+    return '[' + r.timestamp + '] [' + r.level + '] ' + (r.isUser?'[user] ':'') + r.message;
+  }).join('\n') || '(нет записей)');
+}
+
+async function loadLogs(){
+  try {
+    var r = await fetch('/api/logs', {cache:'no-store'});
+    var j = await r.json();
+    window._allLogs = Array.isArray(j) ? j : [];
+    applyLogFilters();
+  } catch(e){
+    setText('logs', '[fetch error] ' + e.message);
+  }
+}
+
+async function tick(){
+  await loadJson('health','/api/health');
+  await loadJson('servers','/api/servers');
+  await loadJson('sessions','/api/sessions');
+  await loadJson('stats','/api/stats');
+  await loadJson('activity','/api/activity');
+  await loadLogs();
+}
+
+ids.forEach(function(id){
+  var node = el(id);
+  if (!node) console.warn('element not found:', id);
+});
+
+['filter-system','filter-user','filter-text'].forEach(function(id){
+  var n = el(id);
+  if (n) n.addEventListener('input', applyLogFilters);
+  if (n) n.addEventListener('change', applyLogFilters);
+});
+
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

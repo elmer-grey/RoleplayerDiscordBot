@@ -843,6 +843,9 @@ private MusicStats? _musicStats;
 			    BotLogger.Warn(LogCategory.System, $"[MasterGuide] Ошибка при массовом создании шаблонов: {ex.Message}");
 			}
 
+			// Загружаем историю отправленных памяток (для кулдауна между перезагрузками)
+			LoadMasterGuideHistory();
+
 			// Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
 			try
 			{
@@ -2008,6 +2011,7 @@ private MusicStats? _musicStats;
                 {
                     await dmChannel.SendMessageAsync(guide);
                     _masterGuideSentAt[key] = DateTimeOffset.UtcNow;
+                    SaveMasterGuideHistory();
                     BotLogger.Info(LogCategory.Discord, $"[MasterGuide] Отправлена памятка пользователю {after.Id} на сервере {after.Guild.Id}");
                 }
                 catch (Exception ex)
@@ -2022,6 +2026,47 @@ private MusicStats? _musicStats;
         }
 
         // BuildMasterGuideMessage перенесён в MasterGuideService.GetBuiltinTemplate/Render
+
+        private const string MasterGuideHistoryFile = "master_guide_sent.json";
+
+        private void LoadMasterGuideHistory()
+        {
+            try
+            {
+                var path = Path.Combine("Settings", MasterGuideHistoryFile);
+                if (!File.Exists(path)) return;
+                var json = File.ReadAllText(path, Encoding.UTF8);
+                if (string.IsNullOrWhiteSpace(json)) return;
+                var dict = JsonSerializer.Deserialize<Dictionary<string, DateTimeOffset>>(json);
+                if (dict == null) return;
+                foreach (var kv in dict)
+                    _masterGuideSentAt[kv.Key] = kv.Value;
+                BotLogger.Info(LogCategory.System, $"[MasterGuide] Загружена история отправок: {dict.Count} записей");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось загрузить историю отправок: {ex.Message}");
+            }
+        }
+
+        private void SaveMasterGuideHistory()
+        {
+            try
+            {
+                var dir = "Settings";
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, MasterGuideHistoryFile);
+                var bakPath = path + ".bak";
+                var json = JsonSerializer.Serialize(_masterGuideSentAt, new JsonSerializerOptions { WriteIndented = true });
+                // Атомарная запись: сначала .bak, затем основной файл
+                File.WriteAllText(bakPath, json, new UTF8Encoding(false));
+                File.Copy(bakPath, path, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось сохранить историю отправок: {ex.Message}");
+            }
+        }
 
         /// <summary>
         /// Автоматическая отмена активного прогноза при завершении/отмене события

@@ -399,6 +399,7 @@ namespace RPBot
             // Диагностика: логируем gateway-события чтобы убедиться что они приходят
             client.UserVoiceStateUpdated += (user, before, after) =>
             {
+                if (before.VoiceChannel?.Id == after.VoiceChannel?.Id) return Task.CompletedTask;
                 Log($"[Music][DBG] UserVoiceStateUpdated: user={user.Id} before={before.VoiceChannel?.Id} after={after.VoiceChannel?.Id} sessionId='{after.VoiceSessionId}' isSelf={user.Id == client.CurrentUser?.Id}");
                 return Task.CompletedTask;
             };

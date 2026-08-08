@@ -21,6 +21,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>Lavalink\application.yml</Link>
     </Content>
+    <Content Include="Web\dashboard.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>Web\dashboard.html</Link>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

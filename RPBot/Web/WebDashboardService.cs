@@ -132,7 +132,7 @@ namespace RPBot.Web
                 switch (path)
                 {
                     case "/":
-                        await WriteHtmlAsync(context.Response, BuildHtml(), token).ConfigureAwait(false);
+                        await WriteHtmlAsync(context.Response, LoadDashboardHtml(), token).ConfigureAwait(false);
                         break;
                     case "/api/health":
                         await WriteJsonAsync(context.Response, SafeInvoke(_healthProvider), token).ConfigureAwait(false);
@@ -245,44 +245,29 @@ namespace RPBot.Web
             }
         }
 
-        private static string BuildHtml()
+        private static string LoadDashboardHtml()
         {
-            return """
-<!doctype html>
-<html lang=\"ru\">
-<head>
-<meta charset=\"utf-8\" />
-<title>RPBot Dashboard</title>
-<style>
-body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:20px}
-.card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:12px}
-pre{white-space:pre-wrap;word-break:break-word;background:#0f0f0f;padding:10px;border-radius:8px}
-h1,h2{margin:0 0 10px}
-small{color:#aaa}
-</style>
-</head>
-<body>
-<h1>RPBot Web Dashboard</h1>
-<div class=\"card\"><h2>Health</h2><pre id=\"health\">loading...</pre></div>
-<div class=\"card\"><h2>Servers</h2><pre id=\"servers\">loading...</pre></div>
-<div class=\"card\"><h2>Sessions</h2><pre id=\"sessions\">loading...</pre></div>
-<div class=\"card\"><h2>Logs (последние 200)</h2><pre id=\"logs\">loading...</pre><small>Автообновление раз в 5 секунд</small></div>
-<script>
-async function load(id,url){
- const r=await fetch(url); const j=await r.json();
- document.getElementById(id).textContent=JSON.stringify(j,null,2);
-}
-async function tick(){
- await load('health','/api/health');
- await load('servers','/api/servers');
- await load('sessions','/api/sessions');
- await load('logs','/api/logs');
-}
-tick(); setInterval(tick,5000);
-</script>
-</body>
-</html>
-""";
+            try
+            {
+                // Ищем файл в Web/dashboard.html рядом с .exe, потом в исходниках
+                var candidates = new[]
+                {
+                    Path.Combine(AppContext.BaseDirectory, "Web", "dashboard.html"),
+                    Path.Combine(Directory.GetCurrentDirectory(), "Web", "dashboard.html"),
+                    Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Web", "dashboard.html"),
+                };
+                foreach (var path in candidates)
+                {
+                    if (File.Exists(path))
+                        return File.ReadAllText(path, Encoding.UTF8);
+                }
+                BotLogger.Warn(LogCategory.System, "[WebDashboard] dashboard.html не найден, отдаём заглушку");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.System, $"[WebDashboard] Ошибка загрузки dashboard.html: {ex.Message}");
+            }
+            return "<!doctype html><html><body><h1>RPBot</h1><p>dashboard.html не найден</p></body></html>";
         }
 
         public void Dispose()
