@@ -19,8 +19,11 @@ public class WebDashboardTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
-        // Initialize the global logger so observers can be registered safely.
-        BotLogger.Initialize(BotConfig.GetDataDirectory(), DateTime.Now);
+        // Используем изолированный временный каталог, чтобы тесты не оставляли
+        // записи в реальном production-каталоге данных (AppData\RPBot\Logs).
+        _tmpLogDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tmpLogDir);
+        BotLogger.Initialize(_tmpLogDir, DateTime.Now);
         return Task.CompletedTask;
     }
 
@@ -32,8 +35,11 @@ public class WebDashboardTests : IAsyncLifetime
             try { _svc.Dispose(); } catch { }
             _svc = null;
         }
+        try { Directory.Delete(_tmpLogDir, recursive: true); } catch { }
         return Task.CompletedTask;
     }
+
+    private string _tmpLogDir = "";
 
     private static readonly int[] _allowedPorts = Enumerable.Range(50060, 41).ToArray();
     private static int _nextPortIndex = 0;

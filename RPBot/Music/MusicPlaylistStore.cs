@@ -38,7 +38,10 @@ namespace RPBot.Music
 
         public MusicPlaylistStore(string baseDirectory)
         {
-            _filePath = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_playlists.json");
+            // baseDirectory обычно равен AppContext.BaseDirectory; используем BotConfig.GetDataDirectory(),
+            // чтобы файл жил в production-каталоге данных (AppData/.../RPBot/Data/ на Windows),
+            // а не рядом с .exe.
+            _filePath = Path.Combine(BotConfig.GetDataDirectory(), "music_playlists.json");
         }
 
         // ─── CRUD ─────────────────────────────────────────────────────────

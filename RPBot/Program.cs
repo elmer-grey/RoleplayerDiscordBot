@@ -40,7 +40,7 @@ namespace RPBot
             {
                 var ex = args.ExceptionObject as Exception;
                 var timestamp = DateTimeOffset.Now.ToString("yyyyMMdd_HHmmss");
-                var crashDir = Path.Combine(BotConfig.DataFolderName, "crashes");
+                var crashDir = Path.Combine(BotConfig.GetDataDirectory(), "crashes");
                 Directory.CreateDirectory(crashDir);
                 var crashFile = Path.Combine(crashDir, $"crash_{timestamp}.txt");
                 var content = $"{ex?.GetType().FullName}: {ex?.Message}\n{ex?.StackTrace}\n";
@@ -899,7 +899,7 @@ private MusicStats? _musicStats;
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
-			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.DataFolderName, "event_announcements.json"));
+			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.GetDataDirectory(), "event_announcements.json"));
 			var eventOpsRenderer = new EventOpsRenderer();
 			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
 			_eventAnnouncer = new EventAnnouncer(

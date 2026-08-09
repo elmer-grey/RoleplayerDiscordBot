@@ -111,6 +111,13 @@ namespace RPBot
         public static void Info(LogCategory category, string message)
             => Write(LogLevel.Info, category, message);
 
+                /// <summary>
+                /// Синхронный Info, ожидающий завершения записи на диск.
+                /// Используется в тестах, чтобы избежать гонки с fire-and-forget фоновой записью.
+                /// </summary>
+                public static Task WriteTestSync(LogCategory category, string message)
+                    => WriteAsync(LogLevel.Info, category, message);
+
         public static void Warn(LogCategory category, string message)
             => Write(LogLevel.Warn, category, message);
 

@@ -24,27 +24,26 @@ public class LoggerTests : IDisposable
     }
 
     [Fact]
-    public async Task Initialize_CreatesSubfolder_WithTimestamp()
-    {
-        var startup = new DateTime(2026, 8, 8, 21, 30, 0);
-        BotLogger.Initialize(_tmpDir, startup);
+        public async Task Initialize_CreatesSubfolder_WithTimestamp()
+        {
+            var startup = new DateTime(2026, 8, 8, 21, 30, 0);
+            BotLogger.Initialize(_tmpDir, startup);
 
-        var expected = Path.Combine(_tmpDir, "20260808_213000");
-        Assert.True(Directory.Exists(expected),
-            $"Ожидался каталог {expected}");
+            var expected = Path.Combine(_tmpDir, "20260808_213000");
+            Assert.True(Directory.Exists(expected),
+                $"Ожидался каталог {expected}");
 
-        // Прямой sync-Write, чтобы избежать гонки с фоновой записью
-        BotLogger.Info(LogCategory.System, "test message");
+            // Info — fire-and-forget, ждём, пока фоновой Write завершится, чтобы не гонять горутины.
+            await BotLogger.WriteTestSync(LogCategory.System, "test message");
 
-        var systemLog = Path.Combine(expected, "System.log");
-        Assert.True(File.Exists(systemLog), $"Ожидался файл {systemLog}");
-        var content = await File.ReadAllTextAsync(systemLog);
-        Assert.Contains("test message", content);
-        await Task.CompletedTask;
-    }
+            var systemLog = Path.Combine(expected, "System.log");
+            Assert.True(File.Exists(systemLog), $"Ожидался файл {systemLog}");
+            var content = await File.ReadAllTextAsync(systemLog);
+            Assert.Contains("test message", content);
+        }
 
-    [Fact]
-    public void LogStartup_TwoStarts_CreatesTwoSubfolders()
+        [Fact]
+        public void LogStartup_TwoStarts_CreatesTwoSubfolders()
     {
         BotLogger.Initialize(_tmpDir, new DateTime(2026, 8, 8, 10, 0, 0));
         BotLogger.Initialize(_tmpDir, new DateTime(2026, 8, 8, 11, 0, 0));

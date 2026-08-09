@@ -23,7 +23,9 @@ namespace RPBot.Music
 
         public MusicQueueStore(string baseDirectory)
         {
-            _filePath = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_queues.json");
+            // baseDirectory не используется — кладём файл в production-каталог данных,
+            // чтобы он не терялся при пересборке/clean.
+            _filePath = Path.Combine(BotConfig.GetDataDirectory(), "music_queues.json");
         }
 
         public async Task SaveAsync(ulong guildId, string? currentUrl, IEnumerable<string> queueUrls)

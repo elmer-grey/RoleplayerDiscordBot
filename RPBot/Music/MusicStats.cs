@@ -18,7 +18,9 @@ namespace RPBot.Music
 
         public static async Task<MusicStats> LoadAsync(string baseDirectory)
         {
-            var path = Path.Combine(baseDirectory, BotConfig.DataFolderName, "music_stats.json");
+            // baseDirectory игнорируется: файл всегда живёт в production-каталоге данных
+            // (см. BotConfig.GetDataDirectory), чтобы не потеряться при dotnet clean.
+            var path = Path.Combine(BotConfig.GetDataDirectory(), "music_stats.json");
             MusicStats stats;
             if (File.Exists(path))
             {
