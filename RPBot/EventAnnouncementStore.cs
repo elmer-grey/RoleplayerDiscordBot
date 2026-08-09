@@ -24,7 +24,12 @@ namespace RPBot
 			{
 				if (!_state.Guilds.TryGetValue(guildId, out var g))
 					return null;
-				return g.Events.TryGetValue(eventId, out var e) ? e : null;
+				if (!g.Events.TryGetValue(eventId, out var e))
+					return null;
+				// Снимок снимка: гарантируем non-null словарь, иначе NRE в resync.
+				if (e.DmMessageIdsByUserId == null)
+					e.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
+				return e;
 			}
 		}
 
@@ -38,18 +43,32 @@ namespace RPBot
 					foreach (var eventPair in guildPair.Value.Events)
 					{
 						var e = eventPair.Value;
+						// На случай если в JSON словарь был null — гарантируем non-null
+						// в снимке, иначе resync/обновление упадёт с NRE.
+						var dmMap = e.DmMessageIdsByUserId is null
+							? new Dictionary<ulong, ulong>()
+							: new Dictionary<ulong, ulong>(e.DmMessageIdsByUserId);
 						list.Add(new EventAnnouncementEntry
 						{
 							GuildId = e.GuildId,
 							EventId = e.EventId,
 							AnnounceChannelId = e.AnnounceChannelId,
 							AnnounceMessageId = e.AnnounceMessageId,
-							DmMessageIdsByUserId = new Dictionary<ulong, ulong>(e.DmMessageIdsByUserId),
+							DmMessageIdsByUserId = dmMap,
 							TelegramChatId = e.TelegramChatId,
 							TelegramMessageThreadId = e.TelegramMessageThreadId,
 							TelegramMessageId = e.TelegramMessageId,
 							TelegramHasPhoto = e.TelegramHasPhoto,
-							LastUpdatedAtUtc = e.LastUpdatedAtUtc
+							LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+							LastName = e.LastName,
+							LastDescription = e.LastDescription,
+							LastStartTimeUtc = e.LastStartTimeUtc,
+							LastEndTimeUtc = e.LastEndTimeUtc,
+							LastChannelId = e.LastChannelId,
+							LastLocation = e.LastLocation,
+							LastCoverImageUrl = e.LastCoverImageUrl,
+							LastUpdatedMark = e.LastUpdatedMark,
+							LastUpdatedAt = e.LastUpdatedAt
 						});
 					}
 				}
@@ -69,6 +88,24 @@ namespace RPBot
 				}
 				g.Events[entry.EventId] = entry;
 				entry.LastUpdatedAtUtc = DateTimeOffset.UtcNow;
+				SaveLocked();
+			}
+		}
+
+		/// <summary>
+		/// Обновляет существующую запись, не трогая DmMessageIdsByUserId.
+		/// Используется для фиксации LastUpdatedMark/LastUpdatedAt в resync-сценарии.
+		/// </summary>
+		public void UpdateEntry(EventAnnouncementEntry updated)
+		{
+			lock (_lock)
+			{
+				if (!_state.Guilds.TryGetValue(updated.GuildId, out var g))
+					return;
+				if (!g.Events.TryGetValue(updated.EventId, out var _))
+					return;
+				g.Events[updated.EventId] = updated;
+				updated.LastUpdatedAtUtc = DateTimeOffset.UtcNow;
 				SaveLocked();
 			}
 		}

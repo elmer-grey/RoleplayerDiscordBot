@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RPBot;
 using RPBot.Music;
 using RPBot.EventOps;
+using RPBot.Startup;
 using RPBot.Web;
 using System;
 using System.Collections.Concurrent;
@@ -116,9 +117,6 @@ private MusicStats? _musicStats;
 		private Task? _dailyRestartTask;
         private string _restartInitiator = "console";
 
-        private TextWriter? _originalOut;
-        private TextWriter? _originalErr;
-
         public static Action<string>? CommandLogSink { get; private set; }
         public static Func<ulong, ServerConfig?>? ServerConfigResolver { get; private set; }
 
@@ -209,7 +207,7 @@ private MusicStats? _musicStats;
                 _client.GuildMemberUpdated += OnGuildMemberUpdated;
             }
 
-            return LogStartup("│   События Discord настроены    │");
+            return LogStartup("События Discord настроены");
         }
         private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
         {
@@ -891,6 +889,18 @@ private MusicStats? _musicStats;
             _client = CreateDiscordClient();
             _commandService = new CommandService();
 
+			// Load persisted DM event-notification subscriptions BEFORE EventAnnouncer,
+			// иначе _eventNotifications остаётся null и AnnounceCreatedInternalAsync
+			// падает с NRE на строке GetActiveSubscribers(...).
+			try
+			{
+				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
+			}
+			catch
+			{
+				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
+			}
+
 			// ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
 			_reconnectionService = new ReconnectionService(_client!) { LogSink = ServiceLogSink };
 			_connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
@@ -903,7 +913,7 @@ private MusicStats? _musicStats;
 			var eventOpsRenderer = new EventOpsRenderer();
 			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
 			_eventAnnouncer = new EventAnnouncer(
-				_client!,
+				() => _client!,
 				() => _serverConfigs!,
 				_telegramNotifier,
 				_eventAnnouncementStore,
@@ -1013,16 +1023,6 @@ private MusicStats? _musicStats;
                 _bwonkCounts = LoadBwonkCounts();
             }
 			catch { _bwonkCounts = new Dictionary<ulong, int>(); }
-
-			// Load persisted DM event-notification subscriptions
-			try
-			{
-				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
-			}
-			catch
-			{
-				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
-			}
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -1820,14 +1820,18 @@ private MusicStats? _musicStats;
                 // Подключаем BotLogger к UI-терминалу (цветная индикация — в дашборде)
                 BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
 
+                // Подключаем StartupRenderer к sinks (один раз за процесс).
+                // FileSink пишет в свой startup-файл напрямую, минуя BotLogger — это убирает дубли.
+                var startupLogDir = Path.Combine(logDir, DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+                var startupRenderer = StartupRenderer.Instance;
+                startupRenderer.AttachSink(new ConsoleSink());
+                startupRenderer.AttachSink(new FileSink(Path.Combine(startupLogDir, "Startup.log")));
+                startupRenderer.AttachSink(new UiSink(msg => _ui?.AddLog(msg)));
+
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
-                // Перенаправляем весь Console в UI-панель логов
-                if (_originalOut == null) _originalOut = Console.Out;
-                if (_originalErr == null) _originalErr = Console.Error;
-                var uiWriter = new UiTextWriter(() => _ui);
-                Console.SetOut(uiWriter);
-                Console.SetError(uiWriter);
+                // Перенаправляем Errors в UI-панель (без Console — это и был источник дублей)
+                Console.SetError(new UiTextWriter(() => _ui));
             }
             else
             {
@@ -1999,7 +2003,8 @@ private MusicStats? _musicStats;
             }
             catch (Exception ex)
             {
-                await LogError($"Ошибка в OnGuildScheduledEventCreated: {ex.Message}");
+                await LogError($"Ошибка в OnGuildScheduledEventCreated: {ex}");
+                try { Console.WriteLine($"[EVENT] OnGuildScheduledEventCreated FULL: {ex}"); } catch { }
             }
         }
 
@@ -2285,6 +2290,19 @@ private MusicStats? _musicStats;
             if (_eventAnnouncementStore == null)
                 return;
 
+            // Подождём, пока клиент реально войдёт — иначе REST падает с
+            // "Client is not logged in" и мы тихо пропускаем все анонсы.
+            var loginDeadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < loginDeadline
+                && _client != null
+                && (_client.ConnectionState != ConnectionState.Connected
+                    || _client.LoginState != LoginState.LoggedIn))
+            {
+                await LogStartup($"[EVENT][RESYNC] Waiting for client login: state={_client?.ConnectionState} login={_client?.LoginState}");
+                await Task.Delay(500);
+            }
+            await LogStartup($"[EVENT][RESYNC] Login state at resync: state={_client?.ConnectionState} login={_client?.LoginState}");
+
             var entries = _eventAnnouncementStore.GetEntriesSnapshot();
 
             // Индекс сохранённых анонсов для быстрого поиска
@@ -2344,7 +2362,7 @@ private MusicStats? _musicStats;
                 catch (Exception ex)
                 {
                     failed++;
-                    await LogError($"[EVENT][RESYNC] Ошибка обновления guild={entry.GuildId}, event={entry.EventId}: {ex.Message}");
+                    await LogError($"[EVENT][RESYNC] Ошибка обновления guild={entry.GuildId}, event={entry.EventId}: {ex}");
                 }
             }
 
@@ -2371,7 +2389,7 @@ private MusicStats? _musicStats;
                 catch (Exception ex)
                 {
                     failed++;
-                    await LogError($"[EVENT][RESYNC] Ошибка скана событий guild={guild.Id}: {ex.Message}");
+                    await LogError($"[EVENT][RESYNC] Ошибка скана событий guild={guild.Id}: {ex}");
                 }
             }
 
@@ -2800,16 +2818,23 @@ await Task.CompletedTask;
             return result;
         }
 
-        private async Task LogStartupBoxAsync(string title, IEnumerable<string> lines)
+        private Task LogStartupBoxAsync(string title, IEnumerable<string> lines)
         {
-            await LogStartupBatch(BuildStartupBox(title, lines));
+            // Перенос логики в рендерер: строки по одной, без рамки-коробки.
+            using (var stage = StartupRenderer.Instance.BeginStage(title))
+            {
+                foreach (var line in lines)
+                    StartupRenderer.Instance.WriteLine(line);
+            }
+            return Task.CompletedTask;
         }
 
-        private async Task LogStartupBatch(IEnumerable<string> messages)
+        private Task LogStartupBatch(IEnumerable<string> messages)
         {
-            var lines = messages is IList<string> l ? l : messages.ToList();
-            foreach (var msg in lines)
-                await BotLogger.InfoAsync(LogCategory.Boot, msg).ConfigureAwait(false);
+            // Используется прежде всего в местах, где список строк уже сформирован.
+            foreach (var msg in messages)
+                StartupRenderer.Instance.WriteLine(msg);
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -3038,48 +3063,54 @@ await Task.CompletedTask;
                 }
 
 				// ЭТАП 1: Регистрация команд
-				var isDailyRestart =
-					_currentStartupType == StartupType.Restart &&
-					string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
+                var isDailyRestart =
+                	_currentStartupType == StartupType.Restart &&
+                	string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
 
-                var stage1Lines = new List<string>();
+                                var stage1Lines = new List<string>();
 
-				if (isDailyRestart)
-				{
-					// После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
-                 stage1Lines.Add("Регистрация команд пропущена (ежедневная перезагрузка).");
-					await _commandHandler.ListSlashCommandsAsync();
-				}
-				else
-				{
-					if (_ui != null && await _ui.AskYesNoQuestion(
-							"Нужно ли перерегистрировать команды?",
-							"Y - Да, N - Нет, таймаут 60 секунд",
-							60
-						) == true)
-					{
-						await _commandHandler.InitializeAsync();
-						await _commandHandler.ListSlashCommandsAsync();
-                        stage1Lines.Add("Команды зарегистрированы.");
-					}
-					else
-					{
-                       stage1Lines.Add("Регистрация команд пропущена.");
-						await _commandHandler.ListSlashCommandsAsync();
-					}
-				}
-                if (stage1Lines.Count == 0)
-                    stage1Lines.Add("Регистрация команд завершена.");
-                await LogStartupBoxAsync("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД", stage1Lines);
+                // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
+                // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
+                StartupRenderer.Instance.WriteHeader("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД");
+
+                if (isDailyRestart)
+                {
+                    // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
+                    StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
+                                    await _commandHandler.ListSlashCommandsAsync();
+                }
+                else
+                {
+                    if (_ui != null && await _ui.AskYesNoQuestion(
+                            "Нужно ли перерегистрировать команды?",
+                            "Y - Да, N - Нет, таймаут 60 секунд",
+                            60
+                        ) == true)
+                    {
+                        await _commandHandler.InitializeAsync();
+                        // При регистрации список уже описан пошагово — печатать его повторно не нужно.
+                    }
+                    else
+                    {
+                       StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
+                        await _commandHandler.ListSlashCommandsAsync();
+                    }
+                }
+
+                // Закрывающая линия этапа 1 — симметрично заголовку.
+                StartupRenderer.Instance.WriteFooter("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
 
                 // ЭТАП 2: Активация обработчиков
                 await SetupDiscordEvents();
-                await LogStartupBoxAsync("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ", new[]
-                {
-                    "Подписки на события Discord обновлены и активированы."
-                });
+                StartupRenderer.Instance.WriteHeader("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ");
+                StartupRenderer.Instance.WriteLine("Подписки на события Discord обновлены и активированы.");
+                StartupRenderer.Instance.WriteFooter("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ — ЗАВЕРШЁН");
 
                 // ЭТАП 3: Синхронизация (эвенты/прогнозы)
+                // Заголовок открываем ДО Resync, иначе [EVENT][RESYNC] строки уезжают
+                // между этапами 2 и 3 — они уходят в рендерер, а рендерер не знает,
+                // что они принадлежат этапу 3.
+                StartupRenderer.Instance.WriteHeader("ЭТАП 3/5: СИНХРОНИЗАЦИЯ");
                 await ResyncEventAnnouncementsOnStartupAsync();
                 var stage3Lines = new List<string>();
                 try
@@ -3132,63 +3163,70 @@ await Task.CompletedTask;
                 catch { }
                 if (stage3Lines.Count == 0)
                     stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
-                await LogStartupBoxAsync("ЭТАП 3/5: СИНХРОНИЗАЦИЯ", stage3Lines);
+                foreach (var line in stage3Lines)
+                    StartupRenderer.Instance.WriteLine(line);
+                StartupRenderer.Instance.WriteFooter("ЭТАП 3/5: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
 
                 // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
-                if (_config.Music.Enabled && _lavalinkService is not null)
-                {
-                    var musicLines = new List<string>();
-                    // Перехватываем весь вывод LavalinkService в буфер,
-                    // чтобы он отобразился внутри бокса этапа, а не до него.
-                    _lavalinkService.StartupLogBuffer = musicLines;
-                    try
-                    {
-                        var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
-
-                        if (!lavalinkReady)
-                        {
-                            // WaitUntilReadyAsync исчерпал таймаут — даём ещё до 15 секунд
-                            // (Lavalink может ещё грузить JVM или плагины)
-                            const int extraRetries = 15;
-                            const int retryDelayMs = 1000;
-                            musicLines.Add($"⏳ Lavalink не ответил за основной таймаут, ждём ещё до {extraRetries}с...");
-
-                            for (int i = 0; i < extraRetries; i++)
-                            {
-                                await Task.Delay(retryDelayMs);
-                                var err = await _lavalinkService.ProbeAsync();
-                                if (err is null)
+                                if (_config.Music.Enabled && _lavalinkService is not null)
                                 {
-                                    lavalinkReady = true;
-                                    musicLines.Add($"✅ Lavalink поднялся на попытке {i + 1} — готов ({_config.Music.Host}:{_config.Music.Port})");
-                                    break;
-                                }
-                            }
+                                    // Перенаправляем весь поток логов LavalinkService в рендерер,
+                                    // чтобы строки появлялись по одной внутри этапа, без буферизации.
+                                    // ВАЖНО: BotLogger.Info(Music) игнорируем в startup-режиме, иначе UI получит дубль.
+                                    _lavalinkService.StartupLogSink = msg =>
+                                    {
+                                        StartupRenderer.Instance.WriteLine(msg);
+                                    };
+                                    StartupRenderer.Instance.WriteHeader("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ");
+                                    try
+                                    {
+                                        var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
 
-                            if (!lavalinkReady)
-                            {
-                                var finalErr = await _lavalinkService.ProbeAsync();
-                                musicLines.Add(finalErr is null
-                                    ? $"✅ Lavalink готов ({_config.Music.Host}:{_config.Music.Port})"
-                                    : $"⚠️ Lavalink так и не ответил: {finalErr}");
-                            }
-                        }
-                        else
-                        {
-                            musicLines.Add($"✅ yt-cipher и Lavalink запущены и отвечают ({_config.Music.Host}:{_config.Music.Port})");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        musicLines.Add($"❌ Ошибка запуска музыкального стека: {ex.Message}");
-                    }
-                    finally
-                    {
-                        // Снимаем буфер — дальнейшие логи идут обратно в обычный sink
-                        _lavalinkService.StartupLogBuffer = null;
-                    }
-                    await LogStartupBoxAsync("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ", musicLines);
-                }
+                                        if (!lavalinkReady)
+                                        {
+                                            // WaitUntilReadyAsync исчерпал таймаут — даём ещё до 15 секунд
+                                            // (Lavalink может ещё грузить JVM или плагины)
+                                            const int extraRetries = 15;
+                                            const int retryDelayMs = 1000;
+                                            StartupRenderer.Instance.WriteLine($"⏳ Lavalink не ответил за основной таймаут, ждём ещё до {extraRetries}с...");
+
+                                            for (int i = 0; i < extraRetries; i++)
+                                            {
+                                                await Task.Delay(retryDelayMs);
+                                                var err = await _lavalinkService.ProbeAsync();
+                                                if (err is null)
+                                                {
+                                                    lavalinkReady = true;
+                                                    StartupRenderer.Instance.WriteLine($"✅ Lavalink поднялся на попытке {i + 1} — готов ({_config.Music.Host}:{_config.Music.Port})");
+                                                    break;
+                                                }
+                                            }
+
+                                            if (!lavalinkReady)
+                                            {
+                                                var finalErr = await _lavalinkService.ProbeAsync();
+                                                if (finalErr is null)
+                                                    StartupRenderer.Instance.WriteLine($"✅ Lavalink готов ({_config.Music.Host}:{_config.Music.Port})");
+                                                else
+                                                    StartupRenderer.Instance.WriteLine($"⚠️ Lavalink так и не ответил: {finalErr}");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            StartupRenderer.Instance.WriteLine($"✅ yt-cipher и Lavalink запущены и отвечают ({_config.Music.Host}:{_config.Music.Port})");
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        StartupRenderer.Instance.WriteLine($"❌ Ошибка запуска музыкального стека: {ex.Message}");
+                                    }
+                                    finally
+                                    {
+                                        // Снимаем sink — дальнейшие логи идут обратно в обычный путь
+                                        _lavalinkService.StartupLogSink = null;
+                                                            StartupRenderer.Instance.WriteFooter("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ — ЗАВЕРШЕНА");
+                                                        }
+                                }
 
                 // ЭТАП 5: ПРОВЕРКА СИСТЕМ И ОТПРАВКА СТАТУСОВ
                 var stage4Lines = new List<string>();
@@ -3196,7 +3234,8 @@ await Task.CompletedTask;
                 // Выполняем проверку здоровья систем
                 var healthChecks = await PerformSystemHealthCheckAsync();
 
-                stage4Lines.Add("═══ ПРОВЕРКА СИСТЕМ ═══");
+                // Подзаголовок: проверка систем
+                StartupRenderer.Instance.WriteHeader("ПРОВЕРКА СИСТЕМ");
                 foreach (var check in healthChecks)
                 {
                     var icon = check.IsHealthy ? "✅" : "❌";
@@ -3204,7 +3243,7 @@ await Task.CompletedTask;
                     var systemNamePart = $"{icon} {check.SystemName}: ";
 
                     // Не обрезаем - пусть WrapStartupBoxContent сам переносит
-                    stage4Lines.Add($"{systemNamePart}{firstLine}");
+                    StartupRenderer.Instance.WriteLine($"{systemNamePart}{firstLine}");
 
                     // Если сообщение многострочное (Telegram), добавляем только первые 2 детальные строки
                     if (check.Message.Contains("\n"))
@@ -3214,8 +3253,7 @@ await Task.CompletedTask;
                         {
                             if (!string.IsNullOrWhiteSpace(line))
                             {
-                                // Добавляем с отступом, WrapStartupBoxContent обработает
-                                stage4Lines.Add($"  {line.Trim()}");
+                                StartupRenderer.Instance.WriteLine($"  {line.Trim()}");
                             }
                         }
                     }
@@ -3225,12 +3263,12 @@ await Task.CompletedTask;
                 var allHealthy = healthChecks.All(c => c.IsHealthy);
                 var overallStatus = allHealthy ? "✅ ВСЕ СИСТЕМЫ РАБОТАЮТ" : "⚠️ ОБНАРУЖЕНЫ ПРОБЛЕМЫ";
 
-                stage4Lines.Add("");
-                stage4Lines.Add($"═══ ИТОГ: {overallStatus} ═══");
-                stage4Lines.Add("");
+                StartupRenderer.Instance.WriteLine($"ИТОГ: {overallStatus}");
+                // Закрывающая линия подзаголовка проверки
+                StartupRenderer.Instance.WriteFooter("ПРОВЕРКА СИСТЕМ");
 
-                // Отправляем статусы на серверы
-                stage4Lines.Add("═══ ОТПРАВКА СТАТУСОВ ═══");
+                // Подзаголовок: отправка статусов
+                StartupRenderer.Instance.WriteHeader("ОТПРАВКА СТАТУСОВ");
                 var guildsList = _client!.Guilds.ToList();
                 for (int i = 0; i < guildsList.Count; i++)
                 {
@@ -3239,7 +3277,7 @@ await Task.CompletedTask;
                     {
                         if (config.ModerateChannelID == 0)
                         {
-                            stage4Lines.Add($"⊘ {guild.Name}: канал не настроен");
+                            StartupRenderer.Instance.WriteLine($"⊘ {guild.Name}: канал не настроен");
                         }
                         else
                         {
@@ -3251,21 +3289,29 @@ await Task.CompletedTask;
                                     healthChecks);
 
                                 if (ok)
-                                    stage4Lines.Add($"✅ {guild.Name}");
+                                    StartupRenderer.Instance.WriteLine($"✅ {guild.Name}");
                                 else
-                                    stage4Lines.Add($"❌ {guild.Name}: ошибка отправки");
+                                    StartupRenderer.Instance.WriteLine($"❌ {guild.Name}: ошибка отправки");
                             }
                         }
                     }
                     await Task.Delay(200);
                 }
 
-                if (stage4Lines.Count == 0)
-                    stage4Lines.Add("Нет серверов для отправки стартовых уведомлений.");
+                if (guildsList.Count == 0)
+                    StartupRenderer.Instance.WriteLine("Нет серверов для отправки стартовых уведомлений.");
 
-                await LogStartupBoxAsync("ЭТАП 5/5: ПРОВЕРКА И ОТПРАВКА СТАТУСОВ", stage4Lines);
+                // Закрывающая линия подзаголовка отправки
+                StartupRenderer.Instance.WriteFooter("ОТПРАВКА СТАТУСОВ");
 
-                // ФИНАЛ
+                // Пустая строка — чтобы последующие плановые логи не лежали впритык
+                // к закрывающей линии подблока.
+                StartupRenderer.Instance.WriteLine(string.Empty);
+
+                // Завершаем стартовый рендерер — дальше идут обычные логи бота
+                StartupRenderer.Instance.EndStartup();
+
+                                // ФИНАЛ
                 _fullReadyTime = DateTime.UtcNow;
                 // Защита: если событие Ready не сработало и _readyTime остался MinValue,
                 // используем время старта инициализации как начало, чтобы не получить отрицательное время.
@@ -3301,8 +3347,8 @@ await Task.CompletedTask;
             }
             catch (Exception ex)
             {
-                await LogStartup($"❌ КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ: {ex.Message}");
-                await LogStartup($"   Стек: {ex.StackTrace}");
+                            StartupRenderer.Instance.WriteError($"❌ КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ: {ex.Message}");
+                            StartupRenderer.Instance.WriteError($"   Стек: {ex.StackTrace}");
             }
         }
 
@@ -5314,8 +5360,11 @@ if (_config!.Music.Enabled)
             return checks;
         }
 
-		private async Task LogStartup(string message)
-			=> await BotLogger.InfoAsync(LogCategory.Boot, message).ConfigureAwait(false);
+		private Task LogStartup(string message)
+				{
+					StartupRenderer.Instance.WriteLine(message);
+					return Task.CompletedTask;
+				}
 
         private async Task LogShutdownState(bool isRestart, string initiator)
         {

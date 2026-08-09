@@ -1334,26 +1334,28 @@ namespace RPBot
         }
 
         private void Log(string message)
-        {
-            if (_startupLogBuffer is not null)
-                _startupLogBuffer.Add(message);
-
-            BotLogger.Info(LogCategory.Music, message);
-        }
+                {
+                    // В startup-режиме (sink установлен) пишем ТОЛЬКО в рендерер.
+                    // BotLogger.Info параллельно шлёт в UI через SetUiSink и в файл Music.log —
+                    // получили бы дубль. После завершения старта (sink == null) возвращаемся
+                    // к обычному пути: BotLogger пишет в файл и UI, в консоль НЕ выводим.
+                    if (StartupLogSink != null)
+                    {
+                        StartupLogSink.Invoke(message);
+                        return;
+                    }
+                    BotLogger.Info(LogCategory.Music, message);
+                }
 
         /// <summary>
-        /// Когда установлен — Log() пишет сюда вместо консоли.
-        /// Program.cs устанавливает перед LaunchProcessAsync и забирает после,
-        /// включая собранные строки в startup-бокс этапа.
-        /// </summary>
-        public List<string>? StartupLogBuffer { get; set; }
+                /// Когда установлен — Log() пишет сюда вместо консоли.
+                /// Program.cs устанавливает перед LaunchProcessAsync и забирает после,
+                /// включая собранные строки в startup-бокс этапа.
+                /// </summary>
+                public Action<string>? StartupLogSink { get; set; }
 
-        // Ссылка на текущий активный буфер (совпадает с StartupLogBuffer, хранится отдельно
-        // чтобы Log() работал без лишних property-read)
-        private List<string>? _startupLogBuffer => StartupLogBuffer;
-
-        /// <summary>Дополнительный sink для записи в файл (назначается из Program.cs).</summary>
-        public Action<string>? FileSink { get; set; }
+                /// <summary>Дополнительный sink для записи в файл (назначается из Program.cs).</summary>
+                public Action<string>? FileSink { get; set; }
 
         // ─── Dispose ─────────────────────────────────────────────────────
 
