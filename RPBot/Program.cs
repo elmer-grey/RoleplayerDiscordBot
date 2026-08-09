@@ -120,6 +120,13 @@ private MusicStats? _musicStats;
         public static Action<string>? CommandLogSink { get; private set; }
         public static Func<ulong, ServerConfig?>? ServerConfigResolver { get; private set; }
 
+        // Флаг, что мы внутри Program.Main — это первый запуск, и AttachSink
+        // к StartupRenderer.Instance должен произойти один раз. На рестарте
+        // мы НЕ добавляем sinks повторно — иначе в UI одна и та же строка
+        // появляется N раз (по разу на каждый сохранённый UiSink-экземпляр).
+        private static bool _startupSinksAttached = false;
+        private static readonly List<RPBot.Startup.IStartupSink> _attachedSinks = new();
+
         private void CleanupServices()
         {
             try
@@ -163,11 +170,40 @@ private MusicStats? _musicStats;
                     _voicePointsService = null;
                 }
 
-}
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"CleanupServices error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Отписывает все обработчики от DiscordSocketClient и утилизирует его.
+        /// Безопасна для null и для уже disposed client.
+        /// </summary>
+        private void DisposeClientSafely(DiscordSocketClient? client)
+        {
+            if (client == null) return;
+            try
+            {
+                client.Ready -= OnReady;
+                client.Disconnected -= OnDisconnected;
+                client.UserJoined -= UserJoined;
+                client.MessageReceived -= HandleCommandAsync;
+                client.SlashCommandExecuted -= OnSlashCommandExecuted;
+                client.SlashCommandExecuted -= BwonkCommand;
+                client.ModalSubmitted -= HandleModalSubmitted;
+                client.ButtonExecuted -= HandleButtonExecuted;
+                client.SelectMenuExecuted -= HandleSelectMenuExecuted;
+                client.GuildScheduledEventCreated -= OnGuildScheduledEventCreated;
+                client.GuildScheduledEventUpdated -= OnGuildScheduledEventUpdated;
+                client.GuildScheduledEventStarted -= OnGuildScheduledEventStarted;
+                client.GuildScheduledEventCancelled -= OnGuildScheduledEventCancelled;
+                client.GuildScheduledEventCompleted -= OnGuildScheduledEventCompleted;
+                client.GuildMemberUpdated -= OnGuildMemberUpdated;
+            }
+            catch { }
+            try { client.Dispose(); } catch { }
         }
 
         private Task SetupDiscordEvents()
@@ -1824,9 +1860,22 @@ private MusicStats? _musicStats;
                 // FileSink пишет в свой startup-файл напрямую, минуя BotLogger — это убирает дубли.
                 var startupLogDir = Path.Combine(logDir, DateTime.Now.ToString("yyyyMMdd_HHmmss"));
                 var startupRenderer = StartupRenderer.Instance;
-                startupRenderer.AttachSink(new ConsoleSink());
-                startupRenderer.AttachSink(new FileSink(Path.Combine(startupLogDir, "Startup.log")));
-                startupRenderer.AttachSink(new UiSink(msg => _ui?.AddLog(msg)));
+                if (!_startupSinksAttached)
+                {
+                    // Первый запуск процесса — снимаем всё, что могло накопиться (на случай если).
+                    startupRenderer.ClearSinks();
+                    var consoleSink = new ConsoleSink();
+                    var fileSink = new FileSink(Path.Combine(startupLogDir, "Startup.log"));
+                    var uiSink = new UiSink(msg => _ui?.AddLog(msg));
+                    startupRenderer.AttachSink(consoleSink);
+                    startupRenderer.AttachSink(fileSink);
+                    startupRenderer.AttachSink(uiSink);
+                    _attachedSinks.Clear();
+                    _attachedSinks.Add(consoleSink);
+                    _attachedSinks.Add(fileSink);
+                    _attachedSinks.Add(uiSink);
+                    _startupSinksAttached = true;
+                }
 
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
 
@@ -1870,7 +1919,15 @@ private MusicStats? _musicStats;
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
-                        _client?.Dispose();
+                        // Фоновая задача на этом интервале могла ещё использовать старый клиент.
+                        // Останавливаем её, чтобы BackgroundMonitoringLoop не дёргал disposed семафор.
+                        try { _backgroundMonitoringCts?.Cancel(); } catch { }
+                        try { _backgroundMonitoringCts?.Dispose(); } catch { }
+                        _backgroundMonitoringCts = null;
+
+                        // Отписываем ВСЕ обработчики от старого клиента и утилизируем
+                        // его ОТДЕЛЬНО от CleanupServices — там это делать поздно.
+                        DisposeClientSafely(_client);
                         _client = CreateDiscordClient();
 
                         CleanupServices();
@@ -2331,7 +2388,10 @@ private MusicStats? _musicStats;
                     var guildEvent = guild.Events.FirstOrDefault(e => e.Id == entry.EventId);
                     if (guildEvent == null)
                     {
-                        // Событие исчезло с сервера — удаляем запись
+                        // Событие исчезло с сервера (удалено).
+                        // Перед удалением записи — обновим сообщение в Discord,
+                        // чтобы оно не висело как "Новое событие".
+                        await TryAnnounceDeletedOrCancelledAsync(entry, "удалено");
                         _eventAnnouncementStore.Remove(entry.GuildId, entry.EventId);
                         removed++;
                         continue;
@@ -2355,6 +2415,8 @@ private MusicStats? _musicStats;
                         continue;
                     }
 
+                    // Для отменённых/завершённых/начатых — обновляем embed на нужный статус.
+                    // AnnounceStatusChangedAsync сам решит, надо ли редактировать.
                     if (_eventAnnouncer != null)
                         await _eventAnnouncer.AnnounceStatusChangedAsync(guildEvent, status);
                     updated++;
@@ -2394,6 +2456,93 @@ private MusicStats? _musicStats;
             }
 
             await LogStartup($"[EVENT][RESYNC] Завершено: updated={updated}, removed={removed}, announced={announced}, failed={failed}.");
+        }
+
+        // ── Вспомогательное: если запись имеет сохранённые ID сообщений, но
+        // событие исчезло — превращаем embed в "Событие удалено/отменено".
+        private async Task TryAnnounceDeletedOrCancelledAsync(EventAnnouncementEntry entry, string reason)
+        {
+            try
+            {
+                if (_eventAnnouncer == null) return;
+                if (entry.AnnounceChannelId == 0 || entry.AnnounceMessageId == 0) return;
+                var announceChannel = _client?.GetChannel(entry.AnnounceChannelId) as IMessageChannel;
+                if (announceChannel == null) return;
+                var msg = await announceChannel.GetMessageAsync(entry.AnnounceMessageId) as IUserMessage;
+                if (msg == null) return;
+
+                var title = reason == "удалено"
+                    ? $"❌ Событие удалено: {entry.LastName}"
+                    : $"⚠️ Событие отменено: {entry.LastName}";
+                var discordMark = reason == "удалено"
+                    ? $"Удалено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}"
+                    : $"Отменено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
+
+                var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var msk) ? msk : DateTime.Now;
+                var mskMark = reason == "удалено"
+                    ? $"Удалено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)"
+                    : $"Отменено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
+
+                var description = reason == "удалено"
+                    ? "Это событие было удалено с сервера Discord."
+                    : "Это событие было отменено.";
+
+                var embed = new EmbedBuilder()
+                    .WithTitle(title)
+                    .WithDescription(description)
+                    .WithColor(reason == "удалено" ? Color.DarkRed : Color.Red)
+                    .WithCurrentTimestamp()
+                    .AddField("Статус", discordMark, false)
+                    .Build();
+                await msg.ModifyAsync(m => m.Embed = embed);
+
+                // Telegram: добавляем доп. строку, если сохранён TelegramMessageId
+                await TryEditTelegramForDeletedOrCancelledAsync(entry, mskMark);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"[EVENT][RESYNC] Не удалось обновить embed для удалённого/отменённого event={entry.EventId}: {ex}");
+            }
+        }
+
+        private async Task TryEditTelegramForDeletedOrCancelledAsync(EventAnnouncementEntry entry, string mskMark)
+        {
+            try
+            {
+                if (_telegramNotifier == null) return;
+                if (entry.TelegramMessageId == 0) return;
+                int msgId = (int)entry.TelegramMessageId;
+                var text = $"❌ {mskMark}\nСобытие больше недоступно.";
+                await _telegramNotifier.EditMessageTextAsync(entry.GuildId, msgId, text);
+            }
+            catch (Exception ex)
+            {
+                await LogError($"[EVENT][RESYNC] Не удалось обновить Telegram для удалённого event={entry.EventId}: {ex.Message}");
+            }
+        }
+
+        private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
+        {
+            try
+            {
+                var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
+                msk = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+                return true;
+            }
+            catch
+            {
+                try
+                {
+                    var tz = TimeZoneInfo.FindSystemTimeZoneById("Russian Standard Time");
+                    msk = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+                    return true;
+                }
+                catch
+                {
+                    msk = utc.AddHours(3);
+                    return false;
+                }
+            }
         }
 
         // Метод-переходник: вся логика унесена в EventAnnouncer.AnnounceUpdatedAsync.
@@ -3100,9 +3249,11 @@ await Task.CompletedTask;
                 // Закрывающая линия этапа 1 — симметрично заголовку.
                 StartupRenderer.Instance.WriteFooter("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
 
-                // ЭТАП 2: Активация обработчиков
-                await SetupDiscordEvents();
+                // Заголовок этапа 2 открываем ДО SetupDiscordEvents: иначе строка
+                // "События Discord настроены" выпадает между этапами 1 и 2 без
+                // обрамляющего блока, и при рестарте дублируется.
                 StartupRenderer.Instance.WriteHeader("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ");
+                await SetupDiscordEvents();
                 StartupRenderer.Instance.WriteLine("Подписки на события Discord обновлены и активированы.");
                 StartupRenderer.Instance.WriteFooter("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ — ЗАВЕРШЁН");
 

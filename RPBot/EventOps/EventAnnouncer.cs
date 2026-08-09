@@ -312,6 +312,9 @@ namespace RPBot.EventOps
             if (guildEvent?.Guild == null) { Log("[EVENT] AnnounceUpdatedInternalAsync: guildEvent.Guild is null, return"); return; }
             if (_store == null) { Log("[EVENT] AnnounceUpdatedInternalAsync: _store is null, return"); return; }
 
+            var client = ResolveClient();
+            Log($"[EVENT] AnnounceUpdatedInternalAsync: resolveClient _client={_client.GetHashCode()} resolved={client.GetHashCode()} state={client.ConnectionState} login={client.LoginState}");
+
             SocketGuildEvent? before = null;
             try { before = await beforeCache.GetOrDownloadAsync(); } catch { }
 
@@ -324,40 +327,51 @@ namespace RPBot.EventOps
             if (entry.DmMessageIdsByUserId == null)
                 entry.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
 
-            if (_client.ConnectionState != ConnectionState.Connected)
+            // Защита от дублей: на resync мы вызываем AnnounceUpdatedAsync(default, ...)
+            // для каждого события в EventAnnouncementStore. Если состояние события не
+            // менялось с момента прошлого апдейта — не отправляем/не редактируем.
+            if (IsUnchangedSinceLastUpdate(entry, guildEvent))
             {
-                Log($"[EVENT] update skipped (client not connected) guild={guild.Id} event={guildEvent.Id} state={_client.ConnectionState} login={_client.LoginState}");
+                Log($"[EVENT] AnnounceUpdatedInternalAsync skip: unchanged since last update guild={guild.Id} event={guildEvent.Id}");
+                return;
+            }
+
+            if (client.ConnectionState != ConnectionState.Connected)
+            {
+                Log($"[EVENT] update skipped (client not connected) guild={guild.Id} event={guildEvent.Id} state={client.ConnectionState} login={client.LoginState}");
                 return;
             }
             else
             {
-                Log($"[EVENT] AnnounceUpdatedInternalAsync: state={_client.ConnectionState} login={_client.LoginState}, proceeding");
+                Log($"[EVENT] AnnounceUpdatedInternalAsync: state={client.ConnectionState} login={client.LoginState}, proceeding");
             }
 
-                    // На resync-фазе before часто отсутствует (default Cacheable). Используем
-                    // сохранённый snapshot из store как «прошлое состояние», чтобы diff работал
-                    // и в resync, и в обычных update-вызовах.
-                    var serverConfigs = _serverConfigsProvider();
+            // На resync-фазе before часто отсутствует (default Cacheable). Используем
+            // сохранённый snapshot из store как «прошлое состояние», чтобы diff работал
+            // и в resync, и в обычных update-вызовах.
+            var serverConfigs = _serverConfigsProvider();
 
-                    var changes = new List<string>();
-                    var changesDiscord = new List<string>();
-                    try
-                    {
-                        // diff из live-cache, если before есть
-                        if (before != null)
-                        {
-                            DiffBeforeVsAfter(before, guildEvent, changes, changesDiscord);
-                        }
-                        // diff из snapshot в store (используется при resync)
-                        else
-                        {
-                            DiffSnapshotVsCurrent(entry, guildEvent, changes, changesDiscord);
-                        }
-                    }
-                    catch { }
+            var changes = new List<string>();
+            var changesDiscord = new List<string>();
+            try
+            {
+                // diff из live-cache, если before есть
+                if (before != null)
+                {
+                    DiffBeforeVsAfter(before, guildEvent, changes, changesDiscord);
+                }
+                // diff из snapshot в store (используется при resync)
+                else
+                {
+                    DiffSnapshotVsCurrent(entry, guildEvent, changes, changesDiscord);
+                }
+            }
+            catch { }
 
             var updatedMark = $"Обновлено: {DateTime.Now:dd.MM.yyyy HH:mm}";
             var updatedMarkDiscord = $"Обновлено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
+            var updatedMsk = TryGetMoscowTime(DateTime.UtcNow, out var mskNow) ? mskNow : DateTime.Now;
+            var updatedMarkMsk = $"Обновлено: {updatedMsk:dd.MM.yyyy HH:mm} (по МСК)";
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
             var startMsk = TryGetMoscowTime(guildEvent.StartTime.UtcDateTime, out var mskStartTime)
@@ -402,6 +416,9 @@ namespace RPBot.EventOps
             embedBuilder.AddField("Статус", updatedMarkDiscord, false);
             var embed = embedBuilder.Build();
 
+            // Telegram: подставляем МСК-метку для обновлений.
+            var changesMsk = FormatChangesMsk(changes);
+
             // Сохраняем маркер обновления и состояние в store, чтобы UI мог показать,
             // что анонс был обновлён ботом (а не остался прежним).
             try
@@ -425,7 +442,7 @@ namespace RPBot.EventOps
             {
                 if (entry.AnnounceChannelId != 0 && entry.AnnounceMessageId != 0)
                 {
-                    var ch = await _client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
+                    var ch = await client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
                     if (ch != null)
                     {
                         var msg = await ch.GetMessageAsync(entry.AnnounceMessageId) as IUserMessage;
@@ -442,7 +459,7 @@ namespace RPBot.EventOps
                 Log($"[EVENT] update discord_channel error guild={guild.Id} event={guildEvent.Id} msg={entry.AnnounceMessageId}: {ex.Message}");
             }
 
-            var subscriberIds = _eventNotifications.GetActiveSubscribers(guild.Id);
+            var subscriberIds = _eventNotifications?.GetActiveSubscribers(guild.Id) ?? Array.Empty<ulong>();
             var dmMap = entry.DmMessageIdsByUserId ?? new Dictionary<ulong, ulong>();
             foreach (var userId in subscriberIds)
             {
@@ -450,10 +467,10 @@ namespace RPBot.EventOps
                 {
                     if (!dmMap.TryGetValue(userId, out var dmMessageId) || dmMessageId == 0)
                         continue;
-                    var user = guild.GetUser(userId) as IUser ?? _client.GetUser(userId);
+                    var user = guild.GetUser(userId) as IUser ?? client.GetUser(userId);
                     if (user == null)
                     {
-                        try { user = await _client.Rest.GetUserAsync(userId); } catch { }
+                        try { user = await client.Rest.GetUserAsync(userId); } catch { }
                     }
                     if (user == null) continue;
                     var dm = await user.CreateDMChannelAsync();
@@ -480,8 +497,8 @@ namespace RPBot.EventOps
                         $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
                         $"📍 Где: {whereTextPlain}\n" +
                         (guildEvent.Creator != null ? $"👤 Создал: {guildEvent.Creator.Username}\n" : string.Empty) +
-                        (changes.Count > 0 ? $"\n✏️ Изменения:\n- {string.Join("\n- ", changes.Take(10))}\n" : string.Empty) +
-                        $"ℹ️ {updatedMark}\n" +
+                        (changes.Count > 0 ? $"\n✏️ Изменения:\n- {changesMsk}\n" : string.Empty) +
+                        $"ℹ️ {updatedMarkMsk}\n" +
                         $"🔗 {eventUrl}";
 
                     if (!string.IsNullOrWhiteSpace(guildEvent.Description))
@@ -543,6 +560,8 @@ namespace RPBot.EventOps
             var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
             var mark = $"{prefix} {statusText}: {DateTime.Now:dd.MM.yyyy HH:mm}";
             var markDiscord = $"{prefix} {statusText}: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
+            var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowValue) ? mskNowValue : DateTime.Now;
+            var markMsk = $"{prefix} {statusText}: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
 
             string whereText;
             string whereTextPlain;
@@ -664,7 +683,7 @@ namespace RPBot.EventOps
                         tgText += $"👤 Создал: {creatorName}\n";
                     }
 
-                    tgText += $"ℹ️ {mark}\n🔗 {eventUrl}";
+                    tgText += $"ℹ️ {markMsk}\n🔗 {eventUrl}";
 
                     if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                     {
@@ -713,6 +732,53 @@ namespace RPBot.EventOps
             return value.Length <= max ? value : value.Substring(0, max - 1) + "…";
         }
 
+        /// <summary>
+        /// Преобразует список изменений в МСК-вариант.
+        /// Заменяет все вхождения dd.MM.yyyy HH:mm → dd.MM.yyyy HH:mm (по МСК).
+        /// Diff-функции используют startLocal при формировании текста, так что на
+        /// летнее/зимнее время преобразование этих строк должно быть точным.
+        /// Здесь мы просто переподписываем таймстемпы, найденные в формате
+        /// "dd.MM.yyyy HH:mm" на их московские аналоги.
+        /// </summary>
+        private static string FormatChangesMsk(List<string> changes)
+        {
+            if (changes == null || changes.Count == 0) return string.Empty;
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < changes.Count; i++)
+            {
+                if (i > 0) sb.Append("\n- ");
+                else sb.Append("- ");
+                sb.Append(ConvertLocalTimesToMsk(changes[i]));
+            }
+            return sb.ToString();
+        }
+
+        private static string ConvertLocalTimesToMsk(string text)
+        {
+            // Ищем вхождения "dd.MM.yyyy HH:mm" и переводим их в МСК.
+            // Простая эвристика: если строка содержит формат, парсим каждое и
+            // заменяем на московское представление.
+            var pattern = new System.Text.RegularExpressions.Regex(@"\b(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2})\b");
+            return pattern.Replace(text, m =>
+            {
+                try
+                {
+                    var day = int.Parse(m.Groups[1].Value);
+                    var month = int.Parse(m.Groups[2].Value);
+                    var year = int.Parse(m.Groups[3].Value);
+                    var hour = int.Parse(m.Groups[4].Value);
+                    var minute = int.Parse(m.Groups[5].Value);
+                    // local time → UTC → Moscow
+                    var local = new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Local);
+                    var utc = local.ToUniversalTime();
+                    if (TryGetMoscowTime(utc, out var msk))
+                        return msk.ToString("dd.MM.yyyy HH:mm");
+                }
+                catch { }
+                return m.Value;
+            });
+        }
+
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
         {
             try
@@ -740,6 +806,32 @@ namespace RPBot.EventOps
         /// <summary>
         /// Diff между двумя живыми объектами SocketGuildEvent.
         /// </summary>
+        /// <summary>
+        /// Сравнение текущего события с последним сохранённым snapshot.
+        /// Возвращает true, если состояние идентично (нечего обновлять).
+        /// Используется для подавления дублей при resync.
+        /// </summary>
+        private static bool IsUnchangedSinceLastUpdate(EventAnnouncementEntry snapshot, SocketGuildEvent current)
+        {
+            // Если у записи нет snapshot — это не resync, а реальное обновление.
+            if (snapshot.LastName == null && snapshot.LastStartTimeUtc == null)
+                return false;
+
+            if (!string.Equals(snapshot.LastName, current.Name, StringComparison.Ordinal))
+                return false;
+            if (!string.Equals(snapshot.LastDescription ?? string.Empty, current.Description ?? string.Empty, StringComparison.Ordinal))
+                return false;
+            if (snapshot.LastStartTimeUtc.HasValue && snapshot.LastStartTimeUtc.Value.UtcDateTime != current.StartTime.UtcDateTime)
+                return false;
+            if (snapshot.LastChannelId != (current.Channel?.Id ?? 0))
+                return false;
+            if (!string.Equals(snapshot.LastLocation ?? string.Empty, current.Location ?? string.Empty, StringComparison.Ordinal))
+                return false;
+            if (!string.Equals(snapshot.LastCoverImageUrl ?? string.Empty, current.GetCoverImageUrl() ?? string.Empty, StringComparison.Ordinal))
+                return false;
+            return true;
+        }
+
         private static void DiffBeforeVsAfter(
             SocketGuildEvent before,
             SocketGuildEvent after,
