@@ -15,7 +15,7 @@ namespace RPBot
 
 		public EventNotificationService(string statePath)
 		{
-			_statePath = statePath;
+					_statePath = BotConfig.ResolvePath(statePath);
 			Load();
 		}
 

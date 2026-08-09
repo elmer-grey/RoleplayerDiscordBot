@@ -41,22 +41,14 @@ namespace RPBot
             _client = client;
             _points = points;
             // State file for persisting active predictions across restarts
-            try
-            {
-                var dataDir = BotConfig.GetDataDirectory();
-                Directory.CreateDirectory(dataDir);
-                _stateFilePath = Path.Combine(dataDir, "predictions_state.json");
-                _historyFilePath = Path.Combine(dataDir, "predictions_history.json");
-                _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
-                _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
-            }
-            catch
-            {
-                _stateFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_state.json");
-                _historyFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_history.json");
-                _statsFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_stats.json");
-                _achievementsFilePath = Path.Combine(AppContext.BaseDirectory, "predictions_achievements.json");
-            }
+                        // Кладём файлы в production-каталог данных (см. BotConfig.GetDataDirectory),
+                        // чтобы они не терялись при пересборке/clean.
+                        var dataDir = BotConfig.GetDataDirectory();
+                        Directory.CreateDirectory(dataDir);
+                        _stateFilePath = Path.Combine(dataDir, "predictions_state.json");
+                        _historyFilePath = Path.Combine(dataDir, "predictions_history.json");
+                        _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
+                        _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
 
             // Загружаем историю, статистику и достижения
             _ = Task.Run(() => LoadHistoryAsync());

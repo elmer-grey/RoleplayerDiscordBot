@@ -174,7 +174,8 @@ namespace RPBot
 				"predictions_history.json",
 				"predictions_stats.json",
 				"predictions_achievements.json",
-			};
+							"sessions_state.json",
+						};
 
 			foreach (var file in filesToMigrate)
 			{

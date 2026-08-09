@@ -66,7 +66,7 @@ namespace RPBot
         private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
         private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
-        private static readonly string _sessionsStatePath = Path.Combine(AppContext.BaseDirectory, "Data", "sessions_state.json");
+        private static readonly string _sessionsStatePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "sessions_state.json"));
 
         public GameSessionCommands(DiscordSocketClient client, GoogleSheetsService? googleSheets = null)
         {
@@ -120,8 +120,16 @@ namespace RPBot
                                 session.ControlChannelId,
                                 session.IsPaused,
                                 session.TrackRolls,
-                                Rolls = session.Rolls
-                            };
+                                                            // PausePeriods нужен, чтобы после рестарта CalculateActiveDuration
+                                                            // не считал время "из начала" — иначе все прошлые паузы терялись
+                                                            // и счётчик длительности "убегал вперёд".
+                                                            PausePeriods = session.PausePeriods.Select(p => new
+                                                            {
+                                                                Start = p.Start,
+                                                                End = p.End,
+                                                            }).ToList(),
+                                                            Rolls = session.Rolls
+                                                        };
                         }
                     }
 
@@ -216,24 +224,50 @@ namespace RPBot
                             }
                         }
 
-                        var session = new GameSession
-                        {
-                            SessionId = sessionId,
-                            GuildId = guildId,
-                            ChannelId = channelId,
-                            GameName = gameName,
-                            MasterName = masterName,
-                            MasterId = masterId,
-                            StartTime = startTime,
-                            EventDescription = eventDescription ?? string.Empty,
-                            GameComment = gameComment ?? string.Empty,
-                            EventId = eventId,
-                            ControlMessageId = controlMessageId,
-                            ControlChannelId = controlChannelId,
-                            IsPaused = isPaused,
-                            TrackRolls = trackRolls,
-                            Rolls = rolls
-                        };
+                                                // Восстанавливаем историю пауз — без неё CalculateActiveDuration считает
+                                                // время с начала сессии, не вычитая прошлые паузы.
+                                                var pausePeriods = new List<(DateTime Start, DateTime? End)>();
+                                                if (elem.TryGetProperty("PausePeriods", out var ppElem) && ppElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                                {
+                                                    foreach (var pElem in ppElem.EnumerateArray())
+                                                    {
+                                                        try
+                                                        {
+                                                            var pStartStr = pElem.GetProperty("Start").GetString();
+                                                            if (string.IsNullOrWhiteSpace(pStartStr)) continue;
+                                                            var pStart = DateTime.Parse(pStartStr);
+                                                            DateTime? pEnd = null;
+                                                            if (pElem.TryGetProperty("End", out var endProp) && endProp.ValueKind != System.Text.Json.JsonValueKind.Null)
+                                                            {
+                                                                var pEndStr = endProp.GetString();
+                                                                if (!string.IsNullOrWhiteSpace(pEndStr))
+                                                                    pEnd = DateTime.Parse(pEndStr);
+                                                            }
+                                                            pausePeriods.Add((pStart, pEnd));
+                                                        }
+                                                        catch { }
+                                                    }
+                                                }
+
+                                                var session = new GameSession
+                                                {
+                                                    SessionId = sessionId,
+                                                    GuildId = guildId,
+                                                    ChannelId = channelId,
+                                                    GameName = gameName,
+                                                    MasterName = masterName,
+                                                    MasterId = masterId,
+                                                    StartTime = startTime,
+                                                    EventDescription = eventDescription ?? string.Empty,
+                                                    GameComment = gameComment ?? string.Empty,
+                                                    EventId = eventId,
+                                                    ControlMessageId = controlMessageId,
+                                                    ControlChannelId = controlChannelId,
+                                                    IsPaused = isPaused,
+                                                    TrackRolls = trackRolls,
+                                                    PausePeriods = pausePeriods,
+                                                    Rolls = rolls
+                                                };
 
                         if (!_sessions.TryGetValue(guildId, out var guildSessions))
                         {

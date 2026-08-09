@@ -2210,7 +2210,7 @@ private MusicStats? _musicStats;
         {
             try
             {
-                var path = Path.Combine("Settings", MasterGuideHistoryFile);
+                var path = BotConfig.ResolvePath(Path.Combine(BotConfig.SettingsFolderName, MasterGuideHistoryFile));
                 if (!File.Exists(path)) return;
                 var json = File.ReadAllText(path, Encoding.UTF8);
                 if (string.IsNullOrWhiteSpace(json)) return;
@@ -2230,9 +2230,9 @@ private MusicStats? _musicStats;
         {
             try
             {
-                var dir = "Settings";
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                var path = Path.Combine(dir, MasterGuideHistoryFile);
+                var dir = BotConfig.GetSettingsDirectory();
+                    Directory.CreateDirectory(dir);
+                    var path = Path.Combine(dir, MasterGuideHistoryFile);
                 var bakPath = path + ".bak";
                 var json = JsonSerializer.Serialize(_masterGuideSentAt, new JsonSerializerOptions { WriteIndented = true });
                 // Атомарная запись: сначала .bak, затем основной файл

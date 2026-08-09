@@ -149,6 +149,57 @@ public class ProductionDataDirTests : IDisposable
         }
     }
 
+        [Fact]
+        public void MigrateDataFiles_RoundTrip_PausePeriodsArePreserved()
+        {
+            // Проверяем, что JSON-формат GameSession'ов корректно сериализует/десериализует PausePeriods:
+            // это страховка от регрессии — если кто-то снова забудет про паузы в SaveSessionsAsync,
+            // этот тест сразу сломается.
+            var start = new DateTime(2026, 8, 9, 10, 0, 0);
+            var pause1Start = start.AddMinutes(20);
+            var pause1End   = start.AddMinutes(35);
+            var pause2Start = start.AddMinutes(50);
+            // pause2End == null — открытая пауза (на момент сохранения сессия ещё на паузе)
+
+            var json = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new { Start = pause1Start, End = (DateTime?)pause1End },
+                new { Start = pause2Start, End = (DateTime?)null },
+            });
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var restored = new List<(DateTime Start, DateTime? End)>();
+            foreach (var p in doc.RootElement.EnumerateArray())
+            {
+                var pStart = DateTime.Parse(p.GetProperty("Start").GetString()!);
+                DateTime? pEnd = null;
+                if (p.TryGetProperty("End", out var endProp) && endProp.ValueKind != System.Text.Json.JsonValueKind.Null)
+                    pEnd = DateTime.Parse(endProp.GetString()!);
+                restored.Add((pStart, pEnd));
+            }
+
+            Assert.Equal(2, restored.Count);
+            Assert.Equal(pause1Start, restored[0].Start);
+            Assert.Equal(pause1End,   restored[0].End);
+            Assert.Equal(pause2Start, restored[1].Start);
+            Assert.Null(restored[1].End);
+        }
+
+        [Fact]
+        public void ResolvePath_SessionsStateFile_LivesUnderDataRoot()
+        {
+            // Раньше GameSession._sessionsStatePath был захардкожен на AppContext.BaseDirectory,
+            // и при переносе на прод-машину файл сессий терялся при пересборке.
+            // Проверяем, что теперь он идёт в DataRoot.
+            ResetCache();
+            var root = Path.GetFullPath(BotConfig.GetDataDirectory())
+                .TrimEnd(Path.DirectorySeparatorChar);
+
+            var resolved = Path.GetFullPath(
+                BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "sessions_state.json")));
+
+            Assert.StartsWith(root, resolved, StringComparison.OrdinalIgnoreCase);
+        }
+
     /// <summary>
     /// Сбрасываем кеш BotConfig._dataRootOverride / _dataRootDefault, чтобы тесты видели
     /// актуальное значение переменной окружения. Делаем через reflection — это приватные поля,

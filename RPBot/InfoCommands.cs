@@ -244,7 +244,7 @@ namespace RPBot
                 return;
             }
 
-            string directoryPath = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? Path.Combine("Logs"));
+            string directoryPath = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? BotConfig.LogsFolderName);
             Directory.CreateDirectory(directoryPath);
 
             // Санируем имя файла: убираем любые символы, недопустимые в именах файлов
@@ -279,7 +279,7 @@ namespace RPBot
 
         private void IncrementBugReportCounter()
         {
-            var logDir = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? Path.Combine("Logs"));
+            var logDir = BotConfig.ResolvePath(BotConfig.Current?.BugReportDirectory ?? BotConfig.LogsFolderName);
             Directory.CreateDirectory(logDir);
             string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
