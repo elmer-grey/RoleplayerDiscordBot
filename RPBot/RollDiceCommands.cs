@@ -156,7 +156,8 @@ namespace RPBot
 
             if (IsOnCooldown(command.User.Id))
             {
-                await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
+                await command.FollowupAsync("Подождите немного перед следующим броском.");
                 return;
             }
             UpdateCooldown(command.User.Id);
@@ -396,7 +397,8 @@ namespace RPBot
 
             if (IsOnCooldown(command.User.Id))
             {
-                await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
+                await command.FollowupAsync("Подождите немного перед следующим броском.");
                 return;
             }
             UpdateCooldown(command.User.Id);

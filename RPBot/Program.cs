@@ -2508,9 +2508,18 @@ private MusicStats? _musicStats;
                 var msg = await announceChannel.GetMessageAsync(entry.AnnounceMessageId) as IUserMessage;
                 if (msg == null) return;
 
+                // Имя события берём из сохранённого LastName. Если snapshot ещё
+                // не успел сохраниться (например, событие создано оффлайн и бот
+                // увидел его уже удалённым при первом RESYNC) — пишем
+                // «без названия», чтобы в ленте Telegram/Discord не висело
+                // безымянное событие.
+                var eventName = string.IsNullOrWhiteSpace(entry.LastName)
+                    ? "без названия"
+                    : entry.LastName;
+
                 var title = reason == "удалено"
-                                    ? $"❌ Событие удалено: {entry.LastName}"
-                                    : $"⚠️ Событие отменено: {entry.LastName}";
+                                    ? $"❌ Событие удалено: {eventName}"
+                                    : $"⚠️ Событие отменено: {eventName}";
 
                                 var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var msk) ? msk : DateTime.Now;
                                 var mskMark = reason == "удалено"
@@ -2531,7 +2540,7 @@ private MusicStats? _musicStats;
                 await msg.ModifyAsync(m => m.Embed = embed);
 
                 // Telegram: добавляем доп. строку, если сохранён TelegramMessageId
-                await TryEditTelegramForDeletedOrCancelledAsync(entry, mskMark);
+                await TryEditTelegramForDeletedOrCancelledAsync(entry, mskMark, eventName);
             }
             catch (Exception ex)
             {
@@ -2539,14 +2548,16 @@ private MusicStats? _musicStats;
             }
         }
 
-        private async Task TryEditTelegramForDeletedOrCancelledAsync(EventAnnouncementEntry entry, string mskMark)
+        private async Task TryEditTelegramForDeletedOrCancelledAsync(EventAnnouncementEntry entry, string mskMark, string eventName)
         {
             try
             {
                 if (_telegramNotifier == null) return;
                 if (entry.TelegramMessageId == 0) return;
                 int msgId = (int)entry.TelegramMessageId;
-                var text = $"❌ {mskMark}\nСобытие больше недоступно.";
+                // Имя события обязательно показываем — иначе в Telegram-ленте
+                // появляется «безымянное» событие, и непонятно, что именно пропало.
+                var text = $"❌ {mskMark}\nСобытие «{eventName}» больше недоступно.";
                 await _telegramNotifier.EditMessageTextAsync(entry.GuildId, msgId, text);
             }
             catch (Exception ex)
