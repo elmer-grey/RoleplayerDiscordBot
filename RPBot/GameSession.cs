@@ -411,8 +411,9 @@ namespace RPBot
                                 /// <summary>
                                 /// После восстановления сессий из файла проверяет, существуют ли ещё
                                 /// связанные Discord-события. Если событие удалено/завершено пока бот
-                                /// был оффлайн — сессия считается завершённой, очищается control message,
-                                /// вызывается RemoveSession, и пользователю уходит уведомление в личку/канал.
+                                /// был оффлайн — сессия финализируется по тому же потоку, что и !stop
+                                /// (FinalizeSessionAsOrphanAsync: EndTime → Discord-event Completed →
+                                /// DeleteControlMessage → SendSessionStats в канал control message).
                                 /// </summary>
                                 public static async Task CleanupStaleSessionsAsync(DiscordSocketClient client)
                                 {
@@ -489,28 +490,16 @@ namespace RPBot
                                                 BotLogger.Warn(LogCategory.Session,
                                                     $"[STALE] Сессия {session.SessionId} (\"{session.GameName}\") — {orphanReason}, принудительное завершение");
 
-                                                session.EndTime = DateTime.Now;
-                                                try
-                                                {
-                                                    var controlCh = session.ControlChannelId != 0
-                                                        ? client.GetChannel(session.ControlChannelId) as IMessageChannel
-                                                        : client.GetChannel(session.ChannelId) as IMessageChannel;
-                                                    if (controlCh != null && session.ControlMessageId != 0)
-                                                    {
-                                                        var msg = await controlCh.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false) as IUserMessage;
-                                                        if (msg != null) await msg.DeleteAsync().ConfigureAwait(false);
-                                                    }
-                                                }
-                                                catch (Exception dex)
-                                                {
-                                                    BotLogger.Debug(LogCategory.Session, $"[STALE] Не удалось удалить control message {session.ControlMessageId}: {dex.Message}");
-                                                }
-
-                                                // Уведомления мастеру в канал больше не отправляем — пользователь
-                                                // решил, что для автозавершения это лишний шум. Удаление control
-                                                // message и пометка в run.log/GUI достаточно.
-
-                                                new GameSessionCommands(client).RemoveSession(session);
+                                                // Финализируем сессию по тому же потоку, что и !stop:
+                                                //   - помечаем EndTime;
+                                                //   - завершаем связанное Discord-событие, если ещё живо;
+                                                //   - удаляем control message;
+                                                //   - отправляем статистику в канал control message.
+                                                // Это та же HandleConfirmStop-логика, но без interactive-кнопок:
+                                                // cleanup приходит из старта/фонового слушателя событий, и
+                                                // считать, что пользователь нажмёт «Да, завершить», мы не можем.
+                                                var commands = new GameSessionCommands(client);
+                                                await commands.FinalizeSessionAsOrphanAsync(session).ConfigureAwait(false);
                                                 cleaned++;
                                             }
                                         }
@@ -551,27 +540,14 @@ namespace RPBot
                                         BotLogger.Warn(LogCategory.Session,
                                             $"[STALE] Сессия {session.SessionId} (\"{session.GameName}\") связана с несуществующим событием {eventId} — принудительное завершение");
 
-                                        session.EndTime = DateTime.Now;
-                                        try
-                                        {
-                                            var controlCh = session.ControlChannelId != 0
-                                                ? client.GetChannel(session.ControlChannelId) as IMessageChannel
-                                                : client.GetChannel(session.ChannelId) as IMessageChannel;
-                                            if (controlCh != null && session.ControlMessageId != 0)
-                                            {
-                                                var msg = await controlCh.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false) as IUserMessage;
-                                                if (msg != null) await msg.DeleteAsync().ConfigureAwait(false);
-                                            }
-                                        }
-                                        catch (Exception dex)
-                                        {
-                                            BotLogger.Debug(LogCategory.Session, $"[STALE] Не удалось удалить control message {session.ControlMessageId}: {dex.Message}");
-                                        }
+                                        // Финализируем сессию по тому же потоку, что и !stop
+                                        // (EndTime → Discord-event Completed → DeleteControlMessage
+                                        // → SendSessionStats в канал control message).
+                                        // Раньше здесь просто удаляли сессию, из-за чего
+                                        // пропадала статистика и связанное событие оставалось Active.
+                                        var commands = new GameSessionCommands(client);
+                                        await commands.FinalizeSessionAsOrphanAsync(session).ConfigureAwait(false);
 
-                                        // Уведомления мастеру в канал не отправляем — пользователь решил,
-                                        // что для автозавершения это лишний шум.
-
-                                        new GameSessionCommands(client).RemoveSession(session);
                                         // Единая строка для категорийного лога и run.log.
                                         // (WriteStageLine сюда не нужен — функция вызывается в рантайме,
                                         // не во время визуализации старта.)
@@ -1622,6 +1598,129 @@ namespace RPBot
             }
 
             await SendTemporaryEphemeralResponse(component, "Отмена завершения игры.");
+        }
+
+        /// <summary>
+        /// Завершает сессию в рамках «нормального потока» (как HandleConfirmStop / HandleForceStop),
+        /// но без интерактивных подтверждений: cleanup не знает, кто мастер, и ждать нажатия кнопки
+        /// нельзя. Используется CleanupStaleSessionsAsync и CleanupStaleSessionByEventAsync,
+        /// когда связанное Discord-событие удалено/завершено, пока бот был оффлайн.
+        ///
+        /// Поток:
+        ///   1. Если сессия на паузе — закрыть паузу (как в HandleConfirmStop).
+        ///   2. Поставить EndTime = now, пометив сессию как IsStopped.
+        ///   3. По возможности завершить связанное Discord-событие (Active → Completed).
+        ///      Уже-завершённые/удалённые события трогать не пытаемся — это нормальное состояние
+        ///      для осиротевших сессий.
+        ///   4. Удалить control message (по ControlChannelId / ChannelId).
+        ///   5. Отправить статистику в канал control message. Дальше SendSessionStats сам архивирует
+        ///      сессию и при отсутствии бросков удаляет её окончательно.
+        ///
+        /// Уведомления в канал от мастера не отправляем — об этом решении договорились: для
+        /// автозавершения это лишний шум. Архив всё равно сохраняется, и пользователь при желании
+        /// может запросить статистику по кнопке.
+        /// </summary>
+        internal async Task FinalizeSessionAsOrphanAsync(GameSession session)
+        {
+            if (session == null) return;
+            if (session.IsStopped)
+            {
+                LogDebug($"FinalizeSessionAsOrphanAsync: сессия {session.SessionId} уже остановлена — пропускаю");
+                return;
+            }
+
+            try
+            {
+                if (session.IsPaused)
+                {
+                    LogDebug($"FinalizeSessionAsOrphanAsync: снимаю паузу для сессии {session.SessionId}");
+                    try { session.PauseReminderCTS?.Cancel(); } catch { }
+                    try { session.PauseReminderCTS?.Dispose(); } catch { }
+                    session.PauseReminderCTS = null;
+                    var lastPause = session.PausePeriods.LastOrDefault();
+                    if (lastPause.Start != default)
+                        session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                    session.IsPaused = false;
+                }
+
+                session.EndTime = DateTime.Now;
+                Log($"[STALE] Сессия {session.SessionId} ({session.GameName}) помечена как остановленная (IsStopped={session.IsStopped}), EndTime={session.EndTime}");
+
+                if (session.EventId.HasValue)
+                {
+                    try
+                    {
+                        var guild = _client.GetGuild(session.GuildId);
+                        var guildEvent = guild != null
+                            ? await guild.GetEventAsync(session.EventId.Value).ConfigureAwait(false)
+                            : null;
+                        // Если события нет в кэше — пробуем REST. Cleanup вызывается сразу после
+                        // восстановления сессий, когда кэш ещё мог не прогреться.
+                        if (guildEvent == null)
+                        {
+                            try
+                            {
+                                var restGuild = await _client.Rest.GetGuildAsync(session.GuildId).ConfigureAwait(false);
+                                if (restGuild != null)
+                                {
+                                    var restEvent = await restGuild.GetEventAsync(session.EventId.Value).ConfigureAwait(false);
+                                    if (restEvent != null)
+                                        guildEvent = restEvent;
+                                }
+                            }
+                            catch (Exception restEx)
+                            {
+                                LogDebug($"[STALE] REST-фоллбэк для события {session.EventId.Value} не удался: {restEx.Message}");
+                            }
+                        }
+
+                        if (guildEvent?.Status == GuildScheduledEventStatus.Active)
+                        {
+                            await guildEvent.ModifyAsync(props => props.Status = GuildScheduledEventStatus.Completed).ConfigureAwait(false);
+                            Log($"Связанное событие {session.EventId} помечено как завершённое");
+                        }
+                        else if (guildEvent != null)
+                        {
+                            LogDebug($"Связанное событие {session.EventId} уже в статусе {guildEvent.Status} — оставляю как есть");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка завершения события: {ex.Message}");
+                    }
+                }
+
+                // Канал control message: точно туда же, куда уходит статистика у !stop.
+                var statsChannel = ResolveControlChannel(session) as ISocketMessageChannel;
+                if (statsChannel != null)
+                {
+                    await DeleteControlMessageAsync(session, statsChannel).ConfigureAwait(false);
+                    await SendSessionStats(session, statsChannel).ConfigureAwait(false);
+                }
+                else
+                {
+                    LogWarn($"Канал для статистики осиротевшей сессии {session.SessionId} не найден — только архивирую");
+                    await DeleteControlMessageAsync(session).ConfigureAwait(false);
+                    ArchiveStoppedSession(session);
+                    _ = Task.Run(() => SaveSessionsAsync());
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError($"FinalizeSessionAsOrphanAsync: ошибка при принудительном завершении сессии {session.SessionId}: {ex.Message}");
+                // Даже если что-то пошло не так, помечаем сессию как остановленную и архивируем,
+                // чтобы при следующем запуске не пытаться чистить её снова.
+                try
+                {
+                    if (!session.IsStopped) session.EndTime = DateTime.Now;
+                    ArchiveStoppedSession(session);
+                    _ = Task.Run(() => SaveSessionsAsync());
+                }
+                catch (Exception fallback)
+                {
+                    LogError($"FinalizeSessionAsOrphanAsync: не удалось даже архивировать сессию {session.SessionId}: {fallback.Message}");
+                }
+            }
         }
 
         /// <summary>
