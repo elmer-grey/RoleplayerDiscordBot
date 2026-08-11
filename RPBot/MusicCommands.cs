@@ -108,7 +108,7 @@ namespace RPBot
             _discord.UserVoiceStateUpdated -= OnVoiceStateUpdatedAsync;
             _discord = newClient;
             _discord.UserVoiceStateUpdated += OnVoiceStateUpdatedAsync;
-            Log($"[Music] MusicCommands: клиент обновлён, переподписка выполнена, client={_discord.GetHashCode()}");
+                    // Лог удалён — это была внутренняя бухгалтерия при рестарте, не нужная в run.log.
         }
 
         // ═══════════════════════════════════════════════════════════════════

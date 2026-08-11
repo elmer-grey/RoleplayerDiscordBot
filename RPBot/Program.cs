@@ -1822,6 +1822,9 @@ private MusicStats? _musicStats;
 				var logDirRaw = _config?.LogDirectory;
 				var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
 				BotLogger.Initialize(logDir, DateTime.Now);
+				// Возвращаем строку-маркер: заголовок «=== Бот запускается: … ===»
+				// пишется только в run.log (в самом файле), в Logs Panel он не виден,
+				// поэтому для пользователя в терминале нужна явная запись отсюда.
 				BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
 
 				_ui = new BotUI(
@@ -1889,7 +1892,7 @@ private MusicStats? _musicStats;
             else
             {
                 // При рестарте просто обновляем сервисы
-                _ui!.UpdateServices(_client!, _reconnectionService!, _connectionPredictor!, _statusNotifier!);
+                            _ui!.UpdateServices(_client!, _reconnectionService!, _connectionPredictor!, _statusNotifier!, isRestart: true);
                 _ui.AddLog("Перезапуск бота...");
 
                 BotLogger.Info(LogCategory.Boot, "=== Рестарт ===");
@@ -1912,14 +1915,17 @@ private MusicStats? _musicStats;
 
                     // Показываем специальное сообщение при рестарте
          var version = _config?.BotVersion ?? BotConfig.Current?.BotVersion ?? "?";
-                    if (_currentStartupType == StartupType.Restart)
-                    {
-                        await LogStartup($"Инициализация бота после перезапуска... Версия {version}");
-                    }
-                    else
-                    {
-                        await LogStartup($"Инициализация бота... Версия {version}");
-                    }
+                             StartupRenderer.Instance.WriteHeader(_currentStartupType == StartupType.Restart
+                                 ? "ЗАПУСК ПОСЛЕ ПЕРЕЗАГРУЗКИ"
+                                 : "ЗАПУСК");
+                             if (_currentStartupType == StartupType.Restart)
+                             {
+                                 StartupRenderer.Instance.WriteLine($"Инициализация бота после перезапуска... Версия {version}");
+                             }
+                             else
+                             {
+                                 StartupRenderer.Instance.WriteLine($"Инициализация бота... Версия {version}");
+                             }
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
@@ -1968,8 +1974,9 @@ private MusicStats? _musicStats;
                             _client,
                             _reconnectionService,
                             _connectionPredictor,
-                            _statusNotifier
-                        );
+                                                    _statusNotifier,
+                                                    isRestart: _currentStartupType == StartupType.Restart
+                                                );
 
                         // Переподписываем MusicCommands на новый клиент
                         if (_musicCommands is not null)
@@ -1979,23 +1986,49 @@ private MusicStats? _musicStats;
                     _commandHandler = new CommandHandler(_client!, _config!.GuildIDs);
                     CommandHandler.SetUI(_ui);
 
-                    await SetupDiscordEvents();
-                    try
-                    {
-                        await _client.LoginAsync(TokenType.Bot, GetBotToken());
-                        await _client.StartAsync();
-                        await LogStartup(" Вход выполнен успешно.");
+                                        // Discord-подписки (Ready/MessageReceived/GuildScheduledEvent*) теперь
+                                        // живут в Этапе 2/4: СИНХРОНИЗАЦИЯ — там, где идёт работа с эвентами.
+                                        try
+                                        {
+                                            await _client.LoginAsync(TokenType.Bot, GetBotToken());
+                                            await _client.StartAsync();
+                                                                                    StartupRenderer.Instance.WriteLine($"Вход выполнен успешно. Состояние: {_client.ConnectionState}, логин: {_client.LoginState}");
 
-                        // PrepareAsync ПОСЛЕ LoginAsync — CurrentUser уже установлен,
-                        // DiscordClientWrapper подпишется на Ready до того как оно сработает
-                        if (_lavalinkService is not null)
-                            await _lavalinkService.PrepareAsync();
+                                            // PrepareAsync ПОСЛЕ LoginAsync — CurrentUser уже установлен,
+                                            // DiscordClientWrapper подпишется на Ready до того как оно сработает.
+                                            // Сам лог "[Music] DI-контейнер собран" не выводится здесь —
+                                            // он появится внутри Этапа 4 (ИНИЦИАЛИЗАЦИЯ МУЗЫКИ).
+                                            if (_lavalinkService is not null)
+                                                _lavalinkService.SuppressPrepareLog = true;
+                                            await _lavalinkService.PrepareAsync();
+                                            if (_lavalinkService is not null)
+                                                _lavalinkService.SuppressPrepareLog = false;
 
-                        // Ждем готовности
-                        await WaitForReadyAsync();
+                                                                                    // Ждем готовности. После успешного WaitForReadyAsync
+                                                                                    // статус гарантированно Connected/LoggedIn — фиксируем
+                                                                                    // это отдельной строкой, чтобы в Logs Panel было видно
+                                                                                    // окончательное состояние подключения.
+                                                                                    await WaitForReadyAsync();
 
-                        // Запускаем инициализацию с опросом (Lavalink запускается внутри на Этапе 3.5)
-                        await InitializeBotWithProgress();
+                                                                                    var readyState = $"{_client.ConnectionState}/{_client.LoginState}";
+                                                                                    if (_client.ConnectionState == ConnectionState.Connected && _client.LoginState == LoginState.LoggedIn)
+                                                                                    {
+                                                                                        StartupRenderer.Instance.WriteLine($"Discord: подключён ({readyState}).");
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        StartupRenderer.Instance.WriteLine($"⚠️ Discord не в Connected: состояние={readyState}. Блок ЗАПУСК не закрывается — проверь сеть/токен.");
+                                                                                        // Не закрываем блок ЗАПУСК — чтобы в логах было видно,
+                                                                                        // что дальше идёт уже попытка продолжения инициализации
+                                                                                        // на нестабильном соединении.
+                                                                                    }
+
+                                                                                    StartupRenderer.Instance.WriteFooter(_currentStartupType == StartupType.Restart
+                                                                                        ? "ЗАПУСК ПОСЛЕ ПЕРЕЗАГРУЗКИ — ЗАВЕРШЁН"
+                                                                                        : "ЗАПУСК — ЗАВЕРШЁН");
+
+                                                                                    // Запускаем инициализацию с опросом (Lavalink запускается внутри на Этапе 4)
+                                                                                    await InitializeBotWithProgress();
 
 						// Ежедневный плановый перезапуск (время задаётся в config.json)
 						StartDailyRestartScheduler();
@@ -2837,10 +2870,9 @@ private MusicStats? _musicStats;
                 {
                     _readyTime = DateTime.UtcNow;
 
-                    try { await LogInfo($"Ready: connected as {_client!.CurrentUser?.Username}"); } catch { }
-
-            // ОТПРАВЛЯЕМ В UI
-            BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
+                                // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
+                                // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.
+                                BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
 
 // ✅ Загрузка сохранённых сессий игр переехала в ЭТАП 3 — СИНХРОНИЗАЦИЯ.
            // После RESYNC и prediction snapshot дёргаем LoadSessionsAsync, который
@@ -3216,128 +3248,128 @@ await Task.CompletedTask;
                 }
 
 				// ЭТАП 1: Регистрация команд
-                var isDailyRestart =
-                	_currentStartupType == StartupType.Restart &&
-                	string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
+				                var isDailyRestart =
+				                	_currentStartupType == StartupType.Restart &&
+				                	string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
 
-                                var stage1Lines = new List<string>();
+				                                var stage1Lines = new List<string>();
 
-                // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
-                // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
-                StartupRenderer.Instance.WriteHeader("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД");
+				                // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
+				                // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
+				                StartupRenderer.Instance.WriteHeader("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД");
 
-                if (isDailyRestart)
-                {
-                    // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
-                    StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
-                                    await _commandHandler.ListSlashCommandsAsync();
-                }
-                else
-                {
-                    if (_ui != null && await _ui.AskYesNoQuestion(
-                            "Нужно ли перерегистрировать команды?",
-                            "Y - Да, N - Нет, таймаут 60 секунд",
-                            60
-                        ) == true)
-                    {
-                        await _commandHandler.InitializeAsync();
-                        // При регистрации список уже описан пошагово — печатать его повторно не нужно.
-                    }
-                    else
-                    {
-                       StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
-                        await _commandHandler.ListSlashCommandsAsync();
-                    }
-                }
+				                if (isDailyRestart)
+				                {
+				                    // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
+				                    StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
+				                                    await _commandHandler.ListSlashCommandsAsync();
+				                }
+				                else
+				                {
+				                    if (_ui != null && await _ui.AskYesNoQuestion(
+				                            "Нужно ли перерегистрировать команды?",
+				                            "Y - Да, N - Нет, таймаут 60 секунд",
+				                            60
+				                        ) == true)
+				                    {
+				                        await _commandHandler.InitializeAsync();
+				                        // При регистрации список уже описан пошагово — печатать его повторно не нужно.
+				                    }
+				                    else
+				                    {
+				                       StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
+				                        await _commandHandler.ListSlashCommandsAsync();
+				                    }
+				                }
 
-                // Закрывающая линия этапа 1 — симметрично заголовку.
-                StartupRenderer.Instance.WriteFooter("ЭТАП 1/5: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
+				                // Закрывающая линия этапа 1 — симметрично заголовку.
+				                StartupRenderer.Instance.WriteFooter("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
 
-                // Заголовок этапа 2 открываем ДО SetupDiscordEvents: иначе строка
-                // "События Discord настроены" выпадает между этапами 1 и 2 без
-                // обрамляющего блока, и при рестарте дублируется.
-                StartupRenderer.Instance.WriteHeader("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ");
-                await SetupDiscordEvents();
-                StartupRenderer.Instance.WriteLine("Подписки на события Discord обновлены и активированы.");
-                StartupRenderer.Instance.WriteFooter("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ — ЗАВЕРШЁН");
+				                // ЭТАП 2: Синхронизация Discord-событий и активных сессий.
+				                // Здесь же подписываемся на Discord-эвенты (Ready/MessageReceived/
+				                // GuildScheduledEventCreated|Updated|Started|Cancelled|Completed/
+				                // GuildMemberUpdated/ButtonExecuted/SelectMenuExecuted).
+				                // Раньше эти подписки делались в отдельном «Этапе 2: АКТИВАЦИЯ
+				                // ОБРАБОТЧИКОВ» — теперь они естественно живут рядом с RESYNC,
+				                // потому что дальше идёт работа именно с эвентами.
+				                StartupRenderer.Instance.WriteHeader("ЭТАП 2/4: СИНХРОНИЗАЦИЯ");
+				                // SetupDiscordEvents сам пишет «События Discord настроены»
+				                // — повторять это явно не нужно.
+				                await SetupDiscordEvents();
+				                await ResyncEventAnnouncementsOnStartupAsync();
+				                // Подтягиваем сессии из файла и прогоняем cleanup + recreate.
+				                // LoadSessionsAsync сам пишет в визуализацию через WriteStageLine.
+				                await GameSessionCommands.LoadSessionsAsync(_client!);
+				                StartupRenderer.Instance.WriteFooter("ЭТАП 2/4: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
 
-                // ЭТАП 3: Синхронизация (эвенты/прогнозы/сессии)
-                // Заголовок открываем ДО Resync, иначе [EVENT][RESYNC] строки уезжают
-                // между этапами 2 и 3 — они уходят в рендерер, а рендерер не знает,
-                // что они принадлежат этапу 3.
-                StartupRenderer.Instance.WriteHeader("ЭТАП 3/5: СИНХРОНИЗАЦИЯ");
-                await ResyncEventAnnouncementsOnStartupAsync();
-                var stage3Lines = new List<string>();
-                try
-                {
-                    static string Trunc(string? s, int max)
-                    {
-                        if (string.IsNullOrWhiteSpace(s)) return string.Empty;
-                        s = s.Trim();
-                        return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
-                    }
+				                // ЭТАП 3: Снимок активных прогнозов (выводится по гильдиям).
+				                StartupRenderer.Instance.WriteHeader("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ");
+				                var stage3Lines = new List<string>();
+				                try
+				                {
+				                    static string Trunc(string? s, int max)
+				                    {
+				                        if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+				                        s = s.Trim();
+				                        return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
+				                    }
 
-                    // Best-effort log: PredictionService restores state on start; here we log a snapshot.
-                    var anyPred = false;
-                    foreach (var g in _client!.Guilds)
-                    {
-                        var ap = _predictionService?.GetActive(g.Id);
-                        if (ap == null || ap.IsResolved)
-                            continue;
+				                    // Best-effort log: PredictionService restores state on start; here we log a snapshot.
+				                    var anyPred = false;
+				                    foreach (var g in _client!.Guilds)
+				                    {
+				                        var ap = _predictionService?.GetActive(g.Id);
+				                        if (ap == null || ap.IsResolved)
+				                            continue;
 
-                        anyPred = true;
-                        var lockText = ap.IsLocked ? "LOCK" : "OPEN";
-                        var closes = ap.BetsCloseAtUtc.ToLocalTime();
-                        stage3Lines.Add($"[PRED] {lockText} | {g.Name} | ставок: {ap.Bets.Count} | пул: {ap.TotalPool}");
-                        stage3Lines.Add($"title: {Trunc(ap.Title, 60)}");
-                        stage3Lines.Add($"closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} | o2={ap.Outcome2.TotalStake}");
+				                        anyPred = true;
+				                        var lockText = ap.IsLocked ? "LOCK" : "OPEN";
+				                        var closes = ap.BetsCloseAtUtc.ToLocalTime();
+				                        stage3Lines.Add($"[PRED] {lockText} | {g.Name} | ставок: {ap.Bets.Count} | пул: {ap.TotalPool}");
+				                        stage3Lines.Add($"title: {Trunc(ap.Title, 60)}");
+				                        stage3Lines.Add($"closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} | o2={ap.Outcome2.TotalStake}");
 
-                        // Print up to N bets to keep startup log compact.
-                        var betLines = ap.Bets.Values
-                            .OrderByDescending(b => b.Amount)
-                            .Take(6)
-                            .Select(b => $"{b.UserId}:{b.Amount}#{b.OutcomeId}")
-                            .ToList();
+				                        // Print up to N bets to keep startup log compact.
+				                        var betLines = ap.Bets.Values
+				                            .OrderByDescending(b => b.Amount)
+				                            .Take(6)
+				                            .Select(b => $"{b.UserId}:{b.Amount}#{b.OutcomeId}")
+				                            .ToList();
 
-                        if (betLines.Count == 0)
-                        {
-                            stage3Lines.Add("bets: (нет ставок)");
-                        }
-                        else
-                        {
-                            var joined = string.Join(" | ", betLines);
-                            stage3Lines.Add($"bets: {Trunc(joined, 60)}");
-                        }
-                    }
+				                        if (betLines.Count == 0)
+				                        {
+				                            stage3Lines.Add("bets: (нет ставок)");
+				                        }
+				                        else
+				                        {
+				                            var joined = string.Join(" | ", betLines);
+				                            stage3Lines.Add($"bets: {Trunc(joined, 60)}");
+				                        }
+				                    }
 
-                    if (!anyPred)
-                    {
-                        stage3Lines.Add("[PRED] активных прогнозов не найдено");
-                    }
-                }
-                catch { }
-                if (stage3Lines.Count == 0)
-                    stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
-                foreach (var line in stage3Lines)
-                    StartupRenderer.Instance.WriteLine(line);
+				                    if (!anyPred)
+				                    {
+				                        stage3Lines.Add("[PRED] активных прогнозов не найдено");
+				                    }
+				                }
+				                catch { }
+				                if (stage3Lines.Count == 0)
+				                    stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
+				                foreach (var line in stage3Lines)
+				                    StartupRenderer.Instance.WriteLine(line);
+				                StartupRenderer.Instance.WriteFooter("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ — ЗАВЕРШЁН");
 
-                // Подтягиваем сессии из файла и прогоняем cleanup + recreate.
-                // LoadSessionsAsync сам пишет в визуализацию через WriteStageLine.
-                await GameSessionCommands.LoadSessionsAsync(_client!);
-
-                StartupRenderer.Instance.WriteFooter("ЭТАП 3/5: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
-
-                // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
-                                if (_config.Music.Enabled && _lavalinkService is not null)
-                                {
-                                    // Перенаправляем весь поток логов LavalinkService в рендерер,
-                                    // чтобы строки появлялись по одной внутри этапа, без буферизации.
-                                    // ВАЖНО: BotLogger.Info(Music) игнорируем в startup-режиме, иначе UI получит дубль.
-                                    _lavalinkService.StartupLogSink = msg =>
-                                    {
-                                        StartupRenderer.Instance.WriteLine(msg);
-                                    };
-                                    StartupRenderer.Instance.WriteHeader("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ");
+				                // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
+				                                if (_config.Music.Enabled && _lavalinkService is not null)
+				                                {
+				                                    // Перенаправляем весь поток логов LavalinkService в рендерер,
+				                                    // чтобы строки появлялись по одной внутри этапа, без буферизации.
+				                                    // ВАЖНО: BotLogger.Info(Music) игнорируем в startup-режиме, иначе UI получит дубль.
+				                                    _lavalinkService.StartupLogSink = msg =>
+				                                    {
+				                                        StartupRenderer.Instance.WriteLine(msg);
+				                                    };
+				                                    StartupRenderer.Instance.WriteHeader("ЭТАП 4/4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ");
                                     try
                                     {
                                         var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
@@ -3384,7 +3416,7 @@ await Task.CompletedTask;
                                     {
                                         // Снимаем sink — дальнейшие логи идут обратно в обычный путь
                                         _lavalinkService.StartupLogSink = null;
-                                                            StartupRenderer.Instance.WriteFooter("ЭТАП 4/5: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ — ЗАВЕРШЕНА");
+                                                            StartupRenderer.Instance.WriteFooter("ЭТАП 4/4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ — ЗАВЕРШЕНА");
                                                         }
                                 }
 
@@ -5517,6 +5549,45 @@ if (_config!.Music.Enabled)
     });
 }
 
+// 10. Проверка файла с текстовыми блоками (!правила/!ссылки/!запись)
+// Файл может отсутствовать — но если его нет, шаблоны не загрузятся,
+// и команды !правила/!ссылки/!запись будут без текста. Поэтому считаем
+// отсутствие файла ошибкой (❌), а не OK (✅).
+try
+{
+    var resolvedTextPath = BotConfig.ResolvePath(_config!.TextBlocksPath);
+    if (File.Exists(resolvedTextPath))
+    {
+        var loaded = _textBlocks?.Count ?? 0;
+        checks.Add(new SystemHealthCheck
+        {
+            SystemName = "Текстовые блоки (Pastes.txt)",
+            IsHealthy = loaded > 0,
+            Message = loaded > 0
+                ? $"Загружено блоков: {loaded}"
+                : "Файл пуст — шаблоны команд отсутствуют",
+        });
+    }
+    else
+    {
+        checks.Add(new SystemHealthCheck
+        {
+            SystemName = "Текстовые блоки (Pastes.txt)",
+            IsHealthy = false,
+            Message = $"Файл не найден ({resolvedTextPath}) — команды !правила/!ссылки/!запись без шаблонов",
+        });
+    }
+}
+catch (Exception ex)
+{
+    checks.Add(new SystemHealthCheck
+    {
+        SystemName = "Текстовые блоки (Pastes.txt)",
+        IsHealthy = false,
+        Message = $"Ошибка проверки: {ex.Message}",
+    });
+}
+
             return checks;
         }
 
@@ -5651,23 +5722,18 @@ if (_config!.Music.Enabled)
         }
 
         private Dictionary<string, string> LoadTextFromFile(string filePath)
-        {
-            var textBlocks = new Dictionary<string, string>();
+                {
+                    var textBlocks = new Dictionary<string, string>();
 
-            if (!File.Exists(filePath))
-            {
-                // Синхронная обработка ошибки, так как метод не async
-                try
-                {
-                    // Используем .GetAwaiter().GetResult() для синхронного вызова асинхронного метода
-                    LogError("Файл с текстом не найден.").GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Ошибка при логировании: {ex.Message}");
-                }
-                return textBlocks;
-            }
+                    if (!File.Exists(filePath))
+                    {
+                        // Pastes.txt — опциональный файл с шаблонами команд (!правила/!ссылки/!запись).
+                        // Если файла нет, не выкидываем в run.log красный ERROR при каждом старте —
+                        // просто отмечаем это в DEBUG. Факт отсутствия всплывёт в ПРОВЕРКЕ СИСТЕМ
+                        // (Этап 4) и в финальном embed статуса.
+                        try { BotLogger.Debug(LogCategory.Boot, $"LoadTextFromFile: файл '{filePath}' отсутствует, текстовые шаблоны будут пустыми."); } catch { }
+                        return textBlocks;
+                    }
 
             try
             {

@@ -74,9 +74,10 @@ namespace RPBot
         {
             if (!_config.Enabled) return Task.CompletedTask;
             BuildServices();
-            Log("[Music] DI-контейнер собран, DiscordClientWrapper подписан на события ✓");
-            return Task.CompletedTask;
-        }
+                    if (!SuppressPrepareLog)
+                        Log("[Music] DI-контейнер собран, DiscordClientWrapper подписан на события ✓");
+                    return Task.CompletedTask;
+                }
 
         /// <summary>
         /// Фаза 2: запускаем Lavalink-процесс, затем поднимаем AudioServiceHost.
@@ -86,12 +87,17 @@ namespace RPBot
         public async Task<bool> LaunchProcessAsync(CancellationToken cancellationToken = default)
         {
             if (!_config.Enabled) return false;
-            await StartYtCipherProcessAsync(cancellationToken);
-            var ready = await StartLavalinkProcessAsync(cancellationToken);
-            await StartHostedServicesAsync(cancellationToken);
-            Log("[Music] AudioServiceHost запущен после Lavalink ✓");
-            return ready;
-        }
+                    // Эта строка раньше жила в PrepareAsync и дрейфовала между ЗАПУСК и Этапом 4.
+                    // Теперь DI-контейнер уже собран внутри ЗАПУСК (через PrepareAsync с
+                    // SuppressPrepareLog=true), а пользователю лог показывается именно здесь,
+                    // внутри Этапа 4, рядом с реальным запуском Lavalink.
+                    Log("[Music] DI-контейнер собран, DiscordClientWrapper подписан на события ✓");
+                    await StartYtCipherProcessAsync(cancellationToken);
+                    var ready = await StartLavalinkProcessAsync(cancellationToken);
+                    await StartHostedServicesAsync(cancellationToken);
+                    Log("[Music] AudioServiceHost запущен после Lavalink ✓");
+                    return ready;
+                }
 
         /// <summary>
         /// Пересобирает DI-контейнер с актуальным Discord-клиентом.
@@ -1356,6 +1362,11 @@ namespace RPBot
 
                 /// <summary>Дополнительный sink для записи в файл (назначается из Program.cs).</summary>
                 public Action<string>? FileSink { get; set; }
+
+                                /// <summary>Когда true — Log() внутри PrepareAsync не пишет строку «DI-контейнер собран».
+                                /// Program.cs включает это во время блока ЗАПУСК, чтобы строка появилась уже в Этапе 4
+                                /// (рядом с LaunchProcessAsync), а не дрейфовала между блоком ЗАПУСК и Этапом 4.</summary>
+                                public bool SuppressPrepareLog { get; set; }
 
         // ─── Dispose ─────────────────────────────────────────────────────
 

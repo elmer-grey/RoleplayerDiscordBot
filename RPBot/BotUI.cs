@@ -2284,36 +2284,45 @@ namespace RPBot
             await Task.CompletedTask;
         }
 
-        public void UpdateServices(
-            DiscordSocketClient client,
-            ReconnectionService reconnectionService,
-            ConnectionPredictor connectionPredictor,
-            StatusNotifier statusNotifier)
-        {
-            _client = client;
-            _reconnectionService = reconnectionService;
-            _connectionPredictor = connectionPredictor;
-            _statusNotifier = statusNotifier;
-
-            AddLog(" Сервисы бота обновлены");
-
-            if (Application.MainLoop != null && !_isDisposed)
-            {
-                Application.MainLoop.Invoke(() =>
+        /// <summary>
+                /// Обновляет ссылки на сервисы внутри UI и (если это рестарт) пишет
+                /// в Logs Panel информационную строку. На первом старте строка
+                /// не пишется — UI и так ещё пустой, дублировать «ЗАПУСК» не нужно.
+                /// </summary>
+                public void UpdateServices(
+                    DiscordSocketClient client,
+                    ReconnectionService reconnectionService,
+                    ConnectionPredictor connectionPredictor,
+                    StatusNotifier statusNotifier,
+                    bool isRestart)
                 {
-                    try
+                    _client = client;
+                    _reconnectionService = reconnectionService;
+                    _connectionPredictor = connectionPredictor;
+                    _statusNotifier = statusNotifier;
+
+                    if (isRestart)
                     {
-                        RefreshLayoutForTerminalSize();
-                        RewrapIfNeeded();
-                        Application.Refresh();
+                        AddLog("UI: сервисы переподключены к новому клиенту");
                     }
-                    catch (Exception ex)
+
+                    if (Application.MainLoop != null && !_isDisposed)
                     {
-                        TryAppendErrorToFile($"UpdateServices layout refresh error: {ex}");
+                        Application.MainLoop.Invoke(() =>
+                        {
+                            try
+                            {
+                                RefreshLayoutForTerminalSize();
+                                RewrapIfNeeded();
+                                Application.Refresh();
+                            }
+                            catch (Exception ex)
+                            {
+                                TryAppendErrorToFile($"UpdateServices layout refresh error: {ex}");
+                            }
+                        });
                     }
-                });
-            }
-        }
+                }
 
         public void ClearForRestart()
         {
