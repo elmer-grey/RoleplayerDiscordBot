@@ -1,7 +1,8 @@
-﻿using Discord;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
+using RPBot.Startup;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -30,31 +31,34 @@ namespace RPBot
         public string MasterName { get; set; } = string.Empty;
         public ulong MasterId { get; set; }
         public DateTime StartTime { get; set; }
-        public DateTime? EndTime { get; set; }
-        public List<(DateTime Start, DateTime? End)> PausePeriods { get; set; } = new();
-        public bool IsPaused { get; set; }
-        public bool IsStopped => EndTime.HasValue;
-        public List<RollStatistic> Rolls { get; set; } = new();
-        public string EventDescription { get; set; } = string.Empty;
-        public ulong ControlMessageId { get; set; }
-        /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
-        public ulong ControlChannelId { get; set; }
-        public ulong StatsMessageId { get; set; }
-        public CancellationTokenSource? PauseReminderCTS { get; set; }
-        public CancellationTokenSource? ControlMessageUpdateCTS { get; set; }
-        public bool TrackRolls { get; set; }
-        /// <summary>true — сбор бросков включён автоматически при старте; сбрасывается при ручном включении.</summary>
-        public bool TrackRollsAutoEnabled { get; set; }
-        public ulong? EventId { get; set; }
-        public ulong ChannelId { get; set; }
-        public ulong? PauseReminderMessageId { get; set; }
-        public ulong? ConfirmationMessageId { get; set; }
-        public bool StatsSent { get; set; }
-        public object StatsSync { get; } = new();
-        /// <summary>1-based номер строки в Google Sheets, куда записана эта сессия. 0 = не записано.</summary>
-        public int SheetRowIndex { get; set; } = 0;
-        /// <summary>Семафор для защиты от параллельных нажатий кнопок управления одной сессией.</summary>
-        public SemaphoreSlim ButtonSemaphore { get; } = new SemaphoreSlim(1, 1);
+                /// <summary>Стартовое время "активной фазы" — обнуляется при Resume после паузы, чтобы
+                /// авто-таймер обновления сообщения управления считал отсюда.</summary>
+                public DateTime ActiveStartTime { get; set; }
+                public DateTime? EndTime { get; set; }
+                public List<(DateTime Start, DateTime? End)> PausePeriods { get; set; } = new();
+                public bool IsPaused { get; set; }
+                public bool IsStopped => EndTime.HasValue;
+                public List<RollStatistic> Rolls { get; set; } = new();
+                public string EventDescription { get; set; } = string.Empty;
+                public ulong ControlMessageId { get; set; }
+                /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
+                public ulong ControlChannelId { get; set; }
+                public ulong StatsMessageId { get; set; }
+                public CancellationTokenSource? PauseReminderCTS { get; set; }
+                public CancellationTokenSource? ControlMessageUpdateCTS { get; set; }
+                public bool TrackRolls { get; set; }
+                /// <summary>true — сбор бросков включён автоматически при старте; сбрасывается при ручном включении.</summary>
+                public bool TrackRollsAutoEnabled { get; set; }
+                public ulong? EventId { get; set; }
+                public ulong ChannelId { get; set; }
+                public ulong? PauseReminderMessageId { get; set; }
+                public ulong? ConfirmationMessageId { get; set; }
+                public bool StatsSent { get; set; }
+                public object StatsSync { get; } = new();
+                /// <summary>1-based номер строки в Google Sheets, куда записана эта сессия. 0 = не записано.</summary>
+                public int SheetRowIndex { get; set; } = 0;
+                /// <summary>Семафор для защиты от параллельных нажатий кнопок управления одной сессией.</summary>
+                public SemaphoreSlim ButtonSemaphore { get; } = new SemaphoreSlim(1, 1);
     }
 
     public class GameSessionCommands : ModuleBase<SocketCommandContext>
@@ -63,8 +67,12 @@ namespace RPBot
         private readonly GoogleSheetsService? _googleSheets;
         internal Action<string>? _logSinkOverride;
         public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _sessions = new();
-        private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
-        private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
+            // Завершённые сессии хранятся в памяти и в файле до тех пор, пока
+            // связанное Discord-событие активно. Нужно, чтобы кнопки статистики
+            // продолжали работать после перезагрузки бота.
+            public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _stoppedSessions = new();
+            private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
+            private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
         private static readonly string _sessionsStatePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "sessions_state.json"));
 
@@ -86,6 +94,29 @@ namespace RPBot
         private static void LogError(string message)
             => BotLogger.Error(LogCategory.Session, message);
 
+        /// <summary>
+        /// Пишет строку в визуализацию старта (ЭТАП 3) через StartupRenderer.
+        /// StartupRenderer уже подключён к FileSink, который зеркалит в
+        /// logs/run.log — поэтому НЕ зовём BotLogger параллельно для той же
+        /// строки: иначе в run.log/GUI появится логический дубль (с [DEBUG]
+        /// и без). Если нужна и категорийная запись для расследования, пишите
+        /// туда ОТДЕЛЬНУЮ по смыслу строку, не копию этой.
+        ///
+        /// Вне старта (после EndStartup) StartupRenderer может быть в неактивном
+        /// состоянии, но sinks продолжают работать — поэтому ничего не теряется.
+        /// </summary>
+        private static void WriteStageLine(string message)
+        {
+            try
+            {
+                StartupRenderer.Instance.WriteLine(message);
+            }
+            catch
+            {
+                // Вне UI-режима — тихо игнорируем.
+            }
+        }
+
         private static async Task SaveSessionsAsync()
         {
             try
@@ -103,55 +134,69 @@ namespace RPBot
                     {
                         foreach (var session in guild.Value.Values.Where(s => !s.IsStopped))
                         {
-                            var key = $"{guild.Key}:{session.SessionId}";
-                            sessionsToSave[key] = new
+                                    sessionsToSave[$"{guild.Key}:{session.SessionId}"] = BuildSessionSnapshot(session);
+                                }
+                            }
+
+                            // Сохраняем и архивные сессии (завершённые, но ещё ожидающие выбора статистики).
+                            foreach (var guild in _stoppedSessions)
                             {
-                                session.SessionId,
-                                session.GuildId,
-                                session.ChannelId,
-                                session.GameName,
-                                session.MasterName,
-                                session.MasterId,
-                                session.StartTime,
-                                session.EventDescription,
-                                session.GameComment,
-                                session.EventId,
-                                session.ControlMessageId,
-                                session.ControlChannelId,
-                                session.IsPaused,
-                                session.TrackRolls,
-                                                            // PausePeriods нужен, чтобы после рестарта CalculateActiveDuration
-                                                            // не считал время "из начала" — иначе все прошлые паузы терялись
-                                                            // и счётчик длительности "убегал вперёд".
-                                                            PausePeriods = session.PausePeriods.Select(p => new
-                                                            {
-                                                                Start = p.Start,
-                                                                End = p.End,
-                                                            }).ToList(),
-                                                            Rolls = session.Rolls
-                                                        };
+                                foreach (var session in guild.Value.Values)
+                                {
+                                    sessionsToSave[$"{guild.Key}:{session.SessionId}"] = BuildSessionSnapshot(session);
+                                }
+                            }
+
+                            var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                            await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
+
+                            if (sessionsToSave.Count > 0)
+                            {
+                                var totalRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count)
+                                    + _stoppedSessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
+                                BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} сессий (активных+архив) ({totalRolls} бросков)");
+                            }
+                        }
+                        finally
+                        {
+                            _saveSessionsSemaphore.Release();
                         }
                     }
-
-                    var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                    await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
-
-                    if (sessionsToSave.Count > 0)
+                    catch (Exception ex)
                     {
-                        var totalRolls = _sessions.Values.SelectMany(g => g.Values.Where(s => !s.IsStopped)).Sum(s => s.Rolls.Count);
-                        BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} активных сессий ({totalRolls} бросков)");
+                        BotLogger.Error(LogCategory.Session, $"Ошибка при сохранении сессий: {ex.Message}");
                     }
                 }
-                finally
+
+                private static object BuildSessionSnapshot(GameSession session) => new
                 {
-                    _saveSessionsSemaphore.Release();
-                }
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Error(LogCategory.Session, $"Ошибка при сохранении сессий: {ex.Message}");
-            }
-        }
+                    session.SessionId,
+                    session.GuildId,
+                    session.ChannelId,
+                    session.GameName,
+                    session.MasterName,
+                    session.MasterId,
+                    session.StartTime,
+                    session.ActiveStartTime,
+                    session.EventDescription,
+                    session.GameComment,
+                    session.EventId,
+                    session.ControlMessageId,
+                    session.ControlChannelId,
+                    session.IsPaused,
+                    session.TrackRolls,
+                    session.StatsMessageId,
+                    session.EndTime,
+                    // PausePeriods нужен, чтобы после рестарта CalculateActiveDuration
+                    // не считал время "из начала" — иначе все прошлые паузы терялись
+                    // и счётчик длительности "убегал вперёд".
+                    PausePeriods = session.PausePeriods.Select(p => new
+                    {
+                        Start = p.Start,
+                        End = p.End,
+                    }).ToList(),
+                    Rolls = session.Rolls
+                };
 
         public static async Task LoadSessionsAsync(DiscordSocketClient client)
         {
@@ -173,6 +218,8 @@ namespace RPBot
 
                 var commands = new GameSessionCommands(client);
                 int restorCount = 0;
+                int activeCount = 0;
+                int archivedCount = 0;
                 int skippedOldCount = 0;
                 // Сессии старше этого порога считаются устаревшими и не восстанавливаются
                 const int MaxSessionAgeHours = 48;
@@ -188,6 +235,12 @@ namespace RPBot
                         var masterName = elem.GetProperty("MasterName").GetString() ?? "Unknown";
                         var masterId = elem.GetProperty("MasterId").GetUInt64();
                         var startTime = DateTime.Parse(elem.GetProperty("StartTime").GetString() ?? DateTime.Now.ToString());
+                        DateTime activeStartTime = startTime;
+                        if (elem.TryGetProperty("ActiveStartTime", out var ast) && ast.ValueKind == System.Text.Json.JsonValueKind.String
+                            && DateTime.TryParse(ast.GetString(), out var parsedActive))
+                        {
+                            activeStartTime = parsedActive;
+                        }
 
                         // Пропускаем слишком старые сессии — они не восстанавливаются
                         if ((DateTime.Now - startTime).TotalHours > MaxSessionAgeHours)
@@ -258,28 +311,51 @@ namespace RPBot
                                                     MasterName = masterName,
                                                     MasterId = masterId,
                                                     StartTime = startTime,
-                                                    EventDescription = eventDescription ?? string.Empty,
-                                                    GameComment = gameComment ?? string.Empty,
-                                                    EventId = eventId,
-                                                    ControlMessageId = controlMessageId,
-                                                    ControlChannelId = controlChannelId,
-                                                    IsPaused = isPaused,
-                                                    TrackRolls = trackRolls,
-                                                    PausePeriods = pausePeriods,
-                                                    Rolls = rolls
-                                                };
+                                                                                                    ActiveStartTime = isPaused ? startTime : (activeStartTime == startTime ? DateTime.Now : activeStartTime),
+                                                                                                    EventDescription = eventDescription ?? string.Empty,
+                                                                                                    GameComment = gameComment ?? string.Empty,
+                                                                                                    EventId = eventId,
+                                                                                                    ControlMessageId = controlMessageId,
+                                                                                                    ControlChannelId = controlChannelId,
+                                                                                                    IsPaused = isPaused,
+                                                                                                    TrackRolls = trackRolls,
+                                                                                                    PausePeriods = pausePeriods,
+                                                                                                    Rolls = rolls
+                                                                                                };
 
-                        if (!_sessions.TryGetValue(guildId, out var guildSessions))
-                        {
-                            guildSessions = new ConcurrentDictionary<ulong, GameSession>();
-                            _sessions[guildId] = guildSessions;
-                        }
+                                                                        // Восстанавливаем EndTime и StatsMessageId, если они есть в сохранении —
+                                                                        // иначе сессия в архиве потеряет связь с висящим сообщением статистики.
+                                                                        if (elem.TryGetProperty("EndTime", out var endTimeProp)
+                                                                            && endTimeProp.ValueKind == System.Text.Json.JsonValueKind.String
+                                                                            && DateTime.TryParse(endTimeProp.GetString(), out var parsedEnd))
+                                                                        {
+                                                                            session.EndTime = parsedEnd;
+                                                                        }
+                                                                        if (elem.TryGetProperty("StatsMessageId", out var smi) && smi.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                                                        {
+                                                                            session.StatsMessageId = smi.GetUInt64();
+                                                                        }
 
-                        if (guildSessions.TryAdd(sessionId, session))
-                        {
-                            restorCount++;
-                            BotLogger.Info(LogCategory.Session, $"Восстановлена сессия {sessionId}: \"{gameName}\" (мастер: {masterName}, бросков: {rolls.Count})");
-                        }
+                                                                        // Активные (незавершённые) сессии кладём в обычный словарь,
+                                                                        // завершённые — в архив, чтобы кнопки статистики продолжали работать.
+                                                                        var target = session.IsStopped ? _stoppedSessions : _sessions;
+                                                                        if (!target.TryGetValue(guildId, out var guildSessions))
+                                                                        {
+                                                                            guildSessions = new ConcurrentDictionary<ulong, GameSession>();
+                                                                            target[guildId] = guildSessions;
+                                                                        }
+
+                                                                        if (guildSessions.TryAdd(sessionId, session))
+                                                                        {
+                                                                            restorCount++;
+                                                                            if (session.IsStopped) archivedCount++;
+                                                                            else activeCount++;
+                                                                            var eventIdStr = session.EventId.HasValue ? session.EventId.Value.ToString() : "null";
+                                                                            // Единая строка для UI/run.log через StartupRenderer.
+                                                                            // Категорийный Session.log получит копию через WriteStageLine
+                                                                            // (его FileSink зеркалит в run.log; сами строки не дублируем).
+                                                                            WriteStageLine($"Загружена сессия {sessionId}: \"{gameName}\" (EventId={eventIdStr}, мастер: {masterName}, бросков: {rolls.Count}, isPaused={isPaused})");
+                                                                        }
                     }
                     catch (Exception ex)
                     {
@@ -288,19 +364,221 @@ namespace RPBot
                 }
 
                 if (restorCount > 0 || skippedOldCount > 0)
-                {
-                    var totalRestorRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
-                    BotLogger.Info(LogCategory.Session, $"Восстановлено {restorCount} сессий ({totalRestorRolls} бросков), пропущено устаревших: {skippedOldCount}");
+                                {
+                                    WriteStageLine($"Загружено {restorCount} записей из файла (активных: {activeCount}, архивных: {archivedCount}), пропущено устаревших: {skippedOldCount}");
 
-                    if (restorCount > 0)
-                        _ = RecreateControlMessagesAsync(client);
-                }
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Error(LogCategory.Session, $"Ошибка при загрузке сессий: {ex.Message}");
-            }
+                                    if (restorCount > 0)
+                                                                        {
+                                                                            // ВАЖНО: cleanup осиротевших сессий должен идти ДО
+                                                                            // RecreateControlMessagesAsync, иначе только что
+                                                                            // восстановленное control message повисит ~1 секунду
+                                                                            // до того, как его удалит cleanup.
+                                                                            await CleanupStaleSessionsAsync(client);
+                                                                            await RecreateControlMessagesAsync(client);
+                                                                        }
+                                                                            }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                                            BotLogger.Error(LogCategory.Session, $"Ошибка при загрузке сессий: {ex.Message}");
+                                            }
         }
+
+                        /// <summary>
+                                /// Останавливает все активные таймеры автообновления control message. Нужно
+                                /// вызывать при ежедневной перезагрузке/рестарте до того, как старый
+                                /// Discord-клиент будет уничтожен, чтобы фоновые Task'и не дёргали
+                                /// disposed HttpClient.
+                                /// </summary>
+                                public static void StopAllAutoRefresh()
+                                {
+                                    int stopped = 0;
+                                    foreach (var guild in _sessions)
+                                    {
+                                        foreach (var session in guild.Value.Values)
+                                        {
+                                            if (session.ControlMessageUpdateCTS == null) continue;
+                                            try { session.ControlMessageUpdateCTS.Cancel(); } catch { }
+                                            try { session.ControlMessageUpdateCTS.Dispose(); } catch { }
+                                            session.ControlMessageUpdateCTS = null;
+                                            stopped++;
+                                        }
+                                    }
+                                    if (stopped > 0)
+                                        BotLogger.Debug(LogCategory.Session, $"Остановлено {stopped} таймеров автообновления control message");
+                                }
+
+                                /// <summary>
+                                /// После восстановления сессий из файла проверяет, существуют ли ещё
+                                /// связанные Discord-события. Если событие удалено/завершено пока бот
+                                /// был оффлайн — сессия считается завершённой, очищается control message,
+                                /// вызывается RemoveSession, и пользователю уходит уведомление в личку/канал.
+                                /// </summary>
+                                public static async Task CleanupStaleSessionsAsync(DiscordSocketClient client)
+                                {
+                                    int cleaned = 0;
+                                    var stale = new List<(ulong GuildId, GameSession Session)>();
+
+                                    foreach (var guild in _sessions)
+                                    {
+                                        foreach (var session in guild.Value.Values)
+                                        {
+                                            if (!session.EventId.HasValue) continue;
+                                            if (session.IsStopped) continue;
+                                            stale.Add((guild.Key, session));
+                                        }
+                                    }
+
+                                    // Стартовая строка cleanup — только через визуализацию, чтобы не было
+                                    // тройных дублей в run.log (BotLogger.Info + WriteStageLine).
+                                    WriteStageLine($"[STALE] Cleanup: проверяю {stale.Count} активных сессий.");
+
+                                    foreach (var (guildId, session) in stale)
+                                    {
+                                        try
+                                        {
+                                            var guild = client.GetGuild(guildId);
+                                            if (guild == null)
+                                            {
+                                                BotLogger.Warn(LogCategory.Session, $"[STALE] Гильдия {guildId} недоступна для сессии {session.SessionId} — пропускаю.");
+                                                continue;
+                                            }
+                                            var guildEvent = await guild.GetEventAsync(session.EventId.Value).ConfigureAwait(false);
+                                            if (guildEvent == null)
+                                            {
+                                                // Кэш SocketGuild.GetEventAsync может возвращать null, даже если событие живёт.
+                                                // Дёрнем REST по гильдии — он ходит напрямую и видит актуальные Completed/Cancelled.
+                                                try
+                                                {
+                                                    var restGuild = await client.Rest.GetGuildAsync(session.GuildId).ConfigureAwait(false);
+                                                    if (restGuild != null)
+                                                    {
+                                                        var restEvent = await restGuild.GetEventAsync(session.EventId.Value).ConfigureAwait(false);
+                                                        if (restEvent != null)
+                                                            guildEvent = restEvent;
+                                                    }
+                                                }
+                                                catch (Exception restEx)
+                                                {
+                                                    BotLogger.Debug(LogCategory.Session, $"[STALE] REST-фоллбэк для события {session.EventId.Value} не удался: {restEx.Message}");
+                                                }
+                                            }
+
+                                            var eventStatusLine = $"[STALE] Сессия {session.SessionId} \"{session.GameName}\" → GetEventAsync({session.EventId}) = {(guildEvent == null ? "null" : $"\"{guildEvent.Name}\" status={guildEvent.Status}")}";
+                                            // В run.log/GUI — через WriteStageLine (одна видимая строка).
+                                            // Дополнительно сохраняем в категорийный Session.log через BotLogger.Debug
+                                            // для расследования: туда идёт та же строка, но в отдельный файл,
+                                            // в run.log/GUI повторно не попадает.
+                                            WriteStageLine(eventStatusLine);
+                                            BotLogger.Debug(LogCategory.Session, eventStatusLine);
+
+                                            // Считаем сессию осиротевшей, если:
+                                            //   - связанное событие уже не существует (null);
+                                            //   - ИЛИ событие уже завершилось на стороне Discord
+                                            //     (Completed/Cancelled) — бот не сможет продолжать
+                                            //     синхронизацию, событие больше нельзя менять.
+                                            bool isOrphan = guildEvent == null
+                                                || guildEvent.Status == GuildScheduledEventStatus.Completed
+                                                || guildEvent.Status == GuildScheduledEventStatus.Cancelled;
+
+                                            if (isOrphan)
+                                            {
+                                                string orphanReason = guildEvent == null
+                                                    ? "связанное Discord-событие больше не существует"
+                                                    : $"связанное Discord-событие в статусе {guildEvent.Status}";
+                                                BotLogger.Warn(LogCategory.Session,
+                                                    $"[STALE] Сессия {session.SessionId} (\"{session.GameName}\") — {orphanReason}, принудительное завершение");
+
+                                                session.EndTime = DateTime.Now;
+                                                try
+                                                {
+                                                    var controlCh = session.ControlChannelId != 0
+                                                        ? client.GetChannel(session.ControlChannelId) as IMessageChannel
+                                                        : client.GetChannel(session.ChannelId) as IMessageChannel;
+                                                    if (controlCh != null && session.ControlMessageId != 0)
+                                                    {
+                                                        var msg = await controlCh.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false) as IUserMessage;
+                                                        if (msg != null) await msg.DeleteAsync().ConfigureAwait(false);
+                                                    }
+                                                }
+                                                catch (Exception dex)
+                                                {
+                                                    BotLogger.Debug(LogCategory.Session, $"[STALE] Не удалось удалить control message {session.ControlMessageId}: {dex.Message}");
+                                                }
+
+                                                // Уведомления мастеру в канал больше не отправляем — пользователь
+                                                // решил, что для автозавершения это лишний шум. Удаление control
+                                                // message и пометка в run.log/GUI достаточно.
+
+                                                new GameSessionCommands(client).RemoveSession(session);
+                                                cleaned++;
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            BotLogger.Error(LogCategory.Session, $"[STALE] Ошибка проверки сессии {session.SessionId}: {ex.Message}");
+                                        }
+                                    }
+
+                                    if (cleaned > 0)
+                                    {
+                                        await SaveSessionsAsync().ConfigureAwait(false);
+                                        // Через визуализацию, чтобы не дублировать.
+                                        WriteStageLine($"[STALE] Очищено {cleaned} осиротевших сессий");
+                                    }
+                                    else
+                                    {
+                                        WriteStageLine("[STALE] Осиротевших сессий не обнаружено.");
+                                    }
+                                }
+
+                                /// <summary>
+                                /// Целевая версия cleanup: ищет в _sessions сессию с заданным EventId
+                                /// и принудительно завершает. Зовётся из RESYNC, когда для одного
+                                /// конкретного события точно известно, что оно уже не существует.
+                                /// </summary>
+                                public static async Task CleanupStaleSessionByEventAsync(DiscordSocketClient client, ulong guildId, ulong eventId)
+                                {
+                                    if (!_sessions.TryGetValue(guildId, out var guildSessions))
+                                        return;
+                                    foreach (var session in guildSessions.Values.ToList())
+                                    {
+                                        if (!session.EventId.HasValue || session.EventId.Value != eventId)
+                                            continue;
+                                        if (session.IsStopped)
+                                            continue;
+
+                                        BotLogger.Warn(LogCategory.Session,
+                                            $"[STALE] Сессия {session.SessionId} (\"{session.GameName}\") связана с несуществующим событием {eventId} — принудительное завершение");
+
+                                        session.EndTime = DateTime.Now;
+                                        try
+                                        {
+                                            var controlCh = session.ControlChannelId != 0
+                                                ? client.GetChannel(session.ControlChannelId) as IMessageChannel
+                                                : client.GetChannel(session.ChannelId) as IMessageChannel;
+                                            if (controlCh != null && session.ControlMessageId != 0)
+                                            {
+                                                var msg = await controlCh.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false) as IUserMessage;
+                                                if (msg != null) await msg.DeleteAsync().ConfigureAwait(false);
+                                            }
+                                        }
+                                        catch (Exception dex)
+                                        {
+                                            BotLogger.Debug(LogCategory.Session, $"[STALE] Не удалось удалить control message {session.ControlMessageId}: {dex.Message}");
+                                        }
+
+                                        // Уведомления мастеру в канал не отправляем — пользователь решил,
+                                        // что для автозавершения это лишний шум.
+
+                                        new GameSessionCommands(client).RemoveSession(session);
+                                        // Единая строка для категорийного лога и run.log.
+                                        // (WriteStageLine сюда не нужен — функция вызывается в рантайме,
+                                        // не во время визуализации старта.)
+                                        BotLogger.Info(LogCategory.Session, $"[STALE] Осиротевшая сессия {session.SessionId} (\"{session.GameName}\") завершена принудительно.");
+                                        return;
+                                    }
+                                }
 
         private static async Task RecreateControlMessagesAsync(DiscordSocketClient client)
         {
@@ -328,33 +606,39 @@ namespace RPBot
                                 try
                                 {
                                     var existingMessage = await channel.GetMessageAsync(session.ControlMessageId).ConfigureAwait(false);
-                                    if (existingMessage != null)
+                                        if (existingMessage != null)
                                     {
-                                        commands.StartControlMessageAutoRefresh(session, channel);
-                                        continue;
+                                        // Старое control message на месте — не пересоздаём,
+                                        // а только обновляем embed до актуального состояния.
+                                        try
+                                        {
+                                    var activeDurationExisting = CalculateActiveDuration(session, DateTime.Now);
+                                    var refreshed = BuildActiveControlEmbed(session, activeDurationExisting);
+                                    var refreshedButtons = commands.CreateControlButtons(session);
+                                    await ((IUserMessage)existingMessage).ModifyAsync(m =>
+                                    {
+                                        m.Embed = refreshed;
+                                        m.Components = refreshedButtons.Build();
+                                    }).ConfigureAwait(false);
+                                    commands.StartControlMessageAutoRefresh(session, channel);
+                                    LogDebug($"Control message для сессии {session.SessionId} уже на месте — обновлён");
+                                    continue;
+                                        }
+                                        catch (Exception editEx)
+                                        {
+                                    LogWarn($"Не удалось обновить существующий control message сессии {session.SessionId}: {editEx.Message}");
+                                    commands.StartControlMessageAutoRefresh(session, channel);
+                                    continue;
+                                                                }
                                     }
-                                }
-                                catch
-                                {
-                                }
-                            }
+                                                            }
+                                                            catch
+                                                            {
+                                                            }
+                                                        }
 
                             var activeDuration = CalculateActiveDuration(session, DateTime.Now);
-                            var embed = new EmbedBuilder()
-                                .WithTitle($"Сессия: \"{session.GameName}\" ⚠️ Восстановлено")
-                                .WithDescription($"Мастер: {session.MasterName}\n" +
-                                               $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
-                                               $"Статус: {(session.IsPaused ? "⏸ На паузе" : "▶ В процессе")}\n" +
-                                               $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
-                                               (session.TrackRolls
-                                                   ? (session.TrackRollsAutoEnabled
-                                                       ? "Сбор бросков: ✅ Включен (автоматически)\n"
-                                                       : "Сбор бросков: ✅ Включен\n")
-                                                   : "Сбор бросков: ❌ Выключен\n") +
-                                               $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}\n")}" +
-                                               $"⚠️ *Сообщение управления было пересоздано после перезапуска бота*")
-                                .WithColor(Color.DarkOrange)
-                                .Build();
+                                                        var embed = BuildActiveControlEmbed(session, activeDuration);
 
                             // Используем кнопку force_stop для пересозданных сообщений, т.к. обычный
                             // confirm_stop требует DeferAsync который не работает на "свежих" interaction
@@ -433,10 +717,13 @@ namespace RPBot
                     GameComment = gameComment ?? string.Empty,
                     EventDescription = eventDescription ?? string.Empty,
                     StartTime = DateTime.Now,
-                    EventId = eventId,
-                    TrackRolls = true,
-                    TrackRollsAutoEnabled = true
-                };
+                                    ActiveStartTime = DateTime.Now,
+                                    EventId = eventId,
+                                    TrackRolls = true,
+                                    TrackRollsAutoEnabled = true
+                                                                        // ActiveStartTime = StartTime; — после Resume больше не
+                                                                        // сбрасываем, "Длительность (активная)" = общая минус паузы.
+                                                                    };
 
                 if (!_sessions.TryGetValue(guildId, out var sessions))
                 {
@@ -486,24 +773,69 @@ namespace RPBot
         }
 
         private static TimeSpan CalculateActiveDuration(GameSession session, DateTime now)
-        {
-            var end = session.EndTime ?? now;
-            if (end < session.StartTime)
-                return TimeSpan.Zero;
+                {
+                            // Активная длительность = (now - StartTime) минус все паузы,
+                            // которые пересекаются с этим интервалом. Так счётчик продолжает
+                            // расти от старта сессии, а паузы из него вычитаются.
+                            var end = session.EndTime ?? now;
+                            if (end < session.StartTime)
+                                return TimeSpan.Zero;
 
-            var total = end - session.StartTime;
-            var pause = TimeSpan.Zero;
-            foreach (var p in session.PausePeriods)
-            {
-                var pauseEnd = p.End ?? now;
-                if (pauseEnd <= p.Start)
-                    continue;
-                pause += pauseEnd - p.Start;
-            }
+                            var total = end - session.StartTime;
+                            var pause = TimeSpan.Zero;
+                            foreach (var p in session.PausePeriods)
+                            {
+                                var pauseEnd = p.End ?? now;
+                                if (pauseEnd <= p.Start)
+                                    continue;
+                                // Учитываем только ту часть паузы, что попадает в [StartTime, end].
+                                var segStart = p.Start < session.StartTime ? session.StartTime : p.Start;
+                                var segEnd = pauseEnd > end ? end : pauseEnd;
+                                if (segEnd <= segStart) continue;
+                                pause += segEnd - segStart;
+                            }
 
-            var active = total - pause;
-            return active < TimeSpan.Zero ? TimeSpan.Zero : active;
-        }
+                            var active = total - pause;
+                            return active < TimeSpan.Zero ? TimeSpan.Zero : active;
+                        }
+
+        private static Embed BuildActiveControlEmbed(GameSession session, TimeSpan activeDuration)
+                {
+                    var currentPause = session.PausePeriods.LastOrDefault();
+                    var pauseTimeInfo = session.IsPaused && currentPause.Start != DateTime.MinValue
+                        ? $"\nНа паузе с: {DiscordTimeFormatter.TimeOnly(currentPause.Start)}"
+                        : "";
+
+                    var statusText = session.IsStopped
+                        ? "✅ Завершена"
+                        : session.IsPaused
+                            ? $"⏸ На паузе{pauseTimeInfo}"
+                            : "▶ В процессе";
+
+                    var descriptionLines = new List<string>
+                    {
+                        $"Мастер: {session.MasterName}",
+                        $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}",
+                        $"Статус: {statusText}",
+                        $"Длительность (активная): {FormatDurationCompact(activeDuration)}",
+                        session.TrackRolls
+                            ? (session.TrackRollsAutoEnabled
+                                ? "Сбор бросков: ✅ Включен (автоматически)"
+                                : "Сбор бросков: ✅ Включен")
+                            : "Сбор бросков: ❌ Выключен",
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(session.EventDescription))
+                        descriptionLines.Add($"Описание: {session.EventDescription}");
+                    if (!string.IsNullOrWhiteSpace(session.GameComment))
+                        descriptionLines.Add($"Комментарий: {session.GameComment}");
+
+                    return new EmbedBuilder()
+                        .WithTitle($"Сессия: \"{session.GameName}\"")
+                        .WithDescription(string.Join("\n", descriptionLines))
+                        .WithColor(session.IsStopped ? Color.DarkGrey : session.IsPaused ? Color.Orange : Color.Green)
+                        .Build();
+                }
 
         private static string FormatDurationCompact(TimeSpan value)
         {
@@ -610,34 +942,49 @@ namespace RPBot
             var cts = new CancellationTokenSource();
             session.ControlMessageUpdateCTS = cts;
             var token = cts.Token;
+                        // Захватываем клиента локально — после рестарта бота _client остаётся
+                        // старым (disposed), и его DiscordHttpClient уже непригоден.
+                        var clientRef = _client;
 
-            _ = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromMinutes(10), token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
+                        _ = Task.Run(async () =>
+                        {
+                            while (!token.IsCancellationRequested)
+                            {
+                                try
+                                {
+                                    await Task.Delay(TimeSpan.FromMinutes(10), token).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    return;
+                                }
 
-                    if (token.IsCancellationRequested || session.IsStopped)
-                        return;
+                                if (token.IsCancellationRequested || session.IsStopped)
+                                    return;
 
-                    try
-                    {
-                        await UpdateControlMessage(session, channel).ConfigureAwait(false);
+                                // На паузе таймер автообновления ничего полезного не делает,
+                                // а ещё вызывает "шум" в логах и рискует затереть напоминание о паузе.
+                                if (session.IsPaused)
+                                    continue;
+
+                                // Клиент мог быть пересоздан — пропускаем обновление до восстановления.
+                                if (clientRef == null || clientRef.ConnectionState != ConnectionState.Connected
+                                    || clientRef.LoginState != LoginState.LoggedIn)
+                                {
+                                    continue;
+                                }
+
+                                try
+                                {
+                                    await UpdateControlMessage(session, channel).ConfigureAwait(false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log($"Ошибка автообновления control message для сессии {session.SessionId}: {ex.Message}");
+                                }
+                            }
+                        }, token);
                     }
-                    catch (Exception ex)
-                    {
-                        Log($"Ошибка автообновления control message для сессии {session.SessionId}: {ex.Message}");
-                    }
-                }
-            }, token);
-        }
 
         public static async Task OnGuildScheduledEventStarted(SocketGuildEvent guildEvent, DiscordSocketClient client)
         {
@@ -967,13 +1314,15 @@ namespace RPBot
             }
 
             session.PauseReminderCTS?.Cancel();
-            try { session.PauseReminderCTS?.Dispose(); } catch { }
-            session.PauseReminderCTS = null;
-            var lastPause = session.PausePeriods.Last();
-            session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
-            session.IsPaused = false;
+                        try { session.PauseReminderCTS?.Dispose(); } catch { }
+                        session.PauseReminderCTS = null;
+                        var lastPause = session.PausePeriods.Last();
+                        session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);
+                        session.IsPaused = false;
+                                    // Не сбрасываем ActiveStartTime: "Длительность (активная)" — это общая
+                                    // длительность сессии минус паузы, а не таймер "от Resume".
 
-            Log($"Сессия {session.SessionId} возобновлена после паузы");
+                                    Log($"Сессия {session.SessionId} возобновлена после паузы");
 
             await UpdateControlMessage(session, component.Channel);
             await SendTemporaryEphemeralResponse(component, "Игра продолжена.");
@@ -1100,41 +1449,29 @@ namespace RPBot
         }
 
         private async Task HandleStopSession(SocketMessageComponent component, GameSession session)
-        {
-            Log($"Пользователь {component.User.Id} запросил остановку сессии {session.SessionId} ({session.GameName})");
-
-            var confirmBuilder = new ComponentBuilder()
-                .WithButton("✅ Да", $"confirm_stop:{session.SessionId}", ButtonStyle.Danger)
-                .WithButton("❌ Нет", $"cancel_stop:{session.SessionId}", ButtonStyle.Secondary);
-
-            try
-            {
-                await component.Message.ModifyAsync(m =>
                 {
-                    m.Components = confirmBuilder.Build();
-                });
-                Log($"Кнопки подтверждения остановки для сессии {session.SessionId} успешно обновлены");
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка при обновлении кнопок подтверждения остановки: {ex.Message}");
-            }
+                    Log($"Пользователь {component.User.Id} запросил остановку сессии {session.SessionId} ({session.GameName})");
 
-            var confirmMessage = await component.FollowupAsync("Вы уверены, что хотите завершить игру?", ephemeral: true);
-            session.ConfirmationMessageId = confirmMessage.Id;
+                    // Меняем кнопки control-сообщения на «✅ Да / ❌ Нет» — пользователь жмёт прямо по ним,
+                    // это один synchronous round-trip к Discord (без отдельного ephemeral FollowupAsync),
+                    // и укладываемся в 3-секундный ack-таймаут без риска 10062/10008.
+                    var confirmBuilder = new ComponentBuilder()
+                        .WithButton("✅ Да, завершить", $"confirm_stop:{session.SessionId}", ButtonStyle.Danger)
+                        .WithButton("❌ Отмена", $"cancel_stop:{session.SessionId}", ButtonStyle.Secondary);
 
-            // Удаляем через 10 секунд
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(TimeSpan.FromSeconds(10));
-                try
-                {
-                    await confirmMessage.DeleteAsync();
+                    try
+                    {
+                        await component.Message.ModifyAsync(m => m.Components = confirmBuilder.Build());
+                        Log($"Кнопки подтверждения остановки для сессии {session.SessionId} успешно обновлены");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка при обновлении кнопок подтверждения остановки: {ex.Message}");
+                    }
+
+                    // Сигналим пользователю ephemeral, что ждём подтверждения (не задерживая ack).
+                    await component.FollowupAsync("Вы уверены, что хотите завершить игру? Нажмите **«✅ Да, завершить»** ниже.", ephemeral: true);
                 }
-                catch { }
-                session.ConfirmationMessageId = null;
-            });
-        }
 
         private async Task HandleConfirmStop(SocketMessageComponent component, GameSession session)
         {
@@ -1192,6 +1529,8 @@ namespace RPBot
                 // 1. В SendSessionStats → RemoveSession() если нет бросков (строка 6621)
                 // 2. В обработке кнопок статистики (no_stats, general_stats, detailed_stats)
                 //    после вывода статистики - там вызывается RemoveSession()
+                                // Пока пользователь не нажал ни одну из кнопок, сессия хранится
+                                // в архиве (_stoppedSessions) — это позволяет пережить рестарт бота.
             }
             catch (Exception ex)
             {
@@ -1551,9 +1890,16 @@ namespace RPBot
                     LogDebug($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
                     RemoveSession(session);
                     _ = Task.Run(() => SaveSessionsAsync());
-                }
+                                    // Архивировать нечего: статистика не нужна.
+                                    return;
+                                }
 
-                // Google Sheets — в последнюю очередь, после всех Discord-сообщений
+                                // Архивируем сессию: пока пользователь не нажал ни одну кнопку
+                                // статистики, данные хранятся в памяти и не теряются при рестарте.
+                                ArchiveStoppedSession(session);
+                                _ = Task.Run(() => SaveSessionsAsync());
+
+                                // Google Sheets — в последнюю очередь, после всех Discord-сообщений
                 if (_googleSheets != null)
                 {
                     try
@@ -1594,66 +1940,114 @@ namespace RPBot
                 session.ControlMessageUpdateCTS?.Cancel();
                 session.ControlMessageUpdateCTS?.Dispose();
 
-                if (_sessions.TryGetValue(session.GuildId, out var guildSessions))
-                {
-                    if (guildSessions.TryRemove(session.SessionId, out _))
-                    {
-                        LogDebug($"Сессия {session.SessionId} успешно удалена из словаря");
-                    }
-                    else
-                    {
-                        LogWarn($"Не удалось удалить сессию {session.SessionId} из словаря");
-                    }
-
-                    if (guildSessions.IsEmpty)
-                    {
-                        if (_sessions.TryRemove(session.GuildId, out _))
+                        if (_sessions.TryGetValue(session.GuildId, out var guildSessions)
+                            && guildSessions.TryRemove(session.SessionId, out _))
                         {
-                            LogDebug($"Словарь сессий для гильдии {session.GuildId} удален (пуст)");
+                            LogDebug($"Сессия {session.SessionId} удалена из активных");
                         }
+                        else if (_stoppedSessions.TryGetValue(session.GuildId, out var stoppedGuildSessions)
+                                 && stoppedGuildSessions.TryRemove(session.SessionId, out _))
+                        {
+                            LogDebug($"Сессия {session.SessionId} удалена из завершённых");
+                        }
+                        else
+                        {
+                            LogDebug($"Не найден словарь сессий для гильдии {session.GuildId} при удалении");
+                        }
+
+                        // Полная очистка пустых словарей
+                        if (_sessions.TryGetValue(session.GuildId, out var active)
+                            && active.IsEmpty)
+                {
+                            _sessions.TryRemove(session.GuildId, out _);
+                            LogDebug($"Словарь активных сессий для гильдии {session.GuildId} удален (пуст)");
+                        }
+                        if (_stoppedSessions.TryGetValue(session.GuildId, out var stopped)
+                            && stopped.IsEmpty)
+                        {
+                            _stoppedSessions.TryRemove(session.GuildId, out _);
+                        }
+
+                        try
+                        {
+                            var guild = _client.GetGuild(session.GuildId);
+                            if (guild == null) return;
+
+                            // Используем ControlChannelId — точный канал control message (напоминания о паузе тоже там)
+                            var channelId = session.ControlChannelId != 0
+                                ? session.ControlChannelId
+                                : session.ChannelId;
+                            var channel = guild.GetTextChannel(channelId);
+                            if (channel == null) return;
+
+                            // Удаляем последнее напоминание о паузе
+                            if (session.PauseReminderMessageId.HasValue)
+                            {
+                                _ = channel.DeleteMessageAsync(session.PauseReminderMessageId.Value)
+                                                            .ContinueWith(t =>
+                                                            {
+                                                                // 10008 / Unknown Message — нормальная гонка: сообщение уже удалено
+                                                                // (например, в SendSessionStats мы удаляем control message параллельно).
+                                                                // Не логируем как WARN, чтобы не захламлять лог.
+                                                                if (t.IsFaulted && t.Exception?.InnerException is not Discord.Net.HttpException hex)
+                                                                    LogWarn($"Ошибка при удалении напоминания о паузе: {t.Exception?.InnerException?.Message}");
+                                                            });
+                            }
+
+                                                    // Удаляем сообщение подтверждения остановки
+                                                    if (session.ConfirmationMessageId.HasValue)
+                                                    {
+                                                        _ = channel.DeleteMessageAsync(session.ConfirmationMessageId.Value)
+                                                            .ContinueWith(t =>
+                                                            {
+                                                                if (t.IsFaulted && t.Exception?.InnerException is not Discord.Net.HttpException)
+                                                                    LogWarn($"Ошибка при удалении подтверждения остановки: {t.Exception?.InnerException?.Message}");
+                                                            });
+                                                    }
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    LogWarn($"Ошибка при очистке сообщений сессии: {ex.Message}");
+                                                }
                     }
-                }
-                else
-                {
-                    LogDebug($"Не найден словарь сессий для гильдии {session.GuildId} при удалении");
-                }
-
-                try
-                {
-                    var guild = _client.GetGuild(session.GuildId);
-                    if (guild == null) return;
-
-                    // Используем ControlChannelId — точный канал control message (напоминания о паузе тоже там)
-                    var channelId = session.ControlChannelId != 0
-                        ? session.ControlChannelId
-                        : session.ChannelId;
-                    var channel = guild.GetTextChannel(channelId);
-                    if (channel == null) return;
-
-                    // Удаляем последнее напоминание о паузе
-                    if (session.PauseReminderMessageId.HasValue)
+                    catch (Exception ex)
                     {
-                        _ = channel.DeleteMessageAsync(session.PauseReminderMessageId.Value)
-                            .ContinueWith(t => { if (t.IsFaulted) LogWarn($"Ошибка при удалении напоминания о паузе: {t.Exception?.InnerException?.Message}"); });
+                        LogWarn($"Ошибка при очистке ресурсов сессии: {ex.Message}");
                     }
+                }
 
-                    // Удаляем сообщение подтверждения остановки
-                    if (session.ConfirmationMessageId.HasValue)
+                /// <summary>
+                /// Помечает сессию завершённой и переносит её в архив. Кнопки статистики
+                /// продолжат находить сессию до окончательного удаления.
+                /// </summary>
+                private void ArchiveStoppedSession(GameSession session)
+                {
+                    try
                     {
-                        _ = channel.DeleteMessageAsync(session.ConfirmationMessageId.Value)
-                            .ContinueWith(t => { if (t.IsFaulted) LogWarn($"Ошибка при удалении подтверждения остановки: {t.Exception?.InnerException?.Message}"); });
+                        if (_sessions.TryGetValue(session.GuildId, out var guildSessions))
+                        {
+                            if (guildSessions.TryRemove(session.SessionId, out _))
+                            {
+                                LogDebug($"Сессия {session.SessionId} перенесена из активных в архив");
+                            }
+                            if (guildSessions.IsEmpty)
+                            {
+                                _sessions.TryRemove(session.GuildId, out _);
+                            }
+                        }
+
+                        if (!_stoppedSessions.TryGetValue(session.GuildId, out var stoppedGuild))
+                        {
+                            stoppedGuild = new ConcurrentDictionary<ulong, GameSession>();
+                            _stoppedSessions[session.GuildId] = stoppedGuild;
+                        }
+                        stoppedGuild[session.SessionId] = session;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarn($"Ошибка при архивировании сессии {session.SessionId}: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    LogWarn($"Ошибка при очистке сообщений сессии: {ex.Message}");
-                }
-            }
-            catch (Exception ex)
-            {
-                LogWarn($"Ошибка при очистке ресурсов сессии: {ex.Message}");
-            }
-        }
 
         public async Task HandleStatsButton(SocketMessageComponent component)
         {
@@ -1669,54 +2063,57 @@ namespace RPBot
             {
                 LogDebug($"Обработка кнопки статистики для гильдии {guildId}");
 
-                if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
-                {
-                    LogWarn($"[RESTART] Активные сессии для гильдии {guildId} не найдены (вероятно бот был перезагружен)");
-                    try { await component.Message.DeleteAsync(); } catch { }
-                    await component.RespondAsync("❌ Сессия больше не активна.\n\nЭто может произойти если бот был перезагружен. Статистика была потеряна.", ephemeral: true);
-                    return;
+                        // Ищем среди активных и в архиве (на случай, если сессия уже завершена
+                        // и бот успел перезагрузиться, прежде чем пользователь нажал кнопку).
+                        GameSession? session = null;
+                        if (_sessions.TryGetValue(guildId.Value, out var guildSessions))
+                        {
+                            session = guildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
                 }
+                        if (session == null && _stoppedSessions.TryGetValue(guildId.Value, out var stoppedGuildSessions))
+                        {
+                            session = stoppedGuildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
+                        }
 
-                var session = guildSessions.Values.FirstOrDefault(s => s.StatsMessageId == component.Message.Id);
-                if (session == null)
-                {
-                    LogWarn($"[RESTART] Сессия для сообщения статистики {component.Message.Id} не найдена");
-                    try { await component.Message.DeleteAsync(); } catch { }
-                    await component.RespondAsync("❌ Сессия не найдена.\n\nЭто может произойти если бот был перезагружен.", ephemeral: true);
-                    return;
+                        if (session == null)
+                        {
+                            LogWarn($"[STATS] Сессия для сообщения статистики {component.Message.Id} не найдена (ни активная, ни в архиве)");
+                            try { await component.Message.DeleteAsync(); } catch { }
+                            await component.RespondAsync("❌ Сессия не найдена.\n\nВозможно, она была очищена или архив был удалён.", ephemeral: true);
+                            return;
+                        }
+
+                        LogDebug($"Найдена сессия {session.SessionId} для обработки статистики (IsStopped={session.IsStopped})");
+
+                        switch (component.Data.CustomId)
+                        {
+                            case "no_stats":
+                                await component.Message.DeleteAsync();
+                                RemoveSession(session);
+                                _ = Task.Run(() => SaveSessionsAsync());
+                                LogDebug($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
+                                break;
+
+                            case "general_stats":
+                                await ShowGeneralStats(component, session);
+                                RemoveSession(session);
+                                _ = Task.Run(() => SaveSessionsAsync());
+                                LogDebug($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
+                                break;
+
+                            case "detailed_stats":
+                                await ShowDetailedStats(component, session);
+                                RemoveSession(session);
+                                _ = Task.Run(() => SaveSessionsAsync());
+                                LogDebug($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
+                                break;
+                        }
+                    }
+                    finally
+                    {
+                        _sessionSemaphore.Release();
+                    }
                 }
-
-                LogDebug($"Найдена сессия {session.SessionId} для обработки статистики");
-
-                switch (component.Data.CustomId)
-                {
-                    case "no_stats":
-                        await component.Message.DeleteAsync();
-                        RemoveSession(session);
-                        _ = Task.Run(() => SaveSessionsAsync());
-                        LogDebug($"Статистика для сессии {session.SessionId} отклонена, сессия удалена");
-                        break;
-
-                    case "general_stats":
-                        await ShowGeneralStats(component, session);
-                        RemoveSession(session);
-                        _ = Task.Run(() => SaveSessionsAsync());
-                        LogDebug($"Показана общая статистика для сессии {session.SessionId}, сессия удалена");
-                        break;
-
-                    case "detailed_stats":
-                        await ShowDetailedStats(component, session);
-                        RemoveSession(session);
-                        _ = Task.Run(() => SaveSessionsAsync());
-                        LogDebug($"Показана детальная статистика для сессии {session.SessionId}, сессия удалена");
-                        break;
-                }
-            }
-            finally
-            {
-                _sessionSemaphore.Release();
-            }
-        }
 
         private async Task ShowGeneralStats(SocketMessageComponent component, GameSession session)
         {

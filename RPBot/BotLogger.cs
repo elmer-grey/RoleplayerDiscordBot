@@ -63,6 +63,11 @@ namespace RPBot
         private static Action<string>? _uiSink;
         private static LogLevel        _minLevel         = LogLevel.Debug;
         private static long            _maxFileSizeBytes = 20 * 1024 * 1024; // 20 МБ
+        // Единый файл терминального лога (logs/run.log) — сюда зеркалируются ВСЕ
+        // записи BotLogger + StartupRenderer, в порядке появления. Удобно копировать
+        // и пересылать, не собирая по категориям.
+        private static string?        _unifiedLogPath;
+        private static readonly SemaphoreSlim _unifiedLock = new(1, 1);
         private static readonly ConcurrentDictionary<Guid, Action<BotLogRecord>> _observers = new();
         // Обратный индекс для O(1) удаления observer по ссылке
         private static readonly ConcurrentDictionary<Action<BotLogRecord>, List<Guid>> _observerBackRef = new();
@@ -74,6 +79,8 @@ namespace RPBot
         /// <summary>
         /// Вызывается один раз при запуске/рестарте.
         /// Создаёт имена файлов вида: <Category>_yyyyMMdd_HHmmss.log
+        /// Дополнительно открывает единый файл терминального лога logs/run.log
+        /// внутри той же сессионной папки — туда зеркалируется всё, что идёт в UI.
         /// </summary>
         public static void Initialize(string logDirectory, DateTime startupTime)
         {
@@ -86,6 +93,18 @@ namespace RPBot
                 Directory.CreateDirectory(sessionDir);
                 _logDirectory = sessionDir;
 
+                // Единый файл-зеркало терминала — единственное место, где собираются
+                // ВСЕ сообщения от BotLogger + StartupRenderer. Имя фиксированное,
+                // чтобы пользователь всегда знал, куда смотреть.
+                _unifiedLogPath = Path.Combine(logDirectory, "run.log");
+                try
+                {
+                    // Перезаписываем run.log при старте, чтобы не путаться со старыми запусками.
+                    // Подробные категорийные логи остаются в подпапке.
+                    File.WriteAllText(_unifiedLogPath, $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}", Encoding.UTF8);
+                }
+                catch { }
+
                 foreach (LogCategory cat in Enum.GetValues<LogCategory>())
                 {
                     if (!_locks.TryGetValue(cat, out var existing))
@@ -94,6 +113,35 @@ namespace RPBot
                     }
                     _paths[cat] = Path.Combine(sessionDir, $"{cat}.log");
                 }
+            }
+        }
+
+        /// <summary>
+        /// Публичный путь к единому лог-файлу. Любой sink (в т.ч. StartupRenderer)
+        /// может позвать этот метод и писать туда же, куда пишет BotLogger.
+        /// </summary>
+        public static string? UnifiedLogPath => _unifiedLogPath;
+
+        /// <summary>
+        /// Дописывает строку в единый файл-зеркало терминала. Потокобезопасно.
+        /// Используется и BotLogger-ом, и внешними sinks (StartupRenderer), чтобы
+        /// гарантировать единый порядок строк между источниками.
+        /// </summary>
+        public static async Task WriteUnifiedLineAsync(string line)
+        {
+            if (string.IsNullOrEmpty(_unifiedLogPath)) return;
+            await _unifiedLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                try
+                {
+                    File.AppendAllText(_unifiedLogPath, line + Environment.NewLine, Encoding.UTF8);
+                }
+                catch { }
+            }
+            finally
+            {
+                try { _unifiedLock.Release(); } catch { }
             }
         }
 
@@ -184,6 +232,8 @@ namespace RPBot
             var line = FormatLine(level, message);
 #pragma warning disable CS4014
             AppendToFileAsync(category, line);
+            // Зеркалим в единый run.log, чтобы всё (старт + рантайм) было в одном месте.
+            _ = WriteUnifiedLineAsync(line);
 #pragma warning restore CS4014
             NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
             if (level >= LogLevel.Info)
@@ -195,6 +245,7 @@ namespace RPBot
             if (level < _minLevel) return;
             var line = FormatLine(level, message);
             await AppendToFileAsync(category, line).ConfigureAwait(false);
+            await WriteUnifiedLineAsync(line).ConfigureAwait(false);
             NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
             if (level >= LogLevel.Info)
                 _uiSink?.Invoke(UiPrefix(level) + message);

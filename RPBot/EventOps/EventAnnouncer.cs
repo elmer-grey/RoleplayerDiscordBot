@@ -183,7 +183,7 @@ namespace RPBot.EventOps
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
 
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
+            embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
 
             string? createdByPlain = null;
@@ -369,7 +369,7 @@ namespace RPBot.EventOps
             catch { }
 
             var updatedMark = $"Обновлено: {DateTime.Now:dd.MM.yyyy HH:mm}";
-            var updatedMarkDiscord = $"Обновлено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
+                        // Discord-время выводится как локальный unix-timestamp (рендерится в часовом поясе читателя).
             var updatedMsk = TryGetMoscowTime(DateTime.UtcNow, out var mskNow) ? mskNow : DateTime.Now;
             var updatedMarkMsk = $"Обновлено: {updatedMsk:dd.MM.yyyy HH:mm} (по МСК)";
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
@@ -407,13 +407,13 @@ namespace RPBot.EventOps
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
+                        embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
             if (changesDiscord.Count > 0)
                 embedBuilder.AddField("✏️ Изменения", string.Join("\n", changesDiscord.Take(10)), false);
-            embedBuilder.AddField("Статус", updatedMarkDiscord, false);
+                        embedBuilder.AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false);
             var embed = embedBuilder.Build();
 
             // Telegram: подставляем МСК-метку для обновлений.
@@ -534,17 +534,31 @@ namespace RPBot.EventOps
             if (entry.DmMessageIdsByUserId == null)
                 entry.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
 
-            if (_client.ConnectionState != ConnectionState.Connected)
-            {
-                Log($"[EVENT] status {status} skipped (client not connected) guild={guild.Id} event={guildEvent.Id} state={_client.ConnectionState} login={_client.LoginState}");
-                return;
-            }
-            else
-            {
-                Log($"[EVENT] AnnounceStatusChangedInternalAsync({status}) guild={guild.Id} event={guildEvent.Id} state={_client.ConnectionState} login={_client.LoginState}, proceeding");
-            }
+                    var client = ResolveClient();
+                    if (client.ConnectionState != ConnectionState.Connected)
+                    {
+                        Log($"[EVENT] status {status} skipped (client not connected) guild={guild.Id} event={guildEvent.Id} state={client.ConnectionState} login={client.LoginState}");
+                        // Подождём до 15с — типичный кейс сразу после рестарта: client ещё не вошёл.
+                        var deadline = DateTime.UtcNow.AddSeconds(15);
+                        while (DateTime.UtcNow < deadline
+                            && (client.ConnectionState != ConnectionState.Connected
+                                || client.LoginState != LoginState.LoggedIn))
+                        {
+                            await Task.Delay(500);
+                        }
+                        if (client.ConnectionState != ConnectionState.Connected || client.LoginState != LoginState.LoggedIn)
+                        {
+                            Log($"[EVENT] status {status} giveup (client still not connected) guild={guild.Id} event={guildEvent.Id} state={client.ConnectionState} login={client.LoginState}");
+                            return;
+                        }
+                        Log($"[EVENT] status {status} retry after wait guild={guild.Id} event={guildEvent.Id} state={client.ConnectionState} login={client.LoginState}");
+                    }
+                    else
+                    {
+                        Log($"[EVENT] AnnounceStatusChangedInternalAsync({status}) guild={guild.Id} event={guildEvent.Id} state={client.ConnectionState} login={client.LoginState}, proceeding");
+                    }
 
-            var serverConfigs = _serverConfigsProvider();
+                    var serverConfigs = _serverConfigsProvider();
 
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
@@ -559,9 +573,9 @@ namespace RPBot.EventOps
             var prefix = isCancelled ? "❌" : isStarted ? "▶️" : isCompleted ? "✅" : "ℹ️";
             var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
             var mark = $"{prefix} {statusText}: {DateTime.Now:dd.MM.yyyy HH:mm}";
-            var markDiscord = $"{prefix} {statusText}: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
-            var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowValue) ? mskNowValue : DateTime.Now;
-            var markMsk = $"{prefix} {statusText}: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
+                        // Discord-время выводится как локальный unix-timestamp (рендерится в часовом поясе читателя).
+                        var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowValue) ? mskNowValue : DateTime.Now;
+                        var markMsk = $"{prefix} {statusText}: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
 
             string whereText;
             string whereTextPlain;
@@ -591,16 +605,16 @@ namespace RPBot.EventOps
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(guildEvent.Description.Length <= 2048 ? guildEvent.Description : guildEvent.Description.Substring(0, 2047) + "…");
             embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-            embedBuilder.AddField("🕒 Когда", DiscordTimeFormatter.FullDateTime(startLocal), true);
+                        embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
                 embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-            embedBuilder.AddField("Статус", markDiscord, false);
+                        embedBuilder.AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false);
             var embed = embedBuilder.Build();
 
             try
             {
-                var ch = await _client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
+                            var ch = await client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
                 var msg = ch != null ? await ch.GetMessageAsync(entry.AnnounceMessageId) as IUserMessage : null;
                 if (msg != null)
                 {
@@ -621,7 +635,7 @@ namespace RPBot.EventOps
                 {
                     if (!dmMap.TryGetValue(userId, out var dmMessageId) || dmMessageId == 0)
                         continue;
-                    var user = guild.GetUser(userId) as IUser ?? _client.GetUser(userId);
+                                var user = guild.GetUser(userId) as IUser ?? client.GetUser(userId);
                     if (user == null) continue;
                     var dm = await user.CreateDMChannelAsync();
                     var dmMsg = await dm.GetMessageAsync(dmMessageId) as IUserMessage;

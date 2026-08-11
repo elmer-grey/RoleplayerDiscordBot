@@ -203,8 +203,11 @@ private MusicStats? _musicStats;
                 client.GuildMemberUpdated -= OnGuildMemberUpdated;
             }
             catch { }
-            try { client.Dispose(); } catch { }
-        }
+                    // Останавливаем таймеры автообновления control message до того, как
+                    // уничтожим клиента — иначе они будут долбиться в disposed HttpClient.
+                    try { RPBot.GameSessionCommands.StopAllAutoRefresh(); } catch { }
+                    try { client.Dispose(); } catch { }
+                }
 
         private Task SetupDiscordEvents()
         {
@@ -1857,15 +1860,16 @@ private MusicStats? _musicStats;
                 BotLogger.SetUiSink(msg => _ui?.AddLog(msg));
 
                 // Подключаем StartupRenderer к sinks (один раз за процесс).
-                // FileSink пишет в свой startup-файл напрямую, минуя BotLogger — это убирает дубли.
-                var startupLogDir = Path.Combine(logDir, DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+                // FileSink пишет в единый logs/run.log (BotLogger.UnifiedLogPath),
+                // чтобы всё (старт + рантайм) было в одном файле.
                 var startupRenderer = StartupRenderer.Instance;
                 if (!_startupSinksAttached)
                 {
                     // Первый запуск процесса — снимаем всё, что могло накопиться (на случай если).
                     startupRenderer.ClearSinks();
                     var consoleSink = new ConsoleSink();
-                    var fileSink = new FileSink(Path.Combine(startupLogDir, "Startup.log"));
+                    // В FileSink не передаём явный путь: внутри он возьмёт BotLogger.UnifiedLogPath.
+                    var fileSink = new FileSink(Path.Combine(logDir, "run.log"));
                     var uiSink = new UiSink(msg => _ui?.AddLog(msg));
                     startupRenderer.AttachSink(consoleSink);
                     startupRenderer.AttachSink(fileSink);
@@ -2472,28 +2476,25 @@ private MusicStats? _musicStats;
                 if (msg == null) return;
 
                 var title = reason == "удалено"
-                    ? $"❌ Событие удалено: {entry.LastName}"
-                    : $"⚠️ Событие отменено: {entry.LastName}";
-                var discordMark = reason == "удалено"
-                    ? $"Удалено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}"
-                    : $"Отменено: {DiscordTimeFormatter.FullDateTime(DateTime.Now)}";
+                                    ? $"❌ Событие удалено: {entry.LastName}"
+                                    : $"⚠️ Событие отменено: {entry.LastName}";
 
-                var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var msk) ? msk : DateTime.Now;
-                var mskMark = reason == "удалено"
-                    ? $"Удалено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)"
-                    : $"Отменено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
+                                var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var msk) ? msk : DateTime.Now;
+                                var mskMark = reason == "удалено"
+                                    ? $"Удалено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)"
+                                    : $"Отменено: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
 
-                var description = reason == "удалено"
-                    ? "Это событие было удалено с сервера Discord."
-                    : "Это событие было отменено.";
+                                var description = reason == "удалено"
+                                    ? "Это событие было удалено с сервера Discord."
+                                    : "Это событие было отменено.";
 
-                var embed = new EmbedBuilder()
-                    .WithTitle(title)
-                    .WithDescription(description)
-                    .WithColor(reason == "удалено" ? Color.DarkRed : Color.Red)
-                    .WithCurrentTimestamp()
-                    .AddField("Статус", discordMark, false)
-                    .Build();
+                                var embed = new EmbedBuilder()
+                                    .WithTitle(title)
+                                    .WithDescription(description)
+                                    .WithColor(reason == "удалено" ? Color.DarkRed : Color.Red)
+                                    .WithCurrentTimestamp()
+                                    .AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false)
+                                    .Build();
                 await msg.ModifyAsync(m => m.Embed = embed);
 
                 // Telegram: добавляем доп. строку, если сохранён TelegramMessageId
@@ -2841,8 +2842,11 @@ private MusicStats? _musicStats;
             // ОТПРАВЛЯЕМ В UI
             BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
 
-// ✅ НОВОЕ: Загружаем сохранённые сессии игр
-_ = Task.Run(() => GameSessionCommands.LoadSessionsAsync(_client!));
+// ✅ Загрузка сохранённых сессий игр переехала в ЭТАП 3 — СИНХРОНИЗАЦИЯ.
+           // После RESYNC и prediction snapshot дёргаем LoadSessionsAsync, который
+           // прогонит CleanupStaleSessionsAsync и RecreateControlMessagesAsync.
+           // Вне этапа 3 этот вызов был фоновым Task.Run, из-за чего cleanup
+           // пропадал из визуализации.
 
 await Task.CompletedTask;
         }
@@ -3257,7 +3261,7 @@ await Task.CompletedTask;
                 StartupRenderer.Instance.WriteLine("Подписки на события Discord обновлены и активированы.");
                 StartupRenderer.Instance.WriteFooter("ЭТАП 2/5: АКТИВАЦИЯ ОБРАБОТЧИКОВ — ЗАВЕРШЁН");
 
-                // ЭТАП 3: Синхронизация (эвенты/прогнозы)
+                // ЭТАП 3: Синхронизация (эвенты/прогнозы/сессии)
                 // Заголовок открываем ДО Resync, иначе [EVENT][RESYNC] строки уезжают
                 // между этапами 2 и 3 — они уходят в рендерер, а рендерер не знает,
                 // что они принадлежат этапу 3.
@@ -3316,6 +3320,11 @@ await Task.CompletedTask;
                     stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
                 foreach (var line in stage3Lines)
                     StartupRenderer.Instance.WriteLine(line);
+
+                // Подтягиваем сессии из файла и прогоняем cleanup + recreate.
+                // LoadSessionsAsync сам пишет в визуализацию через WriteStageLine.
+                await GameSessionCommands.LoadSessionsAsync(_client!);
+
                 StartupRenderer.Instance.WriteFooter("ЭТАП 3/5: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
 
                 // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
