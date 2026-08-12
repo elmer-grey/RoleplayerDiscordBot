@@ -8,6 +8,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.IO;
+using RPBot.Util;
 
 namespace RPBot
 {
@@ -510,9 +511,17 @@ namespace RPBot
 				"// DailyRestart* — настройки ежедневной перезагрузки (локальное время и время по МСК).\n" +
 				"// DefaultSwearWords — базовый список слов для фильтра мата.\n";
 			var defaultJsonWithComments = header + Environment.NewLine + jsonBody + Environment.NewLine;
-			File.WriteAllText(resolvedPath, defaultJsonWithComments, System.Text.Encoding.UTF8);
-			return config;
-        }
+			FileStream? defaultLockHandle = SafeJsonIO.AcquireLock(resolvedPath, retries: 5, retryDelayMs: 50);
+						try
+						{
+							SafeJsonIO.WriteAtomic(resolvedPath, defaultJsonWithComments);
+						}
+						finally
+						{
+							defaultLockHandle?.Dispose();
+						}
+						return config;
+			        }
 
         // Сохранить конфигурацию в файл
         public void Save(string path = "config.json")
@@ -530,8 +539,16 @@ namespace RPBot
                     WriteIndented = true,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
-				string json = JsonSerializer.Serialize(this, options);
-                File.WriteAllText(resolvedPath, json, System.Text.Encoding.UTF8);
+                string json = JsonSerializer.Serialize(this, options);
+                FileStream? lockHandle = SafeJsonIO.AcquireLock(resolvedPath, retries: 5, retryDelayMs: 50);
+                try
+                {
+                    SafeJsonIO.WriteAtomic(resolvedPath, json);
+                }
+                finally
+                {
+                    lockHandle?.Dispose();
+                }
             }
             catch (Exception ex)
             {

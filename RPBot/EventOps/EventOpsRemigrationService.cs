@@ -27,101 +27,143 @@ namespace RPBot.EventOps
     public sealed class EventOpsRemigrationService
     {
         private readonly EventAnnouncementStore _store;
+            private readonly CancellationTokenSource _cts = new();
+            // Single-flight guard: Interlocked защищает от двойного запуска при reconnect/Ready-ретраях.
+            private int _running;
 
-        public EventOpsRemigrationService(EventAnnouncementStore store)
-        {
-            _store = store;
-        }
-
-        /// <summary>
-        /// Прогон по всем записям стора. Каждое сообщение:
-        ///  • REST <c>RestGuild.GetEventAsync</c> для актуальных данных;
-        ///  • <c>ModifyAsync</c> со свежим embed.
-        /// Не падает на отдельных ошибках — логирует и идёт дальше.
-        /// </summary>
-        public async Task RunAsync(DiscordSocketClient client, CancellationToken ct = default)
-        {
-            if (client == null) throw new ArgumentNullException(nameof(client));
-
-            var entries = _store.GetEntriesSnapshot();
-            if (entries.Count == 0)
+            public EventOpsRemigrationService(EventAnnouncementStore store)
             {
-                BotLogger.Info(LogCategory.Discord, "[EventOpsRemigrate] нет записей в сторе, миграция не требуется");
-                _store.MarkRemigratedOnce();
-                return;
+                _store = store;
             }
 
-            BotLogger.Info(LogCategory.Discord, $"[EventOpsRemigrate] старт, записей: {entries.Count}");
-
-            int updated = 0, missingMsg = 0, missingChannel = 0, deletedEvent = 0, errors = 0;
-
-            foreach (var entry in entries)
+            /// <summary>
+            /// Запрашивает отмену ремиграции (для вызова из <c>OnDisconnected</c>/shutdown).
+            /// Безопасно вызывать многократно.
+            /// </summary>
+            public void Cancel()
             {
-                if (ct.IsCancellationRequested) break;
+                try { _cts.Cancel(); } catch { }
+            }
+
+            /// <summary>
+            /// Прогон по всем записям стора. Каждое сообщение:
+            ///  • REST <c>RestGuild.GetEventAsync</c> для актуальных данных;
+            ///  • <c>ModifyAsync</c> со свежим embed.
+            /// Не падает на отдельных ошибках — логирует и идёт дальше.
+            /// Если уже запущен (reconnect/Ready повтор) — вызов игнорируется.
+            /// </summary>
+            public async Task RunAsync(DiscordSocketClient client, CancellationToken externalCt = default)
+            {
+                if (client == null) throw new ArgumentNullException(nameof(client));
+
+                // Single-flight: запрещаем параллельные прогоны.
+                if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+                {
+                    BotLogger.Warn(LogCategory.Discord,
+                        "[EventOpsRemigrate] RunAsync уже выполняется — повторный вызов игнорирован");
+                    return;
+                }
 
                 try
                 {
-                    // 1. Достаём канал анонсов из кэша клиента
-                    if (client.GetChannel(entry.AnnounceChannelId) is not SocketTextChannel channel)
+                    // Объединяем внешний токен и наш внутренний: shutdown/OnDisconnected
+                    // вызовет Cancel(), и цикл по записям прервётся.
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, _cts.Token);
+                    var ct = linkedCts.Token;
+
+                    var entries = _store.GetEntriesSnapshot();
+                    if (entries.Count == 0)
                     {
-                        BotLogger.Warn(LogCategory.Discord,
-                            $"[EventOpsRemigrate] пропуск: канал {entry.AnnounceChannelId} не найден (guild={entry.GuildId}, event={entry.EventId})");
-                        missingChannel++;
-                        continue;
+                        BotLogger.Info(LogCategory.Discord, "[EventOpsRemigrate] нет записей в сторе, миграция не требуется");
+                        _store.MarkRemigratedOnce();
+                        return;
                     }
 
-                    // 2. Достаём само сообщение
-                    var msg = await channel.GetMessageAsync(entry.AnnounceMessageId);
-                    if (msg is not IUserMessage userMsg)
-                    {
-                        BotLogger.Warn(LogCategory.Discord,
-                            $"[EventOpsRemigrate] пропуск: сообщение {entry.AnnounceMessageId} в канале {entry.AnnounceChannelId} не найдено (вероятно удалено)");
-                        missingMsg++;
-                        continue;
-                    }
+                    BotLogger.Info(LogCategory.Discord, $"[EventOpsRemigrate] старт, записей: {entries.Count}");
 
-                    // 3. Тянем актуальные данные события через REST (RestGuildEvent)
-                    RestGuildEvent? liveEvent = null;
-                    try
+                    int updated = 0, missingMsg = 0, missingChannel = 0, deletedEvent = 0, errors = 0;
+
+                    foreach (var entry in entries)
                     {
-                        var restGuild = await client.Rest.GetGuildAsync(entry.GuildId);
-                        if (restGuild != null)
+                        if (ct.IsCancellationRequested)
                         {
-                            liveEvent = await restGuild.GetEventAsync(entry.EventId);
+                            BotLogger.Warn(LogCategory.Discord,
+                                $"[EventOpsRemigrate] отменено на записи {updated + missingChannel + missingMsg + 1}/{entries.Count}");
+                            break;
+                        }
+
+                        try
+                        {
+                            // 1. Достаём канал анонсов из кэша клиента
+                            if (client.GetChannel(entry.AnnounceChannelId) is not SocketTextChannel channel)
+                            {
+                                BotLogger.Warn(LogCategory.Discord,
+                                    $"[EventOpsRemigrate] пропуск: канал {entry.AnnounceChannelId} не найден (guild={entry.GuildId}, event={entry.EventId})");
+                                missingChannel++;
+                                continue;
+                            }
+
+                            // 2. Достаём само сообщение
+                            var msg = await channel.GetMessageAsync(entry.AnnounceMessageId);
+                            if (msg is not IUserMessage userMsg)
+                            {
+                                BotLogger.Warn(LogCategory.Discord,
+                                    $"[EventOpsRemigrate] пропуск: сообщение {entry.AnnounceMessageId} в канале {entry.AnnounceChannelId} не найдено (вероятно удалено)");
+                                missingMsg++;
+                                continue;
+                            }
+
+                            // 3. Тянем актуальные данные события через REST (RestGuildEvent)
+                            RestGuildEvent? liveEvent = null;
+                            try
+                            {
+                                var restGuild = await client.Rest.GetGuildAsync(entry.GuildId);
+                                if (restGuild != null)
+                                {
+                                    liveEvent = await restGuild.GetEventAsync(entry.EventId);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                BotLogger.Warn(LogCategory.Discord,
+                                    $"[EventOpsRemigrate] REST-проба события {entry.EventId} не удалась: {ex.Message}");
+                            }
+                            if (liveEvent == null) deletedEvent++;
+
+                            // 4. Собираем embed: из живого события, иначе из сохранённого снимка
+                            Embed embed = BuildEmbedFromSnapshot(entry, channel.Guild, liveEvent);
+
+                            // 5. Редактируем
+                            await userMsg.ModifyAsync(m => m.Embed = embed);
+                            updated++;
+
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsRemigrate] обновлено: guild={entry.GuildId} event={entry.EventId} channel={entry.AnnounceChannelId} msg={entry.AnnounceMessageId}");
+
+                            // Пауза между запросами, чтобы не упереться в rate limit
+                            await Task.Delay(750, ct);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            errors++;
+                            BotLogger.Error(LogCategory.Discord,
+                                $"[EventOpsRemigrate] ошибка обработки записи guild={entry.GuildId} event={entry.EventId}: {ex.GetType().Name}: {ex.Message}");
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        BotLogger.Warn(LogCategory.Discord,
-                            $"[EventOpsRemigrate] REST-проба события {entry.EventId} не удалась: {ex.Message}");
-                    }
-                    if (liveEvent == null) deletedEvent++;
 
-                    // 4. Собираем embed: из живого события, иначе из сохранённого снимка
-                    Embed embed = BuildEmbedFromSnapshot(entry, channel.Guild, liveEvent);
-
-                    // 5. Редактируем
-                    await userMsg.ModifyAsync(m => m.Embed = embed);
-                    updated++;
-
+                    _store.MarkRemigratedOnce();
                     BotLogger.Info(LogCategory.Discord,
-                        $"[EventOpsRemigrate] обновлено: guild={entry.GuildId} event={entry.EventId} channel={entry.AnnounceChannelId} msg={entry.AnnounceMessageId}");
-
-                    // Пауза между запросами, чтобы не упереться в rate limit
-                    await Task.Delay(750, ct);
+                        $"[EventOpsRemigrate] завершено: обновлено={updated}, нет_канала={missingChannel}, нет_сообщения={missingMsg}, нет_события={deletedEvent}, ошибок={errors}");
                 }
-                catch (Exception ex)
+                finally
                 {
-                    errors++;
-                    BotLogger.Error(LogCategory.Discord,
-                        $"[EventOpsRemigrate] ошибка обработки записи guild={entry.GuildId} event={entry.EventId}: {ex.GetType().Name}: {ex.Message}");
+                    Interlocked.Exchange(ref _running, 0);
                 }
             }
-
-            _store.MarkRemigratedOnce();
-            BotLogger.Info(LogCategory.Discord,
-                $"[EventOpsRemigrate] завершено: обновлено={updated}, нет_канала={missingChannel}, нет_сообщения={missingMsg}, нет_события={deletedEvent}, ошибок={errors}");
-        }
 
         /// <summary>
         /// Собирает embed для уже отправленного анонса. Если живой

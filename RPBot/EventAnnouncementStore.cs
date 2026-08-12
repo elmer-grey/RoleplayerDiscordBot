@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using RPBot.Util;
 
 namespace RPBot
 {
@@ -189,12 +190,23 @@ namespace RPBot
 					Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
 				};
 				var json = JsonSerializer.Serialize(_state, opts);
-				File.WriteAllText(_path, json);
-			}
-			catch
-			{
-				// ignore
-			}
-		}
+						// Advisory inter-process lock: защищает от двух одновременно
+						// работающих инстансов RPBot.exe на одном RPBOT_DATA_DIR.
+						// При неудаче — fallback на прямую запись (best-effort).
+						FileStream? lockHandle = SafeJsonIO.AcquireLock(_path, retries: 5, retryDelayMs: 50);
+						try
+						{
+							SafeJsonIO.WriteAtomic(_path, json);
+						}
+						finally
+						{
+							lockHandle?.Dispose();
+						}
+					}
+					catch
+					{
+						// ignore
+					}
+				}
 	}
 }

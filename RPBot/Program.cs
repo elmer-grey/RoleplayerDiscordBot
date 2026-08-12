@@ -6,6 +6,7 @@ using RPBot;
 using RPBot.Music;
 using RPBot.EventOps;
 using RPBot.Startup;
+using RPBot.Util;
 using RPBot.Web;
 using System;
 using System.Collections.Concurrent;
@@ -614,7 +615,15 @@ private MusicStats? _musicStats;
                 Directory.CreateDirectory(dir);
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(_bwonkCounts, options);
-                File.WriteAllText(_bwonkFilePath, json);
+                                FileStream? lockHandle = SafeJsonIO.AcquireLock(_bwonkFilePath, retries: 5, retryDelayMs: 50);
+                                try
+                                {
+                                    SafeJsonIO.WriteAtomic(_bwonkFilePath, json);
+                                }
+                                finally
+                                {
+                                    lockHandle?.Dispose();
+                                }
             }
             catch { }
         }
@@ -2711,19 +2720,22 @@ private MusicStats? _musicStats;
 
         private async Task TryEditTelegramForDeletedOrCancelledAsync(EventAnnouncementEntry entry, string mskMark, string eventName)
         {
+            // Изоляция: падение Telegram не должно прокидываться вверх в Discord async-chain,
+            // иначе один зависший HTTP-запрос к api.telegram.org роняет обработку resync-цикла.
+            if (_telegramNotifier == null) return;
+            if (entry.TelegramMessageId == 0) return;
             try
             {
-                if (_telegramNotifier == null) return;
-                if (entry.TelegramMessageId == 0) return;
                 int msgId = (int)entry.TelegramMessageId;
                 // Имя события обязательно показываем — иначе в Telegram-ленте
                 // появляется «безымянное» событие, и непонятно, что именно пропало.
                 var text = $"❌ {mskMark}\nСобытие «{eventName}» больше недоступно.";
-                await _telegramNotifier.EditMessageTextAsync(entry.GuildId, msgId, text);
+                await _telegramNotifier.EditMessageTextAsync(entry.GuildId, msgId, text).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                await LogError($"[EVENT][RESYNC] Не удалось обновить Telegram для удалённого event={entry.EventId}: {ex.Message}");
+                // Глотаем всё — Telegram-нотификации best-effort.
+                try { await LogError($"[EVENT][RESYNC] Telegram edit fail (event={entry.EventId}): {ex.Message}"); } catch { }
             }
         }
 
@@ -2954,16 +2966,67 @@ private MusicStats? _musicStats;
                     await LogStartup($"Ошибка при обновлении контекста после реконнекта: {ex.Message}");
                 }
 
-                // Восстанавливаем музыкальные очереди после переподключения
-                if (_musicCommands is not null)
+                // Восстанавливаем музыкальные очереди после переподключения.
+                // Если Lavalink не поднялся — откладываем попытку, не падаем в Task.Run.
+                if (_musicCommands is not null && _lavalinkService is not null)
                 {
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(10)); // ждём стабилизации Lavalink
-                        await _musicCommands.TryRestoreQueuesAsync();
+                        try
+                        {
+                            // Даём Lavalink шанс подняться после реконнекта (с retry).
+                            var lavalinkOk = await WaitForLavalinkWithRetryAsync(
+                                attempts: 6, delay: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+                            if (!lavalinkOk)
+                            {
+                                BotLogger.Warn(LogCategory.Music,
+                                    "[Reconnect] Lavalink не поднялся за отведённое время, очереди не восстановлены — будут подхвачены при следующем успешном probe.");
+                                return;
+                            }
+
+                            await Task.Delay(TimeSpan.FromSeconds(2)); // стабилизация
+                            await _musicCommands.TryRestoreQueuesAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Error(LogCategory.Music,
+                                $"[Reconnect] Ошибка при восстановлении музыкальных очередей: {ex.GetType().Name}: {ex.Message}");
+                        }
                     });
                 }
             }
+        }
+
+        /// <summary>
+        /// Ждёт готовности Lavalink (через /version) с ретраями. Если не поднялся —
+        /// возвращает false вместо throw, чтобы восстановление очередей не падало.
+        /// </summary>
+        private async Task<bool> WaitForLavalinkWithRetryAsync(int attempts, TimeSpan delay, CancellationToken ct)
+        {
+            for (int i = 0; i < attempts; i++)
+            {
+                try
+                {
+                    var err = await _lavalinkService!.ProbeAsync();
+                    if (err is null)
+                    {
+                        BotLogger.Info(LogCategory.Music, $"[Reconnect] Lavalink готов (попытка {i + 1}/{attempts})");
+                        return true;
+                    }
+                    BotLogger.Debug(LogCategory.Music, $"[Reconnect] Lavalink probe попытка {i + 1}: {err}");
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Debug(LogCategory.Music, $"[Reconnect] Lavalink probe исключение: {ex.Message}");
+                }
+
+                if (i < attempts - 1)
+                {
+                    try { await Task.Delay(delay, ct); } catch (OperationCanceledException) { return false; }
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -3740,11 +3803,14 @@ await Task.CompletedTask;
 
         private async Task OnDisconnected(Exception exception)
         {
-            if (_reconnectionService == null)
-            {
-                await LogStartup("Предупреждение: _reconnectionService == null в OnDisconnected — пропускаем обработку отключения.");
-                return;
-            }
+                    // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
+                    try { _eventOpsRemigrator?.Cancel(); } catch { }
+
+                    if (_reconnectionService == null)
+                    {
+                        await LogStartup("Предупреждение: _reconnectionService == null в OnDisconnected — пропускаем обработку отключения.");
+                        return;
+                    }
 
             try
             {
@@ -3773,7 +3839,8 @@ await Task.CompletedTask;
                 try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch (Exception ex) { Console.WriteLine($"Error stopping web dashboard: {ex}"); }
                 try { _webDashboard?.Dispose(); } catch { }
                 _webDashboard = null;
-                CleanupServices();
+                            try { _eventOpsRemigrator?.Cancel(); } catch { }
+                            CleanupServices();
 
                 // Остановим UI корректно
                 try

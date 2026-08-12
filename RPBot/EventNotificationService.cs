@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using RPBot.Util;
 
 namespace RPBot
 {
@@ -192,13 +193,21 @@ namespace RPBot
 				Directory.CreateDirectory(dir);
 
 				var json = JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
-				File.WriteAllText(_statePath, json);
-			}
-			catch
-			{
-				// ignore
-			}
-		}
+						FileStream? lockHandle = SafeJsonIO.AcquireLock(_statePath, retries: 5, retryDelayMs: 50);
+						try
+						{
+							SafeJsonIO.WriteAtomic(_statePath, json);
+						}
+						finally
+						{
+							lockHandle?.Dispose();
+						}
+					}
+					catch
+					{
+						// ignore
+					}
+				}
 
 		public bool EnsureFileExists()
 		{

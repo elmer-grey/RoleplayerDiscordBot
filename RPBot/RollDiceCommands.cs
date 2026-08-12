@@ -16,10 +16,14 @@ namespace RPBot
 {
     public class RollDiceCommands : ModuleBase<SocketCommandContext>
     {
-        private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
+        // Per-guild: параллельные !roll от разных серверов не должны друг друга ждать.
+                private static readonly ConcurrentDictionary<ulong, SemaphoreSlim> _sessionSemaphores = new();
 
-        // Per-user cooldown: не чаще 1 броска в 2 секунды
-        private static readonly ConcurrentDictionary<ulong, DateTime> _lastRollTime = new();
+                private static SemaphoreSlim GetGuildSemaphore(ulong guildId)
+                    => _sessionSemaphores.GetOrAdd(guildId, _ => new SemaphoreSlim(1, 1));
+
+                // Per-user cooldown: не чаще 1 броска в 2 секунды
+                private static readonly ConcurrentDictionary<ulong, DateTime> _lastRollTime = new();
         private static readonly TimeSpan _rollCooldown = TimeSpan.FromSeconds(2);
 
         private static bool IsOnCooldown(ulong userId)
@@ -279,7 +283,8 @@ namespace RPBot
 
             if (isStatsChannel)
             {
-                await _sessionSemaphore.WaitAsync();
+                var sem = GetGuildSemaphore(guildId);
+                await sem.WaitAsync();
                 try
                 {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
@@ -304,7 +309,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    _sessionSemaphore.Release();
+                    sem.Release();
                 }
             }
 
@@ -319,7 +324,8 @@ namespace RPBot
 
             if (isStatsChannel || isRollChannel)
             {
-                await _sessionSemaphore.WaitAsync();
+                var sem = GetGuildSemaphore(guildId);
+                await sem.WaitAsync();
                 try
                 {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
@@ -345,7 +351,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    _sessionSemaphore.Release();
+                    sem.Release();
                 }
             }
 
@@ -496,9 +502,10 @@ namespace RPBot
             if (isStatsChannel || isRollChannel)
             {
                 bool gotLock = false;
+                var sem = GetGuildSemaphore(guildId);
                 try
                 {
-                    gotLock = await _sessionSemaphore.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                     if (!gotLock)
                     {
                         BotLogger.Warn(LogCategory.Cmd, $"[Roll20] семафор сессий занят >2с, пропускаю запись броска");
@@ -542,7 +549,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    if (gotLock) _sessionSemaphore.Release();
+                    if (gotLock) sem.Release();
                 }
             }
 

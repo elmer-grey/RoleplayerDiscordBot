@@ -2,6 +2,7 @@
 using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
+using RPBot.Util;
 using System;
 using System.IO;
 using System.Linq;
@@ -285,18 +286,18 @@ namespace RPBot
 
             if (!File.Exists(counterFilePath))
             {
-                File.WriteAllText(counterFilePath, "1");
+                            SafeJsonIO.WriteAtomic(counterFilePath, "1");
             }
             else
             {
                 if (int.TryParse(File.ReadAllText(counterFilePath), out var currentCount))
                 {
                     currentCount++;
-                    File.WriteAllText(counterFilePath, currentCount.ToString());
+                                SafeJsonIO.WriteAtomic(counterFilePath, currentCount.ToString());
                 }
                 else
                 {
-                    File.WriteAllText(counterFilePath, "1");
+                                SafeJsonIO.WriteAtomic(counterFilePath, "1");
                 }
             }
         }

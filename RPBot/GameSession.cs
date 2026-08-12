@@ -3,6 +3,7 @@ using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
 using RPBot.Startup;
+using RPBot.Util;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -71,6 +72,12 @@ namespace RPBot
             // связанное Discord-событие активно. Нужно, чтобы кнопки статистики
             // продолжали работать после перезагрузки бота.
             public static readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, GameSession>> _stoppedSessions = new();
+            // Per-guild: параллельные команды из разных гильдий не должны блокировать друг друга.
+            // Внутри одной гильдии по-прежнему сериализуем доступ к _sessions / диску.
+            private static readonly ConcurrentDictionary<ulong, SemaphoreSlim> _guildSemaphores = new();
+            private static SemaphoreSlim GetGuildSemaphore(ulong guildId)
+                => _guildSemaphores.GetOrAdd(guildId, _ => new SemaphoreSlim(1, 1));
+            // Старое имя оставлено как алиас для редких путей без guildId (если такие остались).
             private static readonly SemaphoreSlim _sessionSemaphore = new(1, 1);
             private static readonly SemaphoreSlim _saveSessionsSemaphore = new(1, 1);
 
@@ -148,7 +155,16 @@ namespace RPBot
                             }
 
                             var json = System.Text.Json.JsonSerializer.Serialize(sessionsToSave, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                            await File.WriteAllTextAsync(_sessionsStatePath, json).ConfigureAwait(false);
+                            // Атомарная запись + межпроцессная блокировка (advisory).
+                            FileStream? lockHandle = SafeJsonIO.AcquireLock(_sessionsStatePath, retries: 5, retryDelayMs: 50);
+                            try
+                            {
+                                await SafeJsonIO.WriteAtomicAsync(_sessionsStatePath, json).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                lockHandle?.Dispose();
+                            }
 
                             if (sessionsToSave.Count > 0)
                             {
@@ -657,7 +673,8 @@ namespace RPBot
         ulong? eventId = null,
         ulong channelId = 0)
         {
-            await _sessionSemaphore.WaitAsync();
+            var sem = GetGuildSemaphore(guildId);
+            await sem.WaitAsync();
             try
             {
                 Log($"Попытка создать сессию для гильдии {guildId}, игра: \"{gameName}\"");
@@ -726,7 +743,7 @@ namespace RPBot
             }
             finally
             {
-                _sessionSemaphore.Release();
+                sem.Release();
             }
         }
 
@@ -1333,7 +1350,8 @@ namespace RPBot
                 return;
             }
 
-            await _sessionSemaphore.WaitAsync();
+            var sem = GetGuildSemaphore(guildId.Value);
+            await sem.WaitAsync();
             try
             {
                 if (!_sessions.TryGetValue(guildId.Value, out var guildSessions))
@@ -1391,7 +1409,7 @@ namespace RPBot
             }
             finally
             {
-                _sessionSemaphore.Release();
+                sem.Release();
             }
         }
 
@@ -1797,7 +1815,8 @@ namespace RPBot
             {
                 var guildId = guildEvent.Guild.Id;
 
-                await _sessionSemaphore.WaitAsync();
+                var sem = GetGuildSemaphore(guildId);
+                await sem.WaitAsync();
                 try
                 {
                     LogDebug($"Поиск сессий для гильдии {guildId} и события {guildEvent.Id}...");
@@ -1855,7 +1874,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    _sessionSemaphore.Release();
+                    sem.Release();
                 }
             }
             catch (Exception ex)
@@ -2157,7 +2176,8 @@ namespace RPBot
                 return;
             }
 
-            await _sessionSemaphore.WaitAsync();
+            var sem = GetGuildSemaphore(guildId.Value);
+            await sem.WaitAsync();
             try
             {
                 LogDebug($"Обработка кнопки статистики для гильдии {guildId}");
@@ -2210,7 +2230,7 @@ namespace RPBot
                     }
                     finally
                     {
-                        _sessionSemaphore.Release();
+                        sem.Release();
                     }
                 }
 
