@@ -1418,6 +1418,16 @@ private MusicStats? _musicStats;
 			_shouldExit = true;
 			try { await LogStartup($"[SHUTDOWN] graceful shutdown: {reason}"); } catch { }
 
+			// Сообщаем в Discord о завершении работы — пользовательские сценарии:
+			// крестик в окне консоли, диспетчер задач "Завершить", taskkill /F,
+			// logoff, SIGTERM. До рефакторинга этого не было — пропало.
+			try
+			{
+				if (_statusNotifier != null)
+					await _statusNotifier.SendShutdownNotification(reason);
+			}
+			catch { }
+
 			try { _backgroundMonitoringCts?.Cancel(); } catch { }
 			StopDailyRestartScheduler();
 
@@ -1804,7 +1814,16 @@ private MusicStats? _musicStats;
             {
                 var prog = activeProgram;
                 if (prog == null) return;
-                try { prog.GracefulShutdownAsync("ProcessExit").GetAwaiter().GetResult(); } catch { }
+                // ProcessExit рубит процесс через ~2 секунды. Оборачиваем уведомление
+                // в fire-and-forget с жёстким ожиданием, чтобы Discord успел
+                // получить embed «⏹️ БОТ ОСТАНОВЛЕН» (это то, что пропало).
+                try
+                {
+                    var task = prog.GracefulShutdownAsync("ProcessExit");
+                    if (!task.Wait(1500))
+                        BotLogger.Warn(LogCategory.System, "Shutdown notification timed out in ProcessExit");
+                }
+                catch { }
             };
 
             bool restart;
