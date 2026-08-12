@@ -4544,8 +4544,12 @@ await Task.CompletedTask;
                 return;
             }
 
-            // Обработка сообщений, начинающихся с "!" (только если после ! сразу идёт буква)
-            if (message.Content.StartsWith("!") && message.Content.Length > 1 && !char.IsWhiteSpace(message.Content[1]))
+            // Обработка сообщений, начинающихся с "!" (только если после ! сразу идёт буква).
+                        // На "!", "!!", "! " (с пробелом), "!.", "!?", "!/", "!123" и т.п. — НЕ реагируем,
+                        // иначе бот отвечает "Неизвестная команда" на любой мусор после "!", что раздражает.
+                        if (message.Content.Length >= 2
+                            && message.Content[0] == '!'
+                            && char.IsLetter(message.Content[1]))
             {
                 var key = message.Content.Split(' ')[0].ToLower();
 
