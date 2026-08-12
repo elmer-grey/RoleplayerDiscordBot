@@ -83,6 +83,7 @@ namespace RPBot
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
         private EventOpsOrchestrator? _eventOpsOrchestrator;
+        private RPBot.EventOps.EventOpsRemigrationService? _eventOpsRemigrator;
         private EventAnnouncer? _eventAnnouncer;
         private WebDashboardService? _webDashboard;
 private GoogleSheetsService? _googleSheetsService;
@@ -951,6 +952,7 @@ private MusicStats? _musicStats;
 			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.GetDataDirectory(), "event_announcements.json"));
 			var eventOpsRenderer = new EventOpsRenderer();
 			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
+						_eventOpsRemigrator = new RPBot.EventOps.EventOpsRemigrationService(_eventAnnouncementStore);
 			_eventAnnouncer = new EventAnnouncer(
 				() => _client!,
 				() => _serverConfigs!,
@@ -3706,13 +3708,35 @@ await Task.CompletedTask;
                 catch { }
 
                 // LogStartup теперь отправляет в UI
-            }
-            catch (Exception ex)
-            {
-                            StartupRenderer.Instance.WriteError($"❌ КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ: {ex.Message}");
-                            StartupRenderer.Instance.WriteError($"   Стек: {ex.StackTrace}");
-            }
-        }
+
+                                // Одноразовая перерисовка старых анонсов EventOps новым форматированием.
+                                // Выполняется только если флаг RemigratedOnce не выставлен. После
+                                // успешного прохода флаг сохраняется в event_announcements.json,
+                                // и при следующих рестартах этот блок будет пропускаться.
+                                if (!_eventAnnouncementStore.IsRemigratedOnce())
+                                {
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            // Дать шлюзу Discord догнать загрузку кэша каналов/сообщений
+                                            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                                            await _eventOpsRemigrator!.RunAsync(_client!, CancellationToken.None).ConfigureAwait(false);
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            BotLogger.Error(LogCategory.Discord,
+                                                $"[EventOpsRemigrate] фоновый запуск упал: {ex.GetType().Name}: {ex.Message}");
+                                        }
+                                    });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                            StartupRenderer.Instance.WriteError($"❌ КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ: {ex.Message}");
+                                            StartupRenderer.Instance.WriteError($"   Стек: {ex.StackTrace}");
+                            }
+                        }
 
         private async Task OnDisconnected(Exception exception)
         {

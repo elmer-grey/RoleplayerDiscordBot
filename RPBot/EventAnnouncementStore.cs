@@ -155,6 +155,27 @@ namespace RPBot
 			}
 		}
 
+		/// <summary>
+		/// Возвращает флаг «одноразовая миграция старых анонсов выполнена».
+		/// См. <see cref="RPBot.EventOps.EventOpsRemigrationService"/>.
+		/// </summary>
+		public bool IsRemigratedOnce()
+		{
+			lock (_lock) { return _state.RemigratedOnce; }
+		}
+
+		/// <summary>
+		/// Выставляет флаг «одноразовая миграция выполнена» и сохраняет JSON.
+		/// </summary>
+		public void MarkRemigratedOnce()
+		{
+			lock (_lock)
+			{
+				_state.RemigratedOnce = true;
+				SaveLocked();
+			}
+		}
+
 		private void SaveLocked()
 		{
 			try

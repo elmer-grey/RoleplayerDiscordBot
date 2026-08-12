@@ -7,14 +7,22 @@ namespace RPBot
 	{
 		public Dictionary<ulong, GuildEventAnnouncements> Guilds { get; set; } = new();
 
-		public EventAnnouncementState()
-		{
-			// System.Text.Json при десериализации НЕ вызывает инициализаторы полей,
-			// поэтому если в JSON нет ключа, словарь останется null. Возвращаем
-			// пустую коллекцию, чтобы старые файлы не падали с NRE.
-			Guilds ??= new Dictionary<ulong, GuildEventAnnouncements>();
+			/// <summary>
+			/// Флаг одноразовой перерисовки старых анонсов в каналах анонсов
+			/// (см. <c>RPBot.EventOps.EventOpsRemigrationService</c>). После первого
+			/// успешного прохода <c>RunAsync</c> выставляется в true, чтобы при
+			/// последующих перезапусках бот не правил embed-ы заново.
+			/// </summary>
+			public bool RemigratedOnce { get; set; }
+
+			public EventAnnouncementState()
+			{
+				// System.Text.Json при десериализации НЕ вызывает инициализаторы полей,
+				// поэтому если в JSON нет ключа, словарь останется null. Возвращаем
+				// пустую коллекцию, чтобы старые файлы не падали с NRE.
+				Guilds ??= new Dictionary<ulong, GuildEventAnnouncements>();
+			}
 		}
-	}
 
 	public sealed class GuildEventAnnouncements
 	{
