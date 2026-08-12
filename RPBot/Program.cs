@@ -976,26 +976,188 @@ private MusicStats? _musicStats;
 					Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
 				},
 				serverConfigsProvider: () => _serverConfigs!,
-				sessionsProvider: () => GameSessionCommands._sessions
-					.ToDictionary(
-						g => g.Key,
-						g => g.Value.Values.Select(s => new
-						{
-							s.SessionId,
-							GuildId = g.Key,
-							Name = s.GameName,
-							Status = s.IsPaused ? "paused" : "active",
-							CreatedAt = s.StartTime,
-							LeaderId = s.MasterId,
-							MasterName = s.MasterName,
-						}).ToList()),
+				sessionsProvider: () =>
+								{
+									var client = _client;
+									return GameSessionCommands._sessions
+										.ToDictionary(
+										g => g.Key,
+										g =>
+										{
+											SocketGuild? sguild = null;
+											try { sguild = client?.GetGuild(g.Key); } catch { }
+											var guildName = sguild?.Name;
+											// Считаем "сбор бросков активен" по двум признакам:
+											// 1) в GameSession включён TrackRolls (мастер не отключал);
+											// 2) в QueueModule для этой гильдии есть живая очередь (IsActive=true, MaxRolls>0).
+											// Иначе флаг TrackRolls=true на сессии может висеть без реального сбора.
+											bool queueActive = false;
+											int queueRollsCount = 0;
+											try
+											{
+												if (QueueModule._guildQueues != null
+												    && QueueModule._guildQueues.TryGetValue(g.Key, out var q)
+												    && q != null)
+												{
+													queueActive = q.IsActive && q.MaxRolls > 0;
+													if (q.UserRolls != null)
+														queueRollsCount = q.UserRolls.Sum(kv => kv.Value?.Count ?? 0);
+												}
+											}
+											catch { }
+											bool rollCollecting = false;
+											int rollsCount = 0;
+											foreach (var s in g.Value.Values)
+											{
+												if (!s.IsPaused && (s.TrackRolls || queueActive))
+													rollCollecting = true;
+												rollsCount += s.Rolls?.Count ?? 0;
+											}
+											rollsCount += queueRollsCount;
+											return g.Value.Values.Select(s => new
+											{
+												s.SessionId,
+												GuildId = g.Key,
+												GuildName = guildName,
+												Name = s.GameName,
+												Status = s.IsPaused ? "на паузе" : "активна",
+												RollCollecting = rollCollecting,
+												RollsCount = rollsCount,
+												CreatedAt = s.StartTime,
+												LeaderId = s.MasterId,
+												MasterName = s.MasterName,
+											}).ToList();
+										});
+								},
+								eventsProvider: () =>
+								{
+									if (_eventAnnouncementStore == null) return "event announcements not ready";
+									try
+									{
+										var entries = _eventAnnouncementStore.GetEntriesSnapshot();
+										var client = _client;
+										return entries.Select(e =>
+										{
+											SocketGuild? g = null;
+											try { g = client?.GetGuild(e.GuildId); } catch { }
+											// Локализованная подпись статуса: берём из LastUpdatedMark («▶️ Событие началось: 12.08.2026 14:00»),
+											// оставляя только первую часть строки (смайл + статус) — без даты, она выводится отдельно.
+											string? statusLabel = null;
+											if (!string.IsNullOrEmpty(e.LastUpdatedMark))
+											{
+												var mark = e.LastUpdatedMark!;
+												var colon = mark.IndexOf(':');
+												statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
+											}
+											string? whenMsk = null;
+											try
+											{
+												if (e.LastStartTimeUtc.HasValue)
+													whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+											} catch { }
+											return new
+											{
+											    GuildId = e.GuildId,
+											    GuildName = g?.Name,
+											    EventId = e.EventId,
+											    Name = e.LastName ?? "(без названия)",
+											    Description = e.LastDescription,
+											    StartsAtMsk = whenMsk,
+											    Location = e.LastLocation,
+											    ChannelId = e.LastChannelId,
+											    CoverImageUrl = e.LastCoverImageUrl,
+											    StatusLabel = statusLabel,
+											    LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+											};
+										}).ToList();
+									}
+									catch (Exception ex) { return ex.Message; }
+								},
+				clientProvider: () => _client,
 				rollsTodayProvider: () => _rollsTodayCount,
 				activeSessionsProvider: () => GameSessionCommands._sessions.Sum(g => g.Value.Count(s => !s.Value.IsPaused)),
 				chatMessagesTodayProvider: () => _chatMessagesTodayCount,
 				usersInVoiceProvider: () => _usersInVoiceCount,
 				activityProvider: () => GetActivityBuckets(),
 				versionProvider: () => BotVersion,
-				uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc);
+				uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc,
+				systemsProvider: () =>
+				{
+					var checks = new List<object>();
+					try { checks.Add(new { Name = "Discord Gateway",  Healthy = _client?.ConnectionState == Discord.ConnectionState.Connected, Kind = (_client?.ConnectionState == Discord.ConnectionState.Connected) ? "ok" : "err", Message = _client?.ConnectionState == Discord.ConnectionState.Connected ? $"Подключено ({_client.Latency} мс)" : $"Не подключено ({_client?.ConnectionState})" }); } catch { }
+					try { var guildsCount = _client?.Guilds?.Count ?? 0; checks.Add(new { Name = "Серверы Discord", Healthy = guildsCount > 0, Kind = guildsCount > 0 ? "ok" : "err", Message = guildsCount > 0 ? $"Доступно: {guildsCount}" : "Нет доступных серверов" }); } catch { }
+					try { var cfgN = _serverConfigs?.Count ?? 0; checks.Add(new { Name = "Конфигурация", Healthy = cfgN > 0, Kind = cfgN > 0 ? "ok" : "err", Message = cfgN > 0 ? $"Настроено: {cfgN}" : "Нет настроенных серверов" }); } catch { }
+					try
+					{
+						var predEnabled = _serverConfigs?.Values?.Count(c => c.PredictionsEnabled) ?? 0;
+						checks.Add(new { Name = "Прогнозы", Healthy = predEnabled > 0, Kind = predEnabled > 0 ? "ok" : "mute", Message = predEnabled > 0 ? $"Включены на {predEnabled} серверах" : "Не включены ни на одном сервере" });
+					}
+					catch { }
+					try
+					{
+						if (_telegramNotifier != null)
+						{
+							var probes = new List<string>();
+							foreach (var kvp in _serverConfigs ?? new Dictionary<ulong, ServerConfig>())
+							{
+								if (!kvp.Value.TelegramEnabled) continue;
+													var r = _telegramNotifier.ProbeAsync(kvp.Key).GetAwaiter().GetResult();
+								probes.Add($"{kvp.Key}: {(r.Success ? "OK" : r.Message)}");
+							}
+												var ok = probes.Count > 0 && probes.All(s => s.EndsWith("OK"));
+							checks.Add(new { Name = "Telegram", Healthy = ok, Kind = ok ? "ok" : (probes.Count == 0 ? "mute" : "err"), Message = probes.Count > 0 ? string.Join("\n", probes) : "Telegram-интеграция выключена на всех серверах" });
+						}
+						else
+						{
+							checks.Add(new { Name = "Telegram", Healthy = false, Kind = "mute", Message = "Telegram-нотификатор отключён в конфиге" });
+						}
+					}
+					catch (Exception ex) { checks.Add(new { Name = "Telegram", Healthy = false, Kind = "err", Message = ex.Message }); }
+					try { checks.Add(new { Name = "Голосовые поинты", Healthy = _voicePointsService != null, Kind = (_voicePointsService != null) ? "ok" : "err", Message = _voicePointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+					try { checks.Add(new { Name = "Хранилище поинтов", Healthy = _pointsService != null, Kind = (_pointsService != null) ? "ok" : "err", Message = _pointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+					try
+					{
+						if (_googleSheetsService == null)
+						{
+							// google_credentials.json не задан — это сознательное выключение,
+							// а не рабочее состояние сервиса. Healthy=false, Kind=mute.
+							checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "mute", Message = "Отключено (google_credentials.json не задан)" });
+						}
+						else
+						{
+							var probe = _googleSheetsService.ProbeAsync().GetAwaiter().GetResult();
+							checks.Add(new { Name = "Google Sheets", Healthy = probe.Success, Kind = probe.Success ? "ok" : "err", Message = probe.Message });
+						}
+					}
+					catch (Exception ex) { checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "err", Message = ex.Message }); }
+					try
+					{
+						if (_lavalinkService == null)
+						{
+							checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "mute", Message = "Отключено (Music.Enabled=false)" });
+						}
+						else
+						{
+							// LavalinkService.ProbeAsync() дёргает /version по HTTP с таймаутом 3с —
+							// гораздо надёжнее, чем Process.HasExited (процесс может быть жив,
+							// но HTTP-сервер ещё не поднялся, или упасть сразу после старта).
+							var probeErr = _lavalinkService.ProbeAsync().GetAwaiter().GetResult();
+							var procOk = string.IsNullOrEmpty(probeErr);
+							checks.Add(new { Name = "Музыка (Lavalink)", Healthy = procOk, Kind = procOk ? "ok" : "err", Message = procOk ? $"Отвечает на {_config!.Music.Host}:{_config!.Music.Port}/version" : $"Не отвечает: {probeErr}" });
+						}
+					}
+					catch (Exception ex) { checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "err", Message = ex.Message }); }
+					try
+					{
+						var loaded = _textBlocks?.Count ?? 0;
+						// Пустой файл — не «работает», а «нет шаблонов». Нейтральный статус info
+						// показывает это без ложной зелёной галочки.
+						var kind = loaded > 0 ? "ok" : "info";
+						checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = loaded > 0, Kind = kind, Message = loaded > 0 ? $"Загружено {loaded} шаблонов" : "Файл отсутствует — шаблоны пустые (не критично)" });
+					}
+					catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
+					return checks;
+				});
 			_webDashboard.Start();
 
 			_googleSheetsService = GoogleSheetsService.TryCreate(_config!);
@@ -1870,17 +2032,14 @@ private MusicStats? _musicStats;
                 {
                     // Первый запуск процесса — снимаем всё, что могло накопиться (на случай если).
                     startupRenderer.ClearSinks();
-                    var consoleSink = new ConsoleSink();
-                    // В FileSink не передаём явный путь: внутри он возьмёт BotLogger.UnifiedLogPath.
-                    var fileSink = new FileSink(Path.Combine(logDir, "run.log"));
-                    var uiSink = new UiSink(msg => _ui?.AddLog(msg));
-                    startupRenderer.AttachSink(consoleSink);
-                    startupRenderer.AttachSink(fileSink);
-                    startupRenderer.AttachSink(uiSink);
+                    // Единственный sink для StartupRenderer. Он пишет в observer
+                    // (дашборд), в run.log (FileSink-часть внутри BotLogger.WriteStartupFull),
+                    // и в UI-sink. Никаких ConsoleSink/UiSink/FileSink/BotLogger-Info
+                    // параллельно — это и был источник дублей в терминале.
+                    var bootLoggerSink = new BotLoggerSink();
+                    startupRenderer.AttachSink(bootLoggerSink);
                     _attachedSinks.Clear();
-                    _attachedSinks.Add(consoleSink);
-                    _attachedSinks.Add(fileSink);
-                    _attachedSinks.Add(uiSink);
+                    _attachedSinks.Add(bootLoggerSink);
                     _startupSinksAttached = true;
                 }
 
@@ -4104,8 +4263,9 @@ await Task.CompletedTask;
             catch (Exception ex)
             {
                 try { await PredictionErrorLogger.LogAsync("HandleModalSubmitted", ex, $"customId={customId}").ConfigureAwait(false); } catch { }
+                BotLogger.Error(LogCategory.Discord, $"[ModalSubmitted:{customId}] {ex.GetType().Name}: {ex.Message}");
                 try { await LogError($"HandleModalSubmitted exception for CustomId={customId}: {ex}"); } catch { }
-                try { await modal.FollowupAsync("Что-то пошло не так. Повторите попытку.", ephemeral: true).ConfigureAwait(false); } catch { }
+                try { await modal.RespondAsync("Что-то пошло не так. Подробности в логах бота.", ephemeral: true).ConfigureAwait(false); } catch { }
                 try { ScheduleDeleteOriginalResponse(modal); } catch { }
             }
         }
@@ -4121,8 +4281,16 @@ await Task.CompletedTask;
             catch (Exception ex)
             {
                 try { await PredictionErrorLogger.LogAsync("HandleButtonExecuted", ex, $"customId={component.Data.CustomId}").ConfigureAwait(false); } catch { }
+                BotLogger.Error(LogCategory.Discord, $"[ButtonExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
-                try { await component.RespondAsync("Ошибка обработки", ephemeral: true); } catch { }
+                try
+                {
+                    if (!component.HasResponded)
+                        await component.RespondAsync("Ошибка обработки кнопки. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                    else
+                        await component.FollowupAsync("Ошибка обработки кнопки. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                }
+                catch { }
             }
         }
 
@@ -4137,8 +4305,16 @@ await Task.CompletedTask;
             }
             catch (Exception ex)
             {
+                BotLogger.Error(LogCategory.Discord, $"[SelectMenuExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
                 await LogError($"Ошибка обработки SelectMenu: {ex.Message}");
-                try { await component.RespondAsync("Ошибка взаимодействия", ephemeral: true); } catch { }
+                try
+                {
+                    if (!component.HasResponded)
+                        await component.RespondAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                    else
+                        await component.FollowupAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                }
+                catch { }
             }
         }
 
@@ -4622,86 +4798,113 @@ await Task.CompletedTask;
 
         private async Task OnSlashCommandExecuted(SocketSlashCommand command)
         {
-            switch (command.Data.Name)
+            // Сразу освобождаем шлюз, чтобы не блокировать обработку других взаимодействий,
+            // пока мы идём в switch и далее в обработчик команды.
+            await Task.Yield();
+
+            var name = command?.Data?.Name ?? "<null>";
+            try
             {
-                case "stop_q":
-                    await StopQueue(command);
-                    break;
-                case "queue":
-                    await QueueCommand(command);
-                    break;
-                case "q":
-                    await Q_InCommand(command);
-                    break;
-                case "clr":
-                    await ClearMessage(command);
-                    break;
-                case "roll":
-                    await RollCommand(command);
-                    break;
-                case "roll20":
-                    await Roll20Command(command);
-                    break;
-                case "roll_pictures":
-                    await RollPicturesCommand(command);
-                    break;
-                case "serverinfo":
-                    await ServerInfoCommand(command);
-                    break;
-                case "help":
-                    await HelpCommand(command);
-                    break;
-                case "help_r":
-                    await Help_RollCommand(command);
-                    break;
-                case "help_gs":
-                    await Help_GameSessionCommand(command);
-                    break;
-                case "help_music":
-                    await Help_MusicCommand(command);
-                    break;
-                case "help_predict":
-                    await Help_PredictCommand(command);
-                    break;
-                case "bug_report":
-                    await Bug_ReportCommand(command);
-                    break;
-				case "start":
-                    await StartGameSession(command);
-                    break;
-                case "settings":
-                    await SettingsCommand(command);
-                    break;
-                case "prediction":
-                    await PredictionCommand(command);
-                    break;
-                case "close_chat":
-                    await CloseChatCommand(command);
-                    break;
-                case "open_chat":
-                    await OpenChatCommand(command);
-                    break;
-                case "event_notify":
-                    await EventNotifyCommand(command);
-                    break;
-                case "bwonk":
-                    // handled by BwonkCommand (subscribed handler)
-                    break;
-                case "music":
-                    if (_musicCommands is not null)
-                        await _musicCommands.HandleMusicAsync(command);
+                switch (command.Data.Name)
+                {
+                    case "stop_q":
+                        await StopQueue(command);
+                        break;
+                    case "queue":
+                        await QueueCommand(command);
+                        break;
+                    case "q":
+                        await Q_InCommand(command);
+                        break;
+                    case "clr":
+                        await ClearMessage(command);
+                        break;
+                    case "roll":
+                        await RollCommand(command);
+                        break;
+                    case "roll20":
+                        await Roll20Command(command);
+                        break;
+                    case "roll_pictures":
+                        await RollPicturesCommand(command);
+                        break;
+                    case "serverinfo":
+                        await ServerInfoCommand(command);
+                        break;
+                    case "help":
+                        await HelpCommand(command);
+                        break;
+                    case "help_r":
+                        await Help_RollCommand(command);
+                        break;
+                    case "help_gs":
+                        await Help_GameSessionCommand(command);
+                        break;
+                    case "help_music":
+                        await Help_MusicCommand(command);
+                        break;
+                    case "help_predict":
+                        await Help_PredictCommand(command);
+                        break;
+                    case "bug_report":
+                        await Bug_ReportCommand(command);
+                        break;
+    				case "start":
+                        await StartGameSession(command);
+                        break;
+                    case "settings":
+                        await SettingsCommand(command);
+                        break;
+                    case "prediction":
+                        await PredictionCommand(command);
+                        break;
+                    case "close_chat":
+                        await CloseChatCommand(command);
+                        break;
+                    case "open_chat":
+                        await OpenChatCommand(command);
+                        break;
+                    case "event_notify":
+                        await EventNotifyCommand(command);
+                        break;
+                    case "bwonk":
+                        // handled by BwonkCommand (subscribed handler)
+                        break;
+                    case "music":
+                        if (_musicCommands is not null)
+                            await _musicCommands.HandleMusicAsync(command);
+                        else
+                            await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                        break;
+                    case "music-playlist":
+                        if (_musicCommands is not null)
+                            await _musicCommands.HandleMusicPlaylistAsync(command);
+                        else
+                            await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                        break;
+                    default:
+                        await command.RespondAsync("Команда не распознана.");
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Пишем в общий логгер (категория Predict подходит — она уже используется для всех
+                // нештатных ситуаций взаимодействий) и дублируем в Cmd, чтобы было видно в обоих фильтрах.
+                try { await PredictionErrorLogger.LogAsync("OnSlashCommandExecuted", ex, $"cmd={name} user={command.User?.Id} guild={command.GuildId}").ConfigureAwait(false); } catch { }
+                BotLogger.Error(LogCategory.Cmd, $"[SlashCommand:{name}] {ex.GetType().Name}: {ex.Message}");
+
+                // Пытаемся ответить пользователю, чтобы Discord не показывал «Приложение не отвечает».
+                // RespondAsync можно вызвать только один раз — поэтому пробуем и через Respond, и через Followup.
+                // Если уже был Defer — Respond упадёт, тогда Followup.
+                try
+                {
+                    if (!command.HasResponded)
+                        await command.RespondAsync("⚠️ Внутренняя ошибка при обработке команды. Подробности в логах бота.", ephemeral: true).ConfigureAwait(false);
                     else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
-                    break;
-                case "music-playlist":
-                    if (_musicCommands is not null)
-                        await _musicCommands.HandleMusicPlaylistAsync(command);
-                    else
-                        await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
-                    break;
-                default:
-                    await command.RespondAsync("Команда не распознана.");
-                    break;
+                        await command.FollowupAsync("⚠️ Внутренняя ошибка при обработке команды. Подробности в логах бота.", ephemeral: true).ConfigureAwait(false);
+                }
+                catch { /* если и Respond, и Followup упали — Discord всё равно покажет таймаут, но лог останется */ }
             }
         }
 
@@ -4765,172 +4968,324 @@ await Task.CompletedTask;
 
         private async Task StopQueue(SocketSlashCommand command)
         {
-            var queueModule = _services.GetRequiredService<QueueModule>();
-            await queueModule.StopQueue(command);
-            await LogInfo("Очередь остановлена.");
+            try
+            {
+                var queueModule = _services.GetRequiredService<QueueModule>();
+                await queueModule.StopQueue(command);
+                await LogInfo("Очередь остановлена.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[StopQueue] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("StopQueue", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в StopQueue: {ex.Message}");
+            }
         }
 
         private async Task QueueCommand(SocketSlashCommand command)
         {
-            var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
-            if (int.TryParse(inputOption?.Value?.ToString(), out int participantsCount))
+            try
             {
-                var qm = _services.GetRequiredService<QueueModule>();
-                await qm.QueueCommand(command, participantsCount);
+                var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
+                if (int.TryParse(inputOption?.Value?.ToString(), out int participantsCount))
+                {
+                    var qm = _services.GetRequiredService<QueueModule>();
+                    await qm.QueueCommand(command, participantsCount);
+                }
+                else
+                {
+                    await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
+                    await LogError("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
+                }
             }
-            else
+            catch (Exception ex)
             {
-                await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
-                await LogError("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.");
+                BotLogger.Error(LogCategory.Cmd, $"[QueueCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("QueueCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в QueueCommand: {ex.Message}");
             }
         }
 
         private async Task Q_InCommand(SocketSlashCommand command)
         {
-            var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
-            var input = inputOption?.Value?.ToString() ?? string.Empty;
+            try
+            {
+                var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
+                var input = inputOption?.Value?.ToString() ?? string.Empty;
 
-            var queueModule = _services.GetRequiredService<QueueModule>();
-            await queueModule.QIn_RollDice(command, input);
+                var queueModule = _services.GetRequiredService<QueueModule>();
+                await queueModule.QIn_RollDice(command, input);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Q_InCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Q_InCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Q_InCommand: {ex.Message}");
+            }
         }
 
         private async Task CloseChatCommand(SocketSlashCommand command)
         {
-            var moderationModule = _services.GetRequiredService<ModerationCommands>();
-            await moderationModule.CloseChat(command);
-            await LogInfo("Чат или ветка закрыты.");
+            try
+            {
+                var moderationModule = _services.GetRequiredService<ModerationCommands>();
+                await moderationModule.CloseChat(command);
+                await LogInfo("Чат или ветка закрыты.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[CloseChatCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("CloseChatCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в CloseChatCommand: {ex.Message}");
+            }
         }
 
         private async Task OpenChatCommand(SocketSlashCommand command)
         {
-            var moderationModule = _services.GetRequiredService<ModerationCommands>();
-            await moderationModule.OpenChat(command);
-            await LogInfo("Чат открыт и перемещён в указанную категорию.");
+            try
+            {
+                var moderationModule = _services.GetRequiredService<ModerationCommands>();
+                await moderationModule.OpenChat(command);
+                await LogInfo("Чат открыт и перемещён в указанную категорию.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[OpenChatCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("OpenChatCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в OpenChatCommand: {ex.Message}");
+            }
         }
 
         private async Task ClearMessage(SocketSlashCommand command)
         {
-            var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
-            if (int.TryParse(inputOption?.Value?.ToString(), out int messagesToDelete))
+            try
             {
-                var moderationModule = _services.GetService<ModerationCommands>();
-                var mm = _services.GetRequiredService<ModerationCommands>();
-                await mm.ClearMessages(command, messagesToDelete);
+                var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
+                if (int.TryParse(inputOption?.Value?.ToString(), out int messagesToDelete))
+                {
+                    var mm = _services.GetRequiredService<ModerationCommands>();
+                    await mm.ClearMessages(command, messagesToDelete);
+                }
+                else
+                {
+                    await LogInfo("Ошибка: неверный формат ввода при удалении сообщения. Пожалуйста, введите целое число.");
+                    await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.", ephemeral: true);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                await LogInfo("Ошибка: неверный формат ввода при удалении сообщения. Пожалуйста, введите целое число.");
-                await command.RespondAsync("Ошибка: неверный формат ввода. Пожалуйста, введите целое число.", ephemeral: true);
+                BotLogger.Error(LogCategory.Cmd, $"[ClearMessage] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("ClearMessage", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в ClearMessage: {ex.Message}");
             }
         }
 
         private async Task RollCommand(SocketSlashCommand command)
         {
-            var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
-            var input = inputOption?.Value?.ToString() ?? string.Empty;
+            try
+            {
+                var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
+                var input = inputOption?.Value?.ToString() ?? string.Empty;
 
-            var diceModule = _services.GetRequiredService<RollDiceCommands>();
-            await diceModule.RollDice(command, input);
+                var diceModule = _services.GetRequiredService<RollDiceCommands>();
+                await diceModule.RollDice(command, input);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[RollCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("RollCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в RollCommand: {ex.Message}");
+            }
         }
 
         private async Task Roll20Command(SocketSlashCommand command)
         {
-            var diceModule = _services.GetRequiredService<RollDiceCommands>();
-            await diceModule.Roll20(command);
+            try
+            {
+                var diceModule = _services.GetRequiredService<RollDiceCommands>();
+                await diceModule.Roll20(command);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Roll20Command] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Roll20Command", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Roll20Command: {ex.Message}");
+            }
         }
 
         private async Task RollPicturesCommand(SocketSlashCommand command)
         {
-            if (command.GuildId == null)
+            try
             {
-                await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
-                return;
+                if (command.GuildId == null)
+                {
+                    await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
+                    return;
+                }
+
+                var guildId = command.GuildId.Value;
+                var config = ServerConfigResolver?.Invoke(guildId);
+
+                var enabledOpt = command.Data.Options.FirstOrDefault(o => o.Name == "enabled")?.Value;
+                bool newValue;
+                if (enabledOpt != null)
+                {
+                    newValue = Convert.ToBoolean(enabledOpt);
+                }
+                else
+                {
+                    var current = config?.RollPicturesEnabled ?? true;
+                    newValue = !current;
+                }
+
+                await SetServerConfigValueAsync(guildId, "roll_pictures", toggle: newValue);
+                await command.RespondAsync($"Картинки для бросков {(newValue ? "включены" : "выключены")}.", ephemeral: true);
             }
-
-            var guildId = command.GuildId.Value;
-            var config = ServerConfigResolver?.Invoke(guildId);
-
-            var enabledOpt = command.Data.Options.FirstOrDefault(o => o.Name == "enabled")?.Value;
-            bool newValue;
-            if (enabledOpt != null)
+            catch (Exception ex)
             {
-                newValue = Convert.ToBoolean(enabledOpt);
+                BotLogger.Error(LogCategory.Cmd, $"[RollPicturesCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("RollPicturesCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в RollPicturesCommand: {ex.Message}");
             }
-            else
-            {
-                var current = config?.RollPicturesEnabled ?? true;
-                newValue = !current;
-            }
-
-            await SetServerConfigValueAsync(guildId, "roll_pictures", toggle: newValue);
-            await command.RespondAsync($"Картинки для бросков {(newValue ? "включены" : "выключены")}.", ephemeral: true);
         }
 
         private async Task ServerInfoCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.ServerInfo(command);
-            await LogInfo("Выведена информация о сервере.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.ServerInfo(command);
+                await LogInfo("Выведена информация о сервере.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[ServerInfoCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("ServerInfoCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в ServerInfoCommand: {ex.Message}");
+            }
         }
 
         private async Task HelpCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Help(command);
-            await LogInfo("Выведена подсказка о командах.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Help(command);
+                await LogInfo("Выведена подсказка о командах.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[HelpCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("HelpCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в HelpCommand: {ex.Message}");
+            }
         }
 
         private async Task Help_RollCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Help_R(command);
-            await LogInfo("Выведена подсказка о командах для бросков кубов.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Help_R(command);
+                await LogInfo("Выведена подсказка о командах для бросков кубов.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Help_RollCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Help_RollCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Help_RollCommand: {ex.Message}");
+            }
         }
 
         private async Task Help_PredictCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Help_Predict(command);
-            await LogInfo("Выведена подсказка по прогнозам и ставкам.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Help_Predict(command);
+                await LogInfo("Выведена подсказка по прогнозам и ставкам.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Help_PredictCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Help_PredictCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Help_PredictCommand: {ex.Message}");
+            }
         }
 
         private async Task Help_GameSessionCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Help_GS(command);
-            await LogInfo("Выведена подсказка о командах для статистики.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Help_GS(command);
+                await LogInfo("Выведена подсказка о командах для статистики.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Help_GameSessionCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Help_GameSessionCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Help_GameSessionCommand: {ex.Message}");
+            }
         }
 
         private async Task Help_MusicCommand(SocketSlashCommand command)
         {
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Help_Music(command);
-            await LogInfo("Выведена подсказка о музыкальных командах.");
+            try
+            {
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Help_Music(command);
+                await LogInfo("Выведена подсказка о музыкальных командах.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Help_MusicCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Help_MusicCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Help_MusicCommand: {ex.Message}");
+            }
         }
 
         private async Task Bug_ReportCommand(SocketSlashCommand command)
         {
-            var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
-            var input = inputOption?.Value?.ToString() ?? string.Empty;
+            try
+            {
+                var inputOption = command.Data.Options.FirstOrDefault(o => o.Name == "input");
+                var input = inputOption?.Value?.ToString() ?? string.Empty;
 
-            var infoModule = _services.GetRequiredService<InfoCommands>();
-            await infoModule.Bug_Report(command, input);
-            await LogInfo("Использовано уведомление администратора о баге.");
+                var infoModule = _services.GetRequiredService<InfoCommands>();
+                await infoModule.Bug_Report(command, input);
+                await LogInfo("Использовано уведомление администратора о баге.");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Bug_ReportCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Bug_ReportCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в Bug_ReportCommand: {ex.Message}");
+            }
         }
 
         private async Task StartGameSession(SocketSlashCommand command)
         {
-            var gameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "game_name");
-            var gameName = gameNameOption?.Value?.ToString() ?? string.Empty;
+            try
+            {
+                var gameNameOption = command.Data.Options.FirstOrDefault(o => o.Name == "game_name");
+                var gameName = gameNameOption?.Value?.ToString() ?? string.Empty;
 
-            var masterOption = command.Data.Options.FirstOrDefault(o => o.Name == "master");
-            var masterUser = masterOption?.Value as SocketUser;
+                var masterOption = command.Data.Options.FirstOrDefault(o => o.Name == "master");
+                var masterUser = masterOption?.Value as SocketUser;
 
-            var gameCommentOption = command.Data.Options.FirstOrDefault(o => o.Name == "comment");
-            var gameComment = gameCommentOption?.Value?.ToString();
+                var gameCommentOption = command.Data.Options.FirstOrDefault(o => o.Name == "comment");
+                var gameComment = gameCommentOption?.Value?.ToString();
 
-            var gameSessionModule = _services.GetRequiredService<GameSessionCommands>();
-            await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
+                var gameSessionModule = _services.GetRequiredService<GameSessionCommands>();
+                await gameSessionModule.StartGameSession(command, gameName, masterUser, gameComment);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[StartGameSession] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("StartGameSession", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в StartGameSession: {ex.Message}");
+            }
         }
 
         private static bool HasServerRole(SocketGuildUser? user, ulong? roleId)

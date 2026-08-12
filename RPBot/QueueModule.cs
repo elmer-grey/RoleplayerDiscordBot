@@ -45,9 +45,9 @@ namespace RPBot
         }
     }
 
-    public class QueueModule : ModuleBase<SocketCommandContext>
+    internal class QueueModule : ModuleBase<SocketCommandContext>
     {
-        private static readonly ConcurrentDictionary<ulong, GuildQueueState> _guildQueues = new();
+        internal static readonly ConcurrentDictionary<ulong, GuildQueueState> _guildQueues = new();
 
         private static Task Log(string message)
         {

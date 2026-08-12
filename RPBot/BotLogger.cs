@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace RPBot
 {
@@ -224,47 +225,83 @@ namespace RPBot
             }
         }
 
+        // ───── Единый sink для StartupRenderer ─────────────────────────────
+        // Дёргается из BotLoggerSink. Делает то же, что и Write: пишет в run.log,
+        // в категорийный файл, отдаёт в observer-канал и UI-sink. Один путь для
+        // всех каналов → никаких дублей. До этого StartupRenderer-у подключались
+        // ConsoleSink + FileSink + UiSink + BotLoggerSink, и BotLoggerSink тоже
+        // писал в UI — получалось две копии в терминале.
+        internal static void WriteStartupFull(LogLevel level, string message)
+        {
+            if (level < _minLevel) return;
+            var category = LogCategory.Boot;
+            var line = FormatLine(level, category, message);
+#pragma warning disable CS4014
+            AppendToFileAsync(category, line);
+            // Зеркалим в единый run.log, чтобы было в одном месте рядом с
+            // обычными runtime-записями BotLogger. Это и было целью переноса
+            // стартап-логов в observer — пользователь видит их и в дашборде,
+            // и в одном файле run.log.
+            _ = WriteUnifiedLineAsync(line);
+#pragma warning restore CS4014
+            var record = new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser());
+            NotifyObservers(record);
+            if (level >= LogLevel.Info)
+                _uiSink?.Invoke(UiPrefix(level) + message);
+        }
+
         // ───── Ядро ──────────────────────────────────────────────────────
 
         private static void Write(LogLevel level, LogCategory category, string message)
-        {
-            if (level < _minLevel) return;
-            var line = FormatLine(level, message);
-#pragma warning disable CS4014
-            AppendToFileAsync(category, line);
-            // Зеркалим в единый run.log, чтобы всё (старт + рантайм) было в одном месте.
-            _ = WriteUnifiedLineAsync(line);
-#pragma warning restore CS4014
-            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
-            if (level >= LogLevel.Info)
-                _uiSink?.Invoke(UiPrefix(level) + message);
-        }
+                {
+                    if (level < _minLevel) return;
+                    var line = FormatLine(level, category, message);
+        #pragma warning disable CS4014
+                    AppendToFileAsync(category, line);
+                    // Зеркалим в единый run.log, чтобы всё (старт + рантайм) было в одном месте.
+                    _ = WriteUnifiedLineAsync(line);
+        #pragma warning restore CS4014
+                    var record = new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser());
+                    // Подписчики (дашборд, тесты) получают запись напрямую — без хвоста из файла,
+                    // без парсера. Это единая точка правды: всё, что попало в Write,
+                    // попадает и в observer-канал, и в run.log.
+                    NotifyObservers(record);
+                    if (level >= LogLevel.Info)
+                        _uiSink?.Invoke(UiPrefix(level) + message);
+                }
 
-        private static async Task WriteAsync(LogLevel level, LogCategory category, string message)
-        {
-            if (level < _minLevel) return;
-            var line = FormatLine(level, message);
-            await AppendToFileAsync(category, line).ConfigureAwait(false);
-            await WriteUnifiedLineAsync(line).ConfigureAwait(false);
-            NotifyObservers(new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser()));
-            if (level >= LogLevel.Info)
-                _uiSink?.Invoke(UiPrefix(level) + message);
-        }
+                private static async Task WriteAsync(LogLevel level, LogCategory category, string message)
+                {
+                    if (level < _minLevel) return;
+                    var line = FormatLine(level, category, message);
+                    await AppendToFileAsync(category, line).ConfigureAwait(false);
+                    await WriteUnifiedLineAsync(line).ConfigureAwait(false);
+                    var record = new BotLogRecord(DateTimeOffset.Now, level, category, message, line, category.IsUser());
+                    NotifyObservers(record);
+                    if (level >= LogLevel.Info)
+                        _uiSink?.Invoke(UiPrefix(level) + message);
+                }
 
         // ───── Форматирование ────────────────────────────────────────────
 
-        private static string FormatLine(LogLevel level, string message)
+        private static string FormatLine(LogLevel level, LogCategory category, string message)
         {
             var time = DateTime.Now.ToString("HH:mm:ss");
             var lvl  = LevelLabel(level);
-            return $"[{time}] [{lvl}] {message}";
+            var cat  = category.ToString();
+            // После [LEVEL] всегда пробел — парсер TryParseFormattedLine опирается на это,
+            // чтобы отличить лог от произвольных строк с квадратными скобками. Сразу за ним
+            // стоит [Category] (или сразу сообщение, если категория — System по умолчанию).
+            return $"[{time}] [{lvl}] [{cat}] {message}";
         }
 
+        // Все метки ровно 5 символов без хвостовых пробелов — парсер TryParseFormattedLine
+        // сравнивает их напрямую со switch ("INFO"/"WARN"/"DEBUG"/"ERROR").
         private static string LevelLabel(LogLevel level) => level switch
         {
             LogLevel.Debug => "DEBUG",
-            LogLevel.Info  => "INFO ",
-            LogLevel.Warn  => "WARN ",
+            LogLevel.Info  => "INFO",
+            LogLevel.Warn  => "WARN",
             LogLevel.Error => "ERROR",
             _              => "?????",
         };
@@ -359,7 +396,11 @@ namespace RPBot
         public static void Shutdown(string reason)
         {
             _ = AppendToFileAsync(LogCategory.Boot,
-                FormatLine(LogLevel.Info, $"=== Логгер завершён: {reason} ==="));
+                FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
         }
+
+        // ───── Хвост из run.log удалён. Дашборд подписан напрямую на observer
+        // BotLogger (см. RegisterObserver) — это надёжнее, чем парсить файл.
+        // Что попало в Write/WriteAsync, попадает и в observer-канал, и в run.log.
     }
 }

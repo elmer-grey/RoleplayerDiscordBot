@@ -2,6 +2,9 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>RPBot Dashboard</title>
 <style>
   body{font-family:Segoe UI,Arial,sans-serif;background:#111;color:#eee;margin:20px}
@@ -10,15 +13,30 @@
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
   .card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;min-width:0;overflow:hidden;word-break:break-word}
   .card>div{min-width:0}
-  table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;word-break:break-word}
-  td,th{padding:4px 6px;text-align:left;border-bottom:1px solid #2a2a2a;vertical-align:top;overflow-wrap:anywhere}
-  th{color:#9cf;font-weight:600}
-  .badge{display:inline-block;padding:1px 8px;border-radius:8px;font-size:11px;font-weight:600}
-  .b-ok{background:#143;color:#8f8}
-  .b-err{background:#411;color:#f88}
-  .b-warn{background:#422;color:#fc8}
-  .kv{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:13px}
-  .kv .k{color:#9aa}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+  .col{flex:1 1 320px;min-width:0}
+  .badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;white-space:nowrap;margin:2px 4px 2px 0;border:1px solid transparent;cursor:help;position:relative}
+    .badge[title]{border-bottom:1px dotted #666}
+    .b-ok{background:#143;border-color:#1a5;color:#8f8}
+    .b-err{background:#411;border-color:#a33;color:#f88}
+    .b-warn{background:#422;border-color:#a64;color:#fc8}
+    .b-mute{background:#222;border-color:#444;color:#aaa}
+    .b-info{background:#133;border-color:#36c;color:#9cf}
+    .legend{display:flex;flex-wrap:wrap;gap:6px 10px;font-size:11px;color:#888;margin:0 0 8px;padding:6px 8px;background:#181818;border:1px solid #262626;border-radius:6px}
+    .legend .lg{display:inline-flex;align-items:center;gap:6px}
+    .legend .lg .sw{display:inline-block;width:10px;height:10px;border-radius:3px;border:1px solid #444;flex:0 0 auto}
+  .kv{display:block;font-size:13px;width:100%}
+  .kv-row{display:flex;flex-wrap:wrap;gap:6px 12px;padding:3px 0;border-bottom:1px solid #222}
+  .kv-row:last-child{border-bottom:none}
+  .kv .k{color:#9aa;flex:0 0 auto}
+  .kv .v{color:#eee;flex:1 1 auto;overflow-wrap:anywhere;min-width:0}
+  .guild-block{margin-bottom:14px;padding-bottom:6px;border-bottom:1px dashed #2a2a2a}
+  .guild-block:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .guild-title{display:flex;align-items:center;gap:8px;font-size:13px;color:#9cf;margin:0 0 6px;font-weight:600}
+  .item-card{background:#181818;border:1px solid #262626;border-radius:6px;padding:8px 10px;margin:4px 0}
+  .item-card .item-title{font-weight:600;color:#eee;font-size:13px}
+  .item-card .item-meta{color:#888;font-size:11px;margin-top:2px;line-height:1.5}
+  .item-card .item-desc{color:#bbb;font-size:12px;margin-top:4px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
   .logs{font-family:Consolas,monospace;font-size:12px;background:#0f0f0f;padding:8px;border-radius:6px;max-height:340px;overflow:auto;line-height:1.45}
   .logs .ts{color:#888}
   .logs .lv-info{color:#9cf}
@@ -62,12 +80,34 @@
     <div id="stats" class="empty">загрузка...</div>
   </div>
 
-  <div class="card">
+    <div class="card" style="grid-column:1/-1">
+      <h2>Проверка систем</h2>
+      <div class="legend">
+        <span class="lg"><span class="sw" style="background:#143;border-color:#1a5"></span>OK — система работает</span>
+        <span class="lg"><span class="sw" style="background:#422;border-color:#a64"></span>Внимание — нужна проверка</span>
+        <span class="lg"><span class="sw" style="background:#411;border-color:#a33"></span>Ошибка — требуется вмешательство</span>
+      </div>
+      <div id="systems" class="empty">загрузка...</div>
+    </div>
+
+  <div class="card" style="grid-column:1/-1">
     <h2>Servers</h2>
-    <div id="servers" class="empty">загрузка...</div>
+      <div class="legend" id="servers-legend">
+        <span class="lg"><span class="sw" style="background:#143;border-color:#1a5"></span>ОК — настроено и работает</span>
+        <span class="lg"><span class="sw" style="background:#422;border-color:#a64"></span>Внимание — рекомендуется</span>
+        <span class="lg"><span class="sw" style="background:#411;border-color:#a33"></span>Ошибка — обязательно нужно</span>
+        <span class="lg"><span class="sw" style="background:#133;border-color:#36c"></span>Инфо — вспомогательное</span>
+        <span class="lg"><span class="sw" style="background:#222;border-color:#444"></span>Отключено</span>
+      </div>
+      <div id="servers" class="empty">загрузка...</div>
+    </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Анонсы (EventOps)</h2>
+    <div id="announcements" class="empty">загрузка...</div>
   </div>
 
-  <div class="card">
+  <div class="card" style="grid-column:1/-1">
     <h2>Sessions</h2>
     <div id="sessions" class="empty">загрузка...</div>
   </div>
@@ -97,11 +137,12 @@
         <option value="Sheets">Sheets</option>
         <option value="Config">Config</option>
         <option value="Cmd">Cmd</option>
+        <option value="Other">Other</option>
       </select>
       <input type="text" id="filter-text" placeholder="Поиск по тексту..." />
     </div>
-    <div id="logs" class="logs empty">загрузка...</div>
-    <div class="small">Автообновление каждые 5 секунд</div>
+    <div id="logs" class="logs empty">ожидание потока...</div>
+    <div class="small">Логи обновляются в реальном времени через /api/logs/stream</div>
   </div>
 </div>
 
@@ -129,28 +170,88 @@ async function fetchJson(url){
 
 function kvTable(obj){
   const rows = Object.entries(obj).map(([k,v]) =>
-    `<tr><td class="k">${esc(k)}</td><td>${esc(v===null||v===undefined?'':String(v))}</td></tr>`
+    `<div class="kv-row"><span class="k">${esc(k)}:</span> <span class="v">${esc(v===null||v===undefined?'':String(v))}</span></div>`
   ).join('');
-  return `<table class="kv">${rows}</table>`;
+  return `<div class="kv">${rows}</div>`;
 }
 
 function renderHealth(d){
   if (!d || typeof d !== 'object'){ setText('health', '—'); return; }
   if (d.error){ setHtml('health', `<span class="err">${esc(d.error)}</span>`); return; }
-  const badge = d.Connected
+  // Поддерживаем оба формата: «голый» объект (Provider) и обёртку { Provider, Stats }.
+  const p = (d.Provider && typeof d.Provider === 'object') ? d.Provider : d;
+  const stats = d.Stats ?? d.stats ?? {};
+  const connected = p.Connected === true || p.connected === true;
+  const ping = d.PingMs ?? d.pingMs;
+  let pingLine = '—';
+  let pingKind = 'mute';
+  if (typeof ping === 'number' && ping >= 0){
+    pingLine = `${ping} мс`;
+    if (ping < 100) pingKind = 'ok';
+    else if (ping < 250) pingKind = 'info';
+    else if (ping < 500) pingKind = 'warn';
+    else pingKind = 'err';
+  }
+  const badge = connected
     ? '<span class="badge b-ok">online</span>'
     : '<span class="badge b-err">offline</span>';
   const html = `
-    <div style="margin-bottom:6px">${badge}</div>
+    <div style="margin-bottom:6px">${badge}${_badge('пинг ' + pingLine, pingKind, 'Задержка WebSocket до Discord Gateway (DiscordSocketClient.Latency)')}</div>
     ${kvTable({
-      'Серверов': d.Guilds ?? '—',
-      'Тип запуска': d.StartupType ?? '—',
-      'Время UTC': d.UtcNow ?? '—',
-      'Версия бота': d.Version ?? '—',
-      'Аптайм': d.Uptime ?? '—'
+      'Серверов': p.Guilds ?? p.guilds ?? '—',
+      'Тип запуска': p.StartupType ?? p.startupType ?? '—',
+        'Время (МСК)': formatMskTime(p.UtcNow ?? p.utcNow),
+      'Версия бота': p.Version ?? p.version ?? '—',
+      'Аптайм': p.Uptime ?? p.uptime ?? '—',
     })}`;
   setHtml('health', html);
 }
+
+function renderSystems(d){
+  if (!d) { setText('systems','нет данных'); return; }
+  if (d.error){ setHtml('systems', `<span class="err">${esc(d.error)}</span>`); return; }
+  if (!Array.isArray(d) || d.length === 0){ setText('systems','проверки ещё не выполнялись'); return; }
+  const items = d.map(c => {
+    // Kind: ok=зелёная галочка, err=красный крест, warn=жёлтый, info=нейтрально, mute=отключено серым.
+    // Если бэкенд не передал Kind, считаем по Healthy.
+    const healthy = c.Healthy === true || c.healthy === true;
+    const kind = (c.Kind ?? c.kind) || (healthy ? 'ok' : 'err');
+    const icon = (kind === 'ok' || kind === 'info') ? '✅' : (kind === 'warn' ? '⚠️' : '❌');
+    const stateLabel = (kind === 'ok') ? 'OK' : (kind === 'info') ? 'ИНФО' : (kind === 'mute') ? 'ВЫКЛ' : (kind === 'warn') ? 'ВНИМ' : 'FAIL';
+    const stateTitle = (kind === 'ok') ? 'Система работает'
+      : (kind === 'info') ? 'Нет данных / не критично'
+      : (kind === 'mute') ? 'Сервис отключён в конфиге'
+      : (kind === 'warn') ? 'Требуется внимание'
+      : 'Ошибка — требуется вмешательство';
+    const name = c.Name ?? c.name ?? '—';
+    const msg = c.Message ?? c.message ?? '';
+    const lines = String(msg).split('\n');
+    const detail = lines.length > 1
+      ? `<div class="item-meta" style="margin-top:2px"><pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:11px;color:#bbb">${lines.slice(1).map(esc).join('\n')}</pre></div>`
+      : '';
+    return `<div class="item-card">
+      <div class="item-title">${esc(icon + ' ' + name)} ${_badge(stateLabel, kind, stateTitle)}</div>
+      <div class="item-meta">${esc(lines[0] || '—')}</div>
+      ${detail}
+    </div>`;
+  }).join('');
+  setHtml('systems', items);
+}
+
+  // UtcNow (ISO +00:00) → строка «2026-08-12 14:32:00 МСК».
+  function formatMskTime(raw){
+    if (!raw) return '—';
+    try {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return '—';
+      const msk = new Date(d.getTime() + 3 * 3600 * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      return `${msk.getUTCFullYear()}-${pad(msk.getUTCMonth() + 1)}-${pad(msk.getUTCDate())} ` +
+             `${pad(msk.getUTCHours())}:${pad(msk.getUTCMinutes())}:${pad(msk.getUTCSeconds())} МСК`;
+    } catch {
+      return '—';
+    }
+  }
 
 function renderStats(d){
   if (!d || typeof d !== 'object'){ setText('stats','—'); return; }
@@ -164,32 +265,181 @@ function renderStats(d){
   }));
 }
 
+function _badge(text, kind, title){
+  const t = title ? ` title="${esc(title)}"` : '';
+  return `<span class="badge b-${esc(kind || 'mute')}"${t}>${esc(text)}</span>`;
+}
+
+function _flags(items){
+  return items.filter(Boolean).join('');
+}
+
+// Глоссарий бэйджей: текст подписи + расшифровка для tooltip. Порядок — как
+// выводятся под сервером. kind определяет цвет: ok | warn | err | info | mute.
+const BADGES = {
+  discord:   { label: 'Discord',   desc: 'Бот подключён к Discord-шлюзу',                kind: 'ok'   },
+  мод:       { label: 'мод',       desc: 'Канал модерации задан (ModerateChannelID)',   kind: 'ok'   },
+  рг:        { label: 'рг',        desc: 'Канал общих ролевых сообщений (GeneralRGChannelID)', kind: 'ok' },
+  запись:    { label: 'запись',    desc: 'Канал записи событий/сессий (RecordChannelID)', kind: 'ok'  },
+  мастер:    { label: 'мастер',    desc: 'Роль мастера настроена (MasterRoleId)',         kind: 'ok'   },
+  super:     { label: 'super',     desc: 'Роль суперпользователя задана (SuperUserRoleId)', kind: 'info' },
+  welcome:   { label: 'welcome',   desc: 'Канал приветствий задан (WelcomeChannelID)',   kind: 'info' },
+  roll:      { label: 'roll',      desc: 'Канал бросков задан (RollChannelID)',          kind: 'info' },
+  stats:     { label: 'stats',     desc: 'Канал статистики задан (StatsChannelID)',      kind: 'info' },
+  event:     { label: 'event',     desc: 'Голосовой канал события задан (EventVoiceChannelID)', kind: 'info' },
+  swear:     { label: 'swear',     desc: 'Фильтр нецензурной лексики включён',           kind: 'warn' },
+  pred:      { label: 'pred',      desc: 'Прогнозы/костяшки включены',                   kind: 'ok'   },
+  rollPic:   { label: 'rollPic',   desc: 'Картинки для бросков включены',                kind: 'info' },
+  tg:        { label: 'tg',        desc: 'Telegram-уведомления включены',                kind: 'ok'   },
+  guide:     { label: 'guide',     desc: 'Памятка мастеру отправляется автоматически',   kind: 'info' },
+};
+
 function renderServers(d){
   if (d && d.error){ setHtml('servers', `<span class="err">${esc(d.error)}</span>`); return; }
   if (!Array.isArray(d) || d.length === 0){ setText('servers','серверы ещё не загружены'); return; }
-  const rows = d.map(s => `<tr>
-    <td><code>${esc(s.GuildId ?? s.GuildID ?? '?')}</code></td>
-    <td>${s.PredictionsEnabled?'<span class="badge b-ok">pred</span>':'—'}</td>
-    <td>${s.TelegramEnabled?'<span class="badge b-ok">tg</span>':'—'}</td>
-    <td>${esc(s.MasterRoleId ?? '—')}</td>
-  </tr>`).join('');
-  setHtml('servers', `<table>
-    <thead><tr><th style="width:30%">Guild</th><th style="width:15%">Pred</th><th style="width:15%">TG</th><th style="width:40%">Master</th></tr></thead>
-    <tbody>${rows}</tbody></table>`);
+  const b = BADGES;
+  const html = d.map(s => {
+    const items = [
+      [s.ModerateChannelID,    'мод'],
+      [s.GeneralRGChannelID,   'рг'],
+      [s.RecordChannelID,      'запись'],
+      [s.MasterRoleName,       'мастер'],
+      [s.SuperUserRoleName,    'super'],
+      [s.WelcomeChannelID,     'welcome'],
+      [s.RollChannelID,        'roll'],
+      [s.StatsChannelID,       'stats'],
+      [s.EventVoiceChannelID,  'event'],
+      [s.SwearFilterEnabled,   'swear'],
+      [s.PredictionsEnabled,   'pred'],
+      [s.RollPicturesEnabled,  'rollPic'],
+      [s.TelegramEnabled,      'tg'],
+      [s.MasterGuideEnabled,   'guide'],
+    ];
+    const flags = items.map(([has, key]) => {
+      const meta = b[key];
+      if (!meta) return '';
+      if (!has){
+        // Канал/роль не заданы — для критичных это «err», для остальных «mute».
+        const kind = (key === 'мод' || key === 'рг' || key === 'запись' || key === 'мастер') ? 'err' : 'mute';
+        const reason = key === 'мастер' ? ' — не задана (MasterRoleId)' : ' — не задан';
+        return _badge(meta.label + '!', kind, meta.desc + reason);
+      }
+      return _badge(meta.label, meta.kind, meta.desc);
+    }).join('');
+    const disc = _badge('Discord', b.discord.kind, b.discord.desc);
+    return `<div class="guild-block">
+      <div class="guild-title">${esc(s.GuildName ?? '—')}</div>
+      <div>${disc}${flags}</div>
+    </div>`;
+  }).join('');
+  setHtml('servers', html);
+}
+
+function _flattenSessionsDict(d){
+  const flat = [];
+  if (!d || typeof d !== 'object') return flat;
+  if (Array.isArray(d)) {
+    d.forEach(g => {
+      const guild = g.GuildId ?? g.GuildID ?? g.Guild;
+      (g.Sessions || g.sessions || g.Items || []).forEach(s => flat.push({ ...s, GuildId: guild }));
+    });
+    return flat;
+  }
+  Object.keys(d).forEach(k => {
+    const list = d[k];
+    if (!Array.isArray(list)) return;
+    const guildId = Number(k);
+    list.forEach(s => flat.push({ ...s, GuildId: Number.isFinite(guildId) ? guildId : (s.GuildId ?? '?') }));
+  });
+  return flat;
+}
+
+function _groupByGuild(items){
+  const map = new Map();
+  items.forEach(it => {
+    const k = it.GuildId ?? '?';
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(it);
+  });
+  return map;
+}
+
+function _guildBlocks(items, renderItem){
+  const grouped = _groupByGuild(items);
+  const out = [];
+  for (const g of grouped.values()){
+    const guildName = g[0]?.GuildName || '';
+    const head = guildName ? `<div class="guild-title">${esc(guildName)}</div>` : '';
+    const body = g.map(renderItem).join('');
+    out.push(`<div class="guild-block">${head}${body}</div>`);
+  }
+  return out.join('');
 }
 
 function renderSessions(d){
   if (d && d.error){ setHtml('sessions', `<span class="err">${esc(d.error)}</span>`); return; }
-  if (!Array.isArray(d) || d.length === 0){ setText('sessions','активных сессий нет'); return; }
-  const rows = d.map(s => `<tr>
-    <td><code>${esc(s.GuildId ?? s.GuildID ?? s.Guild ?? '?')}</code></td>
-    <td>${esc(s.Name ?? s.SessionName ?? '—')}</td>
-    <td>${esc(s.Status ?? '—')}</td>
-    <td>${esc(s.LeaderId ?? s.MasterId ?? '—')}</td>
-  </tr>`).join('');
-  setHtml('sessions', `<table>
-    <thead><tr><th style="width:25%">Guild</th><th style="width:35%">Session</th><th style="width:20%">Status</th><th style="width:20%">Leader</th></tr></thead>
-    <tbody>${rows}</tbody></table>`);
+  const flat = _flattenSessionsDict(d);
+  if (flat.length === 0){ setText('sessions','активных ролевых сессий нет (это не события EventOps — для них отдельный блок)'); return; }
+  const html = _guildBlocks(flat, s => {
+    const started = s.CreatedAt ? formatMskTime(s.CreatedAt) : '—';
+    const statusKind = /пауз/i.test(s.Status || '') ? 'warn' : 'ok';
+    // Сбор бросков: TrackRolls=true — инкремент идёт, false — выключен.
+    const rollCollecting = s.RollCollecting === true || s.rollCollecting === true;
+    const rollsCount = s.RollsCount ?? s.rollsCount ?? 0;
+    const rollBadge = rollCollecting
+      ? _badge('сбор бросков', 'info', `Включён. Уже сделано ${rollsCount} ${pluralRu(rollsCount, 'бросок', 'броска', 'бросков')} за сессию.`)
+      : _badge('сбор бросков выкл', 'mute', 'Сбор бросков выключен — кнопки и команды трекинга не работают.');
+    return `<div class="item-card">
+      <div class="item-title">${esc(s.Name ?? s.SessionName ?? '—')}</div>
+      <div class="item-meta">
+        ${_badge(s.Status || '—', statusKind)}
+        ${rollBadge}
+        <span>Мастер: <b>${esc(s.MasterName ?? s.LeaderName ?? '—')}</b></span>
+        <span>Старт: ${esc(started)}</span>
+        <span>Бросков: <b>${esc(rollsCount)}</b></span>
+      </div>
+    </div>`;
+  });
+  setHtml('sessions', html);
+}
+
+function pluralRu(n, one, few, many){
+  const a = Math.abs(n) % 100;
+  const b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  if (b === 1) return one;
+  return many;
+}
+
+function renderAnnouncements(d){
+  if (d && d.error){ setHtml('announcements', `<span class="err">${esc(d.error)}</span>`); return; }
+  if (!Array.isArray(d) || d.length === 0){ setText('announcements','объявлений о событиях ещё нет'); return; }
+  const html = _guildBlocks(d, a => {
+    const updated = formatMskTime(a.LastUpdatedAtUtc);
+    const start = a.StartsAtMsk || '—';
+    const loc = a.Location || (a.ChannelId ? `канал #${a.ChannelId}` : '—');
+    const desc = a.Description
+      ? `<div class="item-desc">${esc(a.Description.length > 600 ? a.Description.slice(0, 600) + '…' : a.Description)}</div>`
+      : '';
+    let statusKind = 'info';
+    if (a.StatusLabel){
+      if (/начал/i.test(a.StatusLabel)) statusKind = 'ok';
+      else if (/отмен/i.test(a.StatusLabel) || /удал/i.test(a.StatusLabel)) statusKind = 'err';
+      else if (/заверш/i.test(a.StatusLabel)) statusKind = 'warn';
+    }
+    return `<div class="item-card">
+      <div class="item-title">${esc(a.Name ?? '—')}</div>
+      <div class="item-meta">
+        ${_badge(a.StatusLabel || '—', statusKind)}
+        <span>Старт (МСК): <b>${esc(start)}</b></span>
+        <span>Где: ${esc(loc)}</span>
+        <span>Обновлено: ${esc(updated)}</span>
+      </div>
+      ${desc}
+    </div>`;
+  });
+  setHtml('announcements', html);
 }
 
 function renderActivity(d){
@@ -215,29 +465,43 @@ function logLineHtml(rec){
   return `<div><span class="ts">[${ts}]</span> <span class="${lvCls}">[${esc(lvl)}]</span> ${userTag}<span class="${catCls}">[${esc(cat)}]</span> ${esc(msg)}</div>`;
 }
 
+function dedupMerge(buffer, incoming){
+  // Свежие впереди — дедуп по timestamp+message, обрезка до 500.
+  const seen = new Set();
+  const merged = [];
+  for (const rec of [...incoming, ...buffer]){
+    const key = (rec.timestamp ?? '') + '|' + (rec.message ?? '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+    if (merged.length >= 500) break;
+  }
+  return merged;
+}
+
 function renderLogs(){
-  const showSys = $('filter-system').checked;
-  const showUsr = $('filter-user').checked;
-  const errOnly = $('filter-errors').checked;
+  const node = $('logs');
+  if (!node) return;
+  const showSys = $('filter-system')?.checked !== false;
+  const showUsr = $('filter-user')?.checked !== false;
+  const errOnly = $('filter-errors')?.checked === true;
+  const autoscroll = $('filter-autoscroll')?.checked !== false;
   const cat = ($('filter-category')?.value || '');
-  const q = ($('filter-text').value || '').toLowerCase();
+  const q = ($('filter-text')?.value || '').toLowerCase();
   const all = window._allLogs || [];
   const filtered = all.filter(rec => {
-    const isUser = rec.IsUser === true || rec.isUser === true;
+    const isUser = rec.isUser === true || rec.IsUser === true;
     if (isUser && !showUsr) return false;
     if (!isUser && !showSys) return false;
     const lvl = (rec.level || '');
     if (errOnly && !/error/i.test(lvl)) return false;
-    const recCat = rec.Category ?? rec.category ?? '';
+    const recCat = rec.category ?? rec.Category ?? '';
     if (cat && recCat !== cat) return false;
-    const msg = rec.Message ?? rec.message ?? '';
+    const msg = rec.message ?? rec.Message ?? '';
     if (q && !msg.toLowerCase().includes(q)) return false;
     return true;
   });
-  const node = $('logs');
-  // Автоскролл: применяется только если пользователь не «отстал» от верха более чем на 30px
-  // (т.е. находится у самого верха списка). Если проскроллил вниз — не сбиваем позицию.
-  const stickToTop = (node.scrollTop <= 30);
+  const stickToTop = autoscroll && (node.scrollTop <= 30);
   if (filtered.length === 0){
     node.classList.add('empty'); node.innerHTML = '(нет записей)'; return;
   }
@@ -248,15 +512,76 @@ function renderLogs(){
   }
 }
 
-async function loadLogs(){
+// Стрим логов от сервера (/api/logs/stream). Сервер отдаёт JSON с
+// bootstrap-массивом items, затем по одной записи на новую строку. Мы их
+// складываем в window._allLogs и рендерим. На обрыв — реконнект с экспонентой.
+let _streamAbort = null;
+
+function stopLogsStream(){
+  if (_streamAbort) { try { _streamAbort.abort(); } catch {} _streamAbort = null; }
+}
+
+const _setStatus = (msg, isErr) => {
   const node = $('logs');
-  try {
-    const r = await fetchJson('/api/logs');
-    if (!r.ok){ node.classList.add('empty'); node.innerHTML = `<span class="err">[${r.status}] ${esc(r.error||('HTTP '+r.status))}</span>`; return; }
-    window._allLogs = Array.isArray(r.data) ? r.data : [];
-    renderLogs();
-  } catch(e){
-    node.classList.add('empty'); node.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  if (!node) return;
+  if ((window._allLogs || []).length > 0) return;
+  node.classList.toggle('empty', true);
+  node.innerHTML = `<span class="${isErr ? 'err' : ''}">${esc(msg)}</span>`;
+};
+
+async function startLogsStream(){
+  stopLogsStream();
+  const abort = new AbortController();
+  _streamAbort = abort;
+
+  _setStatus('подключение к /api/logs/stream…', false);
+
+  let backoff = 500;
+  while (!abort.signal.aborted){
+    try {
+      const r = await fetch('/api/logs/stream', {cache:'no-store', signal: abort.signal});
+      if (!r.ok || !r.body){
+        throw new Error('HTTP ' + r.status);
+      }
+      backoff = 500;
+      _setStatus('поток открыт, ожидание данных…', false);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buf = '';
+      let bootstrapConsumed = false;
+      while (!abort.signal.aborted){
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0){
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let obj;
+          try { obj = JSON.parse(line); } catch {
+            continue;
+          }
+          if (!bootstrapConsumed && obj && typeof obj === 'object' && Array.isArray(obj.items)){
+            window._allLogs = dedupMerge([], obj.items);
+            bootstrapConsumed = true;
+          } else if (obj && typeof obj === 'object' && obj.timestamp){
+            window._allLogs = dedupMerge(window._allLogs || [], [obj]);
+          }
+          renderLogs();
+        }
+      }
+    } catch (e){
+      if (abort.signal.aborted) return;
+      _setStatus('поток оборвался (' + (e && e.message ? e.message : 'ошибка') + '), переподключение через ' + (backoff/1000).toFixed(1) + 'с…', true);
+      await new Promise(r => setTimeout(r, backoff));
+      backoff = Math.min(backoff * 2, 8000);
+      continue;
+    }
+    if (abort.signal.aborted) return;
+    _setStatus('поток закрыт сервером, переподключение…', true);
+    await new Promise(r => setTimeout(r, backoff));
+    backoff = Math.min(backoff * 2, 8000);
   }
 }
 
@@ -276,10 +601,11 @@ async function loadCard(id, url, renderer){
 async function tick(){
   await loadCard('health',  '/api/health',   renderHealth);
   await loadCard('stats',   '/api/stats',    renderStats);
+  await loadCard('systems', '/api/systems',  renderSystems);
   await loadCard('servers', '/api/servers',  renderServers);
   await loadCard('sessions','/api/sessions', renderSessions);
-  await loadCard('activity','/api/activity', renderActivity);
-  await loadLogs();
+    await loadCard('announcements','/api/events', renderAnnouncements);
+    await loadCard('activity','/api/activity', renderActivity);
 }
 
 ['filter-system','filter-user','filter-errors','filter-autoscroll'].forEach(id => {
@@ -290,6 +616,7 @@ const ft = $('filter-text'); if (ft) ft.addEventListener('input', renderLogs);
 
 tick();
 setInterval(tick, 5000);
+startLogsStream();
 </script>
 </body>
 </html>

@@ -68,7 +68,10 @@ public class WebDashboardTests : IAsyncLifetime
             },
             serverConfigsProvider: () => new Dictionary<ulong, ServerConfig>(),
             sessionsProvider: () => Array.Empty<object>(),
-            rollsTodayProvider: () => 7,
+                        eventsProvider: () => Array.Empty<object>(),
+                        clientProvider: () => null,
+                        systemsProvider: () => Array.Empty<object>(),
+                        rollsTodayProvider: () => 7,
             activeSessionsProvider: () => 1,
             chatMessagesTodayProvider: () => 42,
             usersInVoiceProvider: () => 2,
@@ -133,19 +136,19 @@ public class WebDashboardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RateLimit_61stRequest_Returns429_WithRetryAfter()
+    public async Task RateLimit_BurstAboveLimit_Returns429_WithRetryAfter()
     {
         StartService();
-        // Делаем 60 запросов с одного IP — все должны пройти.
+        // Делаем 240 запросов с одного IP — все должны пройти (лимит 240/мин).
         var okCount = 0;
-        for (int i = 0; i < 60; i++)
+        for (int i = 0; i < 240; i++)
         {
             var r = await GetAsync(BaseAddress + "/api/health");
             if ((int)r.StatusCode == 200) okCount++;
         }
-        Assert.Equal(60, okCount);
+        Assert.Equal(240, okCount);
 
-        // 61-й должен быть отклонён.
+        // 241-й должен быть отклонён.
         var rejected = await GetAsync(BaseAddress + "/api/health");
         Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.True(rejected.Headers.Contains("Retry-After"));

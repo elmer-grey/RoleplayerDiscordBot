@@ -144,16 +144,51 @@ namespace RPBot
         [Command("roll")]
         public async Task RollDice(SocketSlashCommand command, string input)
         {
-            await command.DeferAsync();
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            var channelId = command.Channel.Id;
-
-            if (guildId == null)
+            // Сразу освобождаем шлюз и подтверждаем взаимодействие. Это нужно, чтобы Discord
+            // не показал «Приложение не отвечает», даже если дальнейшая обработка залипнет.
+            try { await command.DeferAsync().ConfigureAwait(false); }
+            catch (Exception ex)
             {
-                await command.FollowupAsync("Команда доступна только на сервере.", ephemeral: true);
+                BotLogger.Error(LogCategory.Cmd, $"[RollDice:DeferAsync] {ex.GetType().Name}: {ex.Message}");
                 return;
             }
 
+            string user = command.User?.GlobalName ?? "<unknown>";
+            ulong? guildId = null;
+            ulong channelId = 0;
+            try
+            {
+                guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
+                channelId = command.Channel.Id;
+                if (guildId == null)
+                {
+                    await command.FollowupAsync("Команда доступна только на сервере.", ephemeral: true).ConfigureAwait(false);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[RollDice:init] user={user} {ex.GetType().Name}: {ex.Message}");
+                try { await command.FollowupAsync("Ошибка при подготовке команды.", ephemeral: true).ConfigureAwait(false); } catch { }
+                return;
+            }
+
+            // Боевой блок: всё, что ниже, обёрнуто в один try/catch.
+            // Раньше исключение из regex/валидации/queue/semafora проглатывалось, и Discord показывал таймаут.
+            try
+            {
+                await RollDiceInternalAsync(command, input, guildId.Value, channelId, user).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[RollDice:{input}] user={user} guild={guildId} {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("RollDice", ex, $"user={user} guild={guildId} input={input}").ConfigureAwait(false); } catch { }
+                try { await command.FollowupAsync("Ошибка при броске. Подробности в логах.", ephemeral: true).ConfigureAwait(false); } catch { }
+            }
+        }
+
+        private async Task RollDiceInternalAsync(SocketSlashCommand command, string input, ulong guildId, ulong channelId, string user)
+        {
             if (IsOnCooldown(command.User.Id))
             {
                 // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
@@ -162,16 +197,20 @@ namespace RPBot
             }
             UpdateCooldown(command.User.Id);
 
-            // Получаем ID канала статистики из конфига
-            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
+            // Получаем ID канала статистики и канала бросков из конфига
+            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId);
             var statsChannelId = statsConfig?.StatsChannelID ?? 0UL;
+            var rollChannelId = statsConfig?.RollChannelID ?? 0UL;
             var rollPicturesEnabled = statsConfig?.RollPicturesEnabled ?? true;
 
-            // Проверяем, сделан ли бросок в канале статистики
-            bool isStatsChannel = channelId == statsChannelId && statsChannelId != 0;
+            // Проверяем, сделан ли бросок в канале статистики или в канале бросков.
+            // В дашборде флаг «сбор бросков» ожидаемо показывает, что бросок УЧИТЫВАЕТСЯ в сессии,
+            // а не только в stats-канале. Учитываем оба.
+            bool isStatsChannel = statsChannelId != 0 && channelId == statsChannelId;
+            bool isRollChannel  = rollChannelId  != 0 && channelId == rollChannelId;
 
-            var user = command.User as SocketGuildUser;
-            if (user == null)
+            var guildUser = command.User as SocketGuildUser;
+            if (guildUser == null)
             {
                 await command.FollowupAsync("Не удалось получить информацию о пользователе.");
                 return;
@@ -243,7 +282,7 @@ namespace RPBot
                 await _sessionSemaphore.WaitAsync();
                 try
                 {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
+                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
@@ -278,12 +317,12 @@ namespace RPBot
             var diceSubfolder = Path.Combine(numbersDir, diceType);
             bool hasImages = !hasRange && Directory.Exists(diceSubfolder);
 
-            if (isStatsChannel)
+            if (isStatsChannel || isRollChannel)
             {
                 await _sessionSemaphore.WaitAsync();
                 try
                 {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
+                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
@@ -385,16 +424,52 @@ namespace RPBot
         [Command("roll20")]
         public async Task Roll20(SocketSlashCommand command)
         {
-            await command.DeferAsync();
-            var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
-            var channelId = command.Channel.Id;
-
-            if (guildId == null)
+            // Сразу подтверждаем взаимодействие, чтобы Discord не показывал «Приложение не отвечает».
+            try { await command.DeferAsync().ConfigureAwait(false); }
+            catch (Exception ex)
             {
-                await command.FollowupAsync("Команда доступна только на сервере.");
+                BotLogger.Error(LogCategory.Cmd, $"[Roll20:DeferAsync] {ex.GetType().Name}: {ex.Message}");
                 return;
             }
 
+            ulong? guildIdNullable = null;
+            ulong channelId = 0;
+            string userName = command.User?.GlobalName ?? "<unknown>";
+            try
+            {
+                guildIdNullable = (command.Channel as SocketGuildChannel)?.Guild.Id;
+                channelId = command.Channel.Id;
+                if (guildIdNullable == null)
+                {
+                    await command.FollowupAsync("Команда доступна только на сервере.").ConfigureAwait(false);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Roll20:init] user={userName} {ex.GetType().Name}: {ex.Message}");
+                try { await command.FollowupAsync("Ошибка при подготовке команды.", ephemeral: true).ConfigureAwait(false); } catch { }
+                return;
+            }
+
+            ulong guildId = guildIdNullable.Value;
+
+            // Боевой блок: всё, что ниже, обёрнуто в один try/catch. Раньше исключение из валидации,
+            // семафора или работы с диском проглатывалось, и Discord показывал таймаут без следа.
+            try
+            {
+                await Roll20InternalAsync(command, guildId, channelId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[Roll20] user={userName} guild={guildId} {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("Roll20", ex, $"user={userName} guild={guildId}").ConfigureAwait(false); } catch { }
+                try { await command.FollowupAsync("Ошибка при броске d20. Подробности в логах.", ephemeral: true).ConfigureAwait(false); } catch { }
+            }
+        }
+
+        private async Task Roll20InternalAsync(SocketSlashCommand command, ulong guildId, ulong channelId)
+        {
             if (IsOnCooldown(command.User.Id))
             {
                 // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
@@ -403,60 +478,71 @@ namespace RPBot
             }
             UpdateCooldown(command.User.Id);
 
-            // Получаем ID канала статистики из конфига
-            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId.Value);
+            // Получаем ID канала статистики и канала бросков из конфига
+            var statsConfig = Program.ServerConfigResolver?.Invoke(guildId);
             var statsChannelId = statsConfig?.StatsChannelID ?? 0;
+            var rollChannelId = statsConfig?.RollChannelID ?? 0;
             var rollPicturesEnabled = statsConfig?.RollPicturesEnabled ?? true;
 
-            // Если бросок сделан в канале статистики
-            bool isStatsChannel = channelId == statsChannelId;
+            // Если бросок сделан в канале статистики или в канале бросков
+            bool isStatsChannel = statsChannelId != 0 && channelId == statsChannelId;
+            bool isRollChannel  = rollChannelId  != 0 && channelId == rollChannelId;
 
             Random random = new Random();
             int result = random.Next(1, 21);
 
-            // Если это канал статистики, проверяем сессии
-            if (isStatsChannel)
+            // Если это канал статистики или канал бросков, проверяем сессии.
+            // Семафор ждём с таймаутом — если он залип, не подвешиваем взаимодействие на >3с.
+            if (isStatsChannel || isRollChannel)
             {
-                await _sessionSemaphore.WaitAsync();
+                bool gotLock = false;
                 try
                 {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId.Value, out var sessions))
+                    gotLock = await _sessionSemaphore.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    if (!gotLock)
                     {
-                        // Находим ВСЕ сессии с включённой записью бросков (TrackRolls = true)
-                        var sessionsWithRolls = sessions.Where(s =>
-                            s.Value.TrackRolls &&
-                            !s.Value.IsStopped).ToList();
-
-                        if (sessionsWithRolls.Any())
+                        BotLogger.Warn(LogCategory.Cmd, $"[Roll20] семафор сессий занят >2с, пропускаю запись броска");
+                    }
+                    else
+                    {
+                        if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                         {
-                            // Проверяем, есть ли сессии на паузе
-                            var pausedSessions = sessionsWithRolls.Where(s => s.Value.IsPaused).ToList();
-                            if (pausedSessions.Any())
-                            {
-                                // Выводим уведомление о паузе с названием первой найденной сессии
-                                await command.FollowupAsync(
-                                    $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
-                                    ephemeral: false
-                                );
-                                 _ = DeleteOriginalResponseSafeAsync(command, 5000);
-                                return;
-                            }
+                            // Находим ВСЕ сессии с включённой записью бросков (TrackRolls = true)
+                            var sessionsWithRolls = sessions.Where(s =>
+                                s.Value.TrackRolls &&
+                                !s.Value.IsStopped).ToList();
 
-                            foreach (var session in sessionsWithRolls.Where(s => !s.Value.IsPaused))
+                            if (sessionsWithRolls.Any())
                             {
-                                session.Value.Rolls.Add(new RollStatistic
+                                // Проверяем, есть ли сессии на паузе
+                                var pausedSessions = sessionsWithRolls.Where(s => s.Value.IsPaused).ToList();
+                                if (pausedSessions.Any())
                                 {
-                                    PlayerName = command.User.GlobalName,
-                                    RollValue = result,
-                                    DiceType = "d20"  // ✅ Roll20 всегда d20
-                                });
+                                    // Выводим уведомление о паузе с названием первой найденной сессии
+                                    await command.FollowupAsync(
+                                        $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
+                                        ephemeral: false
+                                    );
+                                     _ = DeleteOriginalResponseSafeAsync(command, 5000);
+                                    return;
+                                }
+
+                                foreach (var session in sessionsWithRolls.Where(s => !s.Value.IsPaused))
+                                {
+                                    session.Value.Rolls.Add(new RollStatistic
+                                    {
+                                        PlayerName = command.User.GlobalName,
+                                        RollValue = result,
+                                        DiceType = "d20"  // ✅ Roll20 всегда d20
+                                    });
+                                }
                             }
                         }
                     }
                 }
                 finally
                 {
-                    _sessionSemaphore.Release();
+                    if (gotLock) _sessionSemaphore.Release();
                 }
             }
 

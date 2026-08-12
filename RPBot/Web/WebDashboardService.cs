@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Discord.WebSocket;
 
 namespace RPBot.Web
 {
@@ -18,6 +19,8 @@ namespace RPBot.Web
         private readonly Func<object> _healthProvider;
         private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
         private readonly Func<object> _sessionsProvider;
+        private readonly Func<object> _eventsProvider;
+        private readonly Func<DiscordSocketClient?> _clientProvider;
         private readonly Func<int> _rollsTodayProvider;
         private readonly Func<int> _activeSessionsProvider;
         private readonly Func<int> _chatMessagesTodayProvider;
@@ -25,7 +28,8 @@ namespace RPBot.Web
         private readonly Func<IReadOnlyList<ActivityBucket>> _activityProvider;
         private readonly Func<string> _versionProvider;
         private readonly Func<TimeSpan> _uptimeProvider;
-        private readonly HttpListener _listener = new();
+                private readonly Func<object> _systemsProvider;
+                private readonly HttpListener _listener = new();
         private readonly object _logsLock = new();
         private readonly LinkedList<BotLogRecord> _logs = new();
         private readonly int _maxLogs;
@@ -41,34 +45,51 @@ namespace RPBot.Web
             Func<object> healthProvider,
             Func<IReadOnlyDictionary<ulong, ServerConfig>> serverConfigsProvider,
             Func<object> sessionsProvider,
-            Func<int> rollsTodayProvider,
-            Func<int> activeSessionsProvider,
-            Func<int> chatMessagesTodayProvider,
-            Func<int> usersInVoiceProvider,
-            Func<IReadOnlyList<ActivityBucket>> activityProvider,
-            Func<string> versionProvider,
-            Func<TimeSpan> uptimeProvider,
-            int maxLogs = 1000)
-        {
-            _prefix = $"http://{host}:{port}/";
-            _healthProvider = healthProvider;
-            _serverConfigsProvider = serverConfigsProvider;
-            _sessionsProvider = sessionsProvider;
-            _rollsTodayProvider = rollsTodayProvider;
+                        Func<object> eventsProvider,
+                        Func<DiscordSocketClient?> clientProvider,
+                        Func<int> rollsTodayProvider,
+                        Func<int> activeSessionsProvider,
+                        Func<int> chatMessagesTodayProvider,
+                        Func<int> usersInVoiceProvider,
+                        Func<IReadOnlyList<ActivityBucket>> activityProvider,
+                        Func<string> versionProvider,
+                        Func<TimeSpan> uptimeProvider,
+                        Func<object> systemsProvider,
+                        int maxLogs = 1000)
+                                {
+                                    _prefix = $"http://{host}:{port}/";
+                                    _healthProvider = healthProvider;
+                                    _serverConfigsProvider = serverConfigsProvider;
+                                    _sessionsProvider = sessionsProvider;
+                                    _eventsProvider = eventsProvider ?? (() => Array.Empty<object>());
+                                    _clientProvider = clientProvider ?? (() => null);
+                                    _rollsTodayProvider = rollsTodayProvider;
             _activeSessionsProvider = activeSessionsProvider;
             _chatMessagesTodayProvider = chatMessagesTodayProvider;
             _usersInVoiceProvider = usersInVoiceProvider;
             _activityProvider = activityProvider;
             _versionProvider = versionProvider;
             _uptimeProvider = uptimeProvider;
-            _maxLogs = Math.Max(100, maxLogs);
-            _rateLimitPerMinute = 60;
+                        _systemsProvider = systemsProvider ?? (() => Array.Empty<object>());
+                        _maxLogs = Math.Max(100, maxLogs);
+            // Лимит нужен, чтобы случайный скрипт/краулер не положил дашборд.
+            // Один цикл автообновления (5 с) тащит 6 эндпоинтов → ≈ 72 req/min.
+            // 240 req/min даёт 4-кратный запас на параллельные вкладки и редкие бурсты.
+            // Раньше было 60 req/min — перекрывалось даже одиночным открытием дашборда.
+            _rateLimitPerMinute = 240;
         }
 
-        public void Start()
-        {
-            if (_cts != null)
-                return;
+        // Состояние «хвостового» чтения. Подписываемся не на observer (он может
+                // пропустить запись при исключении/гонке), а на хвост run.log — там
+                // гарантированно всё (стартап + рантайм), порядок честный.
+                private Guid _tailObserverId;
+                private bool _tailRegistered;
+                private readonly object _tailInitLock = new();
+
+                public void Start()
+                {
+                    if (_cts != null)
+                        return;
 
             var cts = new CancellationTokenSource();
             _cts = cts;
@@ -97,7 +118,27 @@ namespace RPBot.Web
                 return;
             }
 
-            BotLogger.RegisterObserver(OnLog);
+            // Подписка напрямую на observer BotLogger. Это надёжнее, чем хвост
+                        // из run.log: гарантированно получаем все записи, прошедшие через Write,
+                        // без парсера и без гонки со смещением файла.
+            // На рестарте мы уже были подписаны — отписываем старый observer
+            // и подписываемся заново, чтобы _logs был очищен для новой сессии
+            // (а не накапливал записи прошлого запуска).
+            lock (_tailInitLock)
+            {
+                if (_tailRegistered)
+                {
+                    try { BotLogger.UnregisterObserver(_tailObserverId); } catch { }
+                    _tailRegistered = false;
+                }
+                lock (_logsLock)
+                                {
+                                    _logs.Clear();
+                                }
+                                _tailObserverId = BotLogger.RegisterObserver(OnLog);
+                                _tailRegistered = true;
+                                BotLogger.Info(LogCategory.System, $"[WebDashboard] Start observer={_tailObserverId}");
+            }
             _loopTask = Task.Run(() => AcceptLoopAsync(cts.Token));
             BotLogger.Info(LogCategory.System, $"[WebDashboard] Запущен на {_prefix}");
         }
@@ -111,8 +152,15 @@ namespace RPBot.Web
             _cts = null;
             try { cts.Cancel(); } catch { }
             try { _listener.Stop(); } catch { }
-            try { _listener.Close(); } catch { }
-            try { BotLogger.UnregisterObserver(OnLog); } catch { }
+                        try { _listener.Close(); } catch { }
+                        lock (_tailInitLock)
+            {
+                if (_tailRegistered)
+                {
+                                try { BotLogger.UnregisterObserver(_tailObserverId); } catch { }
+                                                    _tailRegistered = false;
+                                                }
+            }
 
             if (_loopTask != null)
             {
@@ -189,6 +237,9 @@ namespace RPBot.Web
                     case "/api/health":
                         await WriteJsonAsync(context.Response, BuildHealthPayload(), token).ConfigureAwait(false);
                         break;
+                                        case "/api/systems":
+                                            await WriteJsonAsync(context.Response, BuildSystemsPayload(), token).ConfigureAwait(false);
+                                            break;
                     case "/api/servers":
                         var servers = SafeInvoke(_serverConfigsProvider) as IReadOnlyDictionary<ulong, ServerConfig>;
                         if (servers == null)
@@ -199,45 +250,124 @@ namespace RPBot.Web
                         }
                         else
                         {
-                            var payload = servers
-                                .OrderBy(x => x.Key)
-                                .Select(x => new
-                                {
-                                    GuildId = x.Key,
-                                    x.Value.ModerateChannelID,
-                                    x.Value.GeneralRGChannelID,
-                                    x.Value.RecordChannelID,
-                                    x.Value.MasterRoleId,
-                                    x.Value.SuperUserRoleId,
-                                    x.Value.TelegramEnabled,
-                                    x.Value.PredictionsEnabled,
-                                })
-                                .ToList();
-                            await WriteJsonAsync(context.Response, payload, token).ConfigureAwait(false);
-                        }
-                        break;
-                    case "/api/sessions":
-                        await WriteJsonAsync(context.Response, SafeInvoke(_sessionsProvider), token).ConfigureAwait(false);
+                                                var client = _clientProvider?.Invoke();
+                                                var payload = servers
+                                                    .OrderBy(x => x.Key)
+                                                    .Select(x =>
+                                                    {
+                                                        SocketGuild? g = null;
+                                                                                                            SocketRole? masterRole = null;
+                                                                                                            SocketRole? superRole = null;
+                                                                                                            try
+                                                                                                            {
+                                                                                                                g = client?.GetGuild(x.Key);
+                                                                                                                if (g != null && x.Value.MasterRoleId.HasValue && x.Value.MasterRoleId.Value != 0)
+                                                                                                                {
+                                                                                                                    var mr = g.GetRole(x.Value.MasterRoleId.Value);
+                                                                                                                    masterRole = mr as SocketRole;
+                                                                                                                }
+                                                                                                                if (g != null && x.Value.SuperUserRoleId.HasValue && x.Value.SuperUserRoleId.Value != 0)
+                                                                                                                {
+                                                                                                                    var sr = g.GetRole(x.Value.SuperUserRoleId.Value);
+                                                                                                                    superRole = sr as SocketRole;
+                                                                                                                }
+                                                                                                            }
+                                                                                                            catch { }
+                                                                                                        return new
+                                                                                                        {
+                                                                                                            GuildId = x.Key,
+                                                                                                            GuildName = g?.Name,
+                                                                                                            x.Value.ModerateChannelID,
+                                                                                                            x.Value.GeneralRGChannelID,
+                                                                                                            x.Value.RecordChannelID,
+                                                                                                            x.Value.WelcomeChannelID,
+                                                                                                            x.Value.RollChannelID,
+                                                                                                            x.Value.StatsChannelID,
+                                                                                                            x.Value.EventVoiceChannelID,
+                                                                                                            MasterRoleId = x.Value.MasterRoleId,
+                                                                                                            MasterRoleName = masterRole?.Name,
+                                                                                                            x.Value.SuperUserRoleId,
+                                                                                                            SuperUserRoleName = superRole?.Name,
+                                                                                                            x.Value.TelegramEnabled,
+                                                                                                            x.Value.PredictionsEnabled,
+                                                                                                            x.Value.RollPicturesEnabled,
+                                                                                                            x.Value.SwearFilterEnabled,
+                                                                                                            x.Value.MasterGuideEnabled,
+                                                                                                        };
+                                                                                                    })
+                                                                                                    .ToList();
+                                                await WriteJsonAsync(context.Response, payload, token).ConfigureAwait(false);
+                                            }
+                                            break;
+                                        case "/api/sessions":
+                                            await WriteJsonAsync(context.Response, SafeInvoke(_sessionsProvider), token).ConfigureAwait(false);
+                                            break;
+                                        case "/api/events":
+                                            var announcements = SafeInvoke(_eventsProvider);
+                                            if (announcements is string errMsg)
+                                            {
+                                                context.Response.StatusCode = 503;
+                                                await WriteTextAsync(context.Response,
+                                                    "{\"error\":" + System.Text.Json.JsonSerializer.Serialize(errMsg) + "}",
+                                                    "application/json; charset=utf-8", token).ConfigureAwait(false);
+                                            }
+                                            else
+                                            {
+                                                await WriteJsonAsync(context.Response, announcements, token).ConfigureAwait(false);
+                                            }
+                                            break;
+                    case "/api/logs/stream":
+                        // Длинное соединение: сервер пушит JSON-записи по мере поступления.
+                        // Сначала отдаём последние N для бутстрапа UI, потом — каждую новую запись
+                        // отдельной строкой (chunked). Клиент мерджит их с буфером и рендерит.
+                        await HandleLogsStreamAsync(context, token).ConfigureAwait(false);
                         break;
                     case "/api/logs":
-                        List<BotLogRecord> snapshot;
-                        lock (_logsLock)
-                        {
-                            // Отдаём самые свежие сверху (последняя запись первая)
-                            snapshot = _logs.Take(200).ToList();
-                        }
-                        var logs = snapshot.Select(x => new
-                        {
-                            timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                            level = x.Level.ToString(),
-                            category = x.Category.ToString(),
-                            message = x.Message,
-                            isUser = x.IsUser,
-                            levelClass = Program.LevelCssClass(x.Level),
-                            categoryClass = Program.CategoryCssClass(x.Category),
-                        });
-                        await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
-                        break;
+                                            // Backward-compat: список последних 200 записей одним массивом.
+                                            // Стрим-эндпоинт /api/logs/stream — основной источник данных.
+                                            // Принимает опциональный ?since=ISO для дельты (устаревший, оставлен
+                                            // для скриптов/тестов).
+                                            DateTimeOffset? since = null;
+                                            var sinceRaw = context.Request.QueryString["since"];
+                                            if (!string.IsNullOrEmpty(sinceRaw)
+                                                && DateTimeOffset.TryParse(
+                                                    sinceRaw,
+                                                    System.Globalization.CultureInfo.InvariantCulture,
+                                                    System.Globalization.DateTimeStyles.AssumeUniversal,
+                                                    out var parsedSince))
+                                            {
+                                                since = parsedSince;
+                                            }
+                                            List<BotLogRecord> snapshot;
+                                            lock (_logsLock)
+                                            {
+                                                if (since.HasValue)
+                                                {
+                                                    // Храним FIFO: новые в начале, старые в конце. Нам нужны
+                                                    // записи, у которых Timestamp > since. _logs — LinkedList,
+                                                    // отдаём свежие первыми.
+                                                    snapshot = _logs
+                                                        .Where(x => x.Timestamp > since.Value)
+                                                        .Take(500)
+                                                        .ToList();
+                                                }
+                                                else
+                                                {
+                                                    snapshot = _logs.Take(200).ToList();
+                                                }
+                                            }
+                                            var logs = snapshot.Select(x => new
+                                            {
+                                                timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                                                level = x.Level.ToString(),
+                                                category = x.Category.ToString(),
+                                                message = x.Message,
+                                                isUser = x.IsUser,
+                                                levelClass = Program.LevelCssClass(x.Level),
+                                                categoryClass = Program.CategoryCssClass(x.Category),
+                                            });
+                                            await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
+                                            break;
                     case "/api/stats":
                         int rolls = SafeInvokeInt(_rollsTodayProvider);
                         int sess  = SafeInvokeInt(_activeSessionsProvider);
@@ -311,7 +441,19 @@ namespace RPBot.Web
         }
 
         private static Task WriteHtmlAsync(HttpListenerResponse response, string html, CancellationToken token)
-            => WriteTextAsync(response, html, "text/html; charset=utf-8", token);
+        {
+            // Мета-теги в HTML мы тоже ставим, но без явных заголовков браузер
+            // может игнорировать их. Дашборд показывает live-данные, кешировать
+            // HTML-код незачем — при F5 без Ctrl+Shift:R будет показываться
+            // устаревший JSON-рендер.
+            try
+            {
+                response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                response.Headers["Pragma"] = "no-cache";
+            }
+            catch { /* headers могут быть недоступны до отправки ответа */ }
+            return WriteTextAsync(response, html, "text/html; charset=utf-8", token);
+        }
 
         private static async Task WriteTextAsync(HttpListenerResponse response, string text, string contentType, CancellationToken token)
         {
@@ -327,14 +469,171 @@ namespace RPBot.Web
         }
 
         private void OnLog(BotLogRecord record)
-        {
-            lock (_logsLock)
-            {
-                _logs.AddFirst(record);
-                while (_logs.Count > _maxLogs)
-                    _logs.RemoveLast();
-            }
-        }
+                {
+                    lock (_logsLock)
+                    {
+                        _logs.AddFirst(record);
+                        while (_logs.Count > _maxLogs)
+                            _logs.RemoveLast();
+                    }
+                    _streamSignal.Set();
+                }
+
+                // Сигнал «появились новые записи» для всех открытых /api/logs/stream соединений.
+                // Слабая блокировка (тонкая семафор-нотификация), потому что OnLog вызывается
+                // из BotLogger-обсервера на каждый Write — он не должен стоять в очереди
+                // ожидания дольше микросекунд.
+                private readonly ManualResetEventSlim _streamSignal = new(false);
+
+                // Подписчики стрима: на каждого — свой снепшот логов и ссылка на writer.
+                private readonly object _streamsLock = new();
+                private readonly Dictionary<Guid, StreamSubscription> _streams = new();
+
+                private sealed class StreamSubscription
+                {
+                    public DateTimeOffset LastSent;   // последний Timestamp, который мы уже отдали
+                    public HttpListenerResponse? Response;
+                    public CancellationTokenSource? Cts;
+                }
+
+                private async Task HandleLogsStreamAsync(HttpListenerContext context, CancellationToken token)
+                {
+                    var sid = Guid.NewGuid();
+                    var subCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    StreamSubscription sub;
+
+                    // Отдаём бутстрап: последние 200 записей единым JSON-массивом,
+                    // потом — chunked-поток отдельных объектов.
+                    try
+                    {
+                        context.Response.StatusCode = 200;
+                        context.Response.ContentType = "application/json; charset=utf-8";
+                        context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                        context.Response.Headers["X-Accel-Buffering"] = "no"; // nginx hint, на винде игнор
+                        // chunked-режим HttpListener: важно не выставлять ContentLength64 вообще,
+                        // а сразу включить SendChunked. Иначе runtime бросает
+                        // ArgumentOutOfRangeException на value '-1'.
+                        try { context.Response.SendChunked = true; } catch { }
+
+                        List<BotLogRecord> snapshot;
+                        DateTimeOffset lastTs;
+                        lock (_logsLock)
+                        {
+                            snapshot = _logs.Take(200).ToList();
+                            lastTs = snapshot.Count > 0 ? snapshot[0].Timestamp : DateTimeOffset.MinValue;
+                        }
+
+                        var bootstrap = new
+                                                {
+                                                    items = snapshot.Select(x => new
+                            {
+                                timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                                level = x.Level.ToString(),
+                                category = x.Category.ToString(),
+                                message = x.Message,
+                                isUser = x.IsUser,
+                                levelClass = Program.LevelCssClass(x.Level),
+                                categoryClass = Program.CategoryCssClass(x.Category),
+                            }).ToList(),
+                        };
+                        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(bootstrap) + "\n");
+                        await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length, subCts.Token)
+                            .ConfigureAwait(false);
+                        // Без flush HttpListener держит bootstrap в буфере, пока не
+                        // накопится достаточно данных. У нас bootstrap — ровно один
+                        // массив, и без flush клиент может долго ждать первого чанка.
+                        try { await context.Response.OutputStream.FlushAsync(subCts.Token).ConfigureAwait(false); }
+                        catch (HttpListenerException) { return; }
+                        catch (ObjectDisposedException) { return; }
+
+                        sub = new StreamSubscription
+                        {
+                            LastSent = lastTs,
+                            Response = context.Response,
+                            Cts = subCts,
+                        };
+                        lock (_streamsLock) _streams[sid] = sub;
+                    }
+                    catch (HttpListenerException) { return; }
+                    catch (ObjectDisposedException) { return; }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System,
+                            $"[WebDashboard] Stream bootstrap error: {ex.GetType().Name}: {ex.Message}");
+                        return;
+                    }
+
+                    try
+                    {
+                        // Цикл: ждём сигнал «есть новые записи» — сливаем их, шлём как NDJSON.
+                        while (!subCts.IsCancellationRequested)
+                        {
+                            _streamSignal.Wait(subCts.Token);
+                            _streamSignal.Reset();
+
+                            // Под нашу подписку собрать только записи новее её LastSent,
+                            // потом обновить LastSent, записать в сокет.
+                            List<string>? payloads = null;
+                            lock (_streamsLock)
+                            {
+                                if (!_streams.TryGetValue(sid, out var current) || current != sub) break;
+                            }
+                            lock (_logsLock)
+                            {
+                                // Берём всё с Timestamp > LastSent (свежие записи идут первыми).
+                                var fresh = _logs
+                                    .Where(x => x.Timestamp > sub.LastSent)
+                                    .ToList();
+                                if (fresh.Count > 0)
+                                {
+                                    payloads = fresh.Select(x => JsonSerializer.Serialize(new
+                                    {
+                                        timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                                        level = x.Level.ToString(),
+                                        category = x.Category.ToString(),
+                                        message = x.Message,
+                                        isUser = x.IsUser,
+                                        levelClass = Program.LevelCssClass(x.Level),
+                                        categoryClass = Program.CategoryCssClass(x.Category),
+                                    })).ToList();
+                                    sub.LastSent = fresh[0].Timestamp;
+                                }
+                            }
+                            if (payloads == null) continue;
+                            foreach (var line in payloads)
+                            {
+                                var chunk = Encoding.UTF8.GetBytes(line + "\n");
+                                try
+                                {
+                                    await context.Response.OutputStream
+                                        .WriteAsync(chunk, 0, chunk.Length, subCts.Token)
+                                        .ConfigureAwait(false);
+                                }
+                                catch (HttpListenerException) { return; }
+                                catch (ObjectDisposedException) { return; }
+                            }
+                            try
+                            {
+                                await context.Response.OutputStream.FlushAsync(subCts.Token)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (HttpListenerException) { return; }
+                            catch (ObjectDisposedException) { return; }
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (ObjectDisposedException) { }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System,
+                            $"[WebDashboard] Stream loop error: {ex.GetType().Name}: {ex.Message}");
+                    }
+                    finally
+                    {
+                        lock (_streamsLock) _streams.Remove(sid);
+                        try { subCts.Dispose(); } catch { }
+                    }
+                }
 
         private object BuildHealthPayload()
         {
@@ -364,19 +663,28 @@ namespace RPBot.Web
             lock (_logsLock) totalLogs = _logs.Count;
 
             return new
-            {
-                Provider = raw,
-                Timestamp = DateTimeOffset.UtcNow,
-                Stats = new
-                {
-                    RollsToday = rolls,
-                    ActiveSessions = activeSessions,
-                    ChatMessagesToday = chatMessages,
-                    UsersInVoice = usersInVoice,
-                    LogRecords = totalLogs,
-                },
-            };
-        }
+                        {
+                            Provider = raw,
+                            Timestamp = DateTimeOffset.UtcNow,
+                            PingMs = SafeInvokeInt(() => (int)(_clientProvider?.Invoke()?.Latency ?? 0)),
+                            Stats = new
+                            {
+                                RollsToday = rolls,
+                                ActiveSessions = activeSessions,
+                                ChatMessagesToday = chatMessages,
+                                UsersInVoice = usersInVoice,
+                                LogRecords = totalLogs,
+                            },
+                        };
+                    }
+
+                    private object BuildSystemsPayload()
+                    {
+                        object raw;
+                        try { raw = _systemsProvider(); }
+                        catch (Exception ex) { raw = new { Error = ex.Message }; }
+                        return raw;
+                    }
 
         private bool CheckRateLimit(string clientIp)
         {
