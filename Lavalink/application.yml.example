@@ -11,7 +11,7 @@ server:
 lavalink:
   plugins:
     # YouTube source plugin — для воспроизведения с YouTube
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.1"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
       repository: "https://maven.lavalink.dev/releases"
   server:
     # Пароль должен совпадать с Music.Password в config.json бота
@@ -61,11 +61,14 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
+      - WEB             # полная загрузка плейлистов и поиск
       - TVHTML5_SIMPLY  # загружает метаданные трека
       - TV              # playback-only с OAuth через remote cipher
     remoteCipher:
-      # Адрес локального yt-cipher сервера (запускается ботом автоматически если YtCipherAutoStart=true)
-      url: "http://localhost:8001"
+      # ⚠ По умолчанию используется публичный сервис cipher.kikkia.dev (тот же автор yt-cipher).
+      # Если хостишь локальный yt-cipher (deno run server.ts), поменяй на http://localhost:8001
+      # и выстави YtCipherAutoStart=true в config.json.
+      url: "https://cipher.kikkia.dev"
       userAgent: "RoleplayerDiscordBot"
     oauth:
       enabled: true
