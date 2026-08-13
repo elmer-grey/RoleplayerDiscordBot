@@ -1229,7 +1229,11 @@ private MusicStats? _musicStats;
 						{
 							_predictionService.PredictionResolved += OnPredictionResolvedForUi;
 							_predictionService.PredictionCancelled += OnPredictionCancelledForUi;
-						}
+										// ✅ Bug C: загружаем активные прогнозы ДО BootstrapFirstRunSettingsAsync.
+										// Иначе EnsureStateFileAsync()/SaveStateAsync() мог перезатереть файл,
+										// пока _active ещё пустой (LoadStateAsync ждёт Ready от Discord).
+										_predictionService.LoadStateOnStartupAsync().GetAwaiter().GetResult();
+									}
 						_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
 			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)

@@ -276,40 +276,72 @@ namespace RPBot
                                    $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
                                    $"Таймер будет пересчитан с учётом времени offline.";
                         }
-                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
+                                        // ✅ Bug 6: сохраняем ID сообщения, чтобы потом удалить при возвращении бота.
+                                        var msg = await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                                            .ConfigureAwait(false);
+                                        if (msg != null)
+                                        {
+                                            lock (p.OfflineAnnouncementMessageIds)
+                                            {
+                                                p.OfflineAnnouncementMessageIds.Add(msg.Id);
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
-                    }
-                }
+                                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                    }
+                                }
 
-                private async Task AnnounceOnlineAsync(ActivePrediction p, DateTimeOffset nowUtc)
-                {
-                    try
-                    {
-                        var channel = GetActiveMessageChannel(p);
-                        if (channel == null)
-                            return;
-                        var phase = p.IsLocked ? "Ожидание разрешения прогноза" : "Сбор ставок";
-                        string offlineInfo = string.Empty;
-                        if (p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
-                        {
-                            var dur = p.LastOfflineDurationMinutes.Value;
-                            offlineInfo = dur < 1
-                                ? $" Бот был offline менее минуты."
-                                : $" Бот был offline ~{dur:F1} мин.";
-                        }
-                        var text = $"✅ **Бот снова в сети.** Прогноз «{p.Title}» ({phase}) снова активен.{offlineInfo}";
-                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
-                    }
-                }
+                                private async Task AnnounceOnlineAsync(ActivePrediction p, DateTimeOffset nowUtc)
+                                {
+                                    try
+                                    {
+                                        var channel = GetActiveMessageChannel(p);
+                                        if (channel == null)
+                                            return;
+                                        // ✅ Bug 6: сначала удаляем все накопленные offline-сообщения,
+                                        // чтобы не плодить мусор в канале при каждом реконнекте.
+                                        List<ulong> toDelete;
+                                        lock (p.OfflineAnnouncementMessageIds)
+                                        {
+                                            toDelete = p.OfflineAnnouncementMessageIds.ToList();
+                                            p.OfflineAnnouncementMessageIds.Clear();
+                                        }
+                                        foreach (var msgId in toDelete)
+                                        {
+                                            try
+                                            {
+                                                var oldMsg = await channel.GetMessageAsync(msgId).ConfigureAwait(false) as IUserMessage;
+                                                if (oldMsg != null)
+                                                {
+                                                    await oldMsg.DeleteAsync().ConfigureAwait(false);
+                                                }
+                                            }
+                                            catch (Exception delEx)
+                                            {
+                                                // Сообщение могло быть удалено вручную — это нормально.
+                                                await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                            }
+                                        }
+                                        var phase = p.IsLocked ? "Ожидание разрешения прогноза" : "Сбор ставок";
+                                        string offlineInfo = string.Empty;
+                                        if (p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
+                                        {
+                                            var dur = p.LastOfflineDurationMinutes.Value;
+                                            offlineInfo = dur < 1
+                                                ? $" Бот был offline менее минуты."
+                                                : $" Бот был offline ~{dur:F1} мин.";
+                                        }
+                                        var text = $"✅ **Бот снова в сети.** Прогноз «{p.Title}» ({phase}) снова активен.{offlineInfo}";
+                                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                                            .ConfigureAwait(false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                    }
+                                }
 
         internal class PersistentPrediction
         {
@@ -393,25 +425,38 @@ namespace RPBot
 
         public async Task<bool> EnsureStateFileAsync()
         {
-            if (File.Exists(_stateFilePath)) return false;
-            await SaveStateAsync().ConfigureAwait(false);
-            if (!File.Exists(_stateFilePath))
-            {
-                var dir = Path.GetDirectoryName(_stateFilePath) ?? AppContext.BaseDirectory;
-                Directory.CreateDirectory(dir);
-                await _stateFileGate.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                                // ✅ R6 fix: создание пустого файла через SafeJsonIO (атомарно).
-                                await SafeJsonIO.WriteAtomicAsync(_stateFilePath, "{}", CancellationToken.None).ConfigureAwait(false);
+                    // ✅ Bug C: если файл уже есть — НЕ перезаписываем его пустым _active.
+                    // Раньше этот метод всегда звал SaveStateAsync(), который сериализовал
+                    // пустой ConcurrentDictionary (_active ещё не заполнен до LoadStateAsync)
+                    // и затирал сохранённый offline-прогноз. Теперь на рестарте файл
+                    // остаётся нетронутым, и LoadStateAsync сможет прочитать прогноз.
+                    if (File.Exists(_stateFilePath)) return false;
+                    await SaveStateAsync().ConfigureAwait(false);
+                    if (!File.Exists(_stateFilePath))
+                    {
+                        var dir = Path.GetDirectoryName(_stateFilePath) ?? AppContext.BaseDirectory;
+                        Directory.CreateDirectory(dir);
+                        await _stateFileGate.WaitAsync().ConfigureAwait(false);
+                        try
+                        {
+                                        // ✅ R6 fix: создание пустого файла через SafeJsonIO (атомарно).
+                                        await SafeJsonIO.WriteAtomicAsync(_stateFilePath, "{}", CancellationToken.None).ConfigureAwait(false);
+                                    }
+                                    finally
+                                    {
+                                        _stateFileGate.Release();
+                                    }
+                                }
+                                return true;
                             }
-                            finally
-                            {
-                                _stateFileGate.Release();
-                            }
-                        }
-                        return true;
-                    }
+
+                /// <summary>
+                /// ✅ Bug C: публичный вход в LoadStateAsync, вызывается из Program.cs
+                /// сразу после new PredictionService(), ДО BootstrapFirstRunSettingsAsync.
+                /// Иначе EnsureStateFileAsync/любой SaveStateAsync перезапишет файл,
+                /// пока _active ещё пустой, и прогноз «потеряется» до Ready.
+                /// </summary>
+                public Task LoadStateOnStartupAsync() => LoadStateAsync();
 
         private async Task LoadStateAsync()
         {

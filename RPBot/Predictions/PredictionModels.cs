@@ -93,6 +93,13 @@ namespace RPBot
         public int? WinningOutcomeId { get; set; }
         public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
 
+                // ✅ Bug 6 (новое): ID сообщений-объявлений offline/online в канале прогноза.
+                // AnnounceOfflineAsync добавляет ID, AnnounceOnlineAsync удаляет их и шлёт
+                // своё сообщение «бот снова онлайн». Это избавляет канал от накопления
+                // мусорных сообщений при каждом реконнекте.
+                [JsonIgnore]
+                public List<ulong> OfflineAnnouncementMessageIds { get; } = new();
+
         // Synchronization primitive for concurrent operations on this prediction
         [JsonIgnore]
         public System.Threading.SemaphoreSlim Sync { get; } = new System.Threading.SemaphoreSlim(1, 1);
