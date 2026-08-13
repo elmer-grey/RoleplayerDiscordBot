@@ -1140,7 +1140,21 @@ namespace RPBot
                     return;
                 }
 
-                // Защита от параллельных нажатий на кнопки одной сессии
+                // Дополнительная защита от cross-session bleed: проверяем, что нажатая
+                // кнопка действительно принадлежит control-message этой сессии
+                // (а не чужой сессии, у которой тот же sessionId после рестарта
+                // или пересоздания словаря). GuildId-скоуп уже выше, а вот
+                // MessageId иногда пропускали — добавляем.
+                if (session.ControlMessageId != 0 && component.Message.Id != session.ControlMessageId)
+                {
+                    Log($"[RESTART] Кнопка пришла с чужого message_id={component.Message.Id} (ожидался {session.ControlMessageId} для сессии {session.SessionId}) — игнорирую.");
+                    await component.RespondAsync("❌ Эта кнопка принадлежит другой сессии.", ephemeral: true);
+                    return;
+                }
+
+                // Защита от параллельных нажатий на кнопки одной сессии.
+                // WaitAsync(0) — non-blocking probe: если семафор занят, сообщаем
+                // пользователю «подождите» и выходим, gateway не блокируется.
                 if (!await session.ButtonSemaphore.WaitAsync(0))
                 {
                     await component.RespondAsync("⏳ Идёт обработка предыдущего действия, подождите...", ephemeral: true);

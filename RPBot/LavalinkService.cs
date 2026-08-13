@@ -50,19 +50,46 @@ namespace RPBot
         /// <summary>
         /// Запускает Lavalink-процесс (если AutoStart) и инициализирует IAudioService.
         /// Вызывается из OnReady после того, как Discord-клиент залогинен.
-        /// </summary>
-        public async Task StartAsync(CancellationToken cancellationToken = default)
-        {
-            if (!_config.Enabled)
-            {
-                Log("[Music] Музыка отключена в конфиге (Music.Enabled = false).");
-                return;
-            }
+                /// Если Lavalink не ответил — повторяет попытку несколько раз с нарастающей задержкой,
+                /// чтобы пережить холодный старт JVM (первый запуск после долгого простоя).
+                /// </summary>
+                public async Task StartAsync(CancellationToken cancellationToken = default)
+                {
+                    if (!_config.Enabled)
+                    {
+                        Log("[Music] Музыка отключена в конфиге (Music.Enabled = false).");
+                        return;
+                    }
 
-            await StartLavalinkProcessAsync(cancellationToken);
-            BuildServices();
-            await StartHostedServicesAsync(cancellationToken);
-        }
+                    var ready = await StartLavalinkWithRetryAsync(cancellationToken).ConfigureAwait(false);
+                    BuildServices();
+                    await StartHostedServicesAsync(cancellationToken);
+                    if (!ready)
+                        Log("[Music] ⚠ Lavalink не поднялся — аудиосервис стартует в degraded-режиме, переподключения обработает reconnect-loop.");
+                }
+
+                /// <summary>
+                /// Один полный цикл запуска Lavalink-процесса + проверки готовности через /version.
+                /// Делает до <paramref name="maxAttempts"/> попыток; между попытками — нарастающий backoff.
+                /// </summary>
+                private async Task<bool> StartLavalinkWithRetryAsync(CancellationToken cancellationToken, int maxAttempts = 3)
+                {
+                    var attempt = 0;
+                    var delay = TimeSpan.FromSeconds(2);
+                    while (attempt < maxAttempts)
+                    {
+                        attempt++;
+                        Log($"[Music] Попытка запуска Lavalink #{attempt}/{maxAttempts}…");
+                        var ok = await StartLavalinkProcessAsync(cancellationToken).ConfigureAwait(false);
+                        if (ok) return true;
+                        if (attempt >= maxAttempts) break;
+                        Log($"[Music] Lavalink не ответил, повтор через {delay.TotalSeconds:0}с…");
+                        try { await Task.Delay(delay, cancellationToken).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { return false; }
+                        delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, 10));
+                    }
+                    return false;
+                }
 
         /// <summary>
         /// Фаза 1: строим DI-контейнер и подписываемся на Discord-события.

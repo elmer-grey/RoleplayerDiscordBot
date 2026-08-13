@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using RPBot.Util;
 
 namespace RPBot.Music
 {
@@ -59,13 +60,12 @@ namespace RPBot.Music
         }
 
         public async Task SaveAsync()
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            var json = JsonSerializer.Serialize(_data, _json);
-            var tmpPath = _filePath + ".tmp";
-            await File.WriteAllTextAsync(tmpPath, json);
-            File.Move(tmpPath, _filePath, overwrite: true);
-        }
+                {
+                    // SafeJsonIO.WriteAtomicAsync пишет через .tmp + File.Move(overwrite:true),
+                    // чтобы при падении процесса прежний файл остался валидным.
+                    var json = JsonSerializer.Serialize(_data, _json);
+                    await SafeJsonIO.WriteAtomicAsync(_filePath, json).ConfigureAwait(false);
+                }
 
         public MusicPlaylist? Get(ulong guildId, ulong userId, string name)
         {

@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using RPBot.Util;
 
 namespace RPBot.Music
 {
@@ -29,20 +31,18 @@ namespace RPBot.Music
         }
 
         public async Task SaveAsync(ulong guildId, string? currentUrl, IEnumerable<string> queueUrls)
-        {
-            var all = await LoadRawAsync();
-            all[guildId.ToString()] = new PersistedQueue
-            {
-                GuildId    = guildId,
-                CurrentUrl = currentUrl,
-                QueueUrls  = new List<string>(queueUrls),
-                SavedAt    = DateTime.UtcNow,
-            };
-            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            var tmpSave = _filePath + ".tmp";
-            await File.WriteAllTextAsync(tmpSave, JsonSerializer.Serialize(all, _json));
-            File.Move(tmpSave, _filePath, overwrite: true);
-        }
+                {
+                    var all = await LoadRawAsync();
+                    all[guildId.ToString()] = new PersistedQueue
+                    {
+                        GuildId    = guildId,
+                        CurrentUrl = currentUrl,
+                        QueueUrls  = new List<string>(queueUrls),
+                        SavedAt    = DateTime.UtcNow,
+                    };
+                    // SafeJsonIO.WriteAtomicAsync: .tmp + File.Move(overwrite) — атомарная замена.
+                    await SafeJsonIO.WriteAtomicAsync(_filePath, JsonSerializer.Serialize(all, _json)).ConfigureAwait(false);
+                }
 
         public async Task<PersistedQueue?> LoadAsync(ulong guildId)
         {
@@ -51,16 +51,11 @@ namespace RPBot.Music
         }
 
         public async Task ClearAsync(ulong guildId)
-        {
-            var all = await LoadRawAsync();
-            if (all.Remove(guildId.ToString()))
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                var tmpClear = _filePath + ".tmp";
-                await File.WriteAllTextAsync(tmpClear, JsonSerializer.Serialize(all, _json));
-                File.Move(tmpClear, _filePath, overwrite: true);
-            }
-        }
+                {
+                    var all = await LoadRawAsync();
+                    if (all.Remove(guildId.ToString()))
+                        await SafeJsonIO.WriteAtomicAsync(_filePath, JsonSerializer.Serialize(all, _json)).ConfigureAwait(false);
+                }
 
         /// <summary>Возвращает все сохранённые очереди (для восстановления после перезапуска).</summary>
         public async Task<IReadOnlyList<PersistedQueue>> LoadAllAsync()
