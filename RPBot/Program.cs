@@ -4812,41 +4812,12 @@ await Task.CompletedTask;
             }
         }
 
-        public static readonly Dictionary<ulong, ServerConfig> ServerConfigs = new Dictionary<ulong, ServerConfig>
-        {
-            {
-                1288192593137635359, // ID тестового сервера
-                new ServerConfig
-                {
-                    GuildID = 1288192593137635359,
-                    ModerateChannelID = 1433623049147514981, // спам-от-бота
-                    WelcomeChannelID = 1288192593137635362, // основной
-                    RollChannelID = 1400042149470539837, // броски-кубов
-                    StatsChannelID = 1400042149470539837, // броски-кубов
-                    RecordChannelID = 1333559817045807176, // 1(архив)
-                    GeneralRGChannelID = 1333559817045807176, // 1(архив)
-                    WelcomeMessage = "Приветствую тебя, {user.Mention}! О всех проблемах, которые могут со мной возникнуть, передай, пожалуйста, администратору, или воспользуйся командой `/bug_report`. Хорошо? \nСоветую первой командой использовать `/help`",
-                    LineMessage = "<:begin:1333879098488918098><:middle1:1333879112510472254><:middle2:1333879114440118334><:middle3:1333879116281151550><:end1:1333879106747633735>",
-                    DefaultRoleID = 776013522370560031
-                }
-            },
-            {
-                295189463376855040, // ID основного сервера (КнР)
-                new ServerConfig
-                {
-                    GuildID = 295189463376855040,
-                    ModerateChannelID = 1433622718926028820, // спам-от-бота
-                    WelcomeChannelID = 373788351246893056, // флудилка
-                    RollChannelID = 710471746108784691, // броски-кубов
-                    StatsChannelID = 710471746108784691, // броски-кубов
-                    RecordChannelID = 1345036014519058464, // запись-времени
-                    GeneralRGChannelID = 890295184577937418, // общий-ролевой-чат
-                    WelcomeMessage = "Приветствую тебя, {user.Mention}! О всех проблемах, которые могут со мной возникнуть, передай, пожалуйста, администратору, или воспользуйся командой `/bug_report`. Хорошо? \nСоветую первой командой использовать `/help`",
-                    LineMessage = "<:1begin:1151822634250686504><:2middle1:1151822618677219328><:3middle2:1151822625216155649><:4middle3:1151822621198000169><:5end:1151822629381087292>",
-                    DefaultRoleID = 776013522370560031
-                }
-            }
-        };
+        // Словарь дефолтных значений ServerConfig по guild ID.
+                // Изначально пуст — никакие серверы не захардкожены.
+                // Конфигурация должна полностью приходить из Settings/serverconfigs.json,
+                // который EnsureServerConfigsForConnectedGuilds() заполняет при первом запуске.
+                // Это сознательное решение, чтобы в публичном бинарнике не было чужих guild/channel ID.
+                public static readonly Dictionary<ulong, ServerConfig> ServerConfigs = new Dictionary<ulong, ServerConfig>();
 
         private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string lineMessages, string emoteKappa, string emoteAga) GetResponseData(SocketMessage message)
         {
