@@ -29,6 +29,18 @@ namespace RPBot
                 private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
                 private volatile bool _disposed;
 
+                // ✅ Bug 6 / Round 7-A2: путь к файлу-флагу "следующее отключение — это рестарт".
+                // Совпадает с Program.GetRestartPendingFlagPath(): Data/.restart_pending.
+                // Читается в OnClientDisconnected, удаляется в AnnounceOnlineAsync.
+                private static string RestartPendingFlagPath =>
+                    BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+
+                private static bool IsRestartPending()
+                {
+                    try { return File.Exists(RestartPendingFlagPath); }
+                    catch { return false; }
+                }
+
         // ✅ НОВОЕ: История прогнозов, статистика и достижения
         private PredictionHistoryStore _history = new();
         private readonly ConcurrentDictionary<ulong, Dictionary<ulong, UserPredictionStats>> _userStats = new(); // guildId -> userId -> stats
@@ -81,13 +93,17 @@ namespace RPBot
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
             var nowUtc = DateTimeOffset.UtcNow;
-                    // ✅ Bug 6: разделяем короткие реконнекты ("restart") и длинные offline.
-                    // GatewayReconnectException приходит при штатном разрыве соединения (heartbeat fail, resume/redirect),
-                    // и обычно Discord быстро переподключается. Прочие исключения (401, network down, gateway error)
-                    // считаем полноценным offline, пока не подтверждён Ready.
-                    var kind = exception is Discord.WebSocket.GatewayReconnectException
-                        ? "restart"
-                        : "offline";
+                            // ✅ Bug 6 / Round 7-A2: определяем тип отключения.
+                            // Приоритет источников:
+                            //   1) Program.WriteRestartPendingFlag() — самый надёжный сигнал (флаг
+                            //      "следующее отключение — это рестарт"); учитывает Ctrl+C, консольный
+                            //      /restart, админ-команду, ежедневный планировщик.
+                            //   2) GatewayReconnectException от Discord — короткий heartbeat/reconnect,
+                            //      обычно тоже рестарт.
+                            //   3) Прочее (Discord отвалился по 401/network down) — offline.
+                            var kind = IsRestartPending() || exception is Discord.WebSocket.GatewayReconnectException
+                                ? "restart"
+                                : "offline";
                     var note = exception?.GetType().Name ?? "Disconnected";
                     _ = Task.Run(async () =>
                     {
@@ -300,6 +316,8 @@ namespace RPBot
                                         var channel = GetActiveMessageChannel(p);
                                         if (channel == null)
                                             return;
+                                        // ✅ Bug 6 / Round 7-A2: снимаем флаг «идёт рестарт» после первого успешного Ready.
+                                        try { Program.ClearRestartPendingFlag(); } catch { }
                                         // ✅ Bug 6: сначала удаляем все накопленные offline-сообщения,
                                         // чтобы не плодить мусор в канале при каждом реконнекте.
                                         List<ulong> toDelete;

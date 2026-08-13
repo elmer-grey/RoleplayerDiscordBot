@@ -1326,21 +1326,58 @@ private MusicStats? _musicStats;
         public string? NextStartupReason => _nextStartupReason;
 
 		public Task RestartAsync()
-		{
-			// Перезапуск по команде из консоли
-			return RestartWithReasonAsync(
-				initiator: "console",
-				reason: "Перезапуск по команде из консоли");
-		}
+				{
+					// Перезапуск по команде из консоли
+					return RestartWithReasonAsync(
+						initiator: "console",
+						reason: "Перезапуск по команде из консоли");
+				}
 
-		private async Task RestartWithReasonAsync(string initiator, string reason)
-		{
-			// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
-			if (_shouldExit)
-				return;
+				/// <summary>
+				/// ✅ Bug 6 / Round 7-A2: помечает «следующее отключение — это рестарт»,
+				/// чтобы PredictionService.OnClientDisconnected отличил его от «настоящего» offline.
+				/// Файл удаляется в PredictionService при первом успешном Ready после рестарта.
+				/// </summary>
+				public static void WriteRestartPendingFlag()
+				{
+					try
+					{
+						var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+						var dir = Path.GetDirectoryName(path);
+						if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+						File.WriteAllText(path, DateTimeOffset.UtcNow.ToString("O"));
+					}
+					catch
+					{
+						// Не критично: если флаг не записан — следующий Disconnected будет «offline».
+					}
+				}
 
-			// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
-			StopDailyRestartScheduler();
+				/// <summary>
+				/// Снимает флаг «идёт рестарт» после успешного Ready.
+				/// Вызывается из PredictionService.
+				/// </summary>
+				public static void ClearRestartPendingFlag()
+				{
+					try
+					{
+						var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+						if (File.Exists(path)) File.Delete(path);
+					}
+					catch { /* ignore */ }
+				}
+
+				private async Task RestartWithReasonAsync(string initiator, string reason)
+				{
+					// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
+					if (_shouldExit)
+						return;
+
+					// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
+					StopDailyRestartScheduler();
+
+					// ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
+					WriteRestartPendingFlag();
 
 			// Signal UI and background tasks to prepare for restart
 			_restartInitiator = initiator;
