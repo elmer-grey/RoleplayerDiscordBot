@@ -21,6 +21,22 @@ namespace RPBot
         public long Amount { get; set; }
     }
 
+        // ✅ Bug 6: событие offline/online для лога в прогнозе
+        public enum OfflineEventKind
+        {
+            Disconnected,
+            Reconnected,
+        }
+
+        public class OfflineEvent
+        {
+            public DateTimeOffset AtUtc { get; set; }
+            public OfflineEventKind Kind { get; set; }
+            // "restart" — короткое отключение (< ~30 сек), "offline" — длительное
+            public string Severity { get; set; } = "offline";
+            public string? Note { get; set; }
+        }
+
     public class ActivePrediction
     {
         public ulong GuildId { get; set; }
@@ -70,8 +86,10 @@ namespace RPBot
         public DateTimeOffset? BotOfflineAtUtc { get; set; }
         public double? LastOfflineDurationMinutes { get; set; }
         public bool WasBotOfflineOnShutdown { get; set; }
-        public bool IsLocked { get; set; }
-        public bool IsResolved { get; set; }
+                // ✅ Bug 6: лог событий offline/online для embed'а результата и истории
+                public List<OfflineEvent> OfflineEvents { get; set; } = new();
+                public bool IsLocked { get; set; }
+                public bool IsResolved { get; set; }
         public int? WinningOutcomeId { get; set; }
         public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
 

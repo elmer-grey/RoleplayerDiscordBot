@@ -74,46 +74,235 @@ namespace RPBot
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
             var nowUtc = DateTimeOffset.UtcNow;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    foreach (var kv in _active.ToArray())
+                    // ✅ Bug 6: разделяем короткие реконнекты ("restart") и длинные offline.
+                    // GatewayReconnectException приходит при штатном разрыве соединения (heartbeat fail, resume/redirect),
+                    // и обычно Discord быстро переподключается. Прочие исключения (401, network down, gateway error)
+                    // считаем полноценным offline, пока не подтверждён Ready.
+                    var kind = exception is Discord.WebSocket.GatewayReconnectException
+                        ? "restart"
+                        : "offline";
+                    var note = exception?.GetType().Name ?? "Disconnected";
+                    _ = Task.Run(async () =>
                     {
-                        var p = kv.Value;
-                        if (!p.IsResolved)
+                        try
                         {
-                            // ✅ Bug 5: фиксируем момент ухода в offline для последующего
-                            // сдвига BetsCloseAtUtc после восстановления.
-                            if (!p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                            foreach (var kv in _active.ToArray())
                             {
-                                p.BotOfflineAtUtc = nowUtc;
-                                p.WasBotOfflineOnShutdown = true;
+                                var p = kv.Value;
+                                if (!p.IsResolved)
+                                {
+                                    // ✅ Bug 5: фиксируем момент ухода в offline для последующего
+                                    // сдвига BetsCloseAtUtc после восстановления.
+                                    if (!p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                                    {
+                                        p.BotOfflineAtUtc = nowUtc;
+                                        p.WasBotOfflineOnShutdown = true;
+                                    }
+                                    // ✅ Bug 6: добавляем событие в лог
+                                    p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                    // Защита от спама: если последняя запись — это Disconnected <5 сек назад, не дублируем.
+                                    var lastEvent = p.OfflineEvents.LastOrDefault();
+                                    var isDuplicate = lastEvent != null
+                                        && lastEvent.Kind == OfflineEventKind.Disconnected
+                                        && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(5);
+                                    if (!isDuplicate)
+                                    {
+                                        p.OfflineEvents.Add(new OfflineEvent
+                                        {
+                                            AtUtc = nowUtc,
+                                            Kind = OfflineEventKind.Disconnected,
+                                            Severity = kind,
+                                            Note = note
+                                        });
+                                    }
+                                    await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
+                                    // ✅ Bug 6: оповещаем участников в канале, чтобы они видели,
+                                    // что бот ушёл на рестарт/offline, и кнопки скрыты.
+                                    try
+                                    {
+                                        await AnnounceOfflineAsync(p, kind, nowUtc).ConfigureAwait(false);
+                                    }
+                                    catch (Exception annEx)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                    }
+                                }
                             }
-                            await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
+                            // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
+                            try { await SaveStateAsync().ConfigureAwait(false); }
+                            catch (Exception saveEx)
+                            {
+                                await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
+                            }
                         }
-                    }
-                    // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
-                    try { await SaveStateAsync().ConfigureAwait(false); }
-                    catch (Exception saveEx)
-                    {
-                        await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
-                    }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
+                        }
+                    });
+                    return Task.CompletedTask;
                 }
-                catch (Exception ex)
-                {
-                    await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
-                }
-            });
-            return Task.CompletedTask;
-        }
 
         private Task OnClientReadyForRestore()
         {
-            _client.Ready -= OnClientReadyForRestore;
-            _ = Task.Run(() => LoadStateAsync());
-            return Task.CompletedTask;
-        }
+                    // ✅ Bug 6: при первом Ready после старта мы только восстанавливаем состояние,
+                    // но НЕ объявляем "бот снова онлайн" по каждому прогнозу — это ожидаемое
+                    // поведение после штатного запуска. Сообщения "бот снова онлайн" шлём на
+                    // последующих Ready, если до этого был зафиксирован Disconnected.
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await LoadStateAsync().ConfigureAwait(false);
+                            // Теперь второй Ready-обработчик будет реагировать на каждый
+                            // Disconnected→Ready цикл и слать оповещения в каналы.
+                            _client.Ready -= OnClientReadyForRestore;
+                            _client.Ready += OnClientReadyForAnnouncements;
+                        }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("OnClientReadyForRestore", ex).ConfigureAwait(false);
+                        }
+                    });
+                    return Task.CompletedTask;
+                }
+
+                private Task OnClientReadyForAnnouncements()
+                {
+                    var nowUtc = DateTimeOffset.UtcNow;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            foreach (var kv in _active.ToArray())
+                            {
+                                var p = kv.Value;
+                                if (!p.IsResolved)
+                                {
+                                    // ✅ Bug 6: фиксируем длительность offline для embed'а
+                                    if (p.BotOfflineAtUtc.HasValue)
+                                    {
+                                        var offlineDuration = nowUtc - p.BotOfflineAtUtc.Value;
+                                        if (offlineDuration > TimeSpan.Zero)
+                                        {
+                                            p.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
+                                        }
+                                        p.BotOfflineAtUtc = null;
+                                        p.WasBotOfflineOnShutdown = false;
+                                        if (!p.IsLocked)
+                                        {
+                                            var oldClose = p.BetsCloseAtUtc;
+                                            if (p.BetsCloseAtUtc < nowUtc + TimeSpan.FromSeconds(15))
+                                            {
+                                                p.BetsCloseAtUtc = nowUtc + TimeSpan.FromSeconds(15);
+                                            }
+                                            if (p.BetsCloseAtUtc != oldClose)
+                                            {
+                                                await LogAsync(
+                                                    $"OFFLINE_SHIFT_ON_READY guild={p.GuildId} oldClose='{oldClose:HH:mm:ss}' " +
+                                                    $"newClose='{p.BetsCloseAtUtc:HH:mm:ss}'")
+                                                    .ConfigureAwait(false);
+                                            }
+                                        }
+                                    }
+                                    p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                    // Защита от дублей Reconnected-событий: только если последнее
+                                    // событие было Disconnected и прошло >= 0.5 сек.
+                                    var lastEvent = p.OfflineEvents.LastOrDefault();
+                                    var isDuplicateReady = lastEvent != null
+                                        && lastEvent.Kind == OfflineEventKind.Reconnected
+                                        && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(2);
+                                    if (!isDuplicateReady)
+                                    {
+                                        p.OfflineEvents.Add(new OfflineEvent
+                                        {
+                                            AtUtc = nowUtc,
+                                            Kind = OfflineEventKind.Reconnected,
+                                            Severity = "online",
+                                            Note = "Ready"
+                                        });
+                                    }
+                                    // ✅ Bug 6: возвращаем кнопки и шлём сообщение в канал
+                                    await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: false).ConfigureAwait(false);
+                                    try
+                                    {
+                                        await AnnounceOnlineAsync(p, nowUtc).ConfigureAwait(false);
+                                    }
+                                    catch (Exception annEx)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                    }
+                                }
+                            }
+                            try { await SaveStateAsync().ConfigureAwait(false); }
+                            catch (Exception saveEx)
+                            {
+                                await PredictionErrorLogger.LogAsync("OnClientReadyForAnnouncements:save", saveEx).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("OnClientReadyForAnnouncements", ex).ConfigureAwait(false);
+                        }
+                    });
+                    return Task.CompletedTask;
+                }
+
+                private async Task AnnounceOfflineAsync(ActivePrediction p, string kind, DateTimeOffset nowUtc)
+                {
+                    try
+                    {
+                        var channel = GetActiveMessageChannel(p);
+                        if (channel == null)
+                            return;
+                        var phase = p.IsLocked ? "Ожидание разрешения прогноза" : "Сбор ставок";
+                        string text;
+                        if (string.Equals(kind, "restart", StringComparison.Ordinal))
+                        {
+                            text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
+                                   $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова — " +
+                                   $"все ставки в безопасности, таймер будет сдвинут на длительность offline.";
+                        }
+                        else
+                        {
+                            text = $"⛔ **Зафиксировано отключение бота.**\n" +
+                                   $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
+                                   $"Таймер будет пересчитан с учётом времени offline.";
+                        }
+                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                    }
+                }
+
+                private async Task AnnounceOnlineAsync(ActivePrediction p, DateTimeOffset nowUtc)
+                {
+                    try
+                    {
+                        var channel = GetActiveMessageChannel(p);
+                        if (channel == null)
+                            return;
+                        var phase = p.IsLocked ? "Ожидание разрешения прогноза" : "Сбор ставок";
+                        string offlineInfo = string.Empty;
+                        if (p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
+                        {
+                            var dur = p.LastOfflineDurationMinutes.Value;
+                            offlineInfo = dur < 1
+                                ? $" Бот был offline менее минуты."
+                                : $" Бот был offline ~{dur:F1} мин.";
+                        }
+                        var text = $"✅ **Бот снова в сети.** Прогноз «{p.Title}» ({phase}) снова активен.{offlineInfo}";
+                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                    }
+                }
 
         internal class PersistentPrediction
         {
@@ -141,11 +330,13 @@ namespace RPBot
             public double? LastOfflineDurationMinutes { get; set; }
             // true = бот сейчас offline (для восстановления состояния кнопок/embed)
             public bool WasBotOfflineOnShutdown { get; set; }
-            public bool IsLocked { get; set; }
-            public bool IsResolved { get; set; }
-            public int? WinningOutcomeId { get; set; }
-            public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
-        }
+                        // ✅ Bug 6: лог offline/online для embed результата и истории
+                        public List<OfflineEvent> OfflineEvents { get; set; } = new();
+                        public bool IsLocked { get; set; }
+                        public bool IsResolved { get; set; }
+                        public int? WinningOutcomeId { get; set; }
+                        public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
+                    }
 
         private async Task SaveStateAsync()
         {
@@ -169,11 +360,12 @@ namespace RPBot
                                 BotOfflineAtUtc = v.BotOfflineAtUtc,
                                 LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
                                 WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
-                                IsLocked = v.IsLocked,
-                                IsResolved = v.IsResolved,
-                                WinningOutcomeId = v.WinningOutcomeId,
-                                Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
-                            };
+                                                            OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
+                                                            IsLocked = v.IsLocked,
+                                                            IsResolved = v.IsResolved,
+                                                            WinningOutcomeId = v.WinningOutcomeId,
+                                                            Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
+                                                        };
                         }
 
                         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
@@ -247,11 +439,13 @@ namespace RPBot
                             BotOfflineAtUtc = p.BotOfflineAtUtc,
                             LastOfflineDurationMinutes = p.LastOfflineDurationMinutes,
                             WasBotOfflineOnShutdown = p.WasBotOfflineOnShutdown,
-                            IsLocked = p.IsLocked,
-                            IsResolved = p.IsResolved,
-                            WinningOutcomeId = p.WinningOutcomeId,
-                            Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
-                        };
+                                                    // ✅ Bug 6: восстанавливаем лог offline-событий
+                                                    OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>(),
+                                                    IsLocked = p.IsLocked,
+                                                    IsResolved = p.IsResolved,
+                                                    WinningOutcomeId = p.WinningOutcomeId,
+                                                    Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
+                                                };
 
                         // ✅ БАГ 7: Логируем для диагностики потери ставок
                         await LogAsync($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}").ConfigureAwait(false);
@@ -999,6 +1193,31 @@ namespace RPBot
                     : $"{Math.Round(minutes * 60)} сек";
                 builder.AddField("⏰ Сдвиг таймера", $"Бот был неактивен ~{minsText}, приём ставок продлён на это время.", false);
             }
+
+                    // ✅ Bug 6: лог offline/online-событий в embed'е (для обеих фаз)
+                    if (p.OfflineEvents != null && p.OfflineEvents.Count > 0)
+                    {
+                        var recent = p.OfflineEvents
+                            .OrderBy(e => e.AtUtc)
+                            .TakeLast(8)
+                            .ToList();
+                        if (recent.Count > 0)
+                        {
+                            var sb = new StringBuilder();
+                            foreach (var e in recent)
+                            {
+                                string icon = e.Kind == OfflineEventKind.Disconnected
+                                    ? (string.Equals(e.Severity, "restart", StringComparison.Ordinal) ? "🔄" : "⛔")
+                                    : "✅";
+                                var local = e.AtUtc.ToLocalTime();
+                                var suffix = e.Kind == OfflineEventKind.Disconnected
+                                    ? (string.Equals(e.Severity, "restart", StringComparison.Ordinal) ? "реконнект" : "offline")
+                                    : "online";
+                                sb.AppendLine($"{icon} {local:HH:mm:ss} — {suffix}");
+                            }
+                            builder.AddField("🛰️ Состояние бота", sb.ToString().TrimEnd(), false);
+                        }
+                    }
 
             var totalPool = p.TotalPool;
 
@@ -1843,8 +2062,21 @@ namespace RPBot
                                     p.BotOfflineAtUtc = nowUtc;
                                     p.WasBotOfflineOnShutdown = true;
                                 }
-                            }
-                        }
+                                                        // ✅ Bug 6: фиксируем событие "shutdown" в логе, чтобы
+                                                        // можно было отличить полноценный offline от шумных реконнектов.
+                                                        if (!p.IsResolved)
+                                                        {
+                                                            p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                                            p.OfflineEvents.Add(new OfflineEvent
+                                                            {
+                                                                AtUtc = nowUtc,
+                                                                Kind = OfflineEventKind.Disconnected,
+                                                                Severity = "offline",
+                                                                Note = "Shutdown"
+                                                            });
+                                                        }
+                                                    }
+                                                }
                         catch (Exception ex)
                         {
                             try
