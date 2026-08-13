@@ -263,9 +263,12 @@ namespace RPBot.EventOps
                 }
                 catch (Exception ex)
                 {
-                    Log($"[EVENT] announce discord_dm error guild={guild.Id} event={guildEvent.Id} user={userId}: {ex.Message}");
-                    try { await LogError($"Не удалось отправить DM о событии пользователю {userId} на сервере {guild.Id}: {ex.Message}"); } catch { }
-                }
+                                    // Сначала гарантированный fallback в stderr — даже если оба
+                                    // логгера упадут, мы не потеряем диагностику DM-провала.
+                                    Console.Error.WriteLine($"[EVENT] announce discord_dm error guild={guild.Id} event={guildEvent.Id} user={userId}: {ex.Message}");
+                                    Log($"[EVENT] announce discord_dm error guild={guild.Id} event={guildEvent.Id} user={userId}: {ex.Message}");
+                                    try { await LogError($"Не удалось отправить DM о событии пользователю {userId} на сервере {guild.Id}: {ex.Message}"); } catch { }
+                                }
             }
 
             if (_store != null)
@@ -798,14 +801,16 @@ namespace RPBot.EventOps
 
         private static void Log(string msg)
         {
-            try { BotLogger.Info(LogCategory.Discord, msg); } catch { }
-        }
+                    try { BotLogger.Info(LogCategory.Discord, msg); }
+                    catch { Console.Error.WriteLine($"[Log-fallback] {msg}"); }
+                }
 
-        private static Task LogError(string msg)
-        {
-            try { BotLogger.Error(LogCategory.Discord, msg); } catch { }
-            return Task.CompletedTask;
-        }
+                private static Task LogError(string msg)
+                {
+                    try { BotLogger.Error(LogCategory.Discord, msg); }
+                    catch { Console.Error.WriteLine($"[LogError-fallback] {msg}"); }
+                    return Task.CompletedTask;
+                }
 
         /// <summary>
         /// Diff между двумя живыми объектами SocketGuildEvent.

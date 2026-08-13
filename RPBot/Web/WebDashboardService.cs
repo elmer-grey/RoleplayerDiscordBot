@@ -37,7 +37,7 @@ namespace RPBot.Web
         private readonly Dictionary<string, RateLimitBucket> _rateLimitBuckets = new(StringComparer.Ordinal);
         private readonly int _rateLimitPerMinute;
         private CancellationTokenSource? _cts;
-        private Task? _loopTask;
+                private Task? _loopTask;
                 private static string? _dashboardHtmlCache;
 
         public WebDashboardService(
@@ -146,31 +146,32 @@ namespace RPBot.Web
 
         public async Task StopAsync()
         {
-            var cts = _cts;
-            if (cts == null)
-                return;
+                    // Идемпотентность — повторный вызов из GracefulShutdownAsync + DisposeAsync
+                    // не должен ронять _listener.Close() на disposed объекте.
+                    var cts = Interlocked.Exchange(ref _cts, null);
+                    if (cts == null)
+                        return;
 
-            _cts = null;
-            try { cts.Cancel(); } catch { }
-            try { _listener.Stop(); } catch { }
-                        try { _listener.Close(); } catch { }
-                        lock (_tailInitLock)
-            {
-                if (_tailRegistered)
-                {
-                                try { BotLogger.UnregisterObserver(_tailObserverId); } catch { }
-                                                    _tailRegistered = false;
-                                                }
-            }
+                    try { cts.Cancel(); } catch { }
+                    try { _listener.Stop(); } catch { }
+                    try { _listener.Close(); } catch { }
+                    lock (_tailInitLock)
+                    {
+                        if (_tailRegistered)
+                        {
+                            try { BotLogger.UnregisterObserver(_tailObserverId); } catch { }
+                            _tailRegistered = false;
+                        }
+                    }
 
-            if (_loopTask != null)
-            {
-                try { await _loopTask.ConfigureAwait(false); } catch { }
-                _loopTask = null;
-            }
+                    if (_loopTask != null)
+                    {
+                        try { await _loopTask.ConfigureAwait(false); } catch { }
+                        _loopTask = null;
+                    }
 
-            try { cts.Dispose(); } catch { }
-        }
+                    try { cts.Dispose(); } catch { }
+                }
 
         public int RateLimitPerMinute => _rateLimitPerMinute;
 

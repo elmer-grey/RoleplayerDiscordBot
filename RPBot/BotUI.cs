@@ -446,42 +446,43 @@ namespace RPBot
                                     _statusTimeoutAdded = false;
                                     _resizeTimeoutAdded = false;
                                 }
-									catch (Exception ex)
-									{
-										TryAppendErrorToFile($"SafeShutdown inner error: {ex}");
-									}
+                                        catch (Exception ex)
+                                        {
+                                            TryAppendErrorToFile($"SafeShutdown inner error: {ex}");
+                                        }
                             });
                         }
-						catch (Exception ex)
-						{
-							TryAppendErrorToFile($"SafeShutdown Invoke error: {ex}");
-						}
+                                catch (Exception ex)
+                                {
+                                    TryAppendErrorToFile($"SafeShutdown Invoke error: {ex}");
+                                }
                     }
                     else
                     {
-                        // Если MainLoop отсутствует — всё равно очищаем локальные ссылки (best-effort)
-                        try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
-                        try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
-                        try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
+                                // Если MainLoop отсутствует — всё равно очищаем локальные ссылки (best-effort).
+                                // Отписки от Root-Key/Mouse делаем ДО обнуления ссылок, иначе вызов повиснет в воздухе.
+                                try { if (_inputField != null) _inputField.KeyPress -= OnInputKeyPress; } catch { }
+                                try { Application.RootKeyEvent -= OnRootKeyEvent; } catch { }
+                                try { Application.RootMouseEvent -= OnRootMouseEvent; } catch { }
 
-                        _mainWindow = null;
-                        _logPanel = null;
-                        _commandPanel = null;
-                        _inputField = null;
-                        _statusBar = null;
-                        // Allow status timer to be re-registered on next CreateMainWindow
-                        _statusTimeoutAdded = false;
-                        _resizeTimeoutAdded = false;
+                                _mainWindow = null;
+                                _logPanel = null;
+                                _commandPanel = null;
+                                _inputField = null;
+                                _statusBar = null;
+                                // Allow status timer to be re-registered on next CreateMainWindow
+                                _statusTimeoutAdded = false;
+                                _resizeTimeoutAdded = false;
+                            }
+
+                            _isInitialized = false;
+                        }
+                        catch (Exception ex)
+                        {
+                            TryAppendErrorToFile($"SafeShutdown outer error: {ex}");
+                        }
                     }
-
-                    _isInitialized = false;
                 }
-					catch (Exception ex)
-					{
-						TryAppendErrorToFile($"SafeShutdown outer error: {ex}");
-					}
-            }
-        }
 
         private async Task ShowSettingsInteractive()
         {
