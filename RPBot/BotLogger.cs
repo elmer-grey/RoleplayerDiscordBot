@@ -358,32 +358,37 @@ namespace RPBot
             if (!_paths.TryGetValue(category, out var path)) return;
             var sem = _locks[category];
 
-            await sem.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                // Ротация по размеру — переименовываем, продолжаем в том же имени
-                if (File.Exists(path))
-                {
-                    var fi = new FileInfo(path);
-                    if (fi.Length > _maxFileSizeBytes)
+                    try
                     {
-                        var rotated = path.Replace(".log", $"_rot_{DateTime.Now:HHmmss}.log");
-                        File.Move(path, rotated);
+                        await sem.WaitAsync().ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException) { return; /* логгер уже погашен */ }
+
+                    try
+                    {
+                        // Ротация по размеру — переименовываем, продолжаем в том же имени
+                        if (File.Exists(path))
+                        {
+                            var fi = new FileInfo(path);
+                            if (fi.Length > _maxFileSizeBytes)
+                            {
+                                var rotated = path.Replace(".log", $"_rot_{DateTime.Now:HHmmss}.log");
+                                try { File.Move(path, rotated); } catch { /* ротация best-effort */ }
+                            }
+                        }
+
+                        await File.AppendAllTextAsync(path, line + Environment.NewLine, Encoding.UTF8)
+                                  .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Не падаем из-за ошибок файлового вывода
+                    }
+                    finally
+                    {
+                        try { sem.Release(); } catch (ObjectDisposedException) { }
                     }
                 }
-
-                await File.AppendAllTextAsync(path, line + Environment.NewLine, Encoding.UTF8)
-                          .ConfigureAwait(false);
-            }
-            catch
-            {
-                // Не падаем из-за ошибок файлового вывода
-            }
-            finally
-            {
-                sem.Release();
-            }
-        }
 
         // ───── Вспомогательное ───────────────────────────────────────────
 
@@ -393,10 +398,21 @@ namespace RPBot
                 await WriteAsync(LogLevel.Info, category, line).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Финальная остановка логгера: помечает завершение сессии и обнуляет пути,
+        /// чтобы фоновые записи после Shutdown не восстанавливали категорийные файлы.
+        /// Идемпотентен.
+        /// </summary>
         public static void Shutdown(string reason)
         {
-            _ = AppendToFileAsync(LogCategory.Boot,
-                FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
+            lock (_initLock)
+            {
+                _ = AppendToFileAsync(LogCategory.Boot,
+                    FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
+                _paths.Clear();
+                _logDirectory = null;
+                _unifiedLogPath = null;
+            }
         }
 
         // ───── Хвост из run.log удалён. Дашборд подписан напрямую на observer

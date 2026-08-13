@@ -20,52 +20,100 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         private readonly PointsService _points;
         private readonly Func<ulong, ServerConfig?> _getServerConfig;
+                private readonly object _shutdownLock = new();
+                private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
 
-        private const int BasePointsPerTick = 10;
-        private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(5);
+                private const int BasePointsPerTick = 10;
+                private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(5);
+                private static readonly TimeSpan SaveCoalesceInterval = TimeSpan.FromSeconds(30);
 
-        private enum TimerMode
-        {
-            PerUserTimer,
-            GlobalLoop
-        }
+                private enum TimerMode
+                {
+                    PerUserTimer,
+                    GlobalLoop
+                }
 
-        // Переключатель режима: достаточно поменять значение здесь
-        private const TimerMode CurrentMode = TimerMode.PerUserTimer;
+                // Переключатель режима: достаточно поменять значение здесь
+                private const TimerMode CurrentMode = TimerMode.PerUserTimer;
 
-        private readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, UserState>> _userStates = new();
-        private readonly CancellationTokenSource _cts = new();
+                private readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, UserState>> _userStates = new();
+                private readonly CancellationTokenSource _cts = new();
+                private volatile bool _disposed;
 
-        private class UserState
-        {
-            public ulong VoiceChannelId { get; set; }
-            public DateTimeOffset JoinTimeUtc { get; set; }
-            public DateTimeOffset NextAwardUtc { get; set; }
-            public CancellationTokenSource? TimerCts { get; set; }
-        }
+                private class UserState
+                {
+                    public ulong VoiceChannelId { get; set; }
+                    public DateTimeOffset JoinTimeUtc { get; set; }
+                    public DateTimeOffset NextAwardUtc { get; set; }
+                    public CancellationTokenSource? TimerCts { get; set; }
+                }
 
-        public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, string logPath)
-        {
-            _client = client;
-            _points = points;
-            _getServerConfig = getServerConfig;
+                public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, string logPath)
+                {
+                    _client = client;
+                    _points = points;
+                    _getServerConfig = getServerConfig;
 
-            _client.UserVoiceStateUpdated += OnUserVoiceStateUpdatedAsync;
-            _client.GuildScheduledEventStarted += OnGuildScheduledEventStartedAsync;
-            _client.Ready += OnClientReadyAsync;
+                    _client.UserVoiceStateUpdated += OnUserVoiceStateUpdatedAsync;
+                    _client.GuildScheduledEventStarted += OnGuildScheduledEventStartedAsync;
+                    _client.Ready += OnClientReadyAsync;
 
-            if (_client.ConnectionState == ConnectionState.Connected)
-            {
-                try { SeedExistingUsersInEventChannels(); } catch { }
-            }
-
-            if (CurrentMode == TimerMode.GlobalLoop)
-            {
-            #pragma warning disable CS0162 // Переключатель режима: код GlobalLoop-ветки выполняется только при CurrentMode == GlobalLoop
-                            _ = Task.Run(() => GlobalLoopAsync(_cts.Token));
-            #pragma warning restore CS0162
-                        }
+                    if (_client.ConnectionState == ConnectionState.Connected)
+                    {
+                        try { SeedExistingUsersInEventChannels(); } catch { }
                     }
+
+                    if (CurrentMode == TimerMode.GlobalLoop)
+                    {
+                    #pragma warning disable CS0162 // Переключатель режима: код GlobalLoop-ветки выполняется только при CurrentMode == GlobalLoop
+                                    _ = Task.Run(() => GlobalLoopAsync(_cts.Token));
+                    #pragma warning restore CS0162
+                                }
+                            }
+
+                /// <summary>
+                /// Идемпотентная остановка сервиса: отменяет все таймеры, отписывается от
+                /// событий Discord, освобождает CancellationTokenSource. Безопасно вызывать
+                /// несколько раз (второй вызов — no-op).
+                /// </summary>
+                public void Shutdown()
+                {
+                    if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
+                        return;
+
+                    lock (_shutdownLock)
+                    {
+                        if (_disposed)
+                            return;
+
+                        try
+                        {
+                            _client.UserVoiceStateUpdated -= OnUserVoiceStateUpdatedAsync;
+                            _client.GuildScheduledEventStarted -= OnGuildScheduledEventStartedAsync;
+                            _client.Ready -= OnClientReadyAsync;
+                        }
+                        catch
+                        {
+                            // клиент уже отписан — это норма при перезапуске
+                        }
+
+                        foreach (var guildStates in _userStates.Values)
+                        {
+                            foreach (var state in guildStates.Values)
+                            {
+                                try { state.TimerCts?.Cancel(); } catch { }
+                                try { state.TimerCts?.Dispose(); } catch { }
+                            }
+                            guildStates.Clear();
+                        }
+                        _userStates.Clear();
+
+                        try { _cts.Cancel(); } catch { }
+                        try { _cts.Dispose(); } catch { }
+
+                        _disposed = true;
+                    }
+                }
 
         private Task OnClientReadyAsync()
         {
@@ -319,14 +367,9 @@ namespace RPBot
         }
 
         private Task LogAsync(string message)
-        {
-            BotLogger.Info(LogCategory.Points, message);
-            return Task.CompletedTask;
+                {
+                    BotLogger.Info(LogCategory.Points, message);
+                    return Task.CompletedTask;
+                }
+            }
         }
-
-        public void Shutdown()
-        {
-            _cts.Cancel();
-        }
-    }
-}

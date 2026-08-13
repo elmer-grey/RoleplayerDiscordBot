@@ -259,9 +259,26 @@ namespace RPBot
 				}
 				return (ok, body);
 			}
+			catch (OperationCanceledException) when (ct.IsCancellationRequested)
+			{
+				// Отмена снаружи — пробросить выше, чтобы вызывающий код увидел,
+				// что сообщение не отправлено (без фальшивого "ok=false: ..." в логах).
+				throw;
+			}
+			catch (HttpRequestException ex)
+			{
+				// Сетевые ошибки (DNS, TLS, разрыв соединения) — best-effort возврат;
+				// логирование на стороне вызывающего.
+				return (false, $"network error: {ex.Message}");
+			}
+			catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+			{
+				// HttpClient.Timeout сработал (наш CancellationToken ещё не отменён).
+				return (false, $"timeout: {ex.Message}");
+			}
 			catch (Exception ex)
 			{
-             return (false, ex.ToString());
+				return (false, ex.ToString());
 			}
 		}
 

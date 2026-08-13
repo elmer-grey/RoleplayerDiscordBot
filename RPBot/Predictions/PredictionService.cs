@@ -1,6 +1,7 @@
 using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
+using RPBot.Util;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -24,6 +25,9 @@ namespace RPBot
         private readonly CancellationTokenSource _cts = new();
         private readonly string _stateFilePath;
         private readonly SemaphoreSlim _stateFileGate = new(1, 1);
+                private readonly object _shutdownLock = new();
+                private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
+                private volatile bool _disposed;
 
         // ✅ НОВОЕ: История прогнозов, статистика и достижения
         private PredictionHistoryStore _history = new();
@@ -125,35 +129,42 @@ namespace RPBot
             await _stateFileGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                var snapshot = _active.ToDictionary(kv => kv.Key, kv => new PersistentPrediction
-                {
-                    GuildId = kv.Value.GuildId,
-                    CreatorId = kv.Value.CreatorId,
-                    ChannelId = kv.Value.ChannelId,
-                    MessageId = kv.Value.MessageId,
-                    Title = kv.Value.Title,
-                    Outcomes = kv.Value.Outcomes, // ✅ Сохраняем новый формат
-                    CreatedAtUtc = kv.Value.CreatedAtUtc,
-                    BetsCloseAtUtc = kv.Value.BetsCloseAtUtc,
-                    IsLocked = kv.Value.IsLocked,
-                    IsResolved = kv.Value.IsResolved,
-                    WinningOutcomeId = kv.Value.WinningOutcomeId,
-                    Bets = kv.Value.Bets
-                });
+                        var snapshot = new Dictionary<ulong, PersistentPrediction>();
+                        foreach (var kv in _active)
+                        {
+                            var v = kv.Value;
+                            snapshot[kv.Key] = new PersistentPrediction
+                            {
+                                GuildId = v.GuildId,
+                                CreatorId = v.CreatorId,
+                                ChannelId = v.ChannelId,
+                                MessageId = v.MessageId,
+                                Title = v.Title,
+                                Outcomes = v.Outcomes, // ✅ Сохраняем новый формат
+                                CreatedAtUtc = v.CreatedAtUtc,
+                                BetsCloseAtUtc = v.BetsCloseAtUtc,
+                                IsLocked = v.IsLocked,
+                                IsResolved = v.IsResolved,
+                                WinningOutcomeId = v.WinningOutcomeId,
+                                Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
+                            };
+                        }
 
-                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
-                await File.WriteAllTextAsync(_stateFilePath, json).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
-            }
-            finally
-            {
-                _stateFileGate.Release();
-            }
-        }
+                        var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                        var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
+                        // Атомарная запись: исключает повреждение файла при крэше посреди сереализации
+                        // и при одновременной записи с другого процесса (lock + запись во временный файл + rename).
+                        await SafeJsonIO.WriteAtomicAsync(_stateFilePath, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _stateFileGate.Release();
+                    }
+                }
 
         public async Task<bool> EnsureStateFileAsync()
         {
@@ -1737,10 +1748,32 @@ namespace RPBot
 
         public void Shutdown()
         {
-            _cts.Cancel();
+                    // Идемпотентная остановка: отменяем монитор и помечаем disposed,
+                    // чтобы повторные вызовы (например, при рестарте) были безопасны.
+                    if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
+                        return;
+
+                    lock (_shutdownLock)
+                    {
+                        if (_disposed) return;
+                        try
+                        {
+                            _client.Ready -= OnClientReadyForRestore;
+                            _client.Disconnected -= OnClientDisconnected;
+                        }
+                        catch
+                        {
+                            // клиент уже отписан — это норма при перезапуске
+                        }
+
+                        try { _cts.Cancel(); } catch { }
+                        try { _cts.Dispose(); } catch { }
+
+                        _disposed = true;
+                    }
+                }
+            }
         }
-    }
-}
 
 
 

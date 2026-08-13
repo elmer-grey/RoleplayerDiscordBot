@@ -27,6 +27,7 @@ namespace RPBot
         // (см. ReconnectLoopAsync) мы брали актуальный флаг forceReconnect, а не устаревший
         // параметр из уже отменённого вызова.
         private bool _pendingForceReconnect;
+            private volatile bool _disposed;
 
         private const int InitialWaitMs = 5000;
         private const int ConnectTimeoutMs = 60000;
@@ -62,7 +63,7 @@ namespace RPBot
 
         public async Task HandleDisconnect(Exception exception)
         {
-            if (_isShuttingDown) return;
+                    if (_disposed || _isShuttingDown) return;
             var isManual = exception is ManualReconnectException;
             if (!isManual && exception is GatewayReconnectException)
             {
@@ -249,13 +250,21 @@ namespace RPBot
         private void ClearExpectedDisconnect() { lock (_stateLock) { _connectionInfo.IsExpectedDisconnect = false; _ignoreDisconnectEventsUntil = DateTime.MinValue; } }
         private Task Log(string message) { BotLogger.Info(LogCategory.Discord, $"[RECONNECT] {message}"); return Task.CompletedTask; }
 
-        public void Dispose()
-        {
-            _isShuttingDown = true;
-            try { _reconnectCts?.Cancel(); } catch { }
-            try { _reconnectCts?.Dispose(); } catch { }
-            try { _reconnectLock?.Dispose(); } catch { }
-            OnReconnectStarted = null; OnReconnectCompleted = null; OnDisconnectDetected = null; OnFullRestartRequested = null;
+        /// <summary>
+                /// Освобождает ресурсы и делает объект непригодным к дальнейшему использованию.
+                /// Идемпотентен: повторный вызов не бросит ObjectDisposedException.
+                /// </summary>
+                public void Dispose()
+                {
+                    if (_disposed) return;
+                    _disposed = true;
+
+                    _isShuttingDown = true;
+                    try { _reconnectCts?.Cancel(); } catch { }
+                    try { _reconnectCts?.Dispose(); } catch { }
+                    _reconnectCts = null!;
+                    try { _reconnectLock?.Dispose(); } catch { }
+                    OnReconnectStarted = null; OnReconnectCompleted = null; OnDisconnectDetected = null; OnFullRestartRequested = null;
+                }
+            }
         }
-    }
-}
