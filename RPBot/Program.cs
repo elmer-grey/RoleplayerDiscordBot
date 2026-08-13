@@ -1014,30 +1014,33 @@ private MusicStats? _musicStats;
 												}
 											}
 											catch { }
-											bool rollCollecting = false;
-											int rollsCount = 0;
-											foreach (var s in g.Value.Values)
-											{
-												if (!s.IsPaused && (s.TrackRolls || queueActive))
-													rollCollecting = true;
-												rollsCount += s.Rolls?.Count ?? 0;
-											}
-											rollsCount += queueRollsCount;
-											return g.Value.Values.Select(s => new
-											{
-												s.SessionId,
-												GuildId = g.Key,
-												GuildName = guildName,
-												Name = s.GameName,
-												Status = s.IsPaused ? "на паузе" : "активна",
-												RollCollecting = rollCollecting,
-												RollsCount = rollsCount,
-												CreatedAt = s.StartTime,
-												LeaderId = s.MasterId,
-												MasterName = s.MasterName,
-											}).ToList();
-										});
-								},
+							return g.Value.Values.Select(s => new
+							{
+								s.SessionId,
+								GuildId = g.Key,
+								GuildName = guildName,
+								Name = s.GameName,
+								Status = s.IsStopped
+									? "завершена"
+									: s.IsPaused
+										? "на паузе"
+										: "активна",
+								// ✅ Bug 2/4: каждый переключатель привязан к КОНКРЕТНОЙ сессии.
+								// Раньше здесь считали «любая сессия в гильдии собирает броски»
+								// и отдавали одну булку на всю гильдию — дашборд менял флаг
+								// для всех сессий при переключении в одной. Теперь TrackRolls
+								// живёт в GameSession, и здесь мы просто прокидываем его.
+								RollCollecting = !s.IsStopped && !s.IsPaused && s.TrackRolls,
+								// ✅ Bug 2: счётчик бросков — строго по конкретной сессии
+								// (session.Rolls). Очередь не суммируется сюда, чтобы не
+								// «размазывать» счётчик по сессиям.
+								RollsCount = s.Rolls?.Count ?? 0,
+								CreatedAt = s.StartTime,
+								LeaderId = s.MasterId,
+								MasterName = s.MasterName,
+							}).ToList();
+						});
+				},
 								eventsProvider: () =>
 								{
 									if (_eventAnnouncementStore == null) return "event announcements not ready";

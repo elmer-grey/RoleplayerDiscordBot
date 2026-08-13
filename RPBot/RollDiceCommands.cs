@@ -289,21 +289,37 @@ namespace RPBot
                 {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
-                        var activeSessions = sessions.Where(s =>
-                            !s.Value.IsStopped &&
-                            s.Value.TrackRolls).ToList();
+                        // ✅ Bug 3: пауза НЕ блокирует бросок. Бросок всегда можно совершить;
+                        // глобальный счётчик IncrementRollsToday() инкрементится в
+                        // WriteCompletedRollLog (см. ниже). В session.Rolls пишется
+                        // только если сессия активна и TrackRolls=true.
+                        //
+                        // Однако: если ВСЕ сессии со сбором бросков на паузе — бросок
+                        // покажется без пометки (что было бы странно для пользователя,
+                        // который не понимает, почему ничего не засчиталось). В этом
+                        // случае пишем сообщение, что бросок учтён только глобально.
+                        var activeCollecting = sessions.Values
+                            .Where(s => !s.IsStopped && !s.IsPaused && s.TrackRolls)
+                            .ToList();
+                        var pausedCollecting = sessions.Values
+                            .Where(s => !s.IsStopped && s.IsPaused && s.TrackRolls)
+                            .ToList();
 
-                        if (activeSessions.Any())
+                        if (activeCollecting.Count == 0 && pausedCollecting.Count > 0)
                         {
-                            var pausedSessions = activeSessions.Where(s => s.Value.IsPaused).ToList();
-                            if (pausedSessions.Any())
-                            {
-                                await command.FollowupAsync(
-                                    $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
-                                    ephemeral: false);
-                                 _ = DeleteOriginalResponseSafeAsync(command, 5000);
-                                return;
-                            }
+                            var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                            await command.FollowupAsync(
+                                $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.",
+                                ephemeral: false);
+                            _ = DeleteOriginalResponseSafeAsync(command, 5000);
+                        }
+                        else if (activeCollecting.Count > 0 && pausedCollecting.Count > 0)
+                        {
+                            var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                            await command.FollowupAsync(
+                                $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}.",
+                                ephemeral: false);
+                            _ = DeleteOriginalResponseSafeAsync(command, 5000);
                         }
                     }
                 }
@@ -330,6 +346,9 @@ namespace RPBot
                 {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
+                        // ✅ Bug 3: пишем бросок ТОЛЬКО в активные сессии с TrackRolls=true.
+                        // Глобальный счётчик (RollsToday) уже инкрементнут через
+                        // WriteCompletedRollLog ниже.
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
                             !s.Value.IsPaused &&
@@ -499,6 +518,11 @@ namespace RPBot
 
             // Если это канал статистики или канал бросков, проверяем сессии.
             // Семафор ждём с таймаутом — если он залип, не подвешиваем взаимодействие на >3с.
+            //
+            // ✅ Bug 3: бросок ВСЕГДА совершается. Глобальный счётчик
+            // (RollsToday через IncrementRollsToday ниже) инкрементится
+            // независимо от паузы. В session.Rolls пишется только если
+            // сессия активна и TrackRolls=true.
             if (isStatsChannel || isRollChannel)
             {
                 bool gotLock = false;
@@ -514,35 +538,37 @@ namespace RPBot
                     {
                         if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                         {
-                            // Находим ВСЕ сессии с включённой записью бросков (TrackRolls = true)
-                            var sessionsWithRolls = sessions.Where(s =>
-                                s.Value.TrackRolls &&
-                                !s.Value.IsStopped).ToList();
+                            // ✅ Bug 2/4: каждая сессия сама решает, собирает ли она броски (TrackRolls).
+                            var sessionsWithRolls = sessions.Values
+                                .Where(s => s.TrackRolls && !s.IsStopped)
+                                .ToList();
 
-                            if (sessionsWithRolls.Any())
+                            // Пишем бросок только в активные (не на паузе) сессии.
+                            var activeCollecting = sessionsWithRolls
+                                .Where(s => !s.IsPaused)
+                                .ToList();
+                            foreach (var session in activeCollecting)
                             {
-                                // Проверяем, есть ли сессии на паузе
-                                var pausedSessions = sessionsWithRolls.Where(s => s.Value.IsPaused).ToList();
-                                if (pausedSessions.Any())
+                                session.Rolls.Add(new RollStatistic
                                 {
-                                    // Выводим уведомление о паузе с названием первой найденной сессии
-                                    await command.FollowupAsync(
-                                        $"Игра **{pausedSessions.First().Value.GameName}** на паузе. Броски не учитываются.",
-                                        ephemeral: false
-                                    );
-                                     _ = DeleteOriginalResponseSafeAsync(command, 5000);
-                                    return;
-                                }
+                                    PlayerName = command.User.GlobalName,
+                                    RollValue = result,
+                                    DiceType = "d20"  // ✅ Roll20 всегда d20
+                                });
+                            }
 
-                                foreach (var session in sessionsWithRolls.Where(s => !s.Value.IsPaused))
-                                {
-                                    session.Value.Rolls.Add(new RollStatistic
-                                    {
-                                        PlayerName = command.User.GlobalName,
-                                        RollValue = result,
-                                        DiceType = "d20"  // ✅ Roll20 всегда d20
-                                    });
-                                }
+                            // ✅ Bug 3: информируем пользователя о пауза-сессиях.
+                            var pausedCollecting = sessionsWithRolls
+                                .Where(s => s.IsPaused)
+                                .ToList();
+                            if (pausedCollecting.Any())
+                            {
+                                var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                                string msg = activeCollecting.Any()
+                                    ? $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}."
+                                    : $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.";
+                                _ = command.FollowupAsync(msg, ephemeral: false);
+                                _ = DeleteOriginalResponseSafeAsync(command, 5000);
                             }
                         }
                     }
