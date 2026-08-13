@@ -38,6 +38,7 @@ namespace RPBot.Web
         private readonly int _rateLimitPerMinute;
         private CancellationTokenSource? _cts;
         private Task? _loopTask;
+                private static string? _dashboardHtmlCache;
 
         public WebDashboardService(
             string host,
@@ -356,16 +357,7 @@ namespace RPBot.Web
                                                     snapshot = _logs.Take(200).ToList();
                                                 }
                                             }
-                                            var logs = snapshot.Select(x => new
-                                            {
-                                                timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                                                level = x.Level.ToString(),
-                                                category = x.Category.ToString(),
-                                                message = x.Message,
-                                                isUser = x.IsUser,
-                                                levelClass = Program.LevelCssClass(x.Level),
-                                                categoryClass = Program.CategoryCssClass(x.Category),
-                                            });
+                                            var logs = snapshot.Select(MapRecord);
                                             await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
                                             break;
                     case "/api/stats":
@@ -524,17 +516,8 @@ namespace RPBot.Web
                         }
 
                         var bootstrap = new
-                                                {
-                                                    items = snapshot.Select(x => new
-                            {
-                                timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                                level = x.Level.ToString(),
-                                category = x.Category.ToString(),
-                                message = x.Message,
-                                isUser = x.IsUser,
-                                levelClass = Program.LevelCssClass(x.Level),
-                                categoryClass = Program.CategoryCssClass(x.Category),
-                            }).ToList(),
+                        {
+                            items = snapshot.Select(MapRecord).ToList(),
                         };
                         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(bootstrap) + "\n");
                         await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length, subCts.Token)
@@ -585,19 +568,10 @@ namespace RPBot.Web
                                     .Where(x => x.Timestamp > sub.LastSent)
                                     .ToList();
                                 if (fresh.Count > 0)
-                                {
-                                    payloads = fresh.Select(x => JsonSerializer.Serialize(new
-                                    {
-                                        timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
-                                        level = x.Level.ToString(),
-                                        category = x.Category.ToString(),
-                                        message = x.Message,
-                                        isUser = x.IsUser,
-                                        levelClass = Program.LevelCssClass(x.Level),
-                                        categoryClass = Program.CategoryCssClass(x.Category),
-                                    })).ToList();
-                                    sub.LastSent = fresh[0].Timestamp;
-                                }
+                                                                {
+                                                                    payloads = fresh.Select(x => JsonSerializer.Serialize(MapRecord(x))).ToList();
+                                                                    sub.LastSent = fresh[0].Timestamp;
+                                                                }
                             }
                             if (payloads == null) continue;
                             foreach (var line in payloads)
@@ -635,7 +609,18 @@ namespace RPBot.Web
                     }
                 }
 
-        private object BuildHealthPayload()
+                                private static object MapRecord(BotLogRecord x) => new
+                                {
+                                    timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    level = x.Level.ToString(),
+                                    category = x.Category.ToString(),
+                                    message = x.Message,
+                                    isUser = x.IsUser,
+                                    levelClass = Program.LevelCssClass(x.Level),
+                                    categoryClass = Program.CategoryCssClass(x.Category),
+                                };
+
+                                private object BuildHealthPayload()
         {
             object raw;
             try
@@ -734,28 +719,42 @@ namespace RPBot.Web
 
         private static string LoadDashboardHtml()
         {
-            try
-            {
-                // Ищем файл в Web/dashboard.html рядом с .exe, потом в исходниках
-                var candidates = new[]
-                {
-                    Path.Combine(AppContext.BaseDirectory, "Web", "dashboard.html"),
-                    Path.Combine(Directory.GetCurrentDirectory(), "Web", "dashboard.html"),
-                    Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Web", "dashboard.html"),
-                };
-                foreach (var path in candidates)
-                {
-                    if (File.Exists(path))
-                        return File.ReadAllText(path, Encoding.UTF8);
+                    // Кешируем содержимое dashboard.html после первой удачной загрузки —
+                    // на пиковом трафике это снимает с диска несколько сотен чтений в минуту
+                    // (каждая вкладка дашборда раз в ~5с дёргает '/').
+                    if (_dashboardHtmlCache != null)
+                        return _dashboardHtmlCache;
+
+                    string fallback = "<!doctype html><html><body><h1>RPBot</h1><p>dashboard.html не найден</p></body></html>";
+
+                    try
+                    {
+                        // Ищем файл в Web/dashboard.html рядом с .exe, потом в исходниках
+                        var candidates = new[]
+                        {
+                            Path.Combine(AppContext.BaseDirectory, "Web", "dashboard.html"),
+                            Path.Combine(Directory.GetCurrentDirectory(), "Web", "dashboard.html"),
+                            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "Web", "dashboard.html"),
+                        };
+                        foreach (var path in candidates)
+                        {
+                            if (File.Exists(path))
+                            {
+                                var html = File.ReadAllText(path, Encoding.UTF8);
+                                _dashboardHtmlCache = html;
+                                return html;
+                            }
+                        }
+                        BotLogger.Warn(LogCategory.System, "[WebDashboard] dashboard.html не найден, отдаём заглушку");
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System, $"[WebDashboard] Ошибка загрузки dashboard.html: {ex.Message}");
+                    }
+
+                    _dashboardHtmlCache = fallback;
+                    return fallback;
                 }
-                BotLogger.Warn(LogCategory.System, "[WebDashboard] dashboard.html не найден, отдаём заглушку");
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Warn(LogCategory.System, $"[WebDashboard] Ошибка загрузки dashboard.html: {ex.Message}");
-            }
-            return "<!doctype html><html><body><h1>RPBot</h1><p>dashboard.html не найден</p></body></html>";
-        }
 
         public void Dispose()
         {

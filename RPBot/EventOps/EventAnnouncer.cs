@@ -794,17 +794,7 @@ namespace RPBot.EventOps
         }
 
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
-        {
-            try
-            {
-                var tz = TimeZoneInfo.FindSystemTimeZoneById("Russian Standard Time")
-                         ?? TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
-                if (tz == null) { msk = default; return false; }
-                msk = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
-                return true;
-            }
-            catch { msk = default; return false; }
-        }
+            => MoscowTime.TryConvertFromUtc(utc, out msk);
 
         private static void Log(string msg)
         {

@@ -24,54 +24,71 @@ namespace RPBot
         private Timer? _progressTimer;
 
         // ── Кэш результатов поиска: ключ = "guildId:userId", значение = список треков + время создания + сообщение
-        private readonly Dictionary<string, (List<LavalinkService.TrackSearchResult> Tracks, DateTime CreatedAt, IUserMessage? Message)> _searchCache = new();
-        private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(2);
+                // Обращения в норме идут из gateway-callback'ов Discord.NET (один диспатчер),
+                // но Task.Delay.ContinueWith может сработать на другом контексте — потому синхронизируем
+                // по _searchCacheLock, чтобы TTL-продление не нарвалось на мутацию «уже использован/удалён».
+                private readonly Dictionary<string, (List<LavalinkService.TrackSearchResult> Tracks, DateTime CreatedAt, IUserMessage? Message)> _searchCache = new();
+                private readonly object _searchCacheLock = new();
+                private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(2);
 
-        private string SearchCacheKey(ulong guildId, ulong userId) => $"{guildId}:{userId}";
+                private string SearchCacheKey(ulong guildId, ulong userId) => $"{guildId}:{userId}";
 
-        private void PutSearchCache(ulong guildId, ulong userId, List<LavalinkService.TrackSearchResult> tracks, IUserMessage? message = null)
-        {
-            var key = SearchCacheKey(guildId, userId);
-            _searchCache[key] = (tracks, DateTime.UtcNow, message);
-            // Чистим просроченные записи
-            foreach (var k in _searchCache.Keys.Where(k => DateTime.UtcNow - _searchCache[k].CreatedAt > SearchCacheTtl).ToList())
-                _searchCache.Remove(k);
-
-            // Таймер: через TTL редактируем сообщение как устаревшее
-            if (message is not null)
-            {
-                _ = Task.Delay(SearchCacheTtl).ContinueWith(async _ =>
+                private void PutSearchCache(ulong guildId, ulong userId, List<LavalinkService.TrackSearchResult> tracks, IUserMessage? message = null)
                 {
-                    if (!_searchCache.TryGetValue(key, out var entry)) return; // уже использован/удалён
-                    if (entry.Message?.Id != message.Id) return;               // заменён новым поиском
-                    _searchCache.Remove(key);
-                    try
+                    var key = SearchCacheKey(guildId, userId);
+                    lock (_searchCacheLock)
                     {
-                        await message.ModifyAsync(m =>
-                        {
-                            m.Content    = "⏳ **Результаты поиска устарели.** Повтори `/music` с новым запросом.";
-                            m.Components = new ComponentBuilder().Build(); // убираем дропдаун
-                        });
+                        _searchCache[key] = (tracks, DateTime.UtcNow, message);
+                        // Чистим просроченные записи
+                        var now = DateTime.UtcNow;
+                        foreach (var k in _searchCache.Keys.Where(k => now - _searchCache[k].CreatedAt > SearchCacheTtl).ToList())
+                            _searchCache.Remove(k);
                     }
-                    catch { }
-                }, TaskScheduler.Default);
-            }
-        }
 
-        private List<LavalinkService.TrackSearchResult>? GetSearchCache(ulong guildId, ulong userId)
-        {
-            var key = SearchCacheKey(guildId, userId);
-            if (!_searchCache.TryGetValue(key, out var entry)) return null;
-            if (DateTime.UtcNow - entry.CreatedAt > SearchCacheTtl) { _searchCache.Remove(key); return null; }
-            return entry.Tracks;
-        }
+                    // Таймер: через TTL редактируем сообщение как устаревшее
+                    if (message is not null)
+                    {
+                        _ = Task.Delay(SearchCacheTtl).ContinueWith(async _ =>
+                        {
+                            lock (_searchCacheLock)
+                            {
+                                if (!_searchCache.TryGetValue(key, out var entry)) return;        // уже использован/удалён
+                                if (entry.Message?.Id != message.Id) return;                     // заменён новым поиском
+                                _searchCache.Remove(key);
+                            }
+                            try
+                            {
+                                await message.ModifyAsync(m =>
+                                {
+                                    m.Content    = "⏳ **Результаты поиска устарели.** Повтори `/music` с новым запросом.";
+                                    m.Components = new ComponentBuilder().Build();               // убираем дропдаун
+                                });
+                            }
+                            catch { }
+                        }, TaskScheduler.Default);
+                    }
+                }
 
-        private IUserMessage? GetSearchCacheMessage(ulong guildId, ulong userId)
-        {
-            var key = SearchCacheKey(guildId, userId);
-            if (!_searchCache.TryGetValue(key, out var entry)) return null;
-            return entry.Message;
-        }
+                private List<LavalinkService.TrackSearchResult>? GetSearchCache(ulong guildId, ulong userId)
+                {
+                    var key = SearchCacheKey(guildId, userId);
+                    lock (_searchCacheLock)
+                    {
+                        if (!_searchCache.TryGetValue(key, out var entry)) return null;
+                        if (DateTime.UtcNow - entry.CreatedAt > SearchCacheTtl) { _searchCache.Remove(key); return null; }
+                        return entry.Tracks;
+                    }
+                }
+
+                private IUserMessage? GetSearchCacheMessage(ulong guildId, ulong userId)
+                {
+                    var key = SearchCacheKey(guildId, userId);
+                    lock (_searchCacheLock)
+                    {
+                        if (!_searchCache.TryGetValue(key, out var entry)) return null;
+                        return entry.Message;
+                    }
+                }
 
         public Action<string>? LogSink { get; set; }
 

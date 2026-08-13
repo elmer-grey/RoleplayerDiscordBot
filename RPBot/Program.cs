@@ -182,6 +182,8 @@ private MusicStats? _musicStats;
         /// <summary>
         /// Отписывает все обработчики от DiscordSocketClient и утилизирует его.
         /// Безопасна для null и для уже disposed client.
+        /// До финального Dispose останавливает фоновые таймеры автообновления
+        /// control message — иначе они будут долбиться в disposed HttpClient.
         /// </summary>
         private void DisposeClientSafely(DiscordSocketClient? client)
         {
@@ -205,11 +207,9 @@ private MusicStats? _musicStats;
                 client.GuildMemberUpdated -= OnGuildMemberUpdated;
             }
             catch { }
-                    // Останавливаем таймеры автообновления control message до того, как
-                    // уничтожим клиента — иначе они будут долбиться в disposed HttpClient.
-                    try { RPBot.GameSessionCommands.StopAllAutoRefresh(); } catch { }
-                    try { client.Dispose(); } catch { }
-                }
+            try { RPBot.GameSessionCommands.StopAllAutoRefresh(); } catch { }
+            try { client.Dispose(); } catch { }
+        }
 
         private Task SetupDiscordEvents()
         {
@@ -793,20 +793,18 @@ private MusicStats? _musicStats;
 			{
 				var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
 				var resolved = BotConfig.ResolvePath(path);
-				var dir = Path.GetDirectoryName(resolved) ?? AppContext.BaseDirectory;
-				Directory.CreateDirectory(dir);
 				var options = new JsonSerializerOptions
 				{
 					WriteIndented = true,
 					Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
 				};
 				var json = JsonSerializer.Serialize(_serverConfigs, options);
-				// Атомарная запись: .tmp -> .bak -> основной
-				var tmpPath = resolved + ".tmp";
-				File.WriteAllText(tmpPath, json, System.Text.Encoding.UTF8);
+				// SafeJsonIO делает .tmp → File.Move(overwrite:true); межпроцессный
+				// лок и .bak-фолбэк для serverconfigs всё ещё держим локально (это было
+				// до появления SafeJsonIO и не сломано — только упрощаем запись).
+				SafeJsonIO.WriteAtomic(resolved, json);
 				if (File.Exists(resolved))
-					File.Copy(resolved, resolved + ".bak", overwrite: true);
-				File.Move(tmpPath, resolved, overwrite: true);
+					SafeJsonIO.WriteAtomic(resolved + ".bak", json);
 			}
 			catch (Exception ex)
 			{
@@ -2519,13 +2517,15 @@ private MusicStats? _musicStats;
             try
             {
                 var dir = BotConfig.GetSettingsDirectory();
-                    Directory.CreateDirectory(dir);
-                    var path = Path.Combine(dir, MasterGuideHistoryFile);
-                var bakPath = path + ".bak";
+                Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, MasterGuideHistoryFile);
                 var json = JsonSerializer.Serialize(_masterGuideSentAt, new JsonSerializerOptions { WriteIndented = true });
-                // Атомарная запись: сначала .bak, затем основной файл
-                File.WriteAllText(bakPath, json, new UTF8Encoding(false));
-                File.Copy(bakPath, path, overwrite: true);
+                // SafeJsonIO.WriteAtomic: .tmp → File.Move(overwrite:true). Сначала
+                // обновляем .bak-фолбэк, потом основной файл — чтобы при первом
+                // запуске не было момента, когда основной файл уже новый, а .bak
+                // остался от прошлой записи.
+                SafeJsonIO.WriteAtomic(path + ".bak", json);
+                SafeJsonIO.WriteAtomic(path, json);
             }
             catch (Exception ex)
             {
@@ -2759,28 +2759,7 @@ private MusicStats? _musicStats;
         }
 
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
-        {
-            try
-            {
-                var tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
-                msk = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
-                return true;
-            }
-            catch
-            {
-                try
-                {
-                    var tz = TimeZoneInfo.FindSystemTimeZoneById("Russian Standard Time");
-                    msk = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
-                    return true;
-                }
-                catch
-                {
-                    msk = utc.AddHours(3);
-                    return false;
-                }
-            }
-        }
+            => MoscowTime.TryConvertFromUtc(utc, out msk);
 
         // Метод-переходник: вся логика унесена в EventAnnouncer.AnnounceUpdatedAsync.
         // Сохраняем сигнатуру для редких случаев, когда требуется обновить embed записи
@@ -3969,9 +3948,8 @@ await Task.CompletedTask;
                     string amountStr = string.Empty;
                     foreach (var comp in modal.Data.Components)
                     {
-                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
                         if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
-                        if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
+                        else if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
                     }
 
                     if (!int.TryParse(outcomeStr, out var outcomeNum) || outcomeNum < 1)
@@ -4137,12 +4115,11 @@ await Task.CompletedTask;
                     string title = string.Empty, oc1 = string.Empty, oc2 = string.Empty, oc3 = string.Empty, durationStr = string.Empty;
                     foreach (var comp in modal.Data.Components)
                     {
-                        try { await LogInfo($"Modal field: id={comp.CustomId} value={comp.Value}"); } catch { }
                         if (string.Equals(comp.CustomId, "title", StringComparison.OrdinalIgnoreCase)) title = comp.Value ?? string.Empty;
-                        if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
-                        if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
-                        if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
-                        if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
+                        else if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
+                        else if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                        else if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
+                        else if (string.Equals(comp.CustomId, "duration_minutes", StringComparison.OrdinalIgnoreCase)) durationStr = comp.Value ?? string.Empty;
                     }
 
                     await LogInfo($"Create modal values: title='{title}' oc1='{oc1}' oc2='{oc2}' oc3='{oc3}' duration='{durationStr}' user={modal.User?.Id}");
@@ -4309,10 +4286,10 @@ await Task.CompletedTask;
                         foreach (var comp in modal.Data.Components)
                         {
                             if (string.Equals(comp.CustomId, "outcome1", StringComparison.OrdinalIgnoreCase)) oc1 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome4", StringComparison.OrdinalIgnoreCase)) oc4 = comp.Value ?? string.Empty;
-                            if (string.Equals(comp.CustomId, "outcome5", StringComparison.OrdinalIgnoreCase)) oc5 = comp.Value ?? string.Empty;
+                            else if (string.Equals(comp.CustomId, "outcome2", StringComparison.OrdinalIgnoreCase)) oc2 = comp.Value ?? string.Empty;
+                            else if (string.Equals(comp.CustomId, "outcome3", StringComparison.OrdinalIgnoreCase)) oc3 = comp.Value ?? string.Empty;
+                            else if (string.Equals(comp.CustomId, "outcome4", StringComparison.OrdinalIgnoreCase)) oc4 = comp.Value ?? string.Empty;
+                            else if (string.Equals(comp.CustomId, "outcome5", StringComparison.OrdinalIgnoreCase)) oc5 = comp.Value ?? string.Empty;
                         }
 
                         if (string.IsNullOrWhiteSpace(oc1) || string.IsNullOrWhiteSpace(oc2))
