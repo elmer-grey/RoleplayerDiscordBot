@@ -73,6 +73,7 @@ namespace RPBot
         private Task OnClientDisconnected(Exception exception)
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
+            var nowUtc = DateTimeOffset.UtcNow;
             _ = Task.Run(async () =>
             {
                 try
@@ -82,8 +83,21 @@ namespace RPBot
                         var p = kv.Value;
                         if (!p.IsResolved)
                         {
+                            // ✅ Bug 5: фиксируем момент ухода в offline для последующего
+                            // сдвига BetsCloseAtUtc после восстановления.
+                            if (!p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                            {
+                                p.BotOfflineAtUtc = nowUtc;
+                                p.WasBotOfflineOnShutdown = true;
+                            }
                             await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
                         }
+                    }
+                    // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
+                    try { await SaveStateAsync().ConfigureAwait(false); }
+                    catch (Exception saveEx)
+                    {
+                        await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -101,7 +115,7 @@ namespace RPBot
             return Task.CompletedTask;
         }
 
-        private class PersistentPrediction
+        internal class PersistentPrediction
         {
             public ulong GuildId { get; set; }
             public ulong CreatorId { get; set; }
@@ -118,6 +132,15 @@ namespace RPBot
 
             public DateTimeOffset CreatedAtUtc { get; set; }
             public DateTimeOffset BetsCloseAtUtc { get; set; }
+            // ✅ Bug 5: если бот был офлайн в момент активного приёма ставок,
+            // здесь сохраняется время ухода в offline. При LoadStateAsync мы
+            // сдвигаем BetsCloseAtUtc на длительность offline, чтобы таймер
+            // не "схлопнулся" в прошлое и приём ставок не закрылся мгновенно.
+            public DateTimeOffset? BotOfflineAtUtc { get; set; }
+            // Длительность последнего offline-периода (мин), отображается в embed'ах
+            public double? LastOfflineDurationMinutes { get; set; }
+            // true = бот сейчас offline (для восстановления состояния кнопок/embed)
+            public bool WasBotOfflineOnShutdown { get; set; }
             public bool IsLocked { get; set; }
             public bool IsResolved { get; set; }
             public int? WinningOutcomeId { get; set; }
@@ -143,6 +166,9 @@ namespace RPBot
                                 Outcomes = v.Outcomes, // ✅ Сохраняем новый формат
                                 CreatedAtUtc = v.CreatedAtUtc,
                                 BetsCloseAtUtc = v.BetsCloseAtUtc,
+                                BotOfflineAtUtc = v.BotOfflineAtUtc,
+                                LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
+                                WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
                                 IsLocked = v.IsLocked,
                                 IsResolved = v.IsResolved,
                                 WinningOutcomeId = v.WinningOutcomeId,
@@ -215,7 +241,12 @@ namespace RPBot
                             MessageId = p.MessageId,
                             Title = p.Title,
                             CreatedAtUtc = p.CreatedAtUtc,
+                            // ✅ Bug 5: сдвигаем BetsCloseAtUtc на длительность offline,
+                            // чтобы приём ставок не закрылся сразу же после рестарта.
                             BetsCloseAtUtc = p.BetsCloseAtUtc,
+                            BotOfflineAtUtc = p.BotOfflineAtUtc,
+                            LastOfflineDurationMinutes = p.LastOfflineDurationMinutes,
+                            WasBotOfflineOnShutdown = p.WasBotOfflineOnShutdown,
                             IsLocked = p.IsLocked,
                             IsResolved = p.IsResolved,
                             WinningOutcomeId = p.WinningOutcomeId,
@@ -224,6 +255,28 @@ namespace RPBot
 
                         // ✅ БАГ 7: Логируем для диагностики потери ставок
                         await LogAsync($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}").ConfigureAwait(false);
+
+                        // ✅ Bug 5: если бот был офлайн во время приёма ставок — сдвигаем таймер
+                        // на длительность offline. Только для ещё не закрытых прогнозов.
+                        if (!ap.IsLocked && !ap.IsResolved && p.BotOfflineAtUtc.HasValue && p.WasBotOfflineOnShutdown)
+                        {
+                            var offlineAt = p.BotOfflineAtUtc.Value;
+                            var nowUtc = DateTimeOffset.UtcNow;
+                            var offlineDuration = nowUtc - offlineAt;
+                            if (offlineDuration > TimeSpan.Zero)
+                            {
+                                var oldCloseAt = ap.BetsCloseAtUtc;
+                                ap.BetsCloseAtUtc = oldCloseAt + offlineDuration;
+                                ap.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
+                                await LogAsync(
+                                    $"OFFLINE_SHIFT guild={p.GuildId} channel={p.ChannelId} offlineAt='{offlineAt:yyyy-MM-dd HH:mm:ss}' " +
+                                    $"offlineDuration={offlineDuration} oldClose='{oldCloseAt:HH:mm:ss}' newClose='{ap.BetsCloseAtUtc:HH:mm:ss}'")
+                                    .ConfigureAwait(false);
+                            }
+                            // Сбрасываем признаки offline: бот снова онлайн, окно учтено.
+                            ap.BotOfflineAtUtc = null;
+                            ap.WasBotOfflineOnShutdown = false;
+                        }
 
                         // ✅ Обновлено: загрузка исходов (поддержка старого и нового формата)
                         if (p.Outcomes != null && p.Outcomes.Count > 0)
@@ -934,6 +987,17 @@ namespace RPBot
             if (botOffline)
             {
                 builder.WithDescription("⚠️ **БОТ НЕАКТИВЕН** — таймер может отставать");
+            }
+
+            // ✅ Bug 5: после рестарта показываем пользователю, что окно приёма ставок
+            // было автоматически сдвинуто из-за offline-периода.
+            if (!showLocked && !botOffline && p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
+            {
+                var minutes = p.LastOfflineDurationMinutes.Value;
+                var minsText = minutes >= 1
+                    ? $"{Math.Round(minutes)} мин"
+                    : $"{Math.Round(minutes * 60)} сек";
+                builder.AddField("⏰ Сдвиг таймера", $"Бот был неактивен ~{minsText}, приём ставок продлён на это время.", false);
             }
 
             var totalPool = p.TotalPool;
@@ -1764,6 +1828,44 @@ namespace RPBot
                         catch
                         {
                             // клиент уже отписан — это норма при перезапуске
+                        }
+
+                        // ✅ Bug 5: фиксируем момент ухода в offline на момент штатного shutdown,
+                        // чтобы при следующем старте LoadStateAsync мог сдвинуть BetsCloseAtUtc.
+                        try
+                        {
+                            var nowUtc = DateTimeOffset.UtcNow;
+                            foreach (var kv in _active.ToArray())
+                            {
+                                var p = kv.Value;
+                                if (!p.IsResolved && !p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                                {
+                                    p.BotOfflineAtUtc = nowUtc;
+                                    p.WasBotOfflineOnShutdown = true;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            try
+                            {
+                                PredictionErrorLogger.LogAsync("Shutdown:markOffline", ex, "Failed to mark predictions offline").GetAwaiter().GetResult();
+                            }
+                            catch { /* не блокируем shutdown */ }
+                        }
+
+                        // ✅ Bug 5: сохраняем состояние, чтобы BotOfflineAtUtc дошёл до файла.
+                        try
+                        {
+                            SaveStateAsync().GetAwaiter().GetResult();
+                        }
+                        catch (Exception ex)
+                        {
+                            try
+                            {
+                                PredictionErrorLogger.LogAsync("Shutdown:saveState", ex, "Failed to persist predictions state on shutdown").GetAwaiter().GetResult();
+                            }
+                            catch { /* не блокируем shutdown */ }
                         }
 
                         try { _cts.Cancel(); } catch { }

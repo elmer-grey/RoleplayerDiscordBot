@@ -65,6 +65,11 @@ namespace RPBot
 
         public DateTimeOffset CreatedAtUtc { get; set; }
         public DateTimeOffset BetsCloseAtUtc { get; set; }
+        // ✅ Bug 5: если бот ушёл в offline во время приёма ставок, сохраняем момент.
+        // Используется в Shutdown()/OnClientDisconnected, сбрасывается в LoadStateAsync.
+        public DateTimeOffset? BotOfflineAtUtc { get; set; }
+        public double? LastOfflineDurationMinutes { get; set; }
+        public bool WasBotOfflineOnShutdown { get; set; }
         public bool IsLocked { get; set; }
         public bool IsResolved { get; set; }
         public int? WinningOutcomeId { get; set; }
