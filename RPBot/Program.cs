@@ -551,15 +551,15 @@ private MusicStats? _musicStats;
                 return;
             }
             var (ok, error) = await predictionService.CancelAsync(guildId, resolverId, isAdmin);
-            if (ok)
-            {
-                try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
-            }
-            else
-            {
-                try { await component.RespondAsync(error, ephemeral: true); } catch { }
-            }
-        }
+                        if (ok)
+                        {
+                            try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+                        }
+                        else
+                        {
+                            try { await component.RespondAsync(error, ephemeral: true); } catch { }
+                        }
+                    }
 
         private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
         {
@@ -579,16 +579,51 @@ private MusicStats? _musicStats;
                 return;
             }
             var (ok, error) = await predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
-            if (!ok)
-            {
-                // Avoid responding if the original message was deleted — try update quietly
-                try { await component.RespondAsync(error, ephemeral: true); } catch { }
-            }
-            else
-            {
-                try { await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); }); } catch { }
-            }
-        }
+                        if (!ok)
+                        {
+                            // Avoid responding if the original message was deleted — try update quietly
+                            try { await component.RespondAsync(error, ephemeral: true); } catch { }
+                        }
+                        else
+                        {
+                            try { await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); }); } catch { }
+                        }
+                    }
+
+                    // ✅ R6 fix: чистит _pendingBetUi для конкретной гильдии (все пользователи).
+                    // Вызывается на cancel/resolve/autocancel.
+                    private void ClearPendingBetUiForGuild(ulong guildId)
+                    {
+                        var prefix = $"{guildId}:";
+                        foreach (var key in _pendingBetUi.Keys)
+                        {
+                            if (key.StartsWith(prefix, StringComparison.Ordinal))
+                            {
+                                if (_pendingBetUi.TryRemove(key, out var stale) && stale != null)
+                                {
+                                    try { stale.DeleteOriginalResponseAsync().GetAwaiter().GetResult(); } catch { }
+                                }
+                            }
+                        }
+                    }
+
+                    // ✅ R6 fix: полная очистка _pendingBetUi (для Disconnected/Shutdown).
+                    private void ClearAllPendingBetUi()
+                    {
+                        foreach (var key in _pendingBetUi.Keys.ToList())
+                        {
+                            if (_pendingBetUi.TryRemove(key, out var stale) && stale != null)
+                            {
+                                try { stale.DeleteOriginalResponseAsync().GetAwaiter().GetResult(); } catch { }
+                            }
+                        }
+                    }
+
+                    // ✅ R6 fix: обработчики событий PredictionService об окончании/отмене прогноза.
+                    // У PendingBetUi-preview кнопки нет исходного сообщения (его ещё не отправили),
+                    // поэтому просто удаляем запись из словаря — никакой DeleteOriginalResponseAsync.
+                    private void OnPredictionResolvedForUi(ulong guildId) => ClearPendingBetUiForGuild(guildId);
+                    private void OnPredictionCancelledForUi(ulong guildId) => ClearPendingBetUiForGuild(guildId);
 
         // --- Bwonk persistence helpers (inside Program class) ---
         private Dictionary<ulong, int> LoadBwonkCounts()
@@ -1188,7 +1223,14 @@ private MusicStats? _musicStats;
 
 			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
 			_predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
-			_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
+						// ✅ R6 fix: подписываемся на resolve/cancel прогноза, чтобы почистить _pendingBetUi
+						// для затронутой гильдии (удаляем «висящие» кнопки «Продолжить»).
+						if (_predictionService != null)
+						{
+							_predictionService.PredictionResolved += OnPredictionResolvedForUi;
+							_predictionService.PredictionCancelled += OnPredictionCancelledForUi;
+						}
+						_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
 			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
 			if (_config.Music.Enabled)
@@ -1218,7 +1260,7 @@ private MusicStats? _musicStats;
 				.AddSingleton(_statusNotifier)
 				.AddSingleton(_pointsService)
 				.AddSingleton(_pointsUserIndex)
-				.AddSingleton(_predictionService)
+				.AddSingleton(_predictionService!)
 				.AddSingleton(_voicePointsService)
 				.AddSingleton<QueueModule>()
 				.AddSingleton<InfoCommands>()
@@ -2153,6 +2195,12 @@ private MusicStats? _musicStats;
 
                         var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
                         _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+                        // ✅ R6 fix: см. первичную инициализацию — обработчики тоже подписываем.
+                        if (_predictionService != null)
+                        {
+                            _predictionService.PredictionResolved += OnPredictionResolvedForUi;
+                            _predictionService.PredictionCancelled += OnPredictionCancelledForUi;
+                        }
                         _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
@@ -3804,8 +3852,12 @@ await Task.CompletedTask;
 
         private async Task OnDisconnected(Exception exception)
         {
-                    // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
+            // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
                     try { _eventOpsRemigrator?.Cancel(); } catch { }
+
+                    // ✅ R6 fix: при отключении от Discord все pending-UI кнопки
+                    // «Продолжить» теряют смысл — клиент их не видит. Чистим.
+                    try { ClearAllPendingBetUi(); } catch { }
 
                     if (_reconnectionService == null)
                     {
@@ -3851,6 +3903,10 @@ await Task.CompletedTask;
                     _uiStarted = false;
                 }
                 catch (Exception ex) { Console.WriteLine($"Error disposing UI: {ex}"); }
+
+                // ✅ R6 fix: очищаем все pending-UI кнопки «Продолжить» —
+                // Discord-клиент сейчас уходит в shutdown, отвечать на них всё равно некому.
+                try { ClearAllPendingBetUi(); } catch { }
 
                 // Останавливаем клиента
                 try

@@ -70,6 +70,13 @@ namespace RPBot
             _client.Disconnected += OnClientDisconnected;
         }
 
+        // ✅ R6 fix: события для очистки внешнего UI (кнопки «Продолжить» в Program.cs).
+        // PredictionResolveOccured / PredictionCancelledOccured — когда активный прогноз
+        // покинул _active (resolve/cancel). Используются вызывающей стороной, чтобы
+        // почистить _pendingBetUi для затронутых гильдий.
+        public event Action<ulong>? PredictionResolved;
+        public event Action<ulong>? PredictionCancelled;
+
         private Task OnClientDisconnected(Exception exception)
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
@@ -395,15 +402,16 @@ namespace RPBot
                 await _stateFileGate.WaitAsync().ConfigureAwait(false);
                 try
                 {
-                    await File.WriteAllTextAsync(_stateFilePath, "{}", Encoding.UTF8).ConfigureAwait(false);
-                }
-                finally
-                {
-                    _stateFileGate.Release();
-                }
-            }
-            return true;
-        }
+                                // ✅ R6 fix: создание пустого файла через SafeJsonIO (атомарно).
+                                await SafeJsonIO.WriteAtomicAsync(_stateFilePath, "{}", CancellationToken.None).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                _stateFileGate.Release();
+                            }
+                        }
+                        return true;
+                    }
 
         private async Task LoadStateAsync()
         {
@@ -578,12 +586,13 @@ namespace RPBot
                 {
                     var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
                     var cleanedJson = System.Text.Json.JsonSerializer.Serialize(dict, options);
-                    await File.WriteAllTextAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
-                }
+                                    // ✅ R6 fix: атомарная запись (был прямой File.WriteAllTextAsync).
+                                    await SafeJsonIO.WriteAtomicAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
+                                }
             }
             catch (Exception ex)
             {
@@ -793,149 +802,153 @@ namespace RPBot
         }
 
         public async Task<(bool ok, string error)> PlaceBetAsync(
-            ulong guildId,
-            ulong userId,
-            int outcomeId,
-            long amount)
-        {
-            if (!_active.TryGetValue(guildId, out var p))
-                return (false, "Активного прогноза нет.");
+                    ulong guildId,
+                    ulong userId,
+                    int outcomeId,
+                    long amount)
+                {
+                    if (!_active.TryGetValue(guildId, out var p))
+                        return (false, "Активного прогноза нет.");
 
-            if (p.IsLocked)
-                return (false, "Приём ставок уже завершён.");
-
-            if (DateTimeOffset.UtcNow >= p.BetsCloseAtUtc)
-            {
-                p.IsLocked = true;
-                await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
-                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-
-                // ✅ НОВОЕ: Логируем закрытие приёма ставок
-                var betsDuration = DateTimeOffset.UtcNow - p.CreatedAtUtc;
-                await LogAsync($"LOCK guild={guildId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
-
-                return (false, "Время приёма ставок истекло.");
-            }
-
-            if (amount <= 0)
-                return (false, "Сумма ставки должна быть положительной.");
-
-            // Если пользователь уже ставил
-            await p.Sync.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                if (p.Bets.TryGetValue(userId, out var existing))
-            {
-                // Разрешаем только добавление на тот же исход
-                if (existing.OutcomeId != outcomeId)
-                    return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
-
-                // Тратим дополнительные очки
-                    if (!_points.TrySpend(guildId, userId, amount))
-                        return (false, "Недостаточно костяшек для этой ставки.");
-
-                    existing.Amount += amount;
-
-                    // ✅ Обновлено: поиск исхода по ID
-                    var outcome = p.GetOutcomeById(outcomeId);
-                    if (outcome == null)
-                        return (false, "Неверный ID исхода.");
-
-                    outcome.TotalStake += amount;
-                    if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
+                    // ✅ R6 fix: lock first, then re-check time/locked state. This closes
+                    // the race where MonitorLoopAsync sets IsLocked=true between our
+                    // time check and Sync.WaitAsync() — without the lock the user could
+                    // slip a bet through in the gap.
+                    await p.Sync.WaitAsync().ConfigureAwait(false);
+                    try
                     {
-                        outcome.TopUserId = userId;
-                        outcome.TopUserStake = existing.Amount;
+                        if (p.IsLocked)
+                            return (false, "Приём ставок уже завершён.");
+
+                        if (DateTimeOffset.UtcNow >= p.BetsCloseAtUtc)
+                        {
+                            p.IsLocked = true;
+                            await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
+                            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                            // ✅ НОВОЕ: Логируем закрытие приёма ставок
+                            var betsDuration = DateTimeOffset.UtcNow - p.CreatedAtUtc;
+                            await LogAsync($"LOCK guild={guildId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
+
+                            return (false, "Время приёма ставок истекло.");
+                        }
+
+                        if (amount <= 0)
+                            return (false, "Сумма ставки должна быть положительной.");
+
+                        // Если пользователь уже ставил
+                        if (p.Bets.TryGetValue(userId, out var existing))
+                        {
+                            // Разрешаем только добавление на тот же исход
+                            if (existing.OutcomeId != outcomeId)
+                                return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
+
+                            // Тратим дополнительные очки
+                            if (!_points.TrySpend(guildId, userId, amount))
+                                return (false, "Недостаточно костяшек для этой ставки.");
+
+                            existing.Amount += amount;
+
+                            // ✅ Обновлено: поиск исхода по ID
+                            var outcome = p.GetOutcomeById(outcomeId);
+                            if (outcome == null)
+                                return (false, "Неверный ID исхода.");
+
+                            outcome.TotalStake += amount;
+                            if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
+                            {
+                                outcome.TopUserId = userId;
+                                outcome.TopUserStake = existing.Amount;
+                            }
+
+                            await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                            // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после увеличения ставки
+                            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                            await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
+                            return (true, string.Empty);
+                        }
+
+                        // Новая ставка
+                        if (!_points.TrySpend(guildId, userId, amount))
+                            return (false, "Недостаточно костяшек для этой ставки.");
+
+                        var bet = new PredictionBet
+                        {
+                            UserId = userId,
+                            OutcomeId = outcomeId,
+                            Amount = amount
+                        };
+
+                        p.Bets[userId] = bet;
+
+                        if (!_userStats.TryGetValue(guildId, out var guildStats))
+                        {
+                            guildStats = new Dictionary<ulong, UserPredictionStats>();
+                            _userStats[guildId] = guildStats;
+                        }
+
+                        if (!guildStats.TryGetValue(userId, out var userStats))
+                        {
+                            userStats = new UserPredictionStats { UserId = userId };
+                            guildStats[userId] = userStats;
+                        }
+
+                        if (p.Bets.Count == 1)
+                        {
+                            userStats.FirstBets++;
+                        }
+
+                        // ✅ Обновлено: поиск исхода по ID
+                        var outcomeNew = p.GetOutcomeById(outcomeId);
+                        if (outcomeNew == null)
+                            return (false, "Неверный ID исхода.");
+
+                        outcomeNew.TotalStake += amount;
+                        if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
+                        {
+                            outcomeNew.TopUserId = userId;
+                            outcomeNew.TopUserStake = amount;
+                        }
+
+                        await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                        // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после новой ставки
+                        _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                        await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
+                        return (true, string.Empty);
                     }
+                    finally
+                    {
+                        p.Sync.Release();
+                    }
+                                }
 
-                    await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+                                public async Task<(bool ok, string error)> ResolveAsync(
+                                    ulong guildId,
+                                    ulong resolverId,
+                                    bool isAdminOverride,
+                                    int winningOutcomeId)
+                                {
+                                    if (!_active.TryGetValue(guildId, out var p))
+                                        return (false, "Активного прогноза нет.");
 
-                    // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после увеличения ставки
-                    _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+                                    if (p.IsResolved)
+                                        return (false, "Прогноз уже завершён.");
 
-                    await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
-                    return (true, string.Empty);
-            }
+                                    // Нельзя завершать прогноз до окончания приёма ставок, если нет админского оверрайда
+                                    if (!isAdminOverride && DateTimeOffset.UtcNow < p.BetsCloseAtUtc)
+                                    {
+                                        return (false, "Прогноз ещё идёт: приём ставок не завершён. Дождитесь окончания времени или используйте административный доступ.");
+                                    }
 
-            // Новая ставка
-                if (!_points.TrySpend(guildId, userId, amount))
-                    return (false, "Недостаточно костяшек для этой ставки.");
+                                    if (!(resolverId == p.CreatorId || isAdminOverride))
+                                        return (false, "Завершить прогноз может только создатель или администратор.");
 
-                var bet = new PredictionBet
-                {
-                    UserId = userId,
-                    OutcomeId = outcomeId,
-                    Amount = amount
-                };
-
-                p.Bets[userId] = bet;
-
-                if (!_userStats.TryGetValue(guildId, out var guildStats))
-                {
-                    guildStats = new Dictionary<ulong, UserPredictionStats>();
-                    _userStats[guildId] = guildStats;
-                }
-
-                if (!guildStats.TryGetValue(userId, out var userStats))
-                {
-                    userStats = new UserPredictionStats { UserId = userId };
-                    guildStats[userId] = userStats;
-                }
-
-                if (p.Bets.Count == 1)
-                {
-                    userStats.FirstBets++;
-                }
-
-                // ✅ Обновлено: поиск исхода по ID
-                var outcomeNew = p.GetOutcomeById(outcomeId);
-                if (outcomeNew == null)
-                    return (false, "Неверный ID исхода.");
-
-                outcomeNew.TotalStake += amount;
-                if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
-                {
-                    outcomeNew.TopUserId = userId;
-                    outcomeNew.TopUserStake = amount;
-                }
-
-                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-
-                // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после новой ставки
-                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-
-                await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
-                return (true, string.Empty);
-            }
-            finally
-            {
-                p.Sync.Release();
-            }
-        }
-
-        public async Task<(bool ok, string error)> ResolveAsync(
-            ulong guildId,
-            ulong resolverId,
-            bool isAdminOverride,
-            int winningOutcomeId)
-        {
-            if (!_active.TryGetValue(guildId, out var p))
-                return (false, "Активного прогноза нет.");
-
-            if (p.IsResolved)
-                return (false, "Прогноз уже завершён.");
-
-            // Нельзя завершать прогноз до окончания приёма ставок, если нет админского оверрайда
-            if (!isAdminOverride && DateTimeOffset.UtcNow < p.BetsCloseAtUtc)
-            {
-                return (false, "Прогноз ещё идёт: приём ставок не завершён. Дождитесь окончания времени или используйте административный доступ.");
-            }
-
-            if (!(resolverId == p.CreatorId || isAdminOverride))
-                return (false, "Завершить прогноз может только создатель или администратор.");
-
-            p.IsResolved = true;
-            p.WinningOutcomeId = winningOutcomeId;
+                                    p.IsResolved = true;
+                                    p.WinningOutcomeId = winningOutcomeId;
             p.IsLocked = true;
 
             // ✅ Обновлено: получение победившего исхода динамически
@@ -1084,6 +1097,10 @@ namespace RPBot
             _activeChannels.TryRemove(guildId, out _);
             _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
 
+            // ✅ R6 fix: уведомляем владельца (Program.cs) о завершении прогноза,
+            // чтобы тот почистил _pendingBetUi для этой гильдии.
+            try { PredictionResolved?.Invoke(guildId); } catch { }
+
             // ✅ УЛУЧШЕНО: Логируем с информацией о ставках и победителях
             var totalBets = p.Bets.Count;
             var winningBets = p.Bets.Values.Count(b => b.OutcomeId == winningOutcomeId);
@@ -1148,6 +1165,10 @@ namespace RPBot
 
             _active.TryRemove(guildId, out _);
             _activeChannels.TryRemove(guildId, out _);
+
+            // ✅ R6 fix: уведомляем владельца (Program.cs) об отмене прогноза,
+            // чтобы тот почистил _pendingBetUi для этой гильдии.
+            try { PredictionCancelled?.Invoke(guildId); } catch { }
 
             // ✅ УЛУЧШЕНО: Логируем с информацией о возвращённых ставках
             var totalBets = p.Bets.Count;
@@ -1530,17 +1551,19 @@ namespace RPBot
             try
             {
                 var json = System.Text.Json.JsonSerializer.Serialize(_history, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_historyFilePath, json).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await LogAsync($"HISTORY_SAVE_ERROR: {ex.Message}");
-            }
-            finally
-            {
-                _historyGate.Release();
-            }
-        }
+                        // ✅ R6 fix: атомарная запись через SafeJsonIO, как SaveStateAsync —
+                        // при падении процесса в момент сереализации файл не будет обрезан.
+                        await SafeJsonIO.WriteAtomicAsync(_historyFilePath, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogAsync($"HISTORY_SAVE_ERROR: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _historyGate.Release();
+                    }
+                }
 
         private async Task AddToHistoryAsync(ActivePrediction pred, int? winningOutcomeId, bool wasCancelled)
         {
@@ -1707,17 +1730,18 @@ namespace RPBot
             {
                 var snapshot = _userStats.ToDictionary(kv => kv.Key, kv => kv.Value);
                 var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_statsFilePath, json).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("SaveStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _statsGate.Release();
-            }
-        }
+                        // ✅ R6 fix: атомарная запись — соответствует SaveStateAsync/SaveHistoryAsync.
+                        await SafeJsonIO.WriteAtomicAsync(_statsFilePath, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("SaveStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _statsGate.Release();
+                    }
+                }
 
         // ✅ НОВОЕ: Обновление статистики пользователя после завершения прогноза
         private async Task UpdateUserStatsAfterResolution(
@@ -1940,17 +1964,18 @@ namespace RPBot
             {
                 var snapshot = _userAchievements.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
                 var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_achievementsFilePath, json).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("SaveAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
-            }
-            finally
-            {
-                _achievementsGate.Release();
-            }
-        }
+                        // ✅ R6 fix: атомарная запись.
+                        await SafeJsonIO.WriteAtomicAsync(_achievementsFilePath, json).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("SaveAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _achievementsGate.Release();
+                    }
+                }
 
         // ✅ НОВОЕ: Создаёт Embed с новыми достижениями участников
         private Embed? BuildAchievementsEmbed(ulong guildId, string predictionTitle)
