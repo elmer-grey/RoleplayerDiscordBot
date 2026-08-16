@@ -126,7 +126,6 @@ namespace RPBot
                 {
                     _client = client;
                     _points = points;
-                            BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor enter stateFile={_stateFilePath ?? "(unset)"}");
                             // State file for persisting active predictions across restarts
                                         // Кладём файлы в production-каталог данных (см. BotConfig.GetDataDirectory),
                                         // чтобы они не терялись при пересборке/clean.
@@ -137,8 +136,6 @@ namespace RPBot
                                         _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
                                         _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
 
-                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor stateFile={_stateFilePath} exists={File.Exists(_stateFilePath)} size={(File.Exists(_stateFilePath) ? new FileInfo(_stateFilePath).Length : 0)}");
-
                             // ✅ НОВОЕ: История прогнозов, статистика и достижения.
                             // Загружаем ДО старта, чтобы RunStage3RestoreAsync мог сразу выдать
                             // строку "HISTORY_LOADED entries=N" в ЭТАП 3/4. Никаких больше
@@ -146,8 +143,6 @@ namespace RPBot
                             try { LoadHistoryAsync().GetAwaiter().GetResult(); } catch { /* проглотим, уже отрапортовано */ }
                             try { LoadStatsAsync().GetAwaiter().GetResult(); } catch { }
                             try { LoadAchievementsAsync().GetAwaiter().GetResult(); } catch { }
-
-                            BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor historyLoaded={_historyEntriesLoaded}");
 
                             // Фоновая задача для авто-блокировки ставок по истечении времени.
                             _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
@@ -161,7 +156,6 @@ namespace RPBot
 
                             // ✅ Bug 6: Обновляем сообщения при отключении бота
                             _client.Disconnected += OnClientDisconnected;
-                            BotLogger.Info(LogCategory.Predict, "[TRACE] PredictionService:ctor exit, Disconnected subscribed");
                         }
 
         // ✅ R6 fix: события для очистки внешнего UI (кнопки «Продолжить» в Program.cs).
@@ -175,7 +169,6 @@ namespace RPBot
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
             var nowUtc = DateTimeOffset.UtcNow;
-                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:enter nowUtc={nowUtc:O} _active.Count={_active.Count} _firstReadyValidated={_firstReadyValidated} restartPending={IsRestartPending()} shutdownInProgress={_shutdownInProgress} exception={exception?.GetType().Name ?? "null"}");
                                                         // ✅ Round 7-C4: разделение событий по типу.
                                                         //   - "restart" — наш собственный рестарт (.restart_pending флаг
                                                         //     выставлен через /restart или Ctrl+C). Шлём в канал.
@@ -206,7 +199,6 @@ namespace RPBot
                                                         {
                                                             kind = "offline";
                                                         }
-                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:kind={kind}");
                             var note = exception?.GetType().Name ?? "Disconnected";
                                                                 // ✅ Round 7-C7: для kind=="restart" / kind=="shutdownHandled" обрабатываем СИНХРОННО в обработчике события,
                                                                                                                                 // но БЕЗ повторной отправки AnnounceOfflineAsync — сообщения уже отправлены
@@ -220,34 +212,30 @@ namespace RPBot
                                                                                                                                     return;
                                                                                                                                 }
                                                                                                                                 if (string.Equals(kind, "restart", StringComparison.Ordinal)
-                                                                                                                                   || string.Equals(kind, "shutdownHandled", StringComparison.Ordinal))
+                                                                                                                                || string.Equals(kind, "shutdownHandled", StringComparison.Ordinal))
                                                                                                                                 {
-                                                                                                                                   // ✅ Round 7-C7: вся работа (UpdateMessageAsync, markOffline, OfflineEvents, AnnounceOfflineAsync,
-                                                                                                                                   // SaveStateAsync) уже сделана в AnnounceShutdownAsync, который Program.cs зовёт ДО
-                                                                                                                                   // _client.StopAsync(). HttpClient здесь уже на пути к disposed — любые Discord API
-                                                                                                                                   // вызовы сорвутся ObjectDisposedException. Поэтому sync-блок только логирует
-                                                                                                                                   // факт прибытия и выходит.
-                                                                                                                                   BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:restartSyncStart kind={kind} (AnnounceShutdownAsync already handled)");
-                                                                                                                                   try
-                                                                                                                                   {
-                                                                                                                                       foreach (var kv in _active.ToArray())
-                                                                                                                                       {
-                                                                                                                                           var p = kv.Value;
-                                                                                                                                           if (p.IsResolved) continue;
-                                                                                                                                           BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:skipUpdate guild={p.GuildId} reason=AnnounceShutdownAsync_handled");
-                                                                                                                                       }
-                                                                                                                                   }
-                                                                                                                                   catch (Exception ex)
-                                                                                                                                   {
-                                                                                                                                       BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:restartSyncEX {ex.GetType().Name}: {ex.Message}");
-                                                                                                                                   }
-                                                                                                                                   return;
+                                                                                                                                    // ✅ Round 7-C7: вся работа (UpdateMessageAsync, markOffline, OfflineEvents, AnnounceOfflineAsync,
+                                                                                                                                    // SaveStateAsync) уже сделана в AnnounceShutdownAsync, который Program.cs зовёт ДО
+                                                                                                                                    // _client.StopAsync(). HttpClient здесь уже на пути к disposed — любые Discord API
+                                                                                                                                    // вызовы сорвутся ObjectDisposedException. Поэтому sync-блок только логирует
+                                                                                                                                    // факт прибытия и выходит.
+                                                                                                                                    try
+                                                                                                                                    {
+                                                                                                                                    foreach (var kv in _active.ToArray())
+                                                                                                                                    {
+                                                                                                                                        var p = kv.Value;
+                                                                                                                                        if (p.IsResolved) continue;
+                                                                                                                                    }
+                                                                                                                                    }
+                                                                                                                                    catch
+                                                                                                                                    {
+                                                                                                                                    }
+                                                                                                                                    return;
                                                                                                                                 }
                                                                 _ = Task.Run(async () =>
                                                                 {
                                                                     try
                                                                     {
-                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:workerStart kind={kind}");
                                                                         foreach (var kv in _active.ToArray())
                                                                         {
                                                                             var p = kv.Value;
@@ -260,7 +248,6 @@ namespace RPBot
                                                                                 {
                                                                                     p.BotOfflineAtUtc = nowUtc;
                                                                                     p.WasBotOfflineOnShutdown = true;
-                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:markedOffline guild={p.GuildId}");
                                                                                 }
                                                                                 // ✅ Bug 6: добавляем событие в лог
                                                                                 p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
@@ -285,36 +272,28 @@ namespace RPBot
                                                                                         p.OfflineEvents.RemoveRange(0, p.OfflineEvents.Count - 20);
                                                                                     }
                                                                                 }
-                                                                                BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:UpdateMessageAsync guild={p.GuildId} kind={kind}");
                                                                                 await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
                                                                                 // ✅ Bug 6: оповещаем участников в канале, чтобы они видели,
                                                                                 // что бот ушёл на рестарт/offline, и кнопки скрыты.
                                                                                 try
                                                                                 {
-                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOffline guild={p.GuildId}");
                                                                                     await AnnounceOfflineAsync(p, kind, nowUtc).ConfigureAwait(false);
-                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOfflineDone guild={p.GuildId}");
                                                                                 }
                                                                                 catch (Exception annEx)
                                                                                 {
-                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOfflineEX {annEx.GetType().Name}: {annEx.Message}");
                                                                                     await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
                                                                                 }
                                                                             }
                                                                         }
                                                                         // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
-                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:SaveStateStart _active.Count={_active.Count}");
                                                                         try { await SaveStateAsync().ConfigureAwait(false); }
                                                                         catch (Exception saveEx)
                                                                         {
-                                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:SaveStateEX {saveEx.GetType().Name}: {saveEx.Message}");
                                                                             await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
                                                                         }
-                                                                        BotLogger.Info(LogCategory.Predict, "[TRACE] OnClientDisconnected:workerDone");
                                                                     }
                                                                     catch (Exception ex)
                                                                     {
-                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:workerEX {ex.GetType().Name}: {ex.Message}");
                                                                         await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
                                                                     }
                                                                 });
@@ -333,17 +312,10 @@ namespace RPBot
                 /// </summary>
                 public async Task RunStage3RestoreAsync()
                 {
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:enter stateFileExists={File.Exists(_stateFilePath)} firstValidated={_firstReadyValidated}");
-                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase1-start LoadStateAsync(false)");
                                     await LoadStateAsync(validate: false).ConfigureAwait(false);
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:phase1-done _active.Count={_active.Count}");
-                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase2-start ValidateActiveAfterReadyAsync");
                                     await ValidateActiveAfterReadyAsync().ConfigureAwait(false);
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:phase2-done _active.Count={_active.Count}");
-                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase3-start AnnounceOnlineForRestoredAsync");
                                     await AnnounceOnlineForRestoredAsync().ConfigureAwait(false);
                                     _firstReadyValidated = true;
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:done _firstReadyValidated=true _active.Count={_active.Count}");
                                 }
 
                                 // ✅ Round 7-C7: публичный метод для Program.cs.StopInternalAsync / GracefulShutdownAsync.
@@ -364,7 +336,6 @@ namespace RPBot
                                 //   в OnClientReadyForAnnouncements fallback, если флаг не был установлен заранее).
                                 public async Task AnnounceShutdownAsync(string kind)
                                 {
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:enter kind={kind} _active.Count={_active.Count}");
                                     _shutdownInProgress = true;
                                     var nowUtc = DateTimeOffset.UtcNow;
                                     foreach (var kv in _active.ToArray())
@@ -400,12 +371,10 @@ namespace RPBot
                                                     p.OfflineEvents.RemoveRange(0, p.OfflineEvents.Count - 20);
                                                 }
                                             }
-                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:UpdateMessageAsync guild={p.GuildId} kind={kind}");
                                             await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
                                         }
                                         catch (Exception upEx)
                                         {
-                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:UpdateMessageEX {upEx.GetType().Name}: {upEx.Message}");
                                             await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:UpdateMessage", upEx, $"guild={p.GuildId} kind={kind}").ConfigureAwait(false);
                                         }
                                         // (2) Шлём сообщение «Бот ушёл…» в канал.
@@ -415,23 +384,18 @@ namespace RPBot
                                         }
                                         catch (Exception ex)
                                         {
-                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:AnnounceOfflineEX {ex.GetType().Name}: {ex.Message}");
                                             await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
                                         }
                                     }
                                     // (3) Сохраняем состояние, чтобы BotOfflineAtUtc/WasBotOfflineOnShutdown дошли до файла.
                                     try
                                     {
-                                        BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:SaveStateStart");
                                         await SaveStateAsync().ConfigureAwait(false);
-                                        BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:SaveStateDone");
                                     }
                                     catch (Exception ex)
                                     {
-                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:SaveStateEX {ex.GetType().Name}: {ex.Message}");
                                         await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:save", ex).ConfigureAwait(false);
                                     }
-                                    BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:done");
                                 }
 
                 // ✅ Round 7-C6: метод OnClientReadyForRestore больше не нужен —
@@ -1070,7 +1034,6 @@ namespace RPBot
 
         private async Task SaveStateAsync()
         {
-                    BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:enter _active.Count={_active.Count} hadContent={_stateFileHadContentOnStartup} firstValidated={_firstReadyValidated} wasLoaded={_weLoadedStateAlready}");
                     await _stateFileGate.WaitAsync().ConfigureAwait(false);
                     try
                     {
@@ -1085,7 +1048,6 @@ namespace RPBot
                                                 // Если оба условия сработали, не пишем ничего в файл.
                                                 if (!_weLoadedStateAlready && _active.IsEmpty)
                                                 {
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] SaveStateAsync:SAFE_MODE_BLOCK reason=_active_empty_pre_load");
                                                     AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_load");
                                                     return;
                                                 }
@@ -1093,7 +1055,6 @@ namespace RPBot
                                                 {
                                                     // ✅ Round 7-C5: лог идёт в буфер ЭТАП 3/4 (там пользователь
                                                     // увидит, что safe-mode сработал), а не в Predict.log.
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] SaveStateAsync:SAFE_MODE_BLOCK reason=_active_empty_pre_ready");
                                                     AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_ready");
                                                     return;
                                                 }
@@ -1131,15 +1092,12 @@ namespace RPBot
 
                         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
                         var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
-                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:writing bytes={json.Length} snapshotKeys={snapshot.Count}");
                         // Атомарная запись: исключает повреждение файла при крэше посреди сереализации
                         // и при одновременной записи с другого процесса (lock + запись во временный файл + rename).
                         await SafeJsonIO.WriteAtomicAsync(_stateFilePath, json).ConfigureAwait(false);
-                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:done path={_stateFilePath}");
             }
                     catch (Exception ex)
             {
-                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:EX {ex.GetType().Name}: {ex.Message}");
                         await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
                     }
                     finally
@@ -1187,13 +1145,11 @@ namespace RPBot
 
                         private async Task LoadStateAsync(bool validate = true)
         {
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:enter validate={validate} stateFile={_stateFilePath}");
                                     await _stateFileGate.WaitAsync().ConfigureAwait(false);
                                     try
                                     {
                                         if (!File.Exists(_stateFilePath))
                                         {
-                                            BotLogger.Info(LogCategory.Predict, "[TRACE] LoadStateAsync:no-file");
                                                                                     // ✅ Round 7-C7: нет файла на диске — это тоже «состояние загружено».
                                                                                     // Иначе первая же попытка SaveStateAsync (например, в Shutdown)
                                                                                     // создаст пустой {} и прибьёт любые параллельные попытки восстановления.
@@ -1202,18 +1158,15 @@ namespace RPBot
                                                                                     return;
                                                                                 }
                                         var json = await File.ReadAllTextAsync(_stateFilePath).ConfigureAwait(false);
-                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:read bytes={json.Length}");
                                                         // ✅ Round 7-C3: фиксируем, что файл был НЕпустой на момент старта —
                                                         // это включает "безопасный режим" SaveStateAsync.
                                                         try
                                                         {
                                                             var len = (await File.ReadAllBytesAsync(_stateFilePath).ConfigureAwait(false)).Length;
                                                             _stateFileHadContentOnStartup = len > 2; // больше "{}"
-                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:stateFileHadContentOnStartup={_stateFileHadContentOnStartup} (len={len})");
                                                         }
                                                         catch { _stateFileHadContentOnStartup = false; }
                                                         var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
-                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:parsed entries={dict?.Count ?? 0}");
                                                                                                                 // ✅ Round 7-C7: отметить, что LoadStateAsync отработал в этом ЖЦ —
                                                                                                                 // с этого момента SaveStateAsync может писать.
                                                                                                                 _weLoadedStateAlready = true;
@@ -2948,35 +2901,29 @@ namespace RPBot
                             if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
                                 return;
 
-                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:enter _active.Count={_active.Count} _firstReadyValidated={_firstReadyValidated} _stateFileHadContentOnStartup={_stateFileHadContentOnStartup}");
-
                             lock (_shutdownLock)
                             {
                                                 if (_disposed)
                                                 {
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:skip _disposed=true");
                                                     return;
                                                 }
                                                 try
                                                 {
-                                                                            // ✅ Round 7-C6: подписки на Ready/Connected больше не нужны,
-                                                                            // вся логика восстановления переехала в RunStage3RestoreAsync()
-                                                                            // и зовётся синхронно из ЭТАП 3/4.
-                                                                            _client.Disconnected -= OnClientDisconnected;
-                                                                            BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:unsubscribed Disconnected");
-                                                                        }
-                                                                        catch (Exception unsubEx)
-                                                                        {
-                                                                            // клиент уже отписан — это норма при перезапуске
-                                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:unsubscribe-ex {unsubEx.GetType().Name}");
-                                                                        }
+                                                                                    // ✅ Round 7-C6: подписки на Ready/Connected больше не нужны,
+                                                                                    // вся логика восстановления переехала в RunStage3RestoreAsync()
+                                                                                    // и зовётся синхронно из ЭТАП 3/4.
+                                                                                    _client.Disconnected -= OnClientDisconnected;
+                                                                                }
+                                                                                catch
+                                                                                {
+                                                                                    // клиент уже отписан — это норма при перезапуске
+                                                                                }
 
                                                 // ✅ Bug 5: фиксируем момент ухода в offline на момент штатного shutdown,
                                                 // чтобы при следующем старте LoadStateAsync мог сдвинуть BetsCloseAtUtc.
                                                 try
                                                 {
                                                     var nowUtc = DateTimeOffset.UtcNow;
-                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:markOfflineStart nowUtc={nowUtc:O}");
                                                     foreach (var kv in _active.ToArray())
                                                     {
                                                         var p = kv.Value;
@@ -2999,7 +2946,6 @@ namespace RPBot
                                                                                     });
                                                                                 }
                                                                             }
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:markOfflineDone");
                                                 }
                                                 catch (Exception ex)
                         {
@@ -3013,9 +2959,7 @@ namespace RPBot
                                                 // ✅ Bug 5: сохраняем состояние, чтобы BotOfflineAtUtc дошёл до файла.
                                                 try
                                                 {
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:saveStateStart");
                                                     SaveStateAsync().GetAwaiter().GetResult();
-                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:saveStateDone");
                                                 }
                                                 catch (Exception ex)
                                                 {
@@ -3030,7 +2974,6 @@ namespace RPBot
                                                 try { _cts.Dispose(); } catch { }
 
                                                 _disposed = true;
-                                                BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:exit _disposed=true");
                             }
                         }
                     }
