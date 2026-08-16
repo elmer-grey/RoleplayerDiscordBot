@@ -94,18 +94,21 @@ namespace RPBot
                 Directory.CreateDirectory(sessionDir);
                 _logDirectory = sessionDir;
 
-                // Единый файл-зеркало терминала — единственное место, где собираются
-                // ВСЕ сообщения от BotLogger + StartupRenderer. Имя фиксированное,
-                // чтобы пользователь всегда знал, куда смотреть.
+                // ✅ Round 7-C10: двойная схема логов.
+                //
+                //   1) Общий непрерывный run.log в корне Logs/
+                //      — дописывается с маркером `=== Restart #N: ... ===` между сессиями.
+                //      — удобно, когда нужно увидеть «полный хвост» за дни/недели.
+                //
+                //   2) Копия run.log внутри каждой сессионной папки Logs/<yyyyMMdd_HHmmss>/
+                //      — туда зеркалируется всё содержимое ОБЩЕГО run.log за время этой сессии.
+                //      — удобно, когда нужен только конкретный запуск без хвоста от соседей.
+                //
+                // Пользователь знает оба файла: «общий с маркерами» и «внутри папки запуска».
+                // Оба пишутся строго в порядке записи (через общий _unifiedLock).
                 _unifiedLogPath = Path.Combine(logDirectory, "run.log");
                 try
                 {
-                    // ✅ Round 7-C7: НЕ перезаписываем run.log при старте — добавляем маркер сессии.
-                    // Раньше File.WriteAllText затирал весь предыдущий запуск, и пользователь
-                    // видел в канале лишь «Бот снова в сети» без момента рестарта. Теперь
-                    // run.log — это непрерывный хвост с маркерами `=== Restart #N: ... ===`
-                    // между сессиями. Категорийные файлы по-прежнему ротируются в подпапках
-                    // Logs/<yyyyMMdd_HHmmss>/<Category>.log, так что детальные логи не копятся.
                     if (File.Exists(_unifiedLogPath))
                     {
                         // Считаем, какой по счёту это рестарт — по числу уже записанных маркеров.
@@ -123,15 +126,28 @@ namespace RPBot
                             }
                         }
                         catch { /* если не смогли прочитать — оставляем 1 */ }
-                        File.AppendAllText(_unifiedLogPath,
-                            $"=== Restart #{restartNumber}: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}",
-                            Encoding.UTF8);
+                        var marker = $"=== Restart #{restartNumber}: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}";
+                        File.AppendAllText(_unifiedLogPath, marker, Encoding.UTF8);
+                        // ✅ Round 7-C10: продублировать тот же маркер в сессионную копию.
+                        // Это первый лайн per-session файла — пользователь сразу видит,
+                        // с какого момента начинается запись внутри Logs/<stamp>/run.log.
+                        try
+                        {
+                            File.AppendAllText(Path.Combine(sessionDir, "run.log"), marker, Encoding.UTF8);
+                        }
+                        catch { }
                     }
                     else
                     {
-                        File.WriteAllText(_unifiedLogPath,
-                            $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}",
-                            Encoding.UTF8);
+                        var header = $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}";
+                        File.WriteAllText(_unifiedLogPath, header, Encoding.UTF8);
+                        // ✅ Round 7-C10: первая сессия — общий run.log и per-session run.log
+                        // стартуют с одного и того же заголовка.
+                        try
+                        {
+                            File.WriteAllText(Path.Combine(sessionDir, "run.log"), header, Encoding.UTF8);
+                        }
+                        catch { }
                     }
                 }
                 catch { }
@@ -154,9 +170,23 @@ namespace RPBot
         public static string? UnifiedLogPath => _unifiedLogPath;
 
         /// <summary>
+        /// ✅ Round 7-C10: путь к per-session копии run.log внутри сессионной папки.
+        /// Если сессионная папка ещё не создана (Initialize не вызывался) — вернёт null.
+        /// </summary>
+        public static string? SessionRunLogPath
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_logDirectory)) return null;
+                return Path.Combine(_logDirectory, "run.log");
+            }
+        }
+
+        /// <summary>
         /// Дописывает строку в единый файл-зеркало терминала. Потокобезопасно.
         /// Используется и BotLogger-ом, и внешними sinks (StartupRenderer), чтобы
         /// гарантировать единый порядок строк между источниками.
+        /// ✅ Round 7-C10: пишет и в общий run.log (с маркерами), и в per-session run.log.
         /// </summary>
         public static async Task WriteUnifiedLineAsync(string line)
         {
@@ -167,6 +197,18 @@ namespace RPBot
                 try
                 {
                     File.AppendAllText(_unifiedLogPath, line + Environment.NewLine, Encoding.UTF8);
+                    // ✅ Round 7-C10: параллельная запись в per-session копию.
+                    // Тот же лайн в том же порядке. Делаем best-effort: если per-session
+                    // файл недоступен — общий run.log остаётся источником правды.
+                    var sessionPath = SessionRunLogPath;
+                    if (!string.IsNullOrEmpty(sessionPath) && !string.Equals(sessionPath, _unifiedLogPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            File.AppendAllText(sessionPath, line + Environment.NewLine, Encoding.UTF8);
+                        }
+                        catch { /* per-session файл необязательный */ }
+                    }
                 }
                 catch { }
             }
@@ -442,6 +484,10 @@ namespace RPBot
                 _paths.Clear();
                 _logDirectory = null;
                 _unifiedLogPath = null;
+                // ✅ Round 7-C10: per-session run.log продолжает жить внутри своей папки
+                // и после Shutdown — пользователь всё ещё может его открыть. Ничего
+                // дополнительно не делаем: WriteUnifiedLineAsync смотрит на _logDirectory,
+                // и когда он null, запись просто игнорируется.
             }
         }
 
