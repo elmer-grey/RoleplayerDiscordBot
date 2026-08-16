@@ -62,8 +62,19 @@ namespace RPBot
                 public SemaphoreSlim ButtonSemaphore { get; } = new SemaphoreSlim(1, 1);
     }
 
-    public class GameSessionCommands : ModuleBase<SocketCommandContext>
+    /// <summary>
+    /// ✅ Round 7-C8: мост к PredictionService из статических методов очистки
+    /// сессий. Program.cs при инициализации устанавливает accessor, а cleanup
+    /// вызывает его после финализации осиротевшей сессии, чтобы отменить
+    /// связанный с событием прогноз.
+    /// </summary>
+    public static class GameSessionPredictionBridge
     {
+        public static Func<PredictionService?>? PredictionServiceAccessor { get; set; }
+    }
+
+        public class GameSessionCommands : ModuleBase<SocketCommandContext>
+        {
         private readonly DiscordSocketClient _client;
         private readonly GoogleSheetsService? _googleSheets;
         internal Action<string>? _logSinkOverride;
@@ -87,6 +98,36 @@ namespace RPBot
         {
             _client = client;
             _googleSheets = googleSheets;
+        }
+
+        /// <summary>
+        /// ✅ Round 7-C8: после финализации осиротевшей сессии попробовать отменить
+        /// связанный с её событием прогноз. Вызывается из FinalizeSessionAsOrphanAsync
+        /// и из CleanupStaleSessionByEventAsync. Ничего не делает, если accessor
+        /// не установлен или активного прогноза, привязанного к этому событию, нет.
+        /// </summary>
+        private static async Task TryCancelLinkedPredictionAsync(GameSession session, string reason)
+        {
+            try
+            {
+                if (!session.EventId.HasValue) return;
+                var accessor = GameSessionPredictionBridge.PredictionServiceAccessor;
+                var predictionService = accessor?.Invoke();
+                if (predictionService == null) return;
+
+                var (ok, error) = await predictionService.CancelPredictionForEventAsync(
+                    session.GuildId, session.EventId.Value, reason).ConfigureAwait(false);
+                if (!ok && !string.IsNullOrEmpty(error))
+                {
+                    BotLogger.Warn(LogCategory.Session,
+                        $"[STALE] Не удалось отменить связанный прогноз для сессии {session.SessionId} (event={session.EventId}): {error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.Session,
+                    $"[STALE] Ошибка TryCancelLinkedPredictionAsync для сессии {session.SessionId}: {ex.Message}");
+            }
         }
 
         private void Log(string message)
@@ -1647,6 +1688,7 @@ namespace RPBot
         ///   4. Удалить control message (по ControlChannelId / ChannelId).
         ///   5. Отправить статистику в канал control message. Дальше SendSessionStats сам архивирует
         ///      сессию и при отсутствии бросков удаляет её окончательно.
+        ///   6. ✅ Round 7-C8: отменить связанный с событием прогноз, если он активен.
         ///
         /// Уведомления в канал от мастера не отправляем — об этом решении договорились: для
         /// автозавершения это лишний шум. Архив всё равно сохраняется, и пользователь при желании
@@ -1736,6 +1778,11 @@ namespace RPBot
                     ArchiveStoppedSession(session);
                     _ = Task.Run(() => SaveSessionsAsync());
                 }
+
+                // ✅ Round 7-C8: после финализации сессии пробуем отменить связанный
+                // с её событием прогноз. Ничего не делает, если прогноз не привязан
+                // к этому событию или уже завершён.
+                await TryCancelLinkedPredictionAsync(session, "⚠️ Событие завершено. Все ставки возвращены.").ConfigureAwait(false);
             }
             catch (Exception ex)
             {

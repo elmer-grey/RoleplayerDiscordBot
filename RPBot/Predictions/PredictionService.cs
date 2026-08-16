@@ -25,21 +25,91 @@ namespace RPBot
         private readonly CancellationTokenSource _cts = new();
         private readonly string _stateFilePath;
         private readonly SemaphoreSlim _stateFileGate = new(1, 1);
-                private readonly object _shutdownLock = new();
-                private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
-                private volatile bool _disposed;
+        private readonly object _shutdownLock = new();
+        private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
+        private volatile bool _disposed;
+
+        // ✅ Round 7-C3: "безопасный режим" SaveStateAsync.
+        // Файл прогнозов может быть стёрт в `{}`, если SaveStateAsync срабатывает
+        // ПРЕЖДЕ чем LoadStateAsync восстановит прогнозы из файла (Shutdown
+        // предыдущего процесса / OnClientDisconnected с пустым _active).
+        // Правила:
+        //   - _stateFileHadContentOnStartup: был ли файл НЕпустой на момент запуска.
+        //   - _firstReadyValidated: фаза 2 (ValidateActiveAfterReadyAsync) уже отработала.
+        // Пока фаза 2 не прошла, _active пуст — мы НЕ должны затирать файл.
+        private volatile bool _stateFileHadContentOnStartup;
+                private volatile bool _firstReadyValidated;
+
+                        // ✅ Round 7-C7: true, как только LoadStateAsync завершился (даже если файл был пуст).
+                        // Используется в SaveStateAsync как часть safe-mode: пока LoadStateAsync ещё не отработал,
+                        // мы не знаем, что на диске — и при пустом _active НЕ должны затирать файл.
+                        // Это спасает от «второй итерации restart-loop»: процесс стартует, не успев прочитать файл,
+                        // получает команду Shutdown → SaveStateAsync, и без этой защиты пишет {}.
+                        private volatile bool _weLoadedStateAlready;
+
+                                                // ✅ Round 7-C7: различаем «это наш собственный shutdown (reconnect, stop, restart)»
+                                                // и «реальный offline». В Program.cs.StopInternalAsync / GracefulShutdownAsync
+                                                // мы СРАЗУ шлём сообщения «Бот ушёл» через публичный AnnounceShutdownAsync(),
+                                                // пока клиент ещё живой. Здесь же, в OnClientDisconnected, мы только логируем
+                                                // и не пытаемся слать — иначе HttpClient уже будет disposed.
+                                                internal static volatile bool _shutdownInProgress;
+
+                // ✅ Round 7-C5: буфер для логов восстановления/проверки предиктов.
+        // Строки пишутся в этот список синхронно, а потом "проигрываются" в
+        // ЭТАПЕ 3/4 загрузки через StartupRenderer — чтобы пользователь
+        // видел весь отчёт в одном месте, а не вразнобой в Predict.log.
+        private readonly List<string> _restoreReport = new();
+        private readonly object _restoreReportLock = new();
+        // Кол-во записей истории, уже загруженных в LoadHistoryAsync. Запоминаем
+        // ДО LoadStateAsync, чтобы потом вывести в ЭТАП 3/4.
+        private int _historyEntriesLoaded;
+
+        /// <summary>
+        /// ✅ Round 7-C5: отдать собранный отчёт по восстановлению/проверке
+        /// прогнозов (плюс кол-во записей истории) и очистить буфер. Вызывается
+        /// из Program.cs в ЭТАП 3/4. Все строки — это уже отформатированные
+        /// "[PRED] ..." сообщения, готовые для вывода через StartupRenderer.
+        /// </summary>
+        public IReadOnlyList<string> DrainRestoreReport()
+        {
+            lock (_restoreReportLock)
+            {
+                var copy = _restoreReport.ToArray();
+                _restoreReport.Clear();
+                return copy;
+            }
+        }
+
+        /// <summary>
+        /// ✅ Round 7-C5: отдать кол-во записей истории прогнозов, загруженных
+        /// при старте (для строки "[PRED] HISTORY_LOADED entries=N").
+        /// </summary>
+        public int HistoryEntriesLoaded => _historyEntriesLoaded;
+
+        private void AppendRestoreReport(string line)
+        {
+            // Префикс [PRED] обязателен — парсер дашборда/тестов опирается
+            // на него, чтобы отличать эти строки от прочих.
+            var prefixed = line.StartsWith("[PRED] ", StringComparison.Ordinal)
+                ? line
+                : "[PRED] " + line;
+            lock (_restoreReportLock)
+            {
+                _restoreReport.Add(prefixed);
+            }
+        }
 
                 // ✅ Bug 6 / Round 7-A2: путь к файлу-флагу "следующее отключение — это рестарт".
-                // Совпадает с Program.GetRestartPendingFlagPath(): Data/.restart_pending.
-                // Читается в OnClientDisconnected, удаляется в AnnounceOnlineAsync.
-                private static string RestartPendingFlagPath =>
-                    BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+                                // Совпадает с Program.GetRestartPendingFlagPath(): Data/.restart_pending.
+                                // Читается в OnClientDisconnected, удаляется в AnnounceOnlineAsync.
+                                private static string RestartPendingFlagPath =>
+                                    BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
 
-                private static bool IsRestartPending()
-                {
-                    try { return File.Exists(RestartPendingFlagPath); }
-                    catch { return false; }
-                }
+                                private static bool IsRestartPending()
+                                {
+                                    try { return File.Exists(RestartPendingFlagPath); }
+                                    catch { return false; }
+                                }
 
         // ✅ НОВОЕ: История прогнозов, статистика и достижения
         private PredictionHistoryStore _history = new();
@@ -53,34 +123,46 @@ namespace RPBot
         private readonly SemaphoreSlim _achievementsGate = new(1, 1);
 
         public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
-        {
-            _client = client;
-            _points = points;
-            // State file for persisting active predictions across restarts
-                        // Кладём файлы в production-каталог данных (см. BotConfig.GetDataDirectory),
-                        // чтобы они не терялись при пересборке/clean.
-                        var dataDir = BotConfig.GetDataDirectory();
-                        Directory.CreateDirectory(dataDir);
-                        _stateFilePath = Path.Combine(dataDir, "predictions_state.json");
-                        _historyFilePath = Path.Combine(dataDir, "predictions_history.json");
-                        _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
-                        _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
+                {
+                    _client = client;
+                    _points = points;
+                            BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor enter stateFile={_stateFilePath ?? "(unset)"}");
+                            // State file for persisting active predictions across restarts
+                                        // Кладём файлы в production-каталог данных (см. BotConfig.GetDataDirectory),
+                                        // чтобы они не терялись при пересборке/clean.
+                                        var dataDir = BotConfig.GetDataDirectory();
+                                        Directory.CreateDirectory(dataDir);
+                                        _stateFilePath = Path.Combine(dataDir, "predictions_state.json");
+                                        _historyFilePath = Path.Combine(dataDir, "predictions_history.json");
+                                        _statsFilePath = Path.Combine(dataDir, "predictions_stats.json");
+                                        _achievementsFilePath = Path.Combine(dataDir, "predictions_achievements.json");
 
-            // Загружаем историю, статистику и достижения
-            _ = Task.Run(() => LoadHistoryAsync());
-            _ = Task.Run(() => LoadStatsAsync());
-            _ = Task.Run(() => LoadAchievementsAsync());
+                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor stateFile={_stateFilePath} exists={File.Exists(_stateFilePath)} size={(File.Exists(_stateFilePath) ? new FileInfo(_stateFilePath).Length : 0)}");
 
-            // Фоновая задача для авто-блокировки ставок по истечении времени
-            _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
+                            // ✅ НОВОЕ: История прогнозов, статистика и достижения.
+                            // Загружаем ДО старта, чтобы RunStage3RestoreAsync мог сразу выдать
+                            // строку "HISTORY_LOADED entries=N" в ЭТАП 3/4. Никаких больше
+                            // параллельных логов в Predict.log — всё в одном блоке дашборда.
+                            try { LoadHistoryAsync().GetAwaiter().GetResult(); } catch { /* проглотим, уже отрапортовано */ }
+                            try { LoadStatsAsync().GetAwaiter().GetResult(); } catch { }
+                            try { LoadAchievementsAsync().GetAwaiter().GetResult(); } catch { }
 
-            // Попробуем загрузить ранее сохранённые прогнозы после готовности клиента,
-            // иначе кэш каналов/гильдий может быть пустым и мы получим ложные RESTORE_FAIL.
-            _client.Ready += OnClientReadyForRestore;
+                            BotLogger.Info(LogCategory.Predict, $"[TRACE] PredictionService:ctor historyLoaded={_historyEntriesLoaded}");
 
-            // ✅ БАГ 6: Обновляем сообщения при отключении бота
-            _client.Disconnected += OnClientDisconnected;
-        }
+                            // Фоновая задача для авто-блокировки ставок по истечении времени.
+                            _ = Task.Run(() => MonitorLoopAsync(_cts.Token));
+
+                            // ✅ Round 7-C6: убрали подписку на Ready/Connected для OnClientReadyForRestore.
+                            // Теперь восстановление и валидация прогнозов выполняются ОДИН раз,
+                            // синхронно, внутри ЭТАП 3/4 через RunStage3RestoreAsync().
+                            // Раньше валидация уходила в Task.Run на Ready event, и её результат
+                            // терял гонку с Stage 3/4 — половина строк RESTORE_* печаталась мимо
+                            // дашборда, и потом приходилось подмешивать через буфер.
+
+                            // ✅ Bug 6: Обновляем сообщения при отключении бота
+                            _client.Disconnected += OnClientDisconnected;
+                            BotLogger.Info(LogCategory.Predict, "[TRACE] PredictionService:ctor exit, Disconnected subscribed");
+                        }
 
         // ✅ R6 fix: события для очистки внешнего UI (кнопки «Продолжить» в Program.cs).
         // PredictionResolveOccured / PredictionCancelledOccured — когда активный прогноз
@@ -89,108 +171,590 @@ namespace RPBot
         public event Action<ulong>? PredictionResolved;
         public event Action<ulong>? PredictionCancelled;
 
-        private Task OnClientDisconnected(Exception exception)
+        private async Task OnClientDisconnected(Exception exception)
         {
             // Обновляем все активные прогнозы с пометкой "Бот неактивен"
             var nowUtc = DateTimeOffset.UtcNow;
-                            // ✅ Bug 6 / Round 7-A2: определяем тип отключения.
-                            // Приоритет источников:
-                            //   1) Program.WriteRestartPendingFlag() — самый надёжный сигнал (флаг
-                            //      "следующее отключение — это рестарт"); учитывает Ctrl+C, консольный
-                            //      /restart, админ-команду, ежедневный планировщик.
-                            //   2) GatewayReconnectException от Discord — короткий heartbeat/reconnect,
-                            //      обычно тоже рестарт.
-                            //   3) Прочее (Discord отвалился по 401/network down) — offline.
-                            var kind = IsRestartPending() || exception is Discord.WebSocket.GatewayReconnectException
-                                ? "restart"
-                                : "offline";
-                    var note = exception?.GetType().Name ?? "Disconnected";
-                    _ = Task.Run(async () =>
+                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:enter nowUtc={nowUtc:O} _active.Count={_active.Count} _firstReadyValidated={_firstReadyValidated} restartPending={IsRestartPending()} shutdownInProgress={_shutdownInProgress} exception={exception?.GetType().Name ?? "null"}");
+                                                        // ✅ Round 7-C4: разделение событий по типу.
+                                                        //   - "restart" — наш собственный рестарт (.restart_pending флаг
+                                                        //     выставлен через /restart или Ctrl+C). Шлём в канал.
+                                                        //   - "reconnect" — короткий микроразрыв Discord (GatewayReconnect
+                                                        //     или WebSocketException). НЕ шлём в канал, только в лог.
+                                                        //   - "offline" — реальный offline (нет reconnect >5 сек). Шлём в канал.
+                                                        // ✅ Round 7-C7: если _shutdownInProgress уже true (Program.cs.StopInternalAsync
+                                                        // или GracefulShutdownAsync уже отправили сообщения через AnnounceShutdownAsync
+                                                        // ДО _client.StopAsync()), то OnClientDisconnected не должен пытаться слать
+                                                        // ещё раз — клиент уже на пути к dispose. Только обновить embed и состояние.
+                                                        string kind;
+                                                        if (_shutdownInProgress)
+                                                        {
+                                                            // Наш собственный shutdown — сообщения уже отправлены из Program.cs.
+                                                            // Здесь только обновляем embed, помечаем offline и сохраняем состояние.
+                                                            kind = "shutdownHandled";
+                                                        }
+                                                        else if (IsRestartPending())
+                                                        {
+                                                            kind = "restart";
+                                                        }
+                                                        else if (exception is Discord.WebSocket.GatewayReconnectException
+                                                                 || exception is System.Net.WebSockets.WebSocketException)
+                                                        {
+                                                            kind = "reconnect";
+                                                        }
+                                                        else
+                                                        {
+                                                            kind = "offline";
+                                                        }
+                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:kind={kind}");
+                            var note = exception?.GetType().Name ?? "Disconnected";
+                                                                // ✅ Round 7-C7: для kind=="restart" / kind=="shutdownHandled" обрабатываем СИНХРОННО в обработчике события,
+                                                                                                                                // но БЕЗ повторной отправки AnnounceOfflineAsync — сообщения уже отправлены
+                                                                                                                                // через PredictionService.AnnounceShutdownAsync() из Program.cs.StopInternalAsync
+                                                                                                                                // / GracefulShutdownAsync ДО _client.StopAsync(). Здесь только обновляем embed,
+                                                                                                                                // фиксируем момент offline и сохраняем состояние.
+                                                                                                                                // Для kind=="offline" оставляем fire-and-forget (там клиент ещё живой).
+                                                                                                                                // kind=="reconnect" — выходим (только лог, без Discord API).
+                                                                                                                                if (string.Equals(kind, "reconnect", StringComparison.Ordinal))
+                                                                                                                                {
+                                                                                                                                    return;
+                                                                                                                                }
+                                                                                                                                if (string.Equals(kind, "restart", StringComparison.Ordinal)
+                                                                                                                                   || string.Equals(kind, "shutdownHandled", StringComparison.Ordinal))
+                                                                                                                                {
+                                                                                                                                   // ✅ Round 7-C7: вся работа (UpdateMessageAsync, markOffline, OfflineEvents, AnnounceOfflineAsync,
+                                                                                                                                   // SaveStateAsync) уже сделана в AnnounceShutdownAsync, который Program.cs зовёт ДО
+                                                                                                                                   // _client.StopAsync(). HttpClient здесь уже на пути к disposed — любые Discord API
+                                                                                                                                   // вызовы сорвутся ObjectDisposedException. Поэтому sync-блок только логирует
+                                                                                                                                   // факт прибытия и выходит.
+                                                                                                                                   BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:restartSyncStart kind={kind} (AnnounceShutdownAsync already handled)");
+                                                                                                                                   try
+                                                                                                                                   {
+                                                                                                                                       foreach (var kv in _active.ToArray())
+                                                                                                                                       {
+                                                                                                                                           var p = kv.Value;
+                                                                                                                                           if (p.IsResolved) continue;
+                                                                                                                                           BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:skipUpdate guild={p.GuildId} reason=AnnounceShutdownAsync_handled");
+                                                                                                                                       }
+                                                                                                                                   }
+                                                                                                                                   catch (Exception ex)
+                                                                                                                                   {
+                                                                                                                                       BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:restartSyncEX {ex.GetType().Name}: {ex.Message}");
+                                                                                                                                   }
+                                                                                                                                   return;
+                                                                                                                                }
+                                                                _ = Task.Run(async () =>
+                                                                {
+                                                                    try
+                                                                    {
+                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:workerStart kind={kind}");
+                                                                        foreach (var kv in _active.ToArray())
+                                                                        {
+                                                                            var p = kv.Value;
+                                                                            if (!p.IsResolved)
+                                                                            {
+                                                                                // ✅ Bug 5: фиксируем момент ухода в offline для последующего
+                                                                                // сдвига BetsCloseAtUtc после восстановления.
+                                                                                // Round 7-C4: для "reconnect" НЕ сдвигаем таймер — это микроразрыв.
+                                                                                if (!p.IsLocked && kind != "reconnect" && !p.BotOfflineAtUtc.HasValue)
+                                                                                {
+                                                                                    p.BotOfflineAtUtc = nowUtc;
+                                                                                    p.WasBotOfflineOnShutdown = true;
+                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:markedOffline guild={p.GuildId}");
+                                                                                }
+                                                                                // ✅ Bug 6: добавляем событие в лог
+                                                                                p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                                                                // Защита от спама: если последняя запись — это Disconnected <5 сек назад, не дублируем.
+                                                                                var lastEvent = p.OfflineEvents.LastOrDefault();
+                                                                                var isDuplicate = lastEvent != null
+                                                                                    && lastEvent.Kind == OfflineEventKind.Disconnected
+                                                                                    && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(5);
+                                                                                if (!isDuplicate)
+                                                                                {
+                                                                                    p.OfflineEvents.Add(new OfflineEvent
+                                                                                    {
+                                                                                        AtUtc = nowUtc,
+                                                                                        Kind = OfflineEventKind.Disconnected,
+                                                                                        Severity = kind,
+                                                                                        Note = note
+                                                                                    });
+                                                                                    // ✅ Round 7-C4: ограничиваем историю последними 20 событиями,
+                                                                                    // чтобы лог не разрастался и embed оставался компактным.
+                                                                                    if (p.OfflineEvents.Count > 20)
+                                                                                    {
+                                                                                        p.OfflineEvents.RemoveRange(0, p.OfflineEvents.Count - 20);
+                                                                                    }
+                                                                                }
+                                                                                BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:UpdateMessageAsync guild={p.GuildId} kind={kind}");
+                                                                                await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
+                                                                                // ✅ Bug 6: оповещаем участников в канале, чтобы они видели,
+                                                                                // что бот ушёл на рестарт/offline, и кнопки скрыты.
+                                                                                try
+                                                                                {
+                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOffline guild={p.GuildId}");
+                                                                                    await AnnounceOfflineAsync(p, kind, nowUtc).ConfigureAwait(false);
+                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOfflineDone guild={p.GuildId}");
+                                                                                }
+                                                                                catch (Exception annEx)
+                                                                                {
+                                                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:AnnounceOfflineEX {annEx.GetType().Name}: {annEx.Message}");
+                                                                                    await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
+                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:SaveStateStart _active.Count={_active.Count}");
+                                                                        try { await SaveStateAsync().ConfigureAwait(false); }
+                                                                        catch (Exception saveEx)
+                                                                        {
+                                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:SaveStateEX {saveEx.GetType().Name}: {saveEx.Message}");
+                                                                            await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
+                                                                        }
+                                                                        BotLogger.Info(LogCategory.Predict, "[TRACE] OnClientDisconnected:workerDone");
+                                                                    }
+                                                                    catch (Exception ex)
+                                                                    {
+                                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] OnClientDisconnected:workerEX {ex.GetType().Name}: {ex.Message}");
+                                                                        await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
+                                                                    }
+                                                                });
+                                                                                        }
+
+                                                                        /// <summary>
+                /// ✅ Round 7-C6: вход для ЭТАП 3/4 загрузки.
+                /// Последовательно выполняет:
+                ///   1) LoadStateAsync (без обращения к Discord API, синхронно),
+                ///   2) ValidateActiveAfterReadyAsync (проверка канала/сообщения),
+                ///   3) AnnounceOnlineForRestoredAsync (сдвиг таймера, "Бот снова в сети").
+                /// Никакого Ready/Connected event, никаких Task.Run — всё синхронно
+                /// в коде Program.cs, между запуском бота и ЭТАП 3/4.
+                /// Все строки отчёта попадают в буфер `DrainRestoreReport()`,
+                /// который ЭТАП 3/4 тут же печатает через StartupRenderer.
+                /// </summary>
+                public async Task RunStage3RestoreAsync()
+                {
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:enter stateFileExists={File.Exists(_stateFilePath)} firstValidated={_firstReadyValidated}");
+                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase1-start LoadStateAsync(false)");
+                                    await LoadStateAsync(validate: false).ConfigureAwait(false);
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:phase1-done _active.Count={_active.Count}");
+                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase2-start ValidateActiveAfterReadyAsync");
+                                    await ValidateActiveAfterReadyAsync().ConfigureAwait(false);
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:phase2-done _active.Count={_active.Count}");
+                                    BotLogger.Info(LogCategory.Predict, "[TRACE] RunStage3RestoreAsync:phase3-start AnnounceOnlineForRestoredAsync");
+                                    await AnnounceOnlineForRestoredAsync().ConfigureAwait(false);
+                                    _firstReadyValidated = true;
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] RunStage3RestoreAsync:done _firstReadyValidated=true _active.Count={_active.Count}");
+                                }
+
+                                // ✅ Round 7-C7: публичный метод для Program.cs.StopInternalAsync / GracefulShutdownAsync.
+                                // Вызывается ДО _client.StopAsync(), пока клиент ещё живой. Для каждого активного
+                                // прогноза:
+                                //   1) обновляет embed с пометкой "Бот неактивен" (ВАЖНО: пока HttpClient жив,
+                                //      иначе OnClientDisconnected прилетит поздно и не сможет достучаться до REST);
+                                //   2) шлёт сообщение «Бот ушёл…» в канал;
+                                //   3) фиксирует BotOfflineAtUtc/WasBotOfflineOnShutdown/OfflineEvents,
+                                //      чтобы при следующем старте LoadStateAsync корректно сдвинул BetsCloseAtUtc.
+                                // Эти сообщения сохраняются в OfflineAnnouncementMessageIds — и при следующем
+                                // запуске AnnounceOnlineAsync их удалит.
+                                // Дополнительно: ставит флаг _shutdownInProgress, чтобы OnClientDisconnected не
+                                // пытался слать повторно (и попадать в disposed HttpClient).
+                                // kind="restart": «Бот ушёл на перезагрузку» + таймер сдвинется.
+                                // kind="stop": «Бот завершил работу» + всё сохранится на диск.
+                                // kind="offline" или любой другой: «Зафиксировано отключение бота» (используется
+                                //   в OnClientReadyForAnnouncements fallback, если флаг не был установлен заранее).
+                                public async Task AnnounceShutdownAsync(string kind)
+                                {
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:enter kind={kind} _active.Count={_active.Count}");
+                                    _shutdownInProgress = true;
+                                    var nowUtc = DateTimeOffset.UtcNow;
+                                    foreach (var kv in _active.ToArray())
+                                    {
+                                        var p = kv.Value;
+                                        if (p.IsResolved) continue;
+                                        // (1) Фиксируем moment offline + обновляем embed ДО _client.StopAsync(),
+                                        // пока HttpClient ещё жив. Раньше этот шаг жил в OnClientDisconnected,
+                                        // но там HttpClient уже на пути к disposed — embed не обновлялся.
+                                        try
+                                        {
+                                            if (!p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                                            {
+                                                p.BotOfflineAtUtc = nowUtc;
+                                                p.WasBotOfflineOnShutdown = true;
+                                            }
+                                            p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                            var lastEvent = p.OfflineEvents.LastOrDefault();
+                                            var isDuplicate = lastEvent != null
+                                                && lastEvent.Kind == OfflineEventKind.Disconnected
+                                                && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(5);
+                                            if (!isDuplicate)
+                                            {
+                                                p.OfflineEvents.Add(new OfflineEvent
+                                                {
+                                                    AtUtc = nowUtc,
+                                                    Kind = OfflineEventKind.Disconnected,
+                                                    Severity = kind,
+                                                    Note = $"Shutdown:{kind}"
+                                                });
+                                                if (p.OfflineEvents.Count > 20)
+                                                {
+                                                    p.OfflineEvents.RemoveRange(0, p.OfflineEvents.Count - 20);
+                                                }
+                                            }
+                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:UpdateMessageAsync guild={p.GuildId} kind={kind}");
+                                            await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
+                                        }
+                                        catch (Exception upEx)
+                                        {
+                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:UpdateMessageEX {upEx.GetType().Name}: {upEx.Message}");
+                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:UpdateMessage", upEx, $"guild={p.GuildId} kind={kind}").ConfigureAwait(false);
+                                        }
+                                        // (2) Шлём сообщение «Бот ушёл…» в канал.
+                                        try
+                                        {
+                                            await AnnounceOfflineAsync(p, kind, nowUtc).ConfigureAwait(false);
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:AnnounceOfflineEX {ex.GetType().Name}: {ex.Message}");
+                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                        }
+                                    }
+                                    // (3) Сохраняем состояние, чтобы BotOfflineAtUtc/WasBotOfflineOnShutdown дошли до файла.
+                                    try
+                                    {
+                                        BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:SaveStateStart");
+                                        await SaveStateAsync().ConfigureAwait(false);
+                                        BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:SaveStateDone");
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] AnnounceShutdownAsync:SaveStateEX {ex.GetType().Name}: {ex.Message}");
+                                        await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:save", ex).ConfigureAwait(false);
+                                    }
+                                    BotLogger.Info(LogCategory.Predict, "[TRACE] AnnounceShutdownAsync:done");
+                                }
+
+                // ✅ Round 7-C6: метод OnClientReadyForRestore больше не нужен —
+                // вся логика восстановления переехала в RunStage3RestoreAsync,
+                // который зовётся синхронно из Program.cs в ЭТАП 3/4.
+                // Подписки _client.Ready/Connected тоже сняты в конструкторе,
+                // потому что вся гонка с Stage 3/4 исчезла.
+
+                /// <summary>
+                /// ✅ Round 7-C3: после ValidateActiveAfterReadyAsync прогоняем тот же цикл,
+                /// что и OnClientReadyForAnnouncements, но без зависимости от Disconnected event.
+                /// Удаляет "мусорные" offline-сообщения из канала и шлёт "Бот снова в сети".
+                /// </summary>
+                private async Task AnnounceOnlineForRestoredAsync()
+        {
+            var nowUtc = DateTimeOffset.UtcNow;
+            foreach (var kv in _active.ToArray())
+            {
+                var p = kv.Value;
+                if (p.IsResolved) continue;
+
+                // Сдвиг BetsCloseAtUtc, если был offline.
+                if (p.BotOfflineAtUtc.HasValue)
+                {
+                    var offlineDuration = nowUtc - p.BotOfflineAtUtc.Value;
+                    if (offlineDuration > TimeSpan.Zero)
+                    {
+                        p.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
+                    }
+                    p.BotOfflineAtUtc = null;
+                    p.WasBotOfflineOnShutdown = false;
+                    if (!p.IsLocked)
+                    {
+                        var oldClose = p.BetsCloseAtUtc;
+                        if (p.BetsCloseAtUtc < nowUtc + TimeSpan.FromSeconds(15))
+                        {
+                            p.BetsCloseAtUtc = nowUtc + TimeSpan.FromSeconds(15);
+                        }
+                        if (p.BetsCloseAtUtc != oldClose)
+                        {
+                            // ✅ Round 7-C5: OFFLINE_SHIFT_ON_RESTORE — это лог
+                            // восстановления, должен попадать в ЭТАП 3/4.
+                            AppendRestoreReport(
+                                $"OFFLINE_SHIFT_ON_RESTORE guild={p.GuildId} oldClose='{oldClose:HH:mm:ss}' " +
+                                $"newClose='{p.BetsCloseAtUtc:HH:mm:ss}'");
+                        }
+                    }
+                }
+
+                // ✅ Round 7-C3: фиксируем событие "Reconnected" в истории прогноза,
+                // иначе embed-«Состояние бота» остаётся без финальной "🟢 онлайн".
+                p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                var lastEvent = p.OfflineEvents.LastOrDefault();
+                var isDuplicateReady = lastEvent != null
+                    && lastEvent.Kind == OfflineEventKind.Reconnected
+                    && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(2);
+                if (!isDuplicateReady)
+                {
+                    p.OfflineEvents.Add(new OfflineEvent
+                    {
+                        AtUtc = nowUtc,
+                        Kind = OfflineEventKind.Reconnected,
+                        Severity = "online",
+                        Note = "Restart"
+                    });
+                }
+
+                // Возвращаем кнопки и шлём сообщение в канал.
+                try
+                {
+                    await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: false).ConfigureAwait(false);
+                }
+                catch (Exception upEx)
+                {
+                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:UpdateMessage", upEx, $"guild={p.GuildId}").ConfigureAwait(false);
+                }
+
+                // Шлём "Бот снова в сети" и удаляем offline-сообщения.
+                try
+                {
+                    await AnnounceOnlineAsync(p, nowUtc).ConfigureAwait(false);
+                }
+                catch (Exception annEx)
+                {
+                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:AnnounceOnline", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                }
+
+                // ✅ Round 7-C4: после восстановления прогноза планируем удаление
+                // старых «online»-сообщений, которые не успели удалиться до рестарта.
+                if (p.OnlineAnnouncementMessageIds != null && p.OnlineAnnouncementMessageIds.Count > 0)
+                {
+                    var stale = p.OnlineAnnouncementMessageIds.ToList();
+                    foreach (var om in stale)
+                    {
+                        var sentAt = om.SentAtUtc;
+                        var elapsed = nowUtc - sentAt;
+                        var remaining = TimeSpan.FromMinutes(5) - elapsed;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            // Уже пора удалять — делаем это синхронно, чтобы канал не копил мусор.
+                            _ = ScheduleOnlineMessageCleanupAsync(p, om.MessageId, TimeSpan.Zero);
+                        }
+                        else
+                        {
+                            // Ещё рано — планируем на оставшееся время.
+                            _ = ScheduleOnlineMessageCleanupAsync(p, om.MessageId, remaining);
+                        }
+                    }
+                }
+            }
+            try { await SaveStateAsync().ConfigureAwait(false); }
+            catch (Exception saveEx)
+            {
+                await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:save", saveEx).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// ✅ Bug C / Round 7-C2: после Ready валидируем все активные прогнозы,
+        /// загруженные фазой 1 без обращения к Discord API. Прогнозы без канала
+        /// или сообщения автоматически отменяются и ставки возвращаются.
+        /// </summary>
+        private async Task ValidateActiveAfterReadyAsync()
+        {
+            if (_active.IsEmpty) return;
+            foreach (var kv in _active.ToArray())
+            {
+                var p = kv.Value;
+                if (p.IsResolved) continue;
+
+                // ✅ Round 7-C3: на первом Ready локальный кеш Discord ещё может
+                // быть пустым (guilds/channels появляются чуть позже). Ждём
+                // до ~3 секунд с короткими ретраями, прежде чем считать
+                // канал/сообщение отсутствующим — иначе словим ложный
+                // RESTORE_FAIL_PHASE2 reason=channel_missing при штатном restart.
+                ISocketMessageChannel? ch = null;
+                for (int attempt = 0; attempt < 6 && ch == null; attempt++)
+                {
+                    ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                        ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+                    if (ch == null)
                     {
                         try
                         {
-                            foreach (var kv in _active.ToArray())
-                            {
-                                var p = kv.Value;
-                                if (!p.IsResolved)
+                            var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
+                            ch = fetched as ISocketMessageChannel;
+                        }
+                        catch (Exception ex)
+                        {
+                            await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                        }
+                    }
+                    if (ch == null && attempt < 5)
+                    {
+                        await Task.Delay(500).ConfigureAwait(false);
+                    }
+                }
+
+                if (ch == null || p.MessageId == 0)
+                {
+                    // ✅ Round 7-C5: RESTORE_FAIL_PHASE2 — это лог проверки,
+                    // должен быть виден в ЭТАП 3/4.
+                    AppendRestoreReport($"RESTORE_FAIL_PHASE2 guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count}");
+                    await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                    _active.TryRemove(p.GuildId, out _);
+                    _activeChannels.TryRemove(p.GuildId, out _);
+                    continue;
+                }
+
+                IMessage? msg = null;
+                int msgAttempts = 0;
+                while (msg == null && msgAttempts < 5)
+                {
+                    try
+                    {
+                        msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Discord.Net не имеет публичного HttpException-типа в этой версии;
+                        // любой transient сбой пытаемся ретраить в общем цикле.
+                        await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetMessage", ex, $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}").ConfigureAwait(false);
+                        if (msgAttempts >= 4)
+                        {
+                            await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                            _active.TryRemove(p.GuildId, out _);
+                            _activeChannels.TryRemove(p.GuildId, out _);
+                            msg = null;
+                            break;
+                        }
+                    }
+                    if (msg == null && msgAttempts < 4)
+                    {
+                        await Task.Delay(500).ConfigureAwait(false);
+                    }
+                    msgAttempts++;
+                }
+                if (msg == null && !_active.TryGetValue(p.GuildId, out _))
+                {
+                    // уже отменён через catch выше
+                    continue;
+                }
+                if (msg == null)
+                {
+                    // ✅ Round 7-C5: RESTORE_FAIL_PHASE2 should also surface in ЭТАП 3/4.
+                    AppendRestoreReport($"RESTORE_FAIL_PHASE2 guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count}");
+                    await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                    _active.TryRemove(p.GuildId, out _);
+                    _activeChannels.TryRemove(p.GuildId, out _);
+                    continue;
+                }
+
+                _activeChannels[p.GuildId] = ch;
+                AppendRestoreReport($"RESTORE_OK_PHASE2 guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count} pool={p.TotalPool}");
+
+                                // ✅ Round 7-C8 bugfix: после успешной валидации прогноза проверить,
+                                // что связанное Discord-событие всё ещё живо. Если бот был offline и
+                                // за это время событие успели завершить/отменить на стороне Discord —
+                                // прогноз должен быть автоматически отменён (ставки возвращены),
+                                // потому что правило «нет активного события в канале → нельзя
+                                // создавать прогноз» работает в обе стороны.
+                                if (p.EventId.HasValue && p.EventId.Value != 0)
                                 {
-                                    // ✅ Bug 5: фиксируем момент ухода в offline для последующего
-                                    // сдвига BetsCloseAtUtc после восстановления.
-                                    if (!p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                                    await CheckEventStatusAndCancelIfDoneAsync(p).ConfigureAwait(false);
+                                    // CancelAsync удаляет прогноз из _active. Если он уже отменён,
+                                    // пропускаем остальные шаги (embed/online-анонс) — этого
+                                    // прогноза больше нет в системе.
+                                    if (!_active.TryGetValue(p.GuildId, out var stillActive) || stillActive != p)
                                     {
-                                        p.BotOfflineAtUtc = nowUtc;
-                                        p.WasBotOfflineOnShutdown = true;
-                                    }
-                                    // ✅ Bug 6: добавляем событие в лог
-                                    p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
-                                    // Защита от спама: если последняя запись — это Disconnected <5 сек назад, не дублируем.
-                                    var lastEvent = p.OfflineEvents.LastOrDefault();
-                                    var isDuplicate = lastEvent != null
-                                        && lastEvent.Kind == OfflineEventKind.Disconnected
-                                        && (nowUtc - lastEvent.AtUtc) < TimeSpan.FromSeconds(5);
-                                    if (!isDuplicate)
-                                    {
-                                        p.OfflineEvents.Add(new OfflineEvent
-                                        {
-                                            AtUtc = nowUtc,
-                                            Kind = OfflineEventKind.Disconnected,
-                                            Severity = kind,
-                                            Note = note
-                                        });
-                                    }
-                                    await UpdateMessageAsync(p, showLocked: p.IsLocked, botOffline: true).ConfigureAwait(false);
-                                    // ✅ Bug 6: оповещаем участников в канале, чтобы они видели,
-                                    // что бот ушёл на рестарт/offline, и кнопки скрыты.
-                                    try
-                                    {
-                                        await AnnounceOfflineAsync(p, kind, nowUtc).ConfigureAwait(false);
-                                    }
-                                    catch (Exception annEx)
-                                    {
-                                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                        continue;
                                     }
                                 }
                             }
-                            // Сохраняем состояние, чтобы при следующем рестарте видеть BotOfflineAtUtc.
-                            try { await SaveStateAsync().ConfigureAwait(false); }
-                            catch (Exception saveEx)
+
+                            // ✅ Round 7-C3: после валидации можно безопасно сохранять пустой _active.
+                            try { await SaveStateAsync().ConfigureAwait(false); } catch { }
+                            _firstReadyValidated = true;
+                        }
+
+                        /// <summary>
+                        /// ✅ Round 7-C8 bugfix: проверяет, что Discord-событие, к которому привязан
+                        /// прогноз, ещё активно. Если событие завершено/отменено (Completed/Cancelled)
+                        /// или удалено — отменяет прогноз с isAdminOverride=true и причиной
+                        /// «Событие завершено во время offline бота». Используется после
+                        /// валидации прогноза в ЭТАП 3/4 (ValidateActiveAfterReadyAsync).
+                        /// </summary>
+                        private async Task CheckEventStatusAndCancelIfDoneAsync(ActivePrediction p)
+                        {
+                            if (!p.EventId.HasValue || p.IsResolved) return;
+                            var eventId = p.EventId.Value;
+                            try
                             {
-                                await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
+                                IGuildScheduledEvent? statusSource = null;
+                                var guild = _client.GetGuild(p.GuildId);
+                                if (guild != null)
+                                {
+                                    try { statusSource = await guild.GetEventAsync(eventId).ConfigureAwait(false); }
+                                    catch (Exception ex)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:GetEventAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                    }
+                                }
+                                // REST-фоллбэк: кэш SocketGuild может быть пустым сразу после рестарта.
+                                if (statusSource == null)
+                                {
+                                    try
+                                    {
+                                        var restGuild = await _client.Rest.GetGuildAsync(p.GuildId).ConfigureAwait(false);
+                                        if (restGuild != null)
+                                        {
+                                            try
+                                            {
+                                                var restEvent = await restGuild.GetEventAsync(eventId).ConfigureAwait(false);
+                                                if (restEvent != null) statusSource = restEvent;
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetEventAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetGuild", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                    }
+                                }
+
+                                bool shouldCancel;
+                                string reason;
+                                if (statusSource == null)
+                                {
+                                    shouldCancel = true;
+                                    reason = "Связанное Discord-событие удалено. Все ставки возвращены.";
+                                }
+                                else if (statusSource.Status == GuildScheduledEventStatus.Completed
+                                      || statusSource.Status == GuildScheduledEventStatus.Cancelled)
+                                {
+                                    shouldCancel = true;
+                                    reason = "Связанное Discord-событие завершено во время offline бота. Все ставки возвращены.";
+                                }
+                                else
+                                {
+                                    shouldCancel = false;
+                                    reason = string.Empty;
+                                }
+
+                                if (shouldCancel)
+                                {
+                                    AppendRestoreReport($"RESTORE_STALE_CANCEL guild={p.GuildId} eventId={eventId} status={(statusSource?.Status.ToString() ?? "null")} bets={p.Bets.Count}");
+                                    var (ok, error) = await CancelAsync(p.GuildId, resolverId: 0, isAdminOverride: true, cancelReason: reason).ConfigureAwait(false);
+                                    if (!ok && !string.IsNullOrEmpty(error))
+                                    {
+                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:Cancel", new Exception(error), $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                await PredictionErrorLogger.LogAsync("CheckEventStatusAndCancelIfDoneAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
-                        }
-                    });
-                    return Task.CompletedTask;
-                }
 
-        private Task OnClientReadyForRestore()
-        {
-                    // ✅ Bug 6: при первом Ready после старта мы только восстанавливаем состояние,
-                    // но НЕ объявляем "бот снова онлайн" по каждому прогнозу — это ожидаемое
-                    // поведение после штатного запуска. Сообщения "бот снова онлайн" шлём на
-                    // последующих Ready, если до этого был зафиксирован Disconnected.
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await LoadStateAsync().ConfigureAwait(false);
-                            // Теперь второй Ready-обработчик будет реагировать на каждый
-                            // Disconnected→Ready цикл и слать оповещения в каналы.
-                            _client.Ready -= OnClientReadyForRestore;
-                            _client.Ready += OnClientReadyForAnnouncements;
-                        }
-                        catch (Exception ex)
-                        {
-                            await PredictionErrorLogger.LogAsync("OnClientReadyForRestore", ex).ConfigureAwait(false);
-                        }
-                    });
-                    return Task.CompletedTask;
-                }
-
-                private Task OnClientReadyForAnnouncements()
+                            private Task OnClientReadyForAnnouncements()
                 {
                     var nowUtc = DateTimeOffset.UtcNow;
                     _ = Task.Run(async () =>
@@ -221,10 +785,12 @@ namespace RPBot
                                             }
                                             if (p.BetsCloseAtUtc != oldClose)
                                             {
-                                                await LogAsync(
+                                                // ✅ Round 7-C5: сдвиг таймера при возврате
+                                                // из reconnect/disconnect цикла — это лог
+                                                // восстановления, должен быть в ЭТАП 3/4.
+                                                AppendRestoreReport(
                                                     $"OFFLINE_SHIFT_ON_READY guild={p.GuildId} oldClose='{oldClose:HH:mm:ss}' " +
-                                                    $"newClose='{p.BetsCloseAtUtc:HH:mm:ss}'")
-                                                    .ConfigureAwait(false);
+                                                    $"newClose='{p.BetsCloseAtUtc:HH:mm:ss}'");
                                             }
                                         }
                                     }
@@ -282,27 +848,58 @@ namespace RPBot
                         string text;
                         if (string.Equals(kind, "restart", StringComparison.Ordinal))
                         {
-                            text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
-                                   $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова — " +
-                                   $"все ставки в безопасности, таймер будет сдвинут на длительность offline.";
-                        }
-                        else
-                        {
-                            text = $"⛔ **Зафиксировано отключение бота.**\n" +
-                                   $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
-                                   $"Таймер будет пересчитан с учётом времени offline.";
-                        }
-                                        // ✅ Bug 6: сохраняем ID сообщения, чтобы потом удалить при возвращении бота.
-                                        var msg = await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
-                                            .ConfigureAwait(false);
-                                        if (msg != null)
-                                        {
-                                            lock (p.OfflineAnnouncementMessageIds)
+                                            // ✅ Round 7-C7: разные тексты для рестарта и для остановки.
+                                            if (p.IsLocked)
                                             {
-                                                p.OfflineAnnouncementMessageIds.Add(msg.Id);
+                                                text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова.";
+                                            }
+                                            else
+                                            {
+                                                text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова — " +
+                                                       $"все ставки в безопасности, таймер будет сдвинут на длительность offline.";
                                             }
                                         }
-                                    }
+                                        else if (string.Equals(kind, "stop", StringComparison.Ordinal))
+                                        {
+                                            if (p.IsLocked)
+                                            {
+                                                text = $"⛔ **Бот завершил работу.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии до следующего запуска бота.";
+                                            }
+                                            else
+                                            {
+                                                text = $"⛔ **Бот завершил работу.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии — " +
+                                                       $"все ставки сохранены на диск, таймер продолжит отсчёт при следующем запуске бота.";
+                                            }
+                                        }
+                                        else
+                                        {
+                                            if (p.IsLocked)
+                                            {
+                                                text = $"⛔ **Зафиксировано отключение бота.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть.";
+                                            }
+                                            else
+                                            {
+                                                text = $"⛔ **Зафиксировано отключение бота.**\n" +
+                                                       $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
+                                                       $"Таймер будет пересчитан с учётом времени offline.";
+                                            }
+                                        }
+                                        // ✅ Bug 6: сохраняем ID сообщения, чтобы потом удалить при возвращении бота.
+                                                                                var msg = await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                                                                                    .ConfigureAwait(false);
+                                                                                if (msg != null)
+                                                                                {
+                                                                                    lock (p.OfflineAnnouncementMessageIds)
+                                                                                    {
+                                                                                        p.OfflineAnnouncementMessageIds.Add(msg.Id);
+                                                                                    }
+                                                                                }
+                                                                            }
                                     catch (Exception ex)
                     {
                                         await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
@@ -338,13 +935,22 @@ namespace RPBot
                                             }
                                             catch (Exception delEx)
                                             {
-                                                // Сообщение могло быть удалено вручную — это нормально.
-                                                await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                                // ✅ Round 7-C7: HTTP 10008 (Unknown Message) — нормальная ситуация
+                                                // (сообщение удалено пользователем вручную или каналом). Не логируем.
+                                                int code = 0;
+                                                if (delEx is Discord.Net.HttpException hex) code = (int)hex.HttpCode;
+                                                if (code != 10008)
+                                                {
+                                                    await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                                }
                                             }
                                         }
                                         var phase = p.IsLocked ? "Ожидание разрешения прогноза" : "Сбор ставок";
                                         string offlineInfo = string.Empty;
-                                        if (p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
+                                        // ✅ Round 7-C8: для IsLocked (прогноз уже в фазе разрешения,
+                                        // таймер не сдвигается) упоминание offline длительности
+                                        // неуместно — печатаем только если фаза — сбор ставок.
+                                        if (!p.IsLocked && p.LastOfflineDurationMinutes.HasValue && p.LastOfflineDurationMinutes.Value > 0)
                                         {
                                             var dur = p.LastOfflineDurationMinutes.Value;
                                             offlineInfo = dur < 1
@@ -352,14 +958,72 @@ namespace RPBot
                                                 : $" Бот был offline ~{dur:F1} мин.";
                                         }
                                         var text = $"✅ **Бот снова в сети.** Прогноз «{p.Title}» ({phase}) снова активен.{offlineInfo}";
-                                        await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
+                                        var onlineMsg = await channel.SendMessageAsync(text, allowedMentions: new Discord.AllowedMentions { MentionRepliedUser = false })
                                             .ConfigureAwait(false);
+                                        // ✅ Round 7-C4: сохраняем ID «online»-сообщения, чтобы удалить
+                                        // его через 5 минут (канал не должен копить мусор).
+                                        if (onlineMsg != null)
+                                        {
+                                            p.OnlineAnnouncementMessageIds.Add(new OnlineAnnouncementMessage
+                                            {
+                                                MessageId = onlineMsg.Id,
+                                                SentAtUtc = nowUtc
+                                            });
+                                            _ = ScheduleOnlineMessageCleanupAsync(p, onlineMsg.Id, TimeSpan.FromMinutes(5));
+                                        }
                                     }
                                     catch (Exception ex)
                                     {
                                         await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
                                     }
                                 }
+
+        // ✅ Round 7-C4: через заданное время пытаемся удалить «online»-сообщение.
+        // Запускается фоновым таском; ошибки игнорируются (сообщение могло быть
+        // удалено пользователем вручную).
+        private async Task ScheduleOnlineMessageCleanupAsync(ActivePrediction p, ulong msgId, TimeSpan delay)
+        {
+            try
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                // Проверяем, что прогноз ещё существует и ID всё ещё актуален.
+                if (!_active.TryGetValue(p.GuildId, out var current) || current != p)
+                    return;
+                var channel = GetActiveMessageChannel(p);
+                if (channel == null) return;
+                try
+                {
+                    var msg = await channel.GetMessageAsync(msgId).ConfigureAwait(false) as IUserMessage;
+                    if (msg != null)
+                    {
+                        await msg.DeleteAsync().ConfigureAwait(false);
+                    }
+                }
+                catch (Exception delEx)
+                                {
+                                    // ✅ Round 7-C7: HTTP 10008 (Unknown Message) и NotFound — это нормальная
+                                    // ситуация (сообщение удалено пользователем вручную или каналом).
+                                    // Не логируем как ошибку, но убираем ID из списка, чтобы не пытаться
+                                    // удалять несуществующее сообщение снова при следующем восстановлении.
+                                    int code = 0;
+                                    if (delEx is Discord.Net.HttpException hex) code = (int)hex.HttpCode;
+                                    if (code != 10008)
+                                    {
+                                        await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                    }
+                                }
+                finally
+                                {
+                                    // Убираем ID из списка, даже если удаление не удалось.
+                                    p.OnlineAnnouncementMessageIds.RemoveAll(o => o.MessageId == msgId);
+                                    try { await SaveStateAsync().ConfigureAwait(false); } catch { }
+                                }
+            }
+            catch (Exception ex)
+            {
+                await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync", ex).ConfigureAwait(false);
+            }
+        }
 
         internal class PersistentPrediction
         {
@@ -368,6 +1032,8 @@ namespace RPBot
             public ulong ChannelId { get; set; }
             public ulong MessageId { get; set; }
             public string Title { get; set; } = string.Empty;
+            // ✅ Round 7-C8: связь прогноза с Discord-событием (см. ActivePrediction.EventId).
+            public ulong? EventId { get; set; }
 
             // ✅ Новое поле для поддержки N исходов
             public List<PredictionOutcome>? Outcomes { get; set; }
@@ -387,19 +1053,50 @@ namespace RPBot
             public double? LastOfflineDurationMinutes { get; set; }
             // true = бот сейчас offline (для восстановления состояния кнопок/embed)
             public bool WasBotOfflineOnShutdown { get; set; }
-                        // ✅ Bug 6: лог offline/online для embed результата и истории
-                        public List<OfflineEvent> OfflineEvents { get; set; } = new();
-                        public bool IsLocked { get; set; }
-                        public bool IsResolved { get; set; }
-                        public int? WinningOutcomeId { get; set; }
-                        public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
-                    }
+            // ✅ Bug 6: лог offline/online для embed результата и истории
+            public List<OfflineEvent> OfflineEvents { get; set; } = new();
+            // ✅ Bug 6 (новое): ID сообщений-объявлений offline/online для удаления
+            // их из канала при возвращении бота в сеть. Сохраняем в файле, чтобы
+            // корректно убрать «мусорные» сообщения даже после рестарта.
+            public List<ulong> OfflineAnnouncementMessageIds { get; set; } = new();
+            // ✅ Round 7-C4: ID «online»-сообщений + время отправки для отложенного
+            // удаления через 5 минут. Сериализуется, чтобы не терять ID при рестарте.
+            public List<OnlineAnnouncementMessage> OnlineAnnouncementMessageIds { get; set; } = new();
+            public bool IsLocked { get; set; }
+            public bool IsResolved { get; set; }
+            public int? WinningOutcomeId { get; set; }
+            public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
+        }
 
         private async Task SaveStateAsync()
         {
-            await _stateFileGate.WaitAsync().ConfigureAwait(false);
-            try
-            {
+                    BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:enter _active.Count={_active.Count} hadContent={_stateFileHadContentOnStartup} firstValidated={_firstReadyValidated} wasLoaded={_weLoadedStateAlready}");
+                    await _stateFileGate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        // ✅ Round 7-C3 / Round 7-C7: защита от стирания файла при пустом _active.
+                                                // Два условия:
+                                                //   1) weLoadedStateAlready: в текущем ЖЦ LoadStateAsync уже прочитал файл.
+                                                //      До этого момента SaveStateAsync НЕ имеет права писать — мы не знаем,
+                                                //      что лежит на диске, и при _active.IsEmpty затёрли бы содержимое.
+                                                //      Это спасает в сценарии, когда restart-loop итерирует несколько раз:
+                                                //      во второй итерации _active ещё пуст, а LoadStateAsync ещё не звался.
+                                                //   2) hadContent && !firstValidated: классический safe-mode из R7-C3.
+                                                // Если оба условия сработали, не пишем ничего в файл.
+                                                if (!_weLoadedStateAlready && _active.IsEmpty)
+                                                {
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] SaveStateAsync:SAFE_MODE_BLOCK reason=_active_empty_pre_load");
+                                                    AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_load");
+                                                    return;
+                                                }
+                                                if (_active.IsEmpty && _stateFileHadContentOnStartup && !_firstReadyValidated)
+                                                {
+                                                    // ✅ Round 7-C5: лог идёт в буфер ЭТАП 3/4 (там пользователь
+                                                    // увидит, что safe-mode сработал), а не в Predict.log.
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] SaveStateAsync:SAFE_MODE_BLOCK reason=_active_empty_pre_ready");
+                                                    AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_ready");
+                                                    return;
+                                                }
                         var snapshot = new Dictionary<ulong, PersistentPrediction>();
                         foreach (var kv in _active)
                         {
@@ -412,27 +1109,37 @@ namespace RPBot
                                 MessageId = v.MessageId,
                                 Title = v.Title,
                                 Outcomes = v.Outcomes, // ✅ Сохраняем новый формат
+                                EventId = v.EventId, // ✅ Round 7-C8: связь прогноза с событием
                                 CreatedAtUtc = v.CreatedAtUtc,
                                 BetsCloseAtUtc = v.BetsCloseAtUtc,
                                 BotOfflineAtUtc = v.BotOfflineAtUtc,
                                 LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
                                 WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
-                                                            OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
-                                                            IsLocked = v.IsLocked,
-                                                            IsResolved = v.IsResolved,
-                                                            WinningOutcomeId = v.WinningOutcomeId,
-                                                            Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
-                                                        };
+                                OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
+                                OfflineAnnouncementMessageIds = v.OfflineAnnouncementMessageIds != null
+                                    ? new List<ulong>(v.OfflineAnnouncementMessageIds)
+                                    : new List<ulong>(),
+                                OnlineAnnouncementMessageIds = v.OnlineAnnouncementMessageIds != null
+                                    ? v.OnlineAnnouncementMessageIds.Select(o => new OnlineAnnouncementMessage { MessageId = o.MessageId, SentAtUtc = o.SentAtUtc }).ToList()
+                                    : new List<OnlineAnnouncementMessage>(),
+                                IsLocked = v.IsLocked,
+                                IsResolved = v.IsResolved,
+                                WinningOutcomeId = v.WinningOutcomeId,
+                                Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
+                            };
                         }
 
                         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
                         var json = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
+                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:writing bytes={json.Length} snapshotKeys={snapshot.Count}");
                         // Атомарная запись: исключает повреждение файла при крэше посреди сереализации
                         // и при одновременной записи с другого процесса (lock + запись во временный файл + rename).
                         await SafeJsonIO.WriteAtomicAsync(_stateFilePath, json).ConfigureAwait(false);
-                    }
+                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:done path={_stateFilePath}");
+            }
                     catch (Exception ex)
-                    {
+            {
+                        BotLogger.Info(LogCategory.Predict, $"[TRACE] SaveStateAsync:EX {ex.GetType().Name}: {ex.Message}");
                         await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
                     }
                     finally
@@ -469,22 +1176,48 @@ namespace RPBot
                             }
 
                 /// <summary>
-                /// ✅ Bug C: публичный вход в LoadStateAsync, вызывается из Program.cs
-                /// сразу после new PredictionService(), ДО BootstrapFirstRunSettingsAsync.
-                /// Иначе EnsureStateFileAsync/любой SaveStateAsync перезапишет файл,
-                /// пока _active ещё пустой, и прогноз «потеряется» до Ready.
-                /// </summary>
-                public Task LoadStateOnStartupAsync() => LoadStateAsync();
+                                                /// ✅ Round 7-C6: устаревший прямой вход в LoadStateAsync больше
+                                                /// не нужен — вся загрузка/проверка прогнозов живёт в
+                                                /// RunStage3RestoreAsync(), который вызывается из ЭТАП 3/4.
+                                                /// Метод оставлен как deprecated-обёртка для будущих вызовов
+                                                /// из юнит-тестов и не должен вызываться из production-кода.
+                                                /// </summary>
+                                                [Obsolete("Use RunStage3RestoreAsync from ЭТАП 3/4 instead.")]
+                                                public Task LoadStateOnStartupAsync() => LoadStateAsync(validate: false);
 
-        private async Task LoadStateAsync()
+                        private async Task LoadStateAsync(bool validate = true)
         {
-            await _stateFileGate.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                if (!File.Exists(_stateFilePath)) return;
-                var json = await File.ReadAllTextAsync(_stateFilePath).ConfigureAwait(false);
-                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
-                if (dict == null) return;
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:enter validate={validate} stateFile={_stateFilePath}");
+                                    await _stateFileGate.WaitAsync().ConfigureAwait(false);
+                                    try
+                                    {
+                                        if (!File.Exists(_stateFilePath))
+                                        {
+                                            BotLogger.Info(LogCategory.Predict, "[TRACE] LoadStateAsync:no-file");
+                                                                                    // ✅ Round 7-C7: нет файла на диске — это тоже «состояние загружено».
+                                                                                    // Иначе первая же попытка SaveStateAsync (например, в Shutdown)
+                                                                                    // создаст пустой {} и прибьёт любые параллельные попытки восстановления.
+                                                                                    _stateFileHadContentOnStartup = false;
+                                                                                    _weLoadedStateAlready = true;
+                                                                                    return;
+                                                                                }
+                                        var json = await File.ReadAllTextAsync(_stateFilePath).ConfigureAwait(false);
+                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:read bytes={json.Length}");
+                                                        // ✅ Round 7-C3: фиксируем, что файл был НЕпустой на момент старта —
+                                                        // это включает "безопасный режим" SaveStateAsync.
+                                                        try
+                                                        {
+                                                            var len = (await File.ReadAllBytesAsync(_stateFilePath).ConfigureAwait(false)).Length;
+                                                            _stateFileHadContentOnStartup = len > 2; // больше "{}"
+                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:stateFileHadContentOnStartup={_stateFileHadContentOnStartup} (len={len})");
+                                                        }
+                                                        catch { _stateFileHadContentOnStartup = false; }
+                                                        var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
+                                                        BotLogger.Info(LogCategory.Predict, $"[TRACE] LoadStateAsync:parsed entries={dict?.Count ?? 0}");
+                                                                                                                // ✅ Round 7-C7: отметить, что LoadStateAsync отработал в этом ЖЦ —
+                                                                                                                // с этого момента SaveStateAsync может писать.
+                                                                                                                _weLoadedStateAlready = true;
+                                                                                                                if (dict == null) return;
 
                 foreach (var kv in dict)
                 {
@@ -503,6 +1236,7 @@ namespace RPBot
                             ChannelId = p.ChannelId,
                             MessageId = p.MessageId,
                             Title = p.Title,
+                            EventId = p.EventId, // ✅ Round 7-C8: связь прогноза с событием
                             CreatedAtUtc = p.CreatedAtUtc,
                             // ✅ Bug 5: сдвигаем BetsCloseAtUtc на длительность offline,
                             // чтобы приём ставок не закрылся сразу же после рестарта.
@@ -510,16 +1244,22 @@ namespace RPBot
                             BotOfflineAtUtc = p.BotOfflineAtUtc,
                             LastOfflineDurationMinutes = p.LastOfflineDurationMinutes,
                             WasBotOfflineOnShutdown = p.WasBotOfflineOnShutdown,
-                                                    // ✅ Bug 6: восстанавливаем лог offline-событий
-                                                    OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>(),
-                                                    IsLocked = p.IsLocked,
-                                                    IsResolved = p.IsResolved,
-                                                    WinningOutcomeId = p.WinningOutcomeId,
-                                                    Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
-                                                };
+                            // ✅ Bug 6: восстанавливаем лог offline-событий
+                            OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>(),
+                            // ✅ Bug 6: восстанавливаем список ID offline-сообщений,
+                            // чтобы удалить их после возвращения бота в сеть (Round 7-C3).
+                            OfflineAnnouncementMessageIds = p.OfflineAnnouncementMessageIds ?? new List<ulong>(),
+                            // ✅ Round 7-C4: восстанавливаем ID online-сообщений для
+                            // отложенного удаления через 5 минут.
+                            OnlineAnnouncementMessageIds = p.OnlineAnnouncementMessageIds ?? new List<OnlineAnnouncementMessage>(),
+                            IsLocked = p.IsLocked,
+                            IsResolved = p.IsResolved,
+                            WinningOutcomeId = p.WinningOutcomeId,
+                            Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
+                        };
 
                         // ✅ БАГ 7: Логируем для диагностики потери ставок
-                        await LogAsync($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}").ConfigureAwait(false);
+                        AppendRestoreReport($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}");
 
                         // ✅ Bug 5: если бот был офлайн во время приёма ставок — сдвигаем таймер
                         // на длительность offline. Только для ещё не закрытых прогнозов.
@@ -533,10 +1273,9 @@ namespace RPBot
                                 var oldCloseAt = ap.BetsCloseAtUtc;
                                 ap.BetsCloseAtUtc = oldCloseAt + offlineDuration;
                                 ap.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
-                                await LogAsync(
+                                AppendRestoreReport(
                                     $"OFFLINE_SHIFT guild={p.GuildId} channel={p.ChannelId} offlineAt='{offlineAt:yyyy-MM-dd HH:mm:ss}' " +
-                                    $"offlineDuration={offlineDuration} oldClose='{oldCloseAt:HH:mm:ss}' newClose='{ap.BetsCloseAtUtc:HH:mm:ss}'")
-                                    .ConfigureAwait(false);
+                                    $"offlineDuration={offlineDuration} oldClose='{oldCloseAt:HH:mm:ss}' newClose='{ap.BetsCloseAtUtc:HH:mm:ss}'");
                             }
                             // Сбрасываем признаки offline: бот снова онлайн, окно учтено.
                             ap.BotOfflineAtUtc = null;
@@ -576,7 +1315,18 @@ namespace RPBot
                         ap.UseInlineOutcomeFields = ap.Outcomes.Count <= 3
                             && ap.Outcomes.All(o => $"📊 Исход {o.Id}: {o.Name}".Length <= 256);
 
-                        // Validate message existence. If the original message is gone, auto-cancel and refund.
+                                                // ✅ Bug C / Round 7-C2: фаза 1 (validate=false) загружает состояние
+                                                // БЕЗ обращения к Discord API — клиент ещё не залогинен на этом этапе.
+                                                // Валидация канала/сообщения будет выполнена в ValidateActiveAfterReadyAsync
+                                                // после первого Ready.
+                                                if (!validate)
+                                                {
+                                                    _active[p.GuildId] = ap;
+                                                    AppendRestoreReport($"RESTORE_PHASE1 guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool} deferred=true");
+                                                    continue;
+                                                }
+
+                                                // Validate message existence. If the original message is gone, auto-cancel and refund.
                         ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
                             ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
 
@@ -596,7 +1346,7 @@ namespace RPBot
 
                         if (ch == null || p.MessageId == 0)
                         {
-                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
                             await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
 
                             // Remove from persisted state so it doesn't keep re-triggering on next restart.
@@ -614,7 +1364,7 @@ namespace RPBot
                             var msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
                             if (msg == null)
                             {
-                                await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                                AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
                                 await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
 
                                 try { dict.Remove(kv.Key); } catch { }
@@ -623,7 +1373,7 @@ namespace RPBot
                         }
                         catch
                         {
-                            await LogAsync($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}").ConfigureAwait(false);
+                            AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
                             await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
                             continue;
                         }
@@ -634,7 +1384,7 @@ namespace RPBot
 
                         _activeChannels[p.GuildId] = ch;
 
-                        await LogAsync($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}").ConfigureAwait(false);
+                        AppendRestoreReport($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}");
                     }
                     catch (Exception ex)
                     {
@@ -699,7 +1449,7 @@ namespace RPBot
                                 await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannelAsync", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
                             }
 
-                await LogAsync($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'").ConfigureAwait(false);
+                AppendRestoreReport($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'");
             }
             catch (Exception ex)
             {
@@ -728,7 +1478,25 @@ namespace RPBot
             TimeSpan duration)
         {
             // Используем новую перегрузку с 2 исходами
-            return await CreateAsync(guildId, creatorId, targetChannel, title, new[] { outcome1Name, outcome2Name }, duration).ConfigureAwait(false);
+            return await CreateAsync(guildId, creatorId, targetChannel, title, new[] { outcome1Name, outcome2Name }, duration, eventId: null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// ✅ Round 7-C8: перегрузка с привязкой к Discord-событию. Используется, когда
+        /// прогноз создаётся во время активного события, чтобы при завершении/отмене
+        /// события (включая stale-cleanup) прогноз автоматически отменился.
+        /// </summary>
+        public async Task<(bool ok, string error, ActivePrediction? prediction)> CreateAsync(
+            ulong guildId,
+            ulong creatorId,
+            ISocketMessageChannel targetChannel,
+            string title,
+            string outcome1Name,
+            string outcome2Name,
+            TimeSpan duration,
+            ulong? eventId)
+        {
+            return await CreateAsync(guildId, creatorId, targetChannel, title, new[] { outcome1Name, outcome2Name }, duration, eventId).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -741,6 +1509,21 @@ namespace RPBot
             string title,
             string[] outcomeNames,
             TimeSpan duration)
+        {
+            return await CreateAsync(guildId, creatorId, targetChannel, title, outcomeNames, duration, eventId: null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// ✅ Round 7-C8: перегрузка с привязкой к Discord-событию и N исходами.
+        /// </summary>
+        public async Task<(bool ok, string error, ActivePrediction? prediction)> CreateAsync(
+            ulong guildId,
+            ulong creatorId,
+            ISocketMessageChannel targetChannel,
+            string title,
+            string[] outcomeNames,
+            TimeSpan duration,
+            ulong? eventId)
         {
             if (_active.ContainsKey(guildId))
                 return (false, "Уже есть активный прогноз на этом сервере.", null);
@@ -784,7 +1567,9 @@ namespace RPBot
                 CreatedAtUtc = now,
                 BetsCloseAtUtc = closeAt,
                 IsLocked = false,
-                IsResolved = false
+                IsResolved = false,
+                // ✅ Round 7-C8: связь с Discord-событием (если прогноз создан во время события).
+                EventId = eventId
             };
 
             // Создаём исходы из массива названий
@@ -851,6 +1636,22 @@ namespace RPBot
             string outcome2Name,
             TimeSpan duration)
         {
+            return await CreateAsync(guildId, creatorId, channelId, title, outcome1Name, outcome2Name, duration, eventId: null).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// ✅ Round 7-C8: перегрузка с привязкой к Discord-событию (ulong channelId).
+        /// </summary>
+        public async Task<(bool ok, string error, ActivePrediction? prediction)> CreateAsync(
+            ulong guildId,
+            ulong creatorId,
+            ulong channelId,
+            string title,
+            string outcome1Name,
+            string outcome2Name,
+            TimeSpan duration,
+            ulong? eventId)
+        {
             var rawChannel = _client.GetChannel(channelId) ?? _client.GetGuild(guildId)?.GetChannel(channelId);
             var channel = rawChannel as ISocketMessageChannel;
             if (channel == null)
@@ -861,7 +1662,7 @@ namespace RPBot
                 return (false, "Не удалось найти канал для создания прогноза.", null);
             }
 
-            return await CreateAsync(guildId, creatorId, channel, title, outcome1Name, outcome2Name, duration).ConfigureAwait(false);
+            return await CreateAsync(guildId, creatorId, channel, title, outcome1Name, outcome2Name, duration, eventId).ConfigureAwait(false);
         }
 
         public async Task<(bool ok, string error)> PlaceBetAsync(
@@ -1240,6 +2041,31 @@ namespace RPBot
             return (true, string.Empty);
         }
 
+        /// <summary>
+        /// ✅ Round 7-C8: отменить прогноз, привязанный к конкретному Discord-событию.
+        /// Используется в CleanupStaleSessionsAsync / CleanupStaleSessionByEventAsync
+        /// (когда событие Completed/Cancelled на стороне Discord), и из Program.cs
+        /// после финализации сессии по событию. Если прогноз не привязан к этому
+        /// событию или уже завершён — выходим тихо.
+        /// </summary>
+        public async Task<(bool ok, string error)> CancelPredictionForEventAsync(
+            ulong guildId,
+            ulong eventId,
+            string cancelReason)
+        {
+            if (!_active.TryGetValue(guildId, out var p))
+                return (true, string.Empty); // активного прогноза нет — нечего отменять
+            if (p.IsResolved)
+                return (true, string.Empty);
+            if (p.EventId.HasValue && p.EventId.Value != eventId)
+                return (true, string.Empty); // прогноз привязан к другому событию — не трогаем
+
+            await LogAsync($"PRED_CANCEL_FOR_EVENT guild={guildId} eventId={eventId} reason='{cancelReason}'");
+            // isAdminOverride=true: событие завершилось системно (не вручную), проверка
+            // создателя/adмина здесь неуместна.
+            return await CancelAsync(guildId, resolverId: 0, isAdminOverride: true, cancelReason: cancelReason).ConfigureAwait(false);
+        }
+
         private Embed BuildCancelEmbed(ActivePrediction p, string? cancelReason = null)
         {
             var totalRefund = p.Bets.Values.Sum(b => b.Amount);
@@ -1278,30 +2104,25 @@ namespace RPBot
                 builder.AddField("⏰ Сдвиг таймера", $"Бот был неактивен ~{minsText}, приём ставок продлён на это время.", false);
             }
 
-                    // ✅ Bug 6: лог offline/online-событий в embed'е (для обеих фаз)
-                    if (p.OfflineEvents != null && p.OfflineEvents.Count > 0)
-                    {
-                        var recent = p.OfflineEvents
-                            .OrderBy(e => e.AtUtc)
-                            .TakeLast(8)
-                            .ToList();
-                        if (recent.Count > 0)
-                        {
-                            var sb = new StringBuilder();
-                            foreach (var e in recent)
-                            {
-                                string icon = e.Kind == OfflineEventKind.Disconnected
-                                    ? (string.Equals(e.Severity, "restart", StringComparison.Ordinal) ? "🔄" : "⛔")
-                                    : "✅";
-                                var local = e.AtUtc.ToLocalTime();
-                                var suffix = e.Kind == OfflineEventKind.Disconnected
-                                    ? (string.Equals(e.Severity, "restart", StringComparison.Ordinal) ? "реконнект" : "offline")
-                                    : "online";
-                                sb.AppendLine($"{icon} {local:HH:mm:ss} — {suffix}");
-                            }
-                            builder.AddField("🛰️ Состояние бота", sb.ToString().TrimEnd(), false);
-                        }
-                    }
+            // ✅ Bug 6: текущее состояние бота в embed'е (одна строка: последний переход).
+            // Полный лог хранится в p.OfflineEvents и доступен в !history.
+            if (p.OfflineEvents != null && p.OfflineEvents.Count > 0)
+            {
+                var last = p.OfflineEvents
+                    .OrderBy(e => e.AtUtc)
+                    .LastOrDefault();
+                if (last != null)
+                {
+                    string icon = last.Kind == OfflineEventKind.Disconnected
+                        ? (string.Equals(last.Severity, "restart", StringComparison.Ordinal) ? "🔄" : "⛔")
+                        : "✅";
+                    var local = last.AtUtc.ToLocalTime();
+                    var suffix = last.Kind == OfflineEventKind.Disconnected
+                        ? (string.Equals(last.Severity, "restart", StringComparison.Ordinal) ? "реконнект" : "offline")
+                        : "online";
+                    builder.AddField("🛰️ Состояние бота", $"{icon} {local:HH:mm:ss} — {suffix}", false);
+                }
+            }
 
             var totalPool = p.TotalPool;
 
@@ -1595,7 +2416,10 @@ namespace RPBot
 
                 var json = await File.ReadAllTextAsync(_historyFilePath).ConfigureAwait(false);
                 _history = System.Text.Json.JsonSerializer.Deserialize<PredictionHistoryStore>(json) ?? new();
-                await LogAsync($"HISTORY_LOADED entries={_history.History.Sum(kv => kv.Value.Count)}");
+                _historyEntriesLoaded = _history.History.Sum(kv => kv.Value.Count);
+                // ✅ Round 7-C5: не дублируем в Predict.log — достаточно буфера
+                // для ЭТАП 3/4, где пользователь увидит "HISTORY_LOADED entries=N".
+                AppendRestoreReport($"HISTORY_LOADED entries={_historyEntriesLoaded}");
             }
             catch (Exception ex)
             {
@@ -2118,84 +2942,99 @@ namespace RPBot
         }
 
         public void Shutdown()
-        {
-                    // Идемпотентная остановка: отменяем монитор и помечаем disposed,
-                    // чтобы повторные вызовы (например, при рестарте) были безопасны.
-                    if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
-                        return;
+                {
+                            // Идемпотентная остановка: отменяем монитор и помечаем disposed,
+                            // чтобы повторные вызовы (например, при рестарте) были безопасны.
+                            if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
+                                return;
 
-                    lock (_shutdownLock)
-                    {
-                        if (_disposed) return;
-                        try
-                        {
-                            _client.Ready -= OnClientReadyForRestore;
-                            _client.Disconnected -= OnClientDisconnected;
-                        }
-                        catch
-                        {
-                            // клиент уже отписан — это норма при перезапуске
-                        }
+                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:enter _active.Count={_active.Count} _firstReadyValidated={_firstReadyValidated} _stateFileHadContentOnStartup={_stateFileHadContentOnStartup}");
 
-                        // ✅ Bug 5: фиксируем момент ухода в offline на момент штатного shutdown,
-                        // чтобы при следующем старте LoadStateAsync мог сдвинуть BetsCloseAtUtc.
-                        try
-                        {
-                            var nowUtc = DateTimeOffset.UtcNow;
-                            foreach (var kv in _active.ToArray())
+                            lock (_shutdownLock)
                             {
-                                var p = kv.Value;
-                                if (!p.IsResolved && !p.IsLocked && !p.BotOfflineAtUtc.HasValue)
-                                {
-                                    p.BotOfflineAtUtc = nowUtc;
-                                    p.WasBotOfflineOnShutdown = true;
-                                }
-                                                        // ✅ Bug 6: фиксируем событие "shutdown" в логе, чтобы
-                                                        // можно было отличить полноценный offline от шумных реконнектов.
-                                                        if (!p.IsResolved)
-                                                        {
-                                                            p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
-                                                            p.OfflineEvents.Add(new OfflineEvent
-                                                            {
-                                                                AtUtc = nowUtc,
-                                                                Kind = OfflineEventKind.Disconnected,
-                                                                Severity = "offline",
-                                                                Note = "Shutdown"
-                                                            });
-                                                        }
-                                                    }
+                                                if (_disposed)
+                                                {
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:skip _disposed=true");
+                                                    return;
                                                 }
-                        catch (Exception ex)
+                                                try
+                                                {
+                                                                            // ✅ Round 7-C6: подписки на Ready/Connected больше не нужны,
+                                                                            // вся логика восстановления переехала в RunStage3RestoreAsync()
+                                                                            // и зовётся синхронно из ЭТАП 3/4.
+                                                                            _client.Disconnected -= OnClientDisconnected;
+                                                                            BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:unsubscribed Disconnected");
+                                                                        }
+                                                                        catch (Exception unsubEx)
+                                                                        {
+                                                                            // клиент уже отписан — это норма при перезапуске
+                                                                            BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:unsubscribe-ex {unsubEx.GetType().Name}");
+                                                                        }
+
+                                                // ✅ Bug 5: фиксируем момент ухода в offline на момент штатного shutdown,
+                                                // чтобы при следующем старте LoadStateAsync мог сдвинуть BetsCloseAtUtc.
+                                                try
+                                                {
+                                                    var nowUtc = DateTimeOffset.UtcNow;
+                                                    BotLogger.Info(LogCategory.Predict, $"[TRACE] Shutdown:markOfflineStart nowUtc={nowUtc:O}");
+                                                    foreach (var kv in _active.ToArray())
+                                                    {
+                                                        var p = kv.Value;
+                                                        if (!p.IsResolved && !p.IsLocked && !p.BotOfflineAtUtc.HasValue)
+                                                        {
+                                                            p.BotOfflineAtUtc = nowUtc;
+                                                            p.WasBotOfflineOnShutdown = true;
+                                                        }
+                                                                                // ✅ Bug 6: фиксируем событие "shutdown" в логе, чтобы
+                                                                                // можно было отличить полноценный offline от шумных реконнектов.
+                                                                                if (!p.IsResolved)
+                                                                                {
+                                                                                    p.OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>();
+                                                                                    p.OfflineEvents.Add(new OfflineEvent
+                                                                                    {
+                                                                                        AtUtc = nowUtc,
+                                                                                        Kind = OfflineEventKind.Disconnected,
+                                                                                        Severity = "offline",
+                                                                                        Note = "Shutdown"
+                                                                                    });
+                                                                                }
+                                                                            }
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:markOfflineDone");
+                                                }
+                                                catch (Exception ex)
                         {
-                            try
-                            {
-                                PredictionErrorLogger.LogAsync("Shutdown:markOffline", ex, "Failed to mark predictions offline").GetAwaiter().GetResult();
+                                                    try
+                                                    {
+                                                        PredictionErrorLogger.LogAsync("Shutdown:markOffline", ex, "Failed to mark predictions offline").GetAwaiter().GetResult();
+                                                    }
+                                                    catch { /* не блокируем shutdown */ }
+                                                }
+
+                                                // ✅ Bug 5: сохраняем состояние, чтобы BotOfflineAtUtc дошёл до файла.
+                                                try
+                                                {
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:saveStateStart");
+                                                    SaveStateAsync().GetAwaiter().GetResult();
+                                                    BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:saveStateDone");
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    try
+                                                    {
+                                                        PredictionErrorLogger.LogAsync("Shutdown:saveState", ex, "Failed to persist predictions state on shutdown").GetAwaiter().GetResult();
+                                                    }
+                                                    catch { /* не блокируем shutdown */ }
+                                                }
+
+                                                try { _cts.Cancel(); } catch { }
+                                                try { _cts.Dispose(); } catch { }
+
+                                                _disposed = true;
+                                                BotLogger.Info(LogCategory.Predict, "[TRACE] Shutdown:exit _disposed=true");
                             }
-                            catch { /* не блокируем shutdown */ }
                         }
-
-                        // ✅ Bug 5: сохраняем состояние, чтобы BotOfflineAtUtc дошёл до файла.
-                        try
-                        {
-                            SaveStateAsync().GetAwaiter().GetResult();
-                        }
-                        catch (Exception ex)
-                        {
-                            try
-                            {
-                                PredictionErrorLogger.LogAsync("Shutdown:saveState", ex, "Failed to persist predictions state on shutdown").GetAwaiter().GetResult();
-                            }
-                            catch { /* не блокируем shutdown */ }
-                        }
-
-                        try { _cts.Cancel(); } catch { }
-                        try { _cts.Dispose(); } catch { }
-
-                        _disposed = true;
                     }
                 }
-            }
-        }
 
 
 

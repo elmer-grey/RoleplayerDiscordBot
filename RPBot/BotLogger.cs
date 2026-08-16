@@ -100,9 +100,39 @@ namespace RPBot
                 _unifiedLogPath = Path.Combine(logDirectory, "run.log");
                 try
                 {
-                    // Перезаписываем run.log при старте, чтобы не путаться со старыми запусками.
-                    // Подробные категорийные логи остаются в подпапке.
-                    File.WriteAllText(_unifiedLogPath, $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}", Encoding.UTF8);
+                    // ✅ Round 7-C7: НЕ перезаписываем run.log при старте — добавляем маркер сессии.
+                    // Раньше File.WriteAllText затирал весь предыдущий запуск, и пользователь
+                    // видел в канале лишь «Бот снова в сети» без момента рестарта. Теперь
+                    // run.log — это непрерывный хвост с маркерами `=== Restart #N: ... ===`
+                    // между сессиями. Категорийные файлы по-прежнему ротируются в подпапках
+                    // Logs/<yyyyMMdd_HHmmss>/<Category>.log, так что детальные логи не копятся.
+                    if (File.Exists(_unifiedLogPath))
+                    {
+                        // Считаем, какой по счёту это рестарт — по числу уже записанных маркеров.
+                        // Это грубая эвристика (считаем все вхождения "=== Restart #"), но для
+                        // пользовательского лога этого достаточно.
+                        int restartNumber = 1;
+                        try
+                        {
+                            var existing = File.ReadAllText(_unifiedLogPath);
+                            int idx = 0;
+                            while ((idx = existing.IndexOf("=== Restart #", idx, StringComparison.Ordinal)) >= 0)
+                            {
+                                restartNumber++;
+                                idx++;
+                            }
+                        }
+                        catch { /* если не смогли прочитать — оставляем 1 */ }
+                        File.AppendAllText(_unifiedLogPath,
+                            $"=== Restart #{restartNumber}: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}",
+                            Encoding.UTF8);
+                    }
+                    else
+                    {
+                        File.WriteAllText(_unifiedLogPath,
+                            $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}",
+                            Encoding.UTF8);
+                    }
                 }
                 catch { }
 

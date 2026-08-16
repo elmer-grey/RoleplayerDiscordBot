@@ -348,16 +348,26 @@ private MusicStats? _musicStats;
 
         /// <summary>
         /// Проверяет наличие активного события на указанном голосовом канале
+        /// и возвращает его EventId, чтобы привязать к нему создаваемый прогноз.
         /// </summary>
-        private bool IsActiveEventOnChannel(ulong guildId, ulong channelId)
+        private ulong? GetActiveEventIdOnChannel(ulong guildId, ulong channelId)
         {
             var guild = _client?.GetGuild(guildId);
-            if (guild == null) return false;
+            if (guild == null) return null;
 
-            return guild.Events.Any(e =>
+            var ev = guild.Events.FirstOrDefault(e =>
                 e.Status == GuildScheduledEventStatus.Active &&
                 e.Channel != null &&
                 e.Channel.Id == channelId);
+            return ev?.Id;
+        }
+
+        /// <summary>
+        /// Проверяет наличие активного события на указанном голосовом канале
+        /// </summary>
+        private bool IsActiveEventOnChannel(ulong guildId, ulong channelId)
+        {
+            return GetActiveEventIdOnChannel(guildId, channelId).HasValue;
         }
 
         private async Task HandlePredictionOutcomesButton(SocketMessageComponent component, string[] parts)
@@ -386,29 +396,36 @@ private MusicStats? _musicStats;
 
                 if (outcomesCount == 3)
                 {
-                    var modal = new ModalBuilder()
-                        .WithTitle("Создать прогноз")
-                        .WithCustomId($"pred_create_modal_3:{guildId}:{channelId}")
-                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
-                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
-                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
-                        .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
-                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
-                        .Build();
+                                    // ✅ Round 7-C7: перенесли "Время (мин)" на 2-ю строку (сразу после
+                                    // заголовка), чтобы модальное окно выглядело сбалансированно:
+                                    //   1) Заголовок
+                                    //   2) Время (мин)
+                                    //   3) Исход 1
+                                    //   4) Исход 2
+                                    //   5) Исход 3 (опц.)
+                                    var modal = new ModalBuilder()
+                                        .WithTitle("Создать прогноз")
+                                        .WithCustomId($"pred_create_modal_3:{guildId}:{channelId}")
+                                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                                        .AddTextInput("Исход 1", "outcome1", TextInputStyle.Short, placeholder: "Название исхода 1", maxLength: 80)
+                                        .AddTextInput("Исход 2", "outcome2", TextInputStyle.Short, placeholder: "Название исхода 2", maxLength: 80)
+                                        .AddTextInput("Исход 3 (опц.)", "outcome3", TextInputStyle.Short, placeholder: "Оставьте пустым для 2 исходов", required: false, maxLength: 80)
+                                        .Build();
 
-                    await component.RespondWithModalAsync(modal);
-                }
-                else if (outcomesCount == 5)
-                {
-                    var modal = new ModalBuilder()
-                        .WithTitle("Создать прогноз (шаг 1/2)")
-                        .WithCustomId($"pred_create_step1:{guildId}:{channelId}")
-                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
-                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
-                        .Build();
+                                    await component.RespondWithModalAsync(modal);
+                                }
+                                else if (outcomesCount == 5)
+                                {
+                                    var modal = new ModalBuilder()
+                                        .WithTitle("Создать прогноз (шаг 1/2)")
+                                        .WithCustomId($"pred_create_step1:{guildId}:{channelId}")
+                                        .AddTextInput("Заголовок", "title", TextInputStyle.Short, placeholder: "Название прогноза", maxLength: 100)
+                                        .AddTextInput("Время (мин)", "duration_minutes", TextInputStyle.Short, placeholder: "От 1 до 60 минут", value: "3")
+                                        .Build();
 
-                    await component.RespondWithModalAsync(modal);
-                }
+                                    await component.RespondWithModalAsync(modal);
+                                }
             }
             catch (Exception ex)
             {
@@ -1229,12 +1246,17 @@ private MusicStats? _musicStats;
 						{
 							_predictionService.PredictionResolved += OnPredictionResolvedForUi;
 							_predictionService.PredictionCancelled += OnPredictionCancelledForUi;
-										// ✅ Bug C: загружаем активные прогнозы ДО BootstrapFirstRunSettingsAsync.
-										// Иначе EnsureStateFileAsync()/SaveStateAsync() мог перезатереть файл,
-										// пока _active ещё пустой (LoadStateAsync ждёт Ready от Discord).
-										_predictionService.LoadStateOnStartupAsync().GetAwaiter().GetResult();
-									}
-						_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
+												// ✅ Round 7-C6: убрали преждевременный LoadStateOnStartupAsync.
+												// Раньше он звался здесь ДО BootstrapFirstRunSettingsAsync и
+												// Race-конкурировал с SaveStateAsync. Теперь вся загрузка
+												// проходит ОДИН раз, синхронно, в ЭТАП 3/4 — через
+												// _predictionService.RunStage3RestoreAsync().
+											}
+												// ✅ Round 7-C8: подключаем мост из GameSession → PredictionService,
+												// чтобы cleanup осиротевших сессий мог отменить связанный
+												// с событием прогноз.
+												GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
+									_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
 			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
 			if (_config.Music.Enabled)
@@ -1367,19 +1389,30 @@ private MusicStats? _musicStats;
 					catch { /* ignore */ }
 				}
 
-				private async Task RestartWithReasonAsync(string initiator, string reason)
-				{
-					// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
-					if (_shouldExit)
-						return;
+						private async Task RestartWithReasonAsync(string initiator, string reason)
+						{
+							// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
+							if (_shouldExit)
+								return;
 
-					// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
-					StopDailyRestartScheduler();
+							// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
+							StopDailyRestartScheduler();
 
-					// ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
-					WriteRestartPendingFlag();
+							// ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
+							WriteRestartPendingFlag();
 
-			// Signal UI and background tasks to prepare for restart
+							// ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
+							// пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
+							// HttpClient и сообщение в канал не уйдёт. kind="restart" даёт текст
+							// «Бот ушёл на перезагрузку» (а не «…завершил работу»).
+							try
+							{
+								if (_predictionService != null)
+									await _predictionService.AnnounceShutdownAsync("restart").ConfigureAwait(false);
+							}
+							catch { }
+
+							// Signal UI and background tasks to prepare for restart
 			_restartInitiator = initiator;
 			if (_ui != null && _uiStarted)
 			{
@@ -1448,29 +1481,40 @@ private MusicStats? _musicStats;
 		}
 
 		private async Task StopInternalAsync(string initiator, string startupLogMessage, string shutdownNotificationReason)
-		{
-			await LogStartup(startupLogMessage);
+				{
+					await LogStartup(startupLogMessage);
 
-			try
-			{
-				if (_statusNotifier != null)
-					await _statusNotifier.SendShutdownNotification(shutdownNotificationReason);
-			}
-			catch { }
+					try
+					{
+						if (_statusNotifier != null)
+							await _statusNotifier.SendShutdownNotification(shutdownNotificationReason);
+					}
+					catch { }
 
-			if (_ui != null && _uiStarted)
-			{
-				_ui.AddLog(startupLogMessage);
-			}
+					// ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
+					// пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
+					// HttpClient и сообщение в канал не уйдёт. kind="stop" даёт текст
+					// «Бот завершил работу» (а не «…на перезагрузку»).
+					try
+					{
+						if (_predictionService != null)
+							await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
+					}
+					catch { }
 
-			_shouldExit = true;
-				StopDailyRestartScheduler();
-				_reconnectionService?.Shutdown();
+					if (_ui != null && _uiStarted)
+					{
+						_ui.AddLog(startupLogMessage);
+					}
 
-				// Отменяем фоновый мониторинг
-				try { _backgroundMonitoringCts?.Cancel(); } catch { }
+					_shouldExit = true;
+						StopDailyRestartScheduler();
+						_reconnectionService?.Shutdown();
 
-				try { if (_client != null) await _client.StopAsync(); } catch { }
+						// Отменяем фоновый мониторинг
+						try { _backgroundMonitoringCts?.Cancel(); } catch { }
+
+						try { if (_client != null) await _client.StopAsync(); } catch { }
 
 				if (_backgroundMonitoringTask != null)
 				{
@@ -1512,8 +1556,19 @@ private MusicStats? _musicStats;
 			}
 			catch { }
 
-			try { _backgroundMonitoringCts?.Cancel(); } catch { }
-			StopDailyRestartScheduler();
+						// ✅ Round 7-C7: для graceful shutdown (Ctrl+C, SIGTERM, logoff) тоже отправляем
+						// «Бот ушёл…» в каналы прогнозов ДО того, как _client будет отключен.
+						// Это решает гонку с disposed HttpClient. kind="stop" даёт текст
+						// «Бот завершил работу» (это полное завершение, не рестарт).
+						try
+						{
+							if (_predictionService != null)
+								await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
+						}
+						catch { }
+
+						try { _backgroundMonitoringCts?.Cancel(); } catch { }
+						StopDailyRestartScheduler();
 
 			try { _reconnectionService?.Shutdown(); } catch { }
 
@@ -2236,12 +2291,19 @@ private MusicStats? _musicStats;
 
                         var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
                         _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
-                        // ✅ R6 fix: см. первичную инициализацию — обработчики тоже подписываем.
-                        if (_predictionService != null)
-                        {
-                            _predictionService.PredictionResolved += OnPredictionResolvedForUi;
-                            _predictionService.PredictionCancelled += OnPredictionCancelledForUi;
-                        }
+                                                // ✅ R6 fix: см. первичную инициализацию — обработчики тоже подписываем.
+                                                if (_predictionService != null)
+                                                {
+                                                    _predictionService.PredictionResolved += OnPredictionResolvedForUi;
+                                                    _predictionService.PredictionCancelled += OnPredictionCancelledForUi;
+                                                    // ✅ Round 7-C6: убрали преждевременный LoadStateOnStartupAsync
+                                                    // и в restart-loop. Вся загрузка теперь живёт в ЭТАП 3/4 —
+                                                    // см. _predictionService.RunStage3RestoreAsync() в Stage 3/4.
+                                                }
+                                                // ✅ Round 7-C8: подключаем мост из GameSession → PredictionService,
+                                                // чтобы cleanup осиротевших сессий мог отменить связанный
+                                                // с событием прогноз.
+                                                GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
                         _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
@@ -2424,10 +2486,16 @@ private MusicStats? _musicStats;
                 }
                 catch { }
 
-                // ✅ НОВОЕ: Автоматическая отмена прогноза при отмене события
-                if (guildEvent.Guild != null)
+                // ✅ Round 7-C8: отменяем связанный с событием прогноз (если он был создан
+                // во время этого события). Используем CancelPredictionForEventAsync вместо
+                // AutoCancelPredictionOnEventEnd, чтобы не зацепить прогноз, привязанный
+                // к другому событию той же гильдии.
+                if (guildEvent.Guild != null && _predictionService != null)
                 {
-                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие было отменено");
+                    var (ok, error) = await _predictionService.CancelPredictionForEventAsync(
+                        guildEvent.Guild.Id, guildEvent.Id, "⚠️ Событие было отменено. Все ставки возвращены.");
+                    if (!ok && !string.IsNullOrEmpty(error))
+                        Console.WriteLine($"[PREDICTION] Cancel-on-cancel failed for guild={guildEvent.Guild.Id} event={guildEvent.Id}: {error}");
                 }
 
                 if (_eventOpsOrchestrator != null)
@@ -2484,10 +2552,16 @@ private MusicStats? _musicStats;
                 }
                 catch { }
 
-                // ✅ НОВОЕ: Автоматическая отмена прогноза при завершении события
-                if (guildEvent.Guild != null)
+                // ✅ Round 7-C8: отменяем связанный с событием прогноз (если он был создан
+                // во время этого события). Используем CancelPredictionForEventAsync вместо
+                // AutoCancelPredictionOnEventEnd, чтобы не зацепить прогноз, привязанный
+                // к другому событию той же гильдии.
+                if (guildEvent.Guild != null && _predictionService != null)
                 {
-                    await AutoCancelPredictionOnEventEnd(guildEvent.Guild.Id, "Событие завершено");
+                    var (ok, error) = await _predictionService.CancelPredictionForEventAsync(
+                        guildEvent.Guild.Id, guildEvent.Id, "⚠️ Событие завершено. Все ставки возвращены.");
+                    if (!ok && !string.IsNullOrEmpty(error))
+                        Console.WriteLine($"[PREDICTION] Cancel-on-complete failed for guild={guildEvent.Guild.Id} event={guildEvent.Id}: {error}");
                 }
 
                 if (_eventOpsOrchestrator != null)
@@ -3639,7 +3713,30 @@ await Task.CompletedTask;
 				                        return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
 				                    }
 
-				                    // Best-effort log: PredictionService restores state on start; here we log a snapshot.
+				                    // ✅ Round 7-C6: вся загрузка прогнозов живёт ЗДЕСЬ, в ЭТАП 3/4.
+				                    //   1) RunStage3RestoreAsync → LoadStateAsync (без Discord API,
+				                    //      синхронно из файла), затем ValidateActiveAfterReadyAsync
+				                    //      (проверка канала/сообщения через Discord API — к этому
+				                    //      моменту клиент уже в Connected, см. WaitForReadyAsync выше),
+				                    //      затем AnnounceOnlineForRestoredAsync (сдвиг таймера,
+				                    //      "Бот снова в сети", чистка старых offline-сообщений).
+				                    //   2) После возврата — печать активных прогнозов по гильдиям,
+				                    //      как и раньше.
+				                    // Никаких гонок с Ready event, никакого фонового Task.Run:
+				                    // всё последовательно, в одном месте, с гарантированным
+				                    // порядком строк.
+				                    if (_predictionService != null)
+				                    {
+				                        try
+				                        {
+				                            await _predictionService.RunStage3RestoreAsync().ConfigureAwait(false);
+				                        }
+				                        catch (Exception restoreEx)
+				                        {
+				                            stage3Lines.Add($"[PRED] RESTORE_ERROR {restoreEx.GetType().Name}: {restoreEx.Message}");
+				                        }
+				                    }
+
 				                    var anyPred = false;
 				                    foreach (var g in _client!.Guilds)
 				                    {
@@ -3678,6 +3775,19 @@ await Task.CompletedTask;
 				                    }
 				                }
 				                catch { }
+				                // ✅ Round 7-C5: отчёт о восстановлении/проверке попадает
+				                // в ЭТАП 3/4 через DrainRestoreReport(). Строки печатаются
+				                // ПОСЛЕ активных прогнозов, чтобы блок шёл в порядке:
+				                //   - снимок по гильдиям
+				                //   - потом детальный отчёт восстановления
+				                if (_predictionService != null)
+				                {
+				                    var report = _predictionService.DrainRestoreReport();
+				                    if (report.Count > 0)
+				                    {
+				                        stage3Lines.AddRange(report);
+				                    }
+				                }
 				                if (stage3Lines.Count == 0)
 				                    stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
 				                foreach (var line in stage3Lines)
@@ -4263,7 +4373,7 @@ await Task.CompletedTask;
                         return;
                     }
 
-                    var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                    var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes), eventId: GetActiveEventIdOnChannel(guildId, channelId));
                     await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                     if (createRes.ok)
                     {
@@ -4423,7 +4533,7 @@ await Task.CompletedTask;
                             return;
                         }
 
-                        var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes));
+                        var createRes = await _predictionService!.CreateAsync(guildId, creatorId, channel, title, outcomeNames.ToArray(), TimeSpan.FromMinutes(minutes), eventId: GetActiveEventIdOnChannel(guildId, channelId));
                         await LogInfo($"CreateAsync result: ok={createRes.ok} error={createRes.error}");
                         if (createRes.ok)
                         {

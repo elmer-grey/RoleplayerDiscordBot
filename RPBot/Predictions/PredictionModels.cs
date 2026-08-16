@@ -32,9 +32,19 @@ namespace RPBot
         {
             public DateTimeOffset AtUtc { get; set; }
             public OfflineEventKind Kind { get; set; }
-            // "restart" — короткое отключение (< ~30 сек), "offline" — длительное
+            // "restart" — наш рестарт (.restart_pending), "reconnect" — микроразрыв,
+            // "offline" — длительное отключение
             public string Severity { get; set; } = "offline";
             public string? Note { get; set; }
+        }
+
+        // ✅ Round 7-C4: ID «online»-сообщения + время, через которое его удалить.
+        // При рестарте сериализуется в файл, чтобы при возвращении бота в сеть
+        // запланировать удаление оставшихся online-сообщений.
+        public class OnlineAnnouncementMessage
+        {
+            public ulong MessageId { get; set; }
+            public DateTimeOffset SentAtUtc { get; set; }
         }
 
     public class ActivePrediction
@@ -44,6 +54,10 @@ namespace RPBot
         public ulong ChannelId { get; set; }
         public ulong MessageId { get; set; }
         public string Title { get; set; } = string.Empty;
+        // ✅ Round 7-C8: связь прогноза с Discord-событием, чтобы при завершении/отмене
+        // события (включая stale-cleanup после рестарта бота) прогноз автоматически
+        // отменялся через PredictionService.CancelAsync(...).
+        public ulong? EventId { get; set; }
         public bool UseCompactOutcomeLabels { get; set; }
         public bool UseInlineOutcomeFields { get; set; } = true;
 
@@ -86,19 +100,21 @@ namespace RPBot
         public DateTimeOffset? BotOfflineAtUtc { get; set; }
         public double? LastOfflineDurationMinutes { get; set; }
         public bool WasBotOfflineOnShutdown { get; set; }
-                // ✅ Bug 6: лог событий offline/online для embed'а результата и истории
-                public List<OfflineEvent> OfflineEvents { get; set; } = new();
-                public bool IsLocked { get; set; }
-                public bool IsResolved { get; set; }
+        // ✅ Bug 6: лог событий offline/online для embed'а результата и истории
+        public List<OfflineEvent> OfflineEvents { get; set; } = new();
+        // ✅ Bug 6 (новое): ID сообщений-объявлений offline/online в канале прогноза.
+        // AnnounceOfflineAsync добавляет ID, AnnounceOnlineAsync удаляет их и шлёт
+        // своё сообщение «бот снова онлайн». Это избавляет канал от накопления
+        // мусорных сообщений при каждом реконнекте.
+        public List<ulong> OfflineAnnouncementMessageIds { get; set; } = new();
+        // ✅ Round 7-C4: ID «online»-сообщений для отложенного удаления через 5 минут.
+        // Шлём «Бот снова в сети» и сохраняем ID; фоновый таск удаляет через 5 минут,
+        // чтобы канал не копил мусор, но сообщение оставалось видимым достаточно долго.
+        public List<OnlineAnnouncementMessage> OnlineAnnouncementMessageIds { get; set; } = new();
+        public bool IsLocked { get; set; }
+        public bool IsResolved { get; set; }
         public int? WinningOutcomeId { get; set; }
         public Dictionary<ulong, PredictionBet> Bets { get; set; } = new();
-
-                // ✅ Bug 6 (новое): ID сообщений-объявлений offline/online в канале прогноза.
-                // AnnounceOfflineAsync добавляет ID, AnnounceOnlineAsync удаляет их и шлёт
-                // своё сообщение «бот снова онлайн». Это избавляет канал от накопления
-                // мусорных сообщений при каждом реконнекте.
-                [JsonIgnore]
-                public List<ulong> OfflineAnnouncementMessageIds { get; } = new();
 
         // Synchronization primitive for concurrent operations on this prediction
         [JsonIgnore]
