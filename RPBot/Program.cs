@@ -2371,6 +2371,21 @@ private MusicStats? _musicStats;
                                                                                     // Запускаем инициализацию с опросом (Lavalink запускается внутри на Этапе 4)
                                                                                     await InitializeBotWithProgress();
 
+                                                                                                                                                                        // ✅ R7 fix: после инициализации проверяем что ключевые сервисы живы.
+                                                                                                                                                                        // На чистом клоне (нет файлов / повреждён config.json) часть сервисов
+                                                                                                                                                                        // может быть null — без этой проверки они упадут позже молча
+                                                                                                                                                                        // с NullReferenceException где-то глубоко в обработчике.
+                                                                                                                                                                        var missingServices = new List<string>();
+                                                                                                                                                                        if (_predictionService == null)  missingServices.Add(nameof(_predictionService));
+                                                                                                                                                                        if (_voicePointsService == null)  missingServices.Add(nameof(_voicePointsService));
+                                                                                                                                                                        if (_statusNotifier == null)      missingServices.Add(nameof(_statusNotifier));
+                                                                                                                                                                        if (_reconnectionService == null) missingServices.Add(nameof(_reconnectionService));
+                                                                                                                                                                        if (_connectionPredictor == null) missingServices.Add(nameof(_connectionPredictor));
+                                                                                                                                                                        if (missingServices.Count > 0)
+                                                                                                                                                                        {
+                                                                                                                                                                            await LogStartup($" ⚠️ После инициализации не созданы сервисы: {string.Join(", ", missingServices)}. Бот продолжит работу, но часть функций будет недоступна.");
+                                                                                                                                                                        }
+
 						// Ежедневный плановый перезапуск (время задаётся в config.json)
 						StartDailyRestartScheduler();
 
@@ -2391,13 +2406,35 @@ private MusicStats? _musicStats;
                     }
                     catch (Exception ex)
                     {
-                        await LogStartup($" Ошибка запуска: {ex.Message}");
-                        if (!_shouldExit)
-                        {
-                            await LogStartup(" Повторная попытка через 10 секунд...");
-                            await Task.Delay(10000);
-                        }
-                    }
+                                            // Полный стек печатаем только в Debug-сборке, чтобы не шуметь в проде.
+                                            // В Release — только сообщение, как раньше. Это помогает диагностировать
+                                            // NullReferenceException на чистом клоне: stack сразу покажет место.
+                                            var msg = ex.Message;
+                    #if DEBUG
+                                            msg = ex.ToString();
+                    #endif
+                                            await LogStartup($" Ошибка запуска: {msg}");
+                                            if (!_shouldExit)
+                                            {
+                                                await LogStartup(" Повторная попытка через 10 секунд...");
+                                                await Task.Delay(10000);
+                                                // ✅ R7 fix: после неудачной попытки _client может остаться
+                                                // в частично инициализированном состоянии. Сбрасываем его,
+                                                // чтобы на следующей итерации цикла не упасть на "already running client".
+                                                try
+                                                {
+                                                    if (_client != null)
+                                                    {
+                                                        DisposeClientSafely(_client);
+                                                        _client = null;
+                                                    }
+                                                }
+                                                catch (Exception resetEx)
+                                                {
+                                                    await LogStartup($" Сброс клиента после ошибки: {resetEx.Message}");
+                                                }
+                                            }
+                                        }
                 }
 
                 catch (Exception ex)
