@@ -2339,11 +2339,22 @@ private MusicStats? _musicStats;
                                             // DiscordClientWrapper подпишется на Ready до того как оно сработает.
                                             // Сам лог "[Music] DI-контейнер собран" не выводится здесь —
                                             // он появится внутри Этапа 4 (ИНИЦИАЛИЗАЦИЯ МУЗЫКИ).
-                                            if (_lavalinkService is not null)
-                                                _lavalinkService.SuppressPrepareLog = true;
-                                            await _lavalinkService.PrepareAsync();
-                                            if (_lavalinkService is not null)
-                                                _lavalinkService.SuppressPrepareLog = false;
+                                                                                        //
+                                                                                        // ✅ R7 fix: раннее NRE на чистом клоне приходилось на эту строку.
+                                                                                        // Guard выше/ниже проверял _lavalinkService is not null только для
+                                                                                        // SuppressPrepareLog, но сам PrepareAsync() вызывался без проверки.
+                                                                                        // На машинах, где LavalinkService не создался (нет jar/нет конфига),
+                                                                                        // это падало с NullReferenceException. Теперь — пропускаем.
+                                                                                        if (_lavalinkService is not null)
+                                                                                        {
+                                                                                            _lavalinkService.SuppressPrepareLog = true;
+                                                                                            await _lavalinkService.PrepareAsync();
+                                                                                            _lavalinkService.SuppressPrepareLog = false;
+                                                                                        }
+                                                                                        else
+                                                                                        {
+                                                                                            StartupRenderer.Instance.WriteLine("⚠️ LavalinkService не инициализирован — музыка будет недоступна.");
+                                                                                        }
 
                                                                                     // Ждем готовности. После успешного WaitForReadyAsync
                                                                                     // статус гарантированно Connected/LoggedIn — фиксируем
