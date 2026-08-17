@@ -15,38 +15,42 @@ namespace RPBot
     /// </summary>
     public static class MasterGuideService
     {
-            // Используем BotConfig.SettingsFolderName, чтобы не дублировать константу.
-            // Если кто-то переименует Settings → SettingsNew, шаблоны поедут за ним.
-            private static readonly string SettingsFolder = BotConfig.SettingsFolderName;
+            // Шаблоны лежат в <DataRoot>/Settings/ на всех машинах одинаково.
+            // Пути строятся через BotConfig.ResolvePath внутри EnsureTemplateFile/LoadTemplate,
+            // здесь держим только имя папки для совместимости сигнатуры GetTemplatePath.
             private const string FilePrefix = "master_guide_";
             private const string FileExtension = ".txt";
 
-        /// <summary>
-        /// Гарантирует наличие файла шаблона для указанного сервера.
-        /// Если файл отсутствует — создаёт его с шаблоном и комментариями.
-        /// </summary>
+            /// <summary>
+            /// Гарантирует наличие файла шаблона для указанного сервера.
+            /// Если файл отсутствует — создаёт его с шаблоном и комментариями.
+            /// </summary>
         public static string EnsureTemplateFile(ulong guildId)
         {
-            var path = GetTemplatePath(guildId);
-            if (File.Exists(path))
-                return path;
+                    // ResolvePath → %LOCALAPPDATA%\RPBot\Settings\master_guide_<id>.txt.
+                    // Раньше путь был относительным, и File.Exists + File.WriteAllText шли в
+                    // текущую рабочую директорию / AppContext.BaseDirectory, из-за чего
+                    // на одной машине появлялись копии сразу в двух местах.
+                    var path = BotConfig.ResolvePath(GetTemplatePath(guildId));
+                    if (File.Exists(path))
+                        return path;
 
-            try
-            {
-                var dir = Path.GetDirectoryName(path);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
+                    try
+                    {
+                        var dir = Path.GetDirectoryName(path);
+                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                            Directory.CreateDirectory(dir);
 
-                File.WriteAllText(path, GetDefaultTemplateContent(), new UTF8Encoding(false));
-                BotLogger.Info(LogCategory.System, $"[MasterGuide] Создан файл шаблона: {path}");
+                        File.WriteAllText(path, GetDefaultTemplateContent(), new UTF8Encoding(false));
+                        BotLogger.Info(LogCategory.System, $"[MasterGuide] Создан файл шаблона: {path}");
             }
-            catch (Exception ex)
-            {
-                BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось создать файл шаблона {path}: {ex.Message}");
-            }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось создать файл шаблона {path}: {ex.Message}");
+                    }
 
-            return path;
-        }
+                    return path;
+                }
 
         /// <summary>
         /// Массовое создание файлов шаблонов для всех серверов.
@@ -71,22 +75,26 @@ namespace RPBot
         /// </summary>
         public static string? LoadTemplate(ulong guildId)
         {
-            var path = GetTemplatePath(guildId);
-            if (!File.Exists(path))
-                return null;
+                    // GetTemplatePath возвращает относительный путь ("Settings/master_guide_<id>.txt").
+                    // Резолвим через BotConfig.ResolvePath, чтобы получить каноничную директорию
+                    // (%LOCALAPPDATA%\RPBot\Settings\) — иначе на других машинах (или при сборке .exe не из bin\)
+                    // шаблоны искались бы относительно AppContext.BaseDirectory и появлялись дубли в bin\...\Settings\.
+                    var resolvedPath = BotConfig.ResolvePath(GetTemplatePath(guildId));
+                    if (!File.Exists(resolvedPath))
+                        return null;
 
-            try
-            {
-                var raw = File.ReadAllText(path, Encoding.UTF8);
-                var stripped = StripComments(raw);
-                return string.IsNullOrWhiteSpace(stripped) ? null : stripped.Trim();
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось прочитать шаблон {path}: {ex.Message}");
-                return null;
-            }
-        }
+                    try
+                    {
+                        var raw = File.ReadAllText(resolvedPath, Encoding.UTF8);
+                        var stripped = StripComments(raw);
+                        return string.IsNullOrWhiteSpace(stripped) ? null : stripped.Trim();
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось прочитать шаблон {resolvedPath}: {ex.Message}");
+                        return null;
+                    }
+                }
 
         /// <summary>
         /// Рендерит шаблон: заменяет плейсхолдеры на реальные значения.
@@ -135,8 +143,12 @@ namespace RPBot
 
         public static string GetTemplatePath(ulong guildId)
         {
-            return Path.Combine(SettingsFolder, $"{FilePrefix}{guildId}{FileExtension}");
-        }
+                    // Возвращаем путь вида "Settings/master_guide_<id>.txt".
+                    // Это НЕ абсолютный путь — фактическая директория будет вычислена через BotConfig.ResolvePath
+                    // в момент чтения файла. Так шаблоны живут в %LOCALAPPDATA%\RPBot\Settings\ на всех машинах
+                    // и не создаются дублями в bin\...\Settings\.
+                    return Path.Combine(BotConfig.SettingsFolderName, $"{FilePrefix}{guildId}{FileExtension}");
+                }
 
         private static string ChannelOrPlaceholder(ulong channelId, SocketGuild guild)
         {

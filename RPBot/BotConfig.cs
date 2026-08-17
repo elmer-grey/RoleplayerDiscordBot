@@ -316,7 +316,28 @@ namespace RPBot
 					}
 					catch { /* не критично */ }
 				}
-			}
+
+							// Нормализуем устаревший дефолт GoogleSheetsCredentialsPath.
+							// В старых конфигах могло остаться "google_credentials.json" — это резолвится
+							// в bin\...\google_credentials.json (рядом с .exe) и сыпет Warn при каждом старте.
+							// Новый дефолт — Settings/google_credentials.json (рядом с config.json).
+							var oldDefault = "google_credentials.json";
+							var newDefault = Path.Combine(SettingsFolderName, "google_credentials.json");
+							if (string.Equals(Current.GoogleSheetsCredentialsPath, oldDefault, StringComparison.OrdinalIgnoreCase))
+							{
+								Current.GoogleSheetsCredentialsPath = newDefault;
+								try
+								{
+									var cfgPath = Path.Combine(newSettingsDir, "config.json");
+									if (File.Exists(cfgPath)) Current.Save(cfgPath);
+									BotLogger.Info(LogCategory.Boot, $"[Migration] GoogleSheetsCredentialsPath обновлён до {newDefault}");
+								}
+								catch (Exception ex)
+								{
+									BotLogger.Warn(LogCategory.Boot, $"[Migration] Не удалось обновить GoogleSheetsCredentialsPath: {ex.Message}");
+								}
+							}
+						}
 		}
 
 		private static void CopyDirectory(string src, string dst)
