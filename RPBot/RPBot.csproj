@@ -15,9 +15,15 @@
   </ItemGroup>
 
   <!-- Lavalink: копируем application.yml в выходную папку при сборке.
-       Lavalink.jar слишком большой для копирования — путь задаётся абсолютным в config.json. -->
+       Lavalink.jar слишком большой для копирования — путь задаётся абсолютным в config.json.
+
+       Condition="Exists(...)" — на чистом клоне файла нет (он в .gitignore,
+       содержит OAuth refreshToken). Без Condition MSBuild падает с непонятным MSB3030.
+       С Condition — файл просто пропускается.
+
+       Target ниже выдаёт понятную инструкцию, если файла действительно нет. -->
   <ItemGroup>
-    <Content Include="..\Lavalink\application.yml">
+    <Content Include="..\Lavalink\application.yml" Condition="Exists('..\Lavalink\application.yml')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>Lavalink\application.yml</Link>
     </Content>
@@ -26,6 +32,10 @@
       <Link>Web\dashboard.html</Link>
     </Content>
   </ItemGroup>
+
+  <Target Name="CheckLavalinkApplicationYml" BeforeTargets="BeforeBuild" Condition="!Exists('..\Lavalink\application.yml')">
+    <Error Text="Lavalink/application.yml не найден. Скопируй Lavalink/application.yml.example в Lavalink/application.yml (см. SETUP.md, шаг 5) и пересобери. Если ты сознательно не хочешь коммитить этот файл — проигнорируй это сообщение, бот соберётся без него (Lavalink запустится без YouTube OAuth)." />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Discord.Net" Version="3.20.1" />
