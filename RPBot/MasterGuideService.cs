@@ -15,9 +15,11 @@ namespace RPBot
     /// </summary>
     public static class MasterGuideService
     {
-        private const string SettingsFolder = "Settings";
-        private const string FilePrefix = "master_guide_";
-        private const string FileExtension = ".txt";
+            // Используем BotConfig.SettingsFolderName, чтобы не дублировать константу.
+            // Если кто-то переименует Settings → SettingsNew, шаблоны поедут за ним.
+            private static readonly string SettingsFolder = BotConfig.SettingsFolderName;
+            private const string FilePrefix = "master_guide_";
+            private const string FileExtension = ".txt";
 
         /// <summary>
         /// Гарантирует наличие файла шаблона для указанного сервера.

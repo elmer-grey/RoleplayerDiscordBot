@@ -376,3 +376,8 @@ Data/*.log
 
 # Логи
 Logs/
+
+# Google Sheets service account JSON — содержит приватный ключ,
+# ни в коем случае не коммитим. По умолчанию лежит в Settings/google_credentials.json,
+# но если задан абсолютный путь в config.json — может жить где угодно.
+google_credentials.json

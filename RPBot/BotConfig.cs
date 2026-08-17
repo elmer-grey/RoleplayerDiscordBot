@@ -203,24 +203,43 @@ namespace RPBot
 				"config.json",
 				"serverconfigs.json",
 				"Pastes.txt",
-			};
-			foreach (var file in settingsFiles)
-			{
-				var src = Path.Combine(oldSettingsDir, file);
-				var dst = Path.Combine(newSettingsDir, file);
-				if (File.Exists(src) && !File.Exists(dst))
-				{
-					try
-					{
-						File.Move(src, dst);
-						BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Settings/ → {newSettingsDir}");
-					}
-					catch (Exception ex)
-					{
-						BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
-					}
-				}
-			}
+							"google_credentials.json", // мигрируем из bin\...\google_credentials.json → Settings\
+						};
+						foreach (var file in settingsFiles)
+						{
+							var src = Path.Combine(oldSettingsDir, file);
+							var dst = Path.Combine(newSettingsDir, file);
+							if (File.Exists(src) && !File.Exists(dst))
+							{
+								try
+								{
+									File.Move(src, dst);
+									BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Settings/ → {newSettingsDir}");
+								}
+								catch (Exception ex)
+								{
+									BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
+								}
+							}
+						}
+
+						// google_credentials.json — дополнительно: если лежит рядом с .exe
+						// (по старому дефолту из BotConfig.GoogleSheetsCredentialsPath),
+						// переносим в Settings/google_credentials.json.
+						var legacyCreds = Path.Combine(oldRoot, "google_credentials.json");
+						var newCreds = Path.Combine(newSettingsDir, "google_credentials.json");
+						if (File.Exists(legacyCreds) && !File.Exists(newCreds))
+						{
+							try
+							{
+								File.Move(legacyCreds, newCreds);
+								BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён google_credentials.json: {legacyCreds} → {newCreds}");
+							}
+							catch (Exception ex)
+							{
+								BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения google_credentials.json: {ex.Message}");
+							}
+						}
 
 			// master_guide_<guildId>.txt — переносим по glob-шаблону.
 			if (Directory.Exists(oldSettingsDir))
@@ -380,8 +399,10 @@ namespace RPBot
 
 		// === GOOGLE SHEETS ===
 
-		// Путь к файлу credentials (сервисный аккаунт JSON), относительный или абсолютный
-		public string? GoogleSheetsCredentialsPath { get; set; } = "google_credentials.json";
+		// Путь к файлу credentials (сервисный аккаунт JSON), относительный или абсолютный.
+				// По умолчанию лежит в Settings/ — рядом с config.json и serverconfigs.json.
+				// Абсолютный путь тоже допустим (если credentials хранятся вне каталога данных).
+				public string? GoogleSheetsCredentialsPath { get; set; } = Path.Combine(SettingsFolderName, "google_credentials.json");
 
 		// ID таблицы (из URL: .../spreadsheets/d/{ID}/edit)
 		public string? GoogleSpreadsheetId { get; set; } = null;
