@@ -1039,8 +1039,8 @@ namespace RPBot
                 return;
             }
 
-            ulong channelId = Program.ServerConfigs.TryGetValue(guildId, out var config)
-                ? config.RecordChannelID
+            ulong channelId = (Program.ServerConfigResolver?.Invoke(guildId)) is { } cfg && cfg.RecordChannelID != 0
+                ? cfg.RecordChannelID
                 : guildEvent.Guild.SystemChannel.Id;
 
             if (client.GetChannel(channelId) is ITextChannel channel)
@@ -2033,9 +2033,9 @@ namespace RPBot
                 {
                     LogDebug($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
 
-                    if (Program.ServerConfigs.TryGetValue(session.GuildId, out var config))
+                    if (Program.ServerConfigResolver?.Invoke(session.GuildId) is { } statsCfg)
                     {
-                        if (_client.GetChannel(config.StatsChannelID) is ITextChannel statsChannel)
+                        if (_client.GetChannel(statsCfg.StatsChannelID) is ITextChannel statsChannel)
                         {
                             var buttons = new ComponentBuilder()
                                 .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
@@ -2056,7 +2056,7 @@ namespace RPBot
                         }
                         else
                         {
-                            LogWarn($"Канал статистики {config.StatsChannelID} не найден");
+                            LogWarn($"Канал статистики {statsCfg.StatsChannelID} не найден");
                         }
                     }
                     else
@@ -2434,7 +2434,7 @@ namespace RPBot
             foreach (var guildEntry in _sessions)
             {
                 var guildId = guildEntry.Key;
-                if (!Program.ServerConfigs.TryGetValue(guildId, out var config))
+                if (Program.ServerConfigResolver?.Invoke(guildId) is not { } config)
                     continue;
 
                 var statsChannel = client.GetChannel(config.StatsChannelID) as ITextChannel;

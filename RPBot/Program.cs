@@ -1003,7 +1003,7 @@ private MusicStats? _musicStats;
 			// ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
 			_reconnectionService = new ReconnectionService(_client!) { LogSink = ServiceLogSink };
 			_connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
-			_statusNotifier = new StatusNotifier(_client!, _serverConfigs!) { LogSink = ServiceLogSink };
+			_statusNotifier = new StatusNotifier(_client!, GetServerConfigInternal) { LogSink = ServiceLogSink };
           _telegramNotifier = new TelegramNotifier(guildId =>
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
@@ -1913,9 +1913,6 @@ private MusicStats? _musicStats;
             if (_serverConfigs.ContainsKey(guildId))
                 _serverConfigs.Remove(guildId);
 
-            if (ServerConfigs.ContainsKey(guildId))
-                ServerConfigs.Remove(guildId);
-
             SaveServerConfigs();
             return Task.CompletedTask;
         }
@@ -2275,7 +2272,7 @@ private MusicStats? _musicStats;
                             LogSink = ServiceLogSink
                         };
                         _connectionPredictor = new ConnectionPredictor(_reconnectionService, _config!.Prediction);
-                        _statusNotifier = new StatusNotifier(_client!, ServerConfigs)
+                        _statusNotifier = new StatusNotifier(_client!, GetServerConfigInternal)
                         {
                             LogSink = ServiceLogSink
                         };
@@ -5010,13 +5007,6 @@ await Task.CompletedTask;
                 }
             }
         }
-
-        // Словарь дефолтных значений ServerConfig по guild ID.
-                // Изначально пуст — никакие серверы не захардкожены.
-                // Конфигурация должна полностью приходить из Settings/serverconfigs.json,
-                // который EnsureServerConfigsForConnectedGuilds() заполняет при первом запуске.
-                // Это сознательное решение, чтобы в публичном бинарнике не было чужих guild/channel ID.
-                public static readonly Dictionary<ulong, ServerConfig> ServerConfigs = new Dictionary<ulong, ServerConfig>();
 
         private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string lineMessages, string emoteKappa, string emoteAga) GetResponseData(SocketMessage message)
         {

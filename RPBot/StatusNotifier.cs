@@ -15,16 +15,16 @@ namespace RPBot
     public class StatusNotifier
     {
         private readonly DiscordSocketClient _client;
-        private readonly Dictionary<ulong, ServerConfig> _serverConfigs;
+        private readonly Func<ulong, ServerConfig?> _getServerConfig;
         private StartupType _lastStartupType = StartupType.FirstStart;
         private string? _lastStartupReason;
 
         public Action<string>? LogSink { get; set; }
 
-        public StatusNotifier(DiscordSocketClient client, Dictionary<ulong, ServerConfig> serverConfigs)
+        public StatusNotifier(DiscordSocketClient client, Func<ulong, ServerConfig?> getServerConfig)
         {
             _client = client;
-            _serverConfigs = serverConfigs;
+            _getServerConfig = getServerConfig;
         }
 
         public void SetStartupType(StartupType type)
@@ -64,7 +64,7 @@ namespace RPBot
             var anyFailure = false;
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     // Защита: если channel id не задан — пропускаем отправку
                     if (config.ModerateChannelID == 0) continue;
@@ -147,7 +147,7 @@ namespace RPBot
         {
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     try
                     {
@@ -183,7 +183,7 @@ namespace RPBot
         {
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     try
                     {
@@ -214,7 +214,7 @@ namespace RPBot
         {
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     try
                     {
@@ -248,7 +248,7 @@ namespace RPBot
         {
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     try
                     {
@@ -283,7 +283,7 @@ namespace RPBot
         {
             foreach (var guild in _client.Guilds)
             {
-                if (_serverConfigs.TryGetValue(guild.Id, out var config))
+                if (_getServerConfig(guild.Id) is { } config)
                 {
                     try
                     {
