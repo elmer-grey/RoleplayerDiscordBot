@@ -182,7 +182,7 @@ namespace RPBot.EventOps
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
 
-            embedBuilder.AddField("🏰 Сервер", guild.Name, true);
+            // Поля — для канала. Footer для канала про /event_notify, для DM — отдельный (см. ниже).
             embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
 
@@ -198,7 +198,7 @@ namespace RPBot.EventOps
                     createdByPlain = guildEvent.Creator.Username;
             }
 
-            embedBuilder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
+            embedBuilder.WithFooter("Чтобы это сообщение видеть и в личке: '/event_notify action: subscribe'");
             var embed = embedBuilder.Build();
 
             var announceMsg = await announceChannel.SendMessageAsync(embed: embed);
@@ -212,9 +212,8 @@ namespace RPBot.EventOps
                 if (_telegramNotifier != null)
                 {
                     var tgText = $"📅 Новое событие: {guildEvent.Name}\n" +
-                        $"🏰 Сервер: {guild.Name}\n" +
+                        $"📍 Где: {guild.Name} → {whereTextPlain}\n" +
                         $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
-                        $"📍 Где: {whereTextPlain}\n" +
                         (createdByPlain != null ? $"👤 Создал: {createdByPlain}\n" : string.Empty) +
                         $"🔗 {eventUrl}";
 
@@ -257,7 +256,13 @@ namespace RPBot.EventOps
                     if (user == null) continue;
 
                     var dm = await user.CreateDMChannelAsync();
-                    var dmMsg = await dm.SendMessageAsync(embed: embed);
+                    // Для DM переписываем footer на «Выкл: стоп • Вкл: хочу».
+                    var dmEmbed = embedBuilder.Build().ToEmbedBuilder();
+                    dmEmbed.Footer = new EmbedFooterBuilder
+                    {
+                        Text = "Выкл: напиши «стоп» • Вкл: «хочу»"
+                    };
+                    var dmMsg = await dm.SendMessageAsync(embed: dmEmbed.Build());
                     dmMap[userId] = dmMsg.Id;
                     Log($"[EVENT] announce sent discord_dm guild={guild.Id} event={guildEvent.Id} user={userId} msg={dmMsg.Id}");
                 }
@@ -403,13 +408,11 @@ namespace RPBot.EventOps
             var embedBuilder = new EmbedBuilder()
                 .WithTitle($"📅 Событие обновлено: {guildEvent.Name}")
                 .WithUrl(eventUrl)
-                .WithColor(Color.Orange)
-                .WithCurrentTimestamp();
+                .WithColor(Color.Orange);
             if (!string.IsNullOrWhiteSpace(imageUrl))
                 embedBuilder.WithThumbnailUrl(imageUrl);
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(Truncate(guildEvent.Description, 2048));
-            embedBuilder.AddField("🏰 Сервер", guild.Name, true);
                         embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
@@ -417,6 +420,7 @@ namespace RPBot.EventOps
             if (changesDiscord.Count > 0)
                 embedBuilder.AddField("✏️ Изменения", string.Join("\n", changesDiscord.Take(10)), false);
                         embedBuilder.AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false);
+            embedBuilder.WithFooter("Чтобы это сообщение видеть и в личке: '/event_notify action: subscribe'");
             var embed = embedBuilder.Build();
 
             // Telegram: подставляем МСК-метку для обновлений.
@@ -480,7 +484,13 @@ namespace RPBot.EventOps
                     var dmMsg = await dm.GetMessageAsync(dmMessageId) as IUserMessage;
                     if (dmMsg != null)
                     {
-                        await dmMsg.ModifyAsync(m => m.Embed = embed);
+                        // Для DM переписываем footer на «Выкл: стоп • Вкл: хочу».
+                        var dmEmbed = embedBuilder.Build().ToEmbedBuilder();
+                        dmEmbed.Footer = new EmbedFooterBuilder
+                        {
+                            Text = "Выкл: напиши «стоп» • Вкл: «хочу»"
+                        };
+                        await dmMsg.ModifyAsync(m => m.Embed = dmEmbed.Build());
                         Log($"[EVENT] update discord_dm ok guild={guild.Id} event={guildEvent.Id} user={userId} msg={dmMessageId}");
                     }
                 }
@@ -496,9 +506,8 @@ namespace RPBot.EventOps
                 if (_telegramNotifier != null && entry.TelegramMessageId > 0)
                 {
                     var tgText = $"📅 Событие обновлено: {guildEvent.Name}\n" +
-                        $"🏰 Сервер: {guild.Name}\n" +
+                        $"📍 Где: {guild.Name} → {whereTextPlain}\n" +
                         $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
-                        $"📍 Где: {whereTextPlain}\n" +
                         (guildEvent.Creator != null ? $"👤 Создал: {guildEvent.Creator.Username}\n" : string.Empty) +
                         (changes.Count > 0 ? $"\n✏️ Изменения:\n- {changesMsk}\n" : string.Empty) +
                         $"ℹ️ {updatedMarkMsk}\n" +
@@ -574,7 +583,7 @@ namespace RPBot.EventOps
             var isStarted = string.Equals(status, "started", StringComparison.OrdinalIgnoreCase);
             var isCompleted = string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase);
             var prefix = isCancelled ? "❌" : isStarted ? "▶️" : isCompleted ? "✅" : "ℹ️";
-            var statusText = isCancelled ? "Событие отменено/удалено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
+            var statusText = isCancelled ? "Событие отменено" : isStarted ? "Событие началось" : isCompleted ? "Событие завершено" : "Событие обновлено";
             var mark = $"{prefix} {statusText}: {DateTime.Now:dd.MM.yyyy HH:mm}";
                         // Discord-время выводится как локальный unix-timestamp (рендерится в часовом поясе читателя).
                         var mskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowValue) ? mskNowValue : DateTime.Now;
@@ -601,18 +610,44 @@ namespace RPBot.EventOps
             var embedBuilder = new EmbedBuilder()
                 .WithTitle($"{prefix} {statusText}: {guildEvent.Name}")
                 .WithUrl(eventUrl)
-                .WithColor(isCancelled ? Color.DarkRed : isStarted ? Color.Green : isCompleted ? Color.DarkGreen : Color.Orange)
-                .WithCurrentTimestamp();
+                .WithColor(isCancelled ? Color.DarkRed : isStarted ? Color.Green : isCompleted ? Color.DarkGreen : Color.Orange);
             if (!string.IsNullOrWhiteSpace(imageUrl))
                 embedBuilder.WithThumbnailUrl(imageUrl);
             if (!string.IsNullOrWhiteSpace(guildEvent.Description))
                 embedBuilder.WithDescription(guildEvent.Description.Length <= 2048 ? guildEvent.Description : guildEvent.Description.Substring(0, 2047) + "…");
-            embedBuilder.AddField("🏰 Сервер", guild.Name, true);
-                        embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
-            embedBuilder.AddField("📍 Где", whereText, true);
-            if (guildEvent.Creator != null)
-                embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
-                        embedBuilder.AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false);
+            // «Когда» переименовываем в «Начало» для started/completed (реальное время старта).
+            // Для cancelled — отдельная метка «Отменено». Для updated — «Статус» (как раньше).
+            if (isStarted)
+            {
+                embedBuilder.AddField("🕒 Начало", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true);
+                embedBuilder.AddField("📍 Где", whereText, true);
+                if (guildEvent.Creator != null)
+                    embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+            }
+            else if (isCompleted)
+            {
+                embedBuilder.AddField("🕒 Начало", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
+                embedBuilder.AddField("🛑 Завершение", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true);
+                embedBuilder.AddField("📍 Где", whereText, true);
+                if (guildEvent.Creator != null)
+                    embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+            }
+            else if (isCancelled)
+            {
+                embedBuilder.AddField("❌ Отменено", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true);
+                embedBuilder.AddField("📍 Где", whereText, true);
+                if (guildEvent.Creator != null)
+                    embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+            }
+            else
+            {
+                embedBuilder.AddField("🕒 Когда", $"<t:{new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc)).ToUnixTimeSeconds()}:F>", true);
+                embedBuilder.AddField("📍 Где", whereText, true);
+                if (guildEvent.Creator != null)
+                    embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
+                embedBuilder.AddField("Статус", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", false);
+            }
+            embedBuilder.WithFooter("Чтобы это сообщение видеть и в личке: '/event_notify action: subscribe'");
             var embed = embedBuilder.Build();
 
             try
@@ -644,7 +679,13 @@ namespace RPBot.EventOps
                     var dmMsg = await dm.GetMessageAsync(dmMessageId) as IUserMessage;
                     if (dmMsg != null)
                     {
-                        await dmMsg.ModifyAsync(m => m.Embed = embed);
+                        // Для DM переписываем footer на «Выкл: стоп • Вкл: хочу».
+                        var dmEmbed = embedBuilder.Build().ToEmbedBuilder();
+                        dmEmbed.Footer = new EmbedFooterBuilder
+                        {
+                            Text = "Выкл: напиши «стоп» • Вкл: «хочу»"
+                        };
+                        await dmMsg.ModifyAsync(m => m.Embed = dmEmbed.Build());
                         Log($"[EVENT] status {status} discord_dm ok guild={guild.Id} event={guildEvent.Id} user={userId} msg={dmMessageId}");
                     }
                 }
@@ -666,9 +707,8 @@ namespace RPBot.EventOps
                     }
 
                     var tgText = $"{prefix} {statusText}: {guildEvent.Name}\n" +
-                        $"🏰 Сервер: {guild.Name}\n" +
-                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n" +
-                        $"📍 Где: {whereTextPlain}\n";
+                        $"📍 Где: {guild.Name} → {whereTextPlain}\n" +
+                        $"🕒 Когда: {startMsk:dd.MM.yyyy HH:mm} (по МСК)\n";
 
                     if (isStarted && guildEvent.Creator != null)
                     {
