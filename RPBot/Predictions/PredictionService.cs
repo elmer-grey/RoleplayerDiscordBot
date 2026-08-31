@@ -191,7 +191,7 @@ namespace RPBot
                                                             kind = "restart";
                                                         }
                                                         else if (exception is Discord.WebSocket.GatewayReconnectException
-                                                                 || exception is System.Net.WebSockets.WebSocketException)
+                                                                || exception is System.Net.WebSockets.WebSocketException)
                                                         {
                                                             kind = "reconnect";
                                                         }
@@ -691,7 +691,7 @@ namespace RPBot
                                     reason = "Связанное Discord-событие удалено. Все ставки возвращены.";
                                 }
                                 else if (statusSource.Status == GuildScheduledEventStatus.Completed
-                                      || statusSource.Status == GuildScheduledEventStatus.Cancelled)
+                                        || statusSource.Status == GuildScheduledEventStatus.Cancelled)
                                 {
                                     shouldCancel = true;
                                     reason = "Связанное Discord-событие завершено во время offline бота. Все ставки возвращены.";
@@ -816,13 +816,13 @@ namespace RPBot
                                             if (p.IsLocked)
                                             {
                                                 text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова.";
+                                                        $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова.";
                                             }
                                             else
                                             {
                                                 text = $"🔄 **Бот ушёл на перезагрузку.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова — " +
-                                                       $"все ставки в безопасности, таймер будет сдвинут на длительность offline.";
+                                                        $"Прогноз «{p.Title}» ({phase}) скоро станет доступен снова — " +
+                                                        $"все ставки в безопасности, таймер будет сдвинут на длительность offline.";
                                             }
                                         }
                                         else if (string.Equals(kind, "stop", StringComparison.Ordinal))
@@ -830,13 +830,13 @@ namespace RPBot
                                             if (p.IsLocked)
                                             {
                                                 text = $"⛔ **Бот завершил работу.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии до следующего запуска бота.";
+                                                        $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии до следующего запуска бота.";
                                             }
                                             else
                                             {
                                                 text = $"⛔ **Бот завершил работу.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии — " +
-                                                       $"все ставки сохранены на диск, таймер продолжит отсчёт при следующем запуске бота.";
+                                                        $"Прогноз «{p.Title}» ({phase}) остаётся в текущем состоянии — " +
+                                                        $"все ставки сохранены на диск, таймер продолжит отсчёт при следующем запуске бота.";
                                             }
                                         }
                                         else
@@ -844,13 +844,13 @@ namespace RPBot
                                             if (p.IsLocked)
                                             {
                                                 text = $"⛔ **Зафиксировано отключение бота.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть.";
+                                                        $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть.";
                                             }
                                             else
                                             {
                                                 text = $"⛔ **Зафиксировано отключение бота.**\n" +
-                                                       $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
-                                                       $"Таймер будет пересчитан с учётом времени offline.";
+                                                        $"Прогноз «{p.Title}» ({phase}) будет недоступен до возвращения бота в сеть. " +
+                                                        $"Таймер будет пересчитан с учётом времени offline.";
                                             }
                                         }
                                         // ✅ Bug 6: сохраняем ID сообщения, чтобы потом удалить при возвращении бота.
@@ -1505,10 +1505,10 @@ namespace RPBot
             var creatorGuildUser = guild?.GetUser(creatorId);
             var creatorUser = creatorGuildUser ?? _client.GetUser(creatorId);
             var creatorName = creatorGuildUser?.DisplayName
-                               ?? creatorGuildUser?.Nickname
-                               ?? creatorGuildUser?.Username
-                               ?? creatorUser?.Username
-                               ?? creatorId.ToString();
+                                ?? creatorGuildUser?.Nickname
+                                ?? creatorGuildUser?.Username
+                                ?? creatorUser?.Username
+                                ?? creatorId.ToString();
             var channelName = targetChannel is IChannel c ? c.Name ?? "(без имени)" : "(без имени)";
 
             var prediction = new ActivePrediction

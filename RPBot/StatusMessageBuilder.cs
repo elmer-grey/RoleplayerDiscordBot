@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -33,8 +33,8 @@ namespace RPBot
             if (isReconnect)
             {
                 embed.AddField("⚠️ Отключение", info.LastDisconnectReason, true)
-                     .AddField("🔄 Попыток", info.ReconnectAttempts.ToString(), true)
-                     .AddField("📊 Успешно", info.SuccessfulReconnects.ToString(), true);
+                    .AddField("🔄 Попыток", info.ReconnectAttempts.ToString(), true)
+                    .AddField("📊 Успешно", info.SuccessfulReconnects.ToString(), true);
             }
 
             // Статистика отключений
@@ -53,7 +53,7 @@ namespace RPBot
             embed.AddField("💓 Здоровье", health, true);
 
             embed.WithFooter(f => f.Text = isReconnect ? "Реконнект выполнен" : "Первичный запуск")
-                 .WithCurrentTimestamp();
+                .WithCurrentTimestamp();
 
             return embed.Build();
         }
@@ -81,7 +81,7 @@ namespace RPBot
             }
 
             embed.WithFooter(f => f.Text = "Инициирован реконнект")
-                 .WithCurrentTimestamp();
+                .WithCurrentTimestamp();
 
             return embed.Build();
         }
@@ -106,7 +106,7 @@ namespace RPBot
             }
 
             embed.WithFooter(f => f.Text = "Автоматический прогноз")
-                 .WithCurrentTimestamp();
+                .WithCurrentTimestamp();
 
             return embed.Build();
         }

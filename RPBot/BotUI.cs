@@ -350,18 +350,18 @@ namespace RPBot
                     }
 
                     // Ждём сигнализации Init внутри UI-потока (best-effort)
-						if (!_uiInitialized.Wait(5000))
-						{
-							// Техническая диагностика UI: пишем в отдельный UiErrorLog_yyyyMMdd.txt
-							TryAppendErrorToFile("EnsureUiInitialized: UI thread did not initialize within timeout");
-						}
+        if (!_uiInitialized.Wait(5000))
+        {
+        // Техническая диагностика UI: пишем в отдельный UiErrorLog_yyyyMMdd.txt
+        TryAppendErrorToFile("EnsureUiInitialized: UI thread did not initialize within timeout");
+        }
 
-						_isInitialized = _uiInitialized.IsSet;
-						TryAppendErrorToFile("EnsureUiInitialized: Init completed");
+        _isInitialized = _uiInitialized.IsSet;
+        TryAppendErrorToFile("EnsureUiInitialized: Init completed");
                 }
                 catch (Exception ex)
                 {
-						TryAppendErrorToFile($"EnsureUiInitialized error: {ex}");
+        TryAppendErrorToFile($"EnsureUiInitialized error: {ex}");
                     _isInitialized = false;
                     throw;
                 }
@@ -380,19 +380,19 @@ namespace RPBot
 
                 _uiThread = new Thread(() =>
                 {
-					try
-					{
-						Application.Init();
-						_uiInitialized.Set();
-						TryAppendErrorToFile("UI thread: Init completed");
+    try
+    {
+        Application.Init();
+        _uiInitialized.Set();
+        TryAppendErrorToFile("UI thread: Init completed");
 
                         // Запускаем главный цикл; управление subviews будет выполняться через MainLoop.Invoke
                         Application.Run(Application.Top);
                     }
-					catch (Exception ex)
-					{
-						TryAppendErrorToFile($"UI thread exception: {ex}");
-					}
+    catch (Exception ex)
+    {
+        TryAppendErrorToFile($"UI thread exception: {ex}");
+    }
                     finally
                     {
                         try { Application.Shutdown(); } catch { }
@@ -503,70 +503,70 @@ namespace RPBot
                 int selectedGuildIndex = -1;
                 var tcsGuild = new TaskCompletionSource<int>();
 
-				Application.MainLoop.Invoke(() =>
-				{
-					var dlg = new Dialog("Выберите сервер", 60, 20);
-					var items = guilds.Select(g => $"{g.Name} ({g.Id})").ToList();
-					var list = new ListView(items)
-					{
-						X = 0,
-						Y = 0,
-						Width = Dim.Fill(),
-						Height = Dim.Fill() - 3
-					};
+    Application.MainLoop.Invoke(() =>
+    {
+    var dlg = new Dialog("Выберите сервер", 60, 20);
+    var items = guilds.Select(g => $"{g.Name} ({g.Id})").ToList();
+    var list = new ListView(items)
+    {
+        X = 0,
+        Y = 0,
+        Width = Dim.Fill(),
+        Height = Dim.Fill() - 3
+    };
 
-					var ok = new Button("OK") { X = Pos.Percent(15), Y = Pos.Bottom(list) };
-					var help = new Button("Help") { X = Pos.Center(), Y = Pos.Bottom(list) };
-					var cancel = new Button("Cancel") { X = Pos.Percent(75), Y = Pos.Bottom(list) };
+    var ok = new Button("OK") { X = Pos.Percent(15), Y = Pos.Bottom(list) };
+    var help = new Button("Help") { X = Pos.Center(), Y = Pos.Bottom(list) };
+    var cancel = new Button("Cancel") { X = Pos.Percent(75), Y = Pos.Bottom(list) };
 
-					ok.Clicked += () =>
-					{
-						selectedGuildIndex = list.SelectedItem;
-						Application.RequestStop(dlg);
-						tcsGuild.TrySetResult(selectedGuildIndex);
-					};
-					help.Clicked += () =>
-					{
-						// Краткая справка прямо из диалога выбора сервера
-						AddCommandOutput("Интерактивные настройки сервера:");
-						AddCommandOutput("1) Выберите сервер и нажмите OK.");
-						AddCommandOutput("2) Выберите действие: get/set/list/reset/help.");
-						AddCommandOutput("   - get: показать текущее значение выбранного параметра.");
-						AddCommandOutput("   - set: изменить параметр (канал/роль из списка, флаги true/false, текст руками).");
-						AddCommandOutput("   - list: вывести все настройки сервера.");
-						AddCommandOutput("   - reset: сбросить настройки до значений по умолчанию.");
-						AddCommandOutput("   - help: показать эту же справку после выбора сервера.");
-						AddCommandOutput("Esc или Cancel — выход без изменений.");
-					};
-					cancel.Clicked += () =>
-					{
-						Application.RequestStop(dlg);
-						tcsGuild.TrySetResult(-1);
-					};
+    ok.Clicked += () =>
+    {
+        selectedGuildIndex = list.SelectedItem;
+        Application.RequestStop(dlg);
+        tcsGuild.TrySetResult(selectedGuildIndex);
+    };
+    help.Clicked += () =>
+    {
+        // Краткая справка прямо из диалога выбора сервера
+        AddCommandOutput("Интерактивные настройки сервера:");
+        AddCommandOutput("1) Выберите сервер и нажмите OK.");
+        AddCommandOutput("2) Выберите действие: get/set/list/reset/help.");
+        AddCommandOutput("   - get: показать текущее значение выбранного параметра.");
+        AddCommandOutput("   - set: изменить параметр (канал/роль из списка, флаги true/false, текст руками).");
+        AddCommandOutput("   - list: вывести все настройки сервера.");
+        AddCommandOutput("   - reset: сбросить настройки до значений по умолчанию.");
+        AddCommandOutput("   - help: показать эту же справку после выбора сервера.");
+        AddCommandOutput("Esc или Cancel — выход без изменений.");
+    };
+    cancel.Clicked += () =>
+    {
+        Application.RequestStop(dlg);
+        tcsGuild.TrySetResult(-1);
+    };
 
-					// Поддержка Enter/Esc для выбора сервера с клавиатуры
-					dlg.KeyPress += e =>
-					{
-						try
-						{
-							if (e.KeyEvent.Key == Key.Enter)
-							{
-								selectedGuildIndex = list.SelectedItem;
-								Application.RequestStop(dlg);
-								tcsGuild.TrySetResult(selectedGuildIndex);
-								e.Handled = true;
-							}
-							else if (e.KeyEvent.Key == Key.Esc)
-							{
-								Application.RequestStop(dlg);
-								tcsGuild.TrySetResult(-1);
-								e.Handled = true;
-							}
-						}
-						catch { }
-					};
+    // Поддержка Enter/Esc для выбора сервера с клавиатуры
+    dlg.KeyPress += e =>
+    {
+        try
+        {
+        if (e.KeyEvent.Key == Key.Enter)
+        {
+        selectedGuildIndex = list.SelectedItem;
+        Application.RequestStop(dlg);
+        tcsGuild.TrySetResult(selectedGuildIndex);
+        e.Handled = true;
+        }
+        else if (e.KeyEvent.Key == Key.Esc)
+        {
+        Application.RequestStop(dlg);
+        tcsGuild.TrySetResult(-1);
+        e.Handled = true;
+        }
+        }
+        catch { }
+    };
 
-					dlg.Add(list, ok, help, cancel);
+    dlg.Add(list, ok, help, cancel);
                     Application.Run(dlg);
                 });
 
@@ -580,65 +580,65 @@ namespace RPBot
                 var selectedGuild = guilds[selectedGuildIndex];
                 var guildId = selectedGuild.Id;
 
-				// Выбор действия
-				string[] actions = new[] { "get", "set", "list", "reset", "help" };
+    // Выбор действия
+    string[] actions = new[] { "get", "set", "list", "reset", "help" };
                 int actionIndex = await ShowSelectionDialog("Выберите действие", actions);
                 if (actionIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-				var action = actions[actionIndex];
+    var action = actions[actionIndex];
 
-				if (action == "help")
-				{
-					AddCommandOutput("Параметры, которые можно менять для этого сервера:");
-					AddCommandOutput("- Канал модерации: куда отправляются сообщения модерации (ключ moderation_channel).");
-					AddCommandOutput("- Приветственный канал: канал для приветственных сообщений (welcome_channel).");
-					AddCommandOutput("- Основной РГ-канал: основной канал для игровых сообщений/РГ (general_rg_channel).");
-					AddCommandOutput("- Канал бросков: канал по умолчанию для бросков кубиков (roll_channel).");
-					AddCommandOutput("- Канал статистики: канал для статистики и служебных сообщений (stats_channel).");
-					AddCommandOutput("- Канал записей: канал для сохранения записей/логов (record_channel).");
-					AddCommandOutput("- Приветственное сообщение: текст, который бот пишет при входе новых пользователей (welcome_message).");
-					AddCommandOutput("- Сообщение для команды LINE: текст, который выводится по команде LINE (line_message).");
-					AddCommandOutput("- Роль по умолчанию: роль, которую можно выдавать новым участникам (default_role).");
-					AddCommandOutput("- Роль суперпользователя: роль с расширенными правами управления ботом (super_user_role).");
-					AddCommandOutput("- Фильтр мата включён: включает/выключает фильтрацию мата (swear_filter).");
-					AddCommandOutput("- Слова фильтра мата: дополнительный список запрещённых слов через запятую (swear_words).");
-					AddCommandOutput("- Прогнозы включены: включает/выключает игровые прогнозы и ставки (predictions).");
+    if (action == "help")
+    {
+    AddCommandOutput("Параметры, которые можно менять для этого сервера:");
+    AddCommandOutput("- Канал модерации: куда отправляются сообщения модерации (ключ moderation_channel).");
+    AddCommandOutput("- Приветственный канал: канал для приветственных сообщений (welcome_channel).");
+    AddCommandOutput("- Основной РГ-канал: основной канал для игровых сообщений/РГ (general_rg_channel).");
+    AddCommandOutput("- Канал бросков: канал по умолчанию для бросков кубиков (roll_channel).");
+    AddCommandOutput("- Канал статистики: канал для статистики и служебных сообщений (stats_channel).");
+    AddCommandOutput("- Канал записей: канал для сохранения записей/логов (record_channel).");
+    AddCommandOutput("- Приветственное сообщение: текст, который бот пишет при входе новых пользователей (welcome_message).");
+    AddCommandOutput("- Сообщение для команды LINE: текст, который выводится по команде LINE (line_message).");
+    AddCommandOutput("- Роль по умолчанию: роль, которую можно выдавать новым участникам (default_role).");
+    AddCommandOutput("- Роль суперпользователя: роль с расширенными правами управления ботом (super_user_role).");
+    AddCommandOutput("- Фильтр мата включён: включает/выключает фильтрацию мата (swear_filter).");
+    AddCommandOutput("- Слова фильтра мата: дополнительный список запрещённых слов через запятую (swear_words).");
+    AddCommandOutput("- Прогнозы включены: включает/выключает игровые прогнозы и ставки (predictions).");
                     AddCommandOutput("- Event-голосовой канал: канал события для начисления костяшек (event_voice_channel).");
-					AddCommandOutput("");
-					AddCommandOutput("Как вводятся значения в интерактивном режиме:");
-					AddCommandOutput("- Для каналов и ролей бот показывает список и просит выбрать нужный вариант.");
-					AddCommandOutput("- Для флагов (фильтр мата, прогнозы) предлагается выбрать true/false.");
+    AddCommandOutput("");
+    AddCommandOutput("Как вводятся значения в интерактивном режиме:");
+    AddCommandOutput("- Для каналов и ролей бот показывает список и просит выбрать нужный вариант.");
+    AddCommandOutput("- Для флагов (фильтр мата, прогнозы) предлагается выбрать true/false.");
                     AddCommandOutput("- Event-голосовой канал выбирается из списка голосовых каналов.");
-					AddCommandOutput("- Для текстов (приветствие, LINE) нужно ввести строку.");
-					AddCommandOutput("- Для списка слов фильтра мата вводите слова через запятую без кавычек.");
-					return;
-				}
+    AddCommandOutput("- Для текстов (приветствие, LINE) нужно ввести строку.");
+    AddCommandOutput("- Для списка слов фильтра мата вводите слова через запятую без кавычек.");
+    return;
+    }
 
                 if (action == "list")
                 {
                     var cfg = await _botController.GetServerConfigAsync(guildId);
-					if (cfg == null)
-					{
-						AddCommandOutput($"Настройки для {guildId} не найдены.");
-					}
-					else
-					{
-						AddCommandOutput($"Настройки для {guildId}:");
-						// Единый порядок и человекочитаемые названия ключей
-						AddCommandOutput($"Канал модерации: {selectedGuild.GetTextChannel(cfg.ModerateChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Приветственный канал: {selectedGuild.GetTextChannel(cfg.WelcomeChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Основной РГ-канал: {selectedGuild.GetTextChannel(cfg.GeneralRGChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Канал бросков: {selectedGuild.GetTextChannel(cfg.RollChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Канал статистики: {selectedGuild.GetTextChannel(cfg.StatsChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Канал записей: {selectedGuild.GetTextChannel(cfg.RecordChannelID)?.Name ?? "не задан"}");
+    if (cfg == null)
+    {
+        AddCommandOutput($"Настройки для {guildId} не найдены.");
+    }
+    else
+    {
+        AddCommandOutput($"Настройки для {guildId}:");
+        // Единый порядок и человекочитаемые названия ключей
+        AddCommandOutput($"Канал модерации: {selectedGuild.GetTextChannel(cfg.ModerateChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Приветственный канал: {selectedGuild.GetTextChannel(cfg.WelcomeChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Основной РГ-канал: {selectedGuild.GetTextChannel(cfg.GeneralRGChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Канал бросков: {selectedGuild.GetTextChannel(cfg.RollChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Канал статистики: {selectedGuild.GetTextChannel(cfg.StatsChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Канал записей: {selectedGuild.GetTextChannel(cfg.RecordChannelID)?.Name ?? "не задан"}");
                         AddCommandOutput($"Event-голосовой канал: {selectedGuild.GetVoiceChannel(cfg.EventVoiceChannelID)?.Name ?? "не задан"}");
-						AddCommandOutput($"Приветственное сообщение: {cfg.WelcomeMessage}");
-						AddCommandOutput($"Сообщение для команды LINE: {cfg.LineMessage}");
-						AddCommandOutput($"Роль по умолчанию: {cfg.DefaultRoleID}");
-						AddCommandOutput($"Роль суперпользователя: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
-						AddCommandOutput($"Фильтр мата включён: {cfg.SwearFilterEnabled}");
-						AddCommandOutput($"Слова фильтра мата: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
-						AddCommandOutput($"Прогнозы отключения включены: {cfg.PredictionsEnabled}");
-					}
+        AddCommandOutput($"Приветственное сообщение: {cfg.WelcomeMessage}");
+        AddCommandOutput($"Сообщение для команды LINE: {cfg.LineMessage}");
+        AddCommandOutput($"Роль по умолчанию: {cfg.DefaultRoleID}");
+        AddCommandOutput($"Роль суперпользователя: {(cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "null")}");
+        AddCommandOutput($"Фильтр мата включён: {cfg.SwearFilterEnabled}");
+        AddCommandOutput($"Слова фильтра мата: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
+        AddCommandOutput($"Прогнозы отключения включены: {cfg.PredictionsEnabled}");
+    }
                     return;
                 }
 
@@ -649,56 +649,56 @@ namespace RPBot
                     return;
                 }
 
-				// Действия get/set требуют выбора ключа (отображаем русские описания, но работаем с внутренними именами)
-				(string key, string label)[] keyDefinitions = new[]
-				{
-					("moderation_channel", "Канал модерации"),
-					("welcome_channel", "Приветственный канал"),
-						("general_rg_channel", "Основной РГ-канал"),
-						("roll_channel", "Канал бросков"),
-						("stats_channel", "Канал статистики"),
-						("record_channel", "Канал записей"),
-						("event_voice_channel", "Event-голосовой канал"),
-						("welcome_message", "Приветственное сообщение"),
-						("line_message", "Сообщение для команды LINE"),
-						("default_role", "Роль по умолчанию"),
-						("master_role", "Роль мастера"),
-						("super_user_role", "Роль суперпользователя"),
-						("swear_filter", "Фильтр мата включён"),
-						("swear_words", "Слова фильтра мата"),
-						("predictions", "Прогнозы включены"),
-						("roll_pictures", "Картинки для бросков")
-					};
+    // Действия get/set требуют выбора ключа (отображаем русские описания, но работаем с внутренними именами)
+    (string key, string label)[] keyDefinitions = new[]
+    {
+    ("moderation_channel", "Канал модерации"),
+    ("welcome_channel", "Приветственный канал"),
+        ("general_rg_channel", "Основной РГ-канал"),
+        ("roll_channel", "Канал бросков"),
+        ("stats_channel", "Канал статистики"),
+        ("record_channel", "Канал записей"),
+        ("event_voice_channel", "Event-голосовой канал"),
+        ("welcome_message", "Приветственное сообщение"),
+        ("line_message", "Сообщение для команды LINE"),
+        ("default_role", "Роль по умолчанию"),
+        ("master_role", "Роль мастера"),
+        ("super_user_role", "Роль суперпользователя"),
+        ("swear_filter", "Фильтр мата включён"),
+        ("swear_words", "Слова фильтра мата"),
+        ("predictions", "Прогнозы включены"),
+        ("roll_pictures", "Картинки для бросков")
+    };
 				
-				var labels = keyDefinitions.Select(k => k.label).ToArray();
-				int keyIndex = await ShowSelectionDialog("Выберите параметр", labels);
+    var labels = keyDefinitions.Select(k => k.label).ToArray();
+    int keyIndex = await ShowSelectionDialog("Выберите параметр", labels);
                 if (keyIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-				var key = keyDefinitions[keyIndex].key;
+    var key = keyDefinitions[keyIndex].key;
 
                 if (action == "get")
                 {
                     var cfg = await _botController.GetServerConfigAsync(guildId);
                     if (cfg == null) { AddCommandOutput($"Настройки для {guildId} не найдены."); return; }
-					string res = key switch
-					{
-						"moderation_channel" => cfg.ModerateChannelID.ToString(),
-						"welcome_channel" => cfg.WelcomeChannelID.ToString(),
-						"general_rg_channel" => cfg.GeneralRGChannelID.ToString(),
-						"roll_channel" => cfg.RollChannelID.ToString(),
-						"stats_channel" => cfg.StatsChannelID.ToString(),
-						"record_channel" => cfg.RecordChannelID.ToString(),
-						"event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
-						"welcome_message" => cfg.WelcomeMessage ?? "",
-						"line_message" => cfg.LineMessage ?? "",
-						"default_role" => cfg.DefaultRoleID.ToString(),
-						"master_role" => cfg.MasterRoleId.HasValue ? cfg.MasterRoleId.Value.ToString() : "",
-						"super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
-						"swear_filter" => cfg.SwearFilterEnabled.ToString(),
-						"swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
-						"predictions" => cfg.PredictionsEnabled.ToString(),
-						"roll_pictures" => cfg.RollPicturesEnabled.ToString(),
-						_ => "Неизвестный ключ"
-					};
+    string res = key switch
+    {
+        "moderation_channel" => cfg.ModerateChannelID.ToString(),
+        "welcome_channel" => cfg.WelcomeChannelID.ToString(),
+        "general_rg_channel" => cfg.GeneralRGChannelID.ToString(),
+        "roll_channel" => cfg.RollChannelID.ToString(),
+        "stats_channel" => cfg.StatsChannelID.ToString(),
+        "record_channel" => cfg.RecordChannelID.ToString(),
+        "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
+        "welcome_message" => cfg.WelcomeMessage ?? "",
+        "line_message" => cfg.LineMessage ?? "",
+        "default_role" => cfg.DefaultRoleID.ToString(),
+        "master_role" => cfg.MasterRoleId.HasValue ? cfg.MasterRoleId.Value.ToString() : "",
+        "super_user_role" => cfg.SuperUserRoleId.HasValue ? cfg.SuperUserRoleId.Value.ToString() : "",
+        "swear_filter" => cfg.SwearFilterEnabled.ToString(),
+        "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
+        "predictions" => cfg.PredictionsEnabled.ToString(),
+        "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
+        _ => "Неизвестный ключ"
+    };
                     AddCommandOutput(res);
                     return;
                 }
@@ -743,27 +743,27 @@ namespace RPBot
                         }
                     }
                 }
-				else if (key == "default_role" || key == "master_role" || key == "super_user_role")
-				{
-					var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
-					var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
-					int rIndex = await ShowSelectionDialog("Выберите роль", items);
-					if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
-					value = roles[rIndex].Id.ToString();
-				}
-				else if (key == "swear_filter" || key == "predictions" || key == "roll_pictures")
-				{
-					var opts = new[] { "true", "false" };
-					string prompt = key switch
-					{
-						"swear_filter" => "Включить фильтр мата?",
-						"predictions" => "Включить прогнозы?",
-						_ => "Включить картинки для бросков?"
-					};
-					int idx = await ShowSelectionDialog(prompt, opts);
-					if (idx < 0) { AddCommandOutput("Операция отменена."); return; }
-					toggle = opts[idx] == "true";
-				}
+    else if (key == "default_role" || key == "master_role" || key == "super_user_role")
+    {
+    var roles = selectedGuild.Roles.OrderBy(r => r.Position).ToList();
+    var items = roles.Select(r => $"{r.Name} ({r.Id})").ToArray();
+    int rIndex = await ShowSelectionDialog("Выберите роль", items);
+    if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
+    value = roles[rIndex].Id.ToString();
+    }
+    else if (key == "swear_filter" || key == "predictions" || key == "roll_pictures")
+    {
+    var opts = new[] { "true", "false" };
+    string prompt = key switch
+    {
+        "swear_filter" => "Включить фильтр мата?",
+        "predictions" => "Включить прогнозы?",
+        _ => "Включить картинки для бросков?"
+    };
+    int idx = await ShowSelectionDialog(prompt, opts);
+    if (idx < 0) { AddCommandOutput("Операция отменена."); return; }
+    toggle = opts[idx] == "true";
+    }
                 else
                 {
                     // Запросим текстовое значение
@@ -995,7 +995,7 @@ namespace RPBot
 
                         if (!guiReady)
                         {
-						TryAppendErrorToFile("Warning: Application.Driver/Top not ready before Application.Run, retrying loop");
+        TryAppendErrorToFile("Warning: Application.Driver/Top not ready before Application.Run, retrying loop");
 
                             continue;
                         }
@@ -1011,16 +1011,16 @@ namespace RPBot
                                         Application.Top?.Add(_mainWindow);
                                     }
                                 }
-									catch (Exception ex)
-									{
-										TryAppendErrorToFile($"AddMainWindow error: {ex}");
-									}
+        catch (Exception ex)
+        {
+        TryAppendErrorToFile($"AddMainWindow error: {ex}");
+        }
                             });
                         }
-						catch (Exception ex)
-						{
-							TryAppendErrorToFile($"AddMainWindow invoke failed: {ex}");
-						}
+        catch (Exception ex)
+        {
+        TryAppendErrorToFile($"AddMainWindow invoke failed: {ex}");
+        }
 
                         while (_isRunning && _uiThread != null && _uiThread.IsAlive)
                         {
@@ -1033,7 +1033,7 @@ namespace RPBot
                     {
                         AddLog($"Application.Run error: {ex.Message}");
 
-						TryAppendErrorToFile($"Application.Run error: {ex}");
+        TryAppendErrorToFile($"Application.Run error: {ex}");
 
                         try
                         {
@@ -1475,7 +1475,7 @@ namespace RPBot
             return new[]
             {
                 "default_role",
-				"super_user_role",
+    "super_user_role",
                 "general_rg_channel",
                 "line_message",
                 "moderation_channel",
@@ -1756,24 +1756,24 @@ namespace RPBot
                         var sub = args[0].ToLowerInvariant();
                         switch (sub)
                         {
-							case "reload":
-								await _botController.ReloadServerConfigsAsync();
-								AddCommandOutput("Конфигурации серверов перезагружены из файла serverconfigs.json.");
-								break;
+        case "reload":
+        await _botController.ReloadServerConfigsAsync();
+        AddCommandOutput("Конфигурации серверов перезагружены из файла serverconfigs.json.");
+        break;
 
-							case "help":
-								AddCommandOutput("Справка по settings в терминале:");
-								AddCommandOutput("settings — без аргументов откроет интерактивное меню выбора сервера и параметров.");
-								AddCommandOutput("settings list <guildId> — показать настройки конкретного сервера.");
-								AddCommandOutput("settings get <guildId> <key> — показать одно значение по внутреннему ключу.");
-								AddCommandOutput("settings set <guildId> <key> <value> — изменить параметр.");
-								AddCommandOutput("settings reset <guildId> — сбросить настройки сервера.");
-								AddCommandOutput("");
-								AddCommandOutput("В интерактивном меню (settings без аргументов) каналы и роли выбираются из списка,");
-								AddCommandOutput("для булевых флагов (фильтр мата, прогнозы) предлагается выбор true/false,");
-								AddCommandOutput("для текстовых значений (приветствие, LINE) вводится произвольная строка.");
+        case "help":
+        AddCommandOutput("Справка по settings в терминале:");
+        AddCommandOutput("settings — без аргументов откроет интерактивное меню выбора сервера и параметров.");
+        AddCommandOutput("settings list <guildId> — показать настройки конкретного сервера.");
+        AddCommandOutput("settings get <guildId> <key> — показать одно значение по внутреннему ключу.");
+        AddCommandOutput("settings set <guildId> <key> <value> — изменить параметр.");
+        AddCommandOutput("settings reset <guildId> — сбросить настройки сервера.");
+        AddCommandOutput("");
+        AddCommandOutput("В интерактивном меню (settings без аргументов) каналы и роли выбираются из списка,");
+        AddCommandOutput("для булевых флагов (фильтр мата, прогнозы) предлагается выбор true/false,");
+        AddCommandOutput("для текстовых значений (приветствие, LINE) вводится произвольная строка.");
                                 AddCommandOutput("event_voice_channel задаётся ID голосового канала (или через интерактивный выбор).");
-								break;
+        break;
 
                             case "list":
                                 {
@@ -2567,22 +2567,22 @@ namespace RPBot
             catch { }
         }
 
-		// Путь к основному ErrorLog (внутренние ошибки бота), который отображается в UI.
-		// Используем тот же шаблон, что и Program.LogError: ErrorLog_yyyyMMdd.txt в LogDirectory.
-		private string GetErrorLogPath()
-		{
-			var logDir = BotConfig.Current?.LogDirectory;
-			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
-			Directory.CreateDirectory(resolvedLogDir);
-			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-			return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
-		}
+// Путь к основному ErrorLog (внутренние ошибки бота), который отображается в UI.
+// Используем тот же шаблон, что и Program.LogError: ErrorLog_yyyyMMdd.txt в LogDirectory.
+private string GetErrorLogPath()
+{
+    var logDir = BotConfig.Current?.LogDirectory;
+    var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
+    Directory.CreateDirectory(resolvedLogDir);
+    var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+    return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
+}
 
-		private long GetErrorLogLength()
+private long GetErrorLogLength()
         {
             try
             {
-				var path = GetErrorLogPath();
+    var path = GetErrorLogPath();
                 if (!File.Exists(path))
                     return 0;
                 return new FileInfo(path).Length;
@@ -2597,7 +2597,7 @@ namespace RPBot
         {
             try
             {
-				var path = GetErrorLogPath();
+    var path = GetErrorLogPath();
                 if (!File.Exists(path))
                     return string.Empty;
 
@@ -2623,21 +2623,21 @@ namespace RPBot
         {
             try
             {
-				var logPath = GetUiErrorLogPath();
-				File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+    var logPath = GetUiErrorLogPath();
+    File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
             }
             catch { }
         }
 
-		private static string GetUiErrorLogPath()
-		{
-			var logDir = BotConfig.Current?.LogDirectory;
-			var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
-			Directory.CreateDirectory(resolvedLogDir);
-			// Отдельный лог ошибок UI по дням: UiErrorLog_yyyyMMdd.txt
-			var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-			return Path.Combine(resolvedLogDir, $"UiErrorLog_{dateSuffix}.txt");
-		}
+private static string GetUiErrorLogPath()
+{
+    var logDir = BotConfig.Current?.LogDirectory;
+    var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
+    Directory.CreateDirectory(resolvedLogDir);
+    // Отдельный лог ошибок UI по дням: UiErrorLog_yyyyMMdd.txt
+    var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
+    return Path.Combine(resolvedLogDir, $"UiErrorLog_{dateSuffix}.txt");
+}
 
         public void Dispose()
         {

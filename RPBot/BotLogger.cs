@@ -450,7 +450,7 @@ namespace RPBot
                         }
 
                         await File.AppendAllTextAsync(path, line + Environment.NewLine, Encoding.UTF8)
-                                  .ConfigureAwait(false);
+                                .ConfigureAwait(false);
                     }
                     catch
                     {

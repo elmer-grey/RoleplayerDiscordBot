@@ -168,10 +168,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-					catch (Exception ex)
-					{
-					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
-					}
+    catch (Exception ex)
+    {
+    BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendConnectionIssue error for {guild.Name}: {ex.Message}");
+    }
                 }
             }
         }
@@ -202,10 +202,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-					catch (Exception ex)
-					{
-					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
-					}
+    catch (Exception ex)
+    {
+    BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendRestartNotification error for {guild.Name}: {ex.Message}");
+    }
                 }
             }
         }
@@ -233,10 +233,10 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-					catch (Exception ex)
-					{
-					BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
-					}
+    catch (Exception ex)
+    {
+    BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendReconnectNotification error for {guild.Name}: {ex.Message}");
+    }
                 }
             }
         }

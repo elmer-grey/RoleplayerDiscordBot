@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -55,7 +55,7 @@ namespace RPBot
                 // ensure single analyzer at a time
             }
             // Проверяем, включены ли прогнозы ОТКЛЮЧЕНИЙ соединения
-			if (!_config.EnableConnectionPredictions)
+    if (!_config.EnableConnectionPredictions)
                 return null;
 
             // Проверяем защиту от спама (но не блокируем подтверждение кандидата)

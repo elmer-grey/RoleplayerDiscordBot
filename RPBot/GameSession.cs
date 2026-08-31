@@ -1049,11 +1049,11 @@ namespace RPBot
                 var embed = new EmbedBuilder()
                     .WithTitle($"Сессия: \"{session.GameName}\"")
                     .WithDescription($"Мастер: {session.MasterName}\n" +
-                                   $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
-                                   $"Статус: ▶ В процессе\n" +
-                                   $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
-                                   $"Сбор бросков: ✅ Включен (автоматически)\n" +
-                                   $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
+                                    $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
+                                    $"Статус: ▶ В процессе\n" +
+                                    $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
+                                    $"Сбор бросков: ✅ Включен (автоматически)\n" +
+                                    $"{(string.IsNullOrEmpty(session.EventDescription) ? "" : $"Описание: {session.EventDescription}")}")
                     .WithColor(Color.Green)
                     .Build();
 
@@ -1117,11 +1117,11 @@ namespace RPBot
             var embed = new EmbedBuilder()
                 .WithTitle($"Сессия: \"{session.GameName}\"")
                 .WithDescription($"Мастер: {session.MasterName}\n" +
-                               $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
-                               $"Статус: ▶ В процессе\n" +
-                               $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
-                               $"Сбор бросков: ✅ Включен (автоматически)\n" +
-                               $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
+                                $"Начало: {DiscordTimeFormatter.FullDateTime(session.StartTime)}\n" +
+                                $"Статус: ▶ В процессе\n" +
+                                $"Длительность (активная): {FormatDurationCompact(activeDuration)}\n" +
+                                $"Сбор бросков: ✅ Включен (автоматически)\n" +
+                                $"{(string.IsNullOrEmpty(session.GameComment) ? "" : $"Комментарий: {session.GameComment}")}")
                 .WithColor(Color.Green)
                 .Build();
 
@@ -2125,7 +2125,7 @@ namespace RPBot
                             LogDebug($"Сессия {session.SessionId} удалена из активных");
                         }
                         else if (_stoppedSessions.TryGetValue(session.GuildId, out var stoppedGuildSessions)
-                                 && stoppedGuildSessions.TryRemove(session.SessionId, out _))
+                                && stoppedGuildSessions.TryRemove(session.SessionId, out _))
                         {
                             LogDebug($"Сессия {session.SessionId} удалена из завершённых");
                         }

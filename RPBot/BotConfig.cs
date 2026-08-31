@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,343 +14,343 @@ namespace RPBot
 {
     public class BotConfig
     {
-		// Папка Settings — содержит конфиги (config.json, serverconfigs.json, master_guide_*.txt, Pastes.txt).
-		public const string SettingsFolderName = "Settings";
+// Папка Settings — содержит конфиги (config.json, serverconfigs.json, master_guide_*.txt, Pastes.txt).
+public const string SettingsFolderName = "Settings";
 
-		// Папка Data — файлы состояния бота (scores, queues, sessions, плейлисты и т.д.)
-		public const string DataFolderName = "Data";
+// Папка Data — файлы состояния бота (scores, queues, sessions, плейлисты и т.д.)
+public const string DataFolderName = "Data";
 
-		// Папка Logs — логи бота (по умолчанию).
-		public const string LogsFolderName = "Logs";
+// Папка Logs — логи бота (по умолчанию).
+public const string LogsFolderName = "Logs";
 
-		// Имя переменной окружения для принудительного переопределения корня данных.
-		// Если задана — её значение используется как корневой каталог для Settings/, Data/, Logs/.
-		// Если не задана — на Windows используется %LOCALAPPDATA%\RPBot,
-		// на Linux/macOS — ~/.local/share/rpbot.
-		public const string DataRootEnvVar = "RPBOT_DATA_DIR";
+// Имя переменной окружения для принудительного переопределения корня данных.
+// Если задана — её значение используется как корневой каталог для Settings/, Data/, Logs/.
+// Если не задана — на Windows используется %LOCALAPPDATA%\RPBot,
+// на Linux/macOS — ~/.local/share/rpbot.
+public const string DataRootEnvVar = "RPBOT_DATA_DIR";
 
-		// Имя приложения внутри LocalAppData / $XDG_DATA_HOME.
-		public const string AppDataSubdirectory = "RPBot";
+// Имя приложения внутри LocalAppData / $XDG_DATA_HOME.
+public const string AppDataSubdirectory = "RPBot";
 
-		// Кэш для вычисленного корня данных (один раз на процесс).
-		private static string? _dataRootOverride;
-		private static string? _dataRootDefault;
+// Кэш для вычисленного корня данных (один раз на процесс).
+private static string? _dataRootOverride;
+private static string? _dataRootDefault;
 
-		/// <summary>
-		/// Корневой каталог для runtime-данных бота (Settings/, Data/, Logs/).
-		/// Приоритет: переменная окружения RPBOT_DATA_DIR → %LOCALAPPDATA%\RPBot (Windows)
-		/// или ~/.local/share/rpbot (Linux/macOS).
-		/// Каталог создаётся при первом обращении.
-		/// </summary>
-		public static string GetDataRootDirectory()
-		{
-			if (_dataRootOverride != null) return _dataRootOverride;
+/// <summary>
+/// Корневой каталог для runtime-данных бота (Settings/, Data/, Logs/).
+/// Приоритет: переменная окружения RPBOT_DATA_DIR → %LOCALAPPDATA%\RPBot (Windows)
+/// или ~/.local/share/rpbot (Linux/macOS).
+/// Каталог создаётся при первом обращении.
+/// </summary>
+public static string GetDataRootDirectory()
+{
+    if (_dataRootOverride != null) return _dataRootOverride;
 
-			var fromEnv = Environment.GetEnvironmentVariable(DataRootEnvVar);
-			if (!string.IsNullOrWhiteSpace(fromEnv))
-			{
-				_dataRootOverride = fromEnv;
-			}
-			else
-			{
-				_dataRootDefault ??= ComputeDefaultDataRoot();
-				_dataRootOverride = _dataRootDefault;
-			}
+    var fromEnv = Environment.GetEnvironmentVariable(DataRootEnvVar);
+    if (!string.IsNullOrWhiteSpace(fromEnv))
+    {
+    _dataRootOverride = fromEnv;
+    }
+    else
+    {
+    _dataRootDefault ??= ComputeDefaultDataRoot();
+    _dataRootOverride = _dataRootDefault;
+    }
 
-			Directory.CreateDirectory(_dataRootOverride!);
-			return _dataRootOverride!;
-		}
+    Directory.CreateDirectory(_dataRootOverride!);
+    return _dataRootOverride!;
+}
 
-		private static string ComputeDefaultDataRoot()
-		{
-			if (OperatingSystem.IsWindows())
-			{
-				var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData,
-					Environment.SpecialFolderOption.Create);
-				return Path.Combine(localAppData, AppDataSubdirectory);
-			}
-			// Linux / macOS — XDG_DATA_HOME или ~/.local/share
-			var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
-			if (!string.IsNullOrWhiteSpace(xdg))
-				return Path.Combine(xdg, "rpbot");
-			var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-			return Path.Combine(home, ".local", "share", "rpbot");
-		}
+private static string ComputeDefaultDataRoot()
+{
+    if (OperatingSystem.IsWindows())
+    {
+    var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData,
+    Environment.SpecialFolderOption.Create);
+    return Path.Combine(localAppData, AppDataSubdirectory);
+    }
+    // Linux / macOS — XDG_DATA_HOME или ~/.local/share
+    var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+    if (!string.IsNullOrWhiteSpace(xdg))
+    return Path.Combine(xdg, "rpbot");
+    var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    return Path.Combine(home, ".local", "share", "rpbot");
+}
 
-		/// <summary>
-		/// Каталог для статических ресурсов, идущих рядом с .exe
-		/// (Lavalink/application.yml, Web/dashboard.html).
-		/// </summary>
-		public static string GetStaticDirectory() => AppContext.BaseDirectory;
+/// <summary>
+/// Каталог для статических ресурсов, идущих рядом с .exe
+/// (Lavalink/application.yml, Web/dashboard.html).
+/// </summary>
+public static string GetStaticDirectory() => AppContext.BaseDirectory;
 
-		public static string GetSettingsDirectory()
-		{
-			var dir = Path.Combine(GetDataRootDirectory(), SettingsFolderName);
-			Directory.CreateDirectory(dir);
-			return dir;
-		}
+public static string GetSettingsDirectory()
+{
+    var dir = Path.Combine(GetDataRootDirectory(), SettingsFolderName);
+    Directory.CreateDirectory(dir);
+    return dir;
+}
 
-		public static string GetDataDirectory()
-		{
-			var dir = Path.Combine(GetDataRootDirectory(), DataFolderName);
-			Directory.CreateDirectory(dir);
-			return dir;
-		}
+public static string GetDataDirectory()
+{
+    var dir = Path.Combine(GetDataRootDirectory(), DataFolderName);
+    Directory.CreateDirectory(dir);
+    return dir;
+}
 
-		public static string GetLogsDirectory()
-		{
-			var dir = Path.Combine(GetDataRootDirectory(), LogsFolderName);
-			Directory.CreateDirectory(dir);
-			return dir;
-		}
+public static string GetLogsDirectory()
+{
+    var dir = Path.Combine(GetDataRootDirectory(), LogsFolderName);
+    Directory.CreateDirectory(dir);
+    return dir;
+}
 
-		/// <summary>
-		/// Преобразует путь в абсолютный.
-		/// Относительные пути, которые выглядят как runtime-данные (Settings/…, Data/…, Logs/…)
-		/// резолвятся относительно корня данных; всё остальное — относительно каталога .exe
-		/// (статические ресурсы типа Lavalink/, Web/).
-		/// </summary>
-		public static string ResolvePath(string path)
-		{
-			if (string.IsNullOrWhiteSpace(path))
-				return AppContext.BaseDirectory;
+/// <summary>
+/// Преобразует путь в абсолютный.
+/// Относительные пути, которые выглядят как runtime-данные (Settings/…, Data/…, Logs/…)
+/// резолвятся относительно корня данных; всё остальное — относительно каталога .exe
+/// (статические ресурсы типа Lavalink/, Web/).
+/// </summary>
+public static string ResolvePath(string path)
+{
+    if (string.IsNullOrWhiteSpace(path))
+    return AppContext.BaseDirectory;
 
-			if (Path.IsPathRooted(path)) return path;
+    if (Path.IsPathRooted(path)) return path;
 
-			// Runtime-данные — относительно корня данных.
-			var trimmed = path.Replace('\\', '/').TrimStart('/');
-			if (trimmed.StartsWith(SettingsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
-			    trimmed.StartsWith(DataFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
-			    trimmed.StartsWith(LogsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
-			    string.Equals(trimmed, SettingsFolderName, StringComparison.OrdinalIgnoreCase) ||
-			    string.Equals(trimmed, DataFolderName, StringComparison.OrdinalIgnoreCase) ||
-			    string.Equals(trimmed, LogsFolderName, StringComparison.OrdinalIgnoreCase))
-			{
-				return Path.Combine(GetDataRootDirectory(), path.Replace('/', Path.DirectorySeparatorChar));
-			}
+    // Runtime-данные — относительно корня данных.
+    var trimmed = path.Replace('\\', '/').TrimStart('/');
+    if (trimmed.StartsWith(SettingsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.StartsWith(DataFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.StartsWith(LogsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(trimmed, SettingsFolderName, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(trimmed, DataFolderName, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(trimmed, LogsFolderName, StringComparison.OrdinalIgnoreCase))
+    {
+    return Path.Combine(GetDataRootDirectory(), path.Replace('/', Path.DirectorySeparatorChar));
+    }
 
-			// Статические ресурсы — относительно .exe.
-			return Path.Combine(AppContext.BaseDirectory, path);
-		}
+    // Статические ресурсы — относительно .exe.
+    return Path.Combine(AppContext.BaseDirectory, path);
+}
 
-		/// <summary>
-		/// Одноразовая миграция: переносит файлы данных из старого расположения
-		/// (рядом с .exe: bin\Debug\net8.0\Settings, bin\…\Data, bin\…\Logs)
-		/// в новое (корневой каталог данных: %LOCALAPPDATA%\RPBot на Windows).
-		/// Идемпотентна — если файл уже на новом месте, не трогает.
-		/// </summary>
-		public static void MigrateDataFiles()
-		{
-			var oldRoot = AppContext.BaseDirectory;
-			var newRoot = GetDataRootDirectory();
+/// <summary>
+/// Одноразовая миграция: переносит файлы данных из старого расположения
+/// (рядом с .exe: bin\Debug\net8.0\Settings, bin\…\Data, bin\…\Logs)
+/// в новое (корневой каталог данных: %LOCALAPPDATA%\RPBot на Windows).
+/// Идемпотентна — если файл уже на новом месте, не трогает.
+/// </summary>
+public static void MigrateDataFiles()
+{
+    var oldRoot = AppContext.BaseDirectory;
+    var newRoot = GetDataRootDirectory();
 
-			// Если корень данных совпадает с каталогом .exe — мигрировать некуда.
-			if (string.Equals(
-				Path.GetFullPath(oldRoot).TrimEnd(Path.DirectorySeparatorChar),
-				Path.GetFullPath(newRoot).TrimEnd(Path.DirectorySeparatorChar),
-				StringComparison.OrdinalIgnoreCase))
-			{
-				return;
-			}
+    // Если корень данных совпадает с каталогом .exe — мигрировать некуда.
+    if (string.Equals(
+    Path.GetFullPath(oldRoot).TrimEnd(Path.DirectorySeparatorChar),
+    Path.GetFullPath(newRoot).TrimEnd(Path.DirectorySeparatorChar),
+    StringComparison.OrdinalIgnoreCase))
+    {
+    return;
+    }
 
-			var oldSettingsDir = Path.Combine(oldRoot, SettingsFolderName);
-			var oldDataDir = Path.Combine(oldRoot, DataFolderName);
-			var oldLogsDir = Path.Combine(oldRoot, LogsFolderName);
+    var oldSettingsDir = Path.Combine(oldRoot, SettingsFolderName);
+    var oldDataDir = Path.Combine(oldRoot, DataFolderName);
+    var oldLogsDir = Path.Combine(oldRoot, LogsFolderName);
 
-			var newSettingsDir = GetSettingsDirectory();
-			var newDataDir = GetDataDirectory();
+    var newSettingsDir = GetSettingsDirectory();
+    var newDataDir = GetDataDirectory();
 
-			// Список JSON-файлов данных, которые переезжают из Settings/ в Data/
-			var filesToMigrate = new[]
-			{
-				"bwonks.json",
-				"event-notify.json",
-				"event_announcements.json",
-				"points.json",
-				"points_users.json",
-				"music_playlists.json",
-				"music_queues.json",
-				"music_stats.json",
-				"predictions_state.json",
-				"predictions_history.json",
-				"predictions_stats.json",
-				"predictions_achievements.json",
-							"sessions_state.json",
-						};
+    // Список JSON-файлов данных, которые переезжают из Settings/ в Data/
+    var filesToMigrate = new[]
+    {
+    "bwonks.json",
+    "event-notify.json",
+    "event_announcements.json",
+    "points.json",
+    "points_users.json",
+    "music_playlists.json",
+    "music_queues.json",
+    "music_stats.json",
+    "predictions_state.json",
+    "predictions_history.json",
+    "predictions_stats.json",
+    "predictions_achievements.json",
+        "sessions_state.json",
+        };
 
-			foreach (var file in filesToMigrate)
-			{
-				var src = Path.Combine(oldDataDir, file);
-				var dst = Path.Combine(newDataDir, file);
-				if (File.Exists(src) && !File.Exists(dst))
-				{
-					try
-					{
-						File.Move(src, dst);
-						BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Data/ → {newDataDir}");
-					}
-					catch (Exception ex)
-					{
-						BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
-					}
-				}
-			}
+    foreach (var file in filesToMigrate)
+    {
+    var src = Path.Combine(oldDataDir, file);
+    var dst = Path.Combine(newDataDir, file);
+    if (File.Exists(src) && !File.Exists(dst))
+    {
+    try
+    {
+        File.Move(src, dst);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Data/ → {newDataDir}");
+    }
+    catch (Exception ex)
+    {
+        BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
+    }
+    }
+    }
 
-			// Конфиги (config.json, serverconfigs.json, master_guide_*.txt, Pastes.txt)
-			// переезжают из Settings/ → Settings/.
-			var settingsFiles = new[]
-			{
-				"config.json",
-				"serverconfigs.json",
-				"Pastes.txt",
-							"google_credentials.json", // мигрируем из bin\...\google_credentials.json → Settings\
-						};
-						foreach (var file in settingsFiles)
-						{
-							var src = Path.Combine(oldSettingsDir, file);
-							var dst = Path.Combine(newSettingsDir, file);
-							if (File.Exists(src) && !File.Exists(dst))
-							{
-								try
-								{
-									File.Move(src, dst);
-									BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Settings/ → {newSettingsDir}");
-								}
-								catch (Exception ex)
-								{
-									BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
-								}
-							}
-						}
+    // Конфиги (config.json, serverconfigs.json, master_guide_*.txt, Pastes.txt)
+    // переезжают из Settings/ → Settings/.
+    var settingsFiles = new[]
+    {
+    "config.json",
+    "serverconfigs.json",
+    "Pastes.txt",
+        "google_credentials.json", // мигрируем из bin\...\google_credentials.json → Settings\
+        };
+        foreach (var file in settingsFiles)
+        {
+        var src = Path.Combine(oldSettingsDir, file);
+        var dst = Path.Combine(newSettingsDir, file);
+        if (File.Exists(src) && !File.Exists(dst))
+        {
+        try
+        {
+        File.Move(src, dst);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {file}: Settings/ → {newSettingsDir}");
+        }
+        catch (Exception ex)
+        {
+        BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {file}: {ex.Message}");
+        }
+        }
+        }
 
-						// google_credentials.json — дополнительно: если лежит рядом с .exe
-						// (по старому дефолту из BotConfig.GoogleSheetsCredentialsPath),
-						// переносим в Settings/google_credentials.json.
-						var legacyCreds = Path.Combine(oldRoot, "google_credentials.json");
-						var newCreds = Path.Combine(newSettingsDir, "google_credentials.json");
-						if (File.Exists(legacyCreds) && !File.Exists(newCreds))
-						{
-							try
-							{
-								File.Move(legacyCreds, newCreds);
-								BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён google_credentials.json: {legacyCreds} → {newCreds}");
-							}
-							catch (Exception ex)
-							{
-								BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения google_credentials.json: {ex.Message}");
-							}
-						}
+        // google_credentials.json — дополнительно: если лежит рядом с .exe
+        // (по старому дефолту из BotConfig.GoogleSheetsCredentialsPath),
+        // переносим в Settings/google_credentials.json.
+        var legacyCreds = Path.Combine(oldRoot, "google_credentials.json");
+        var newCreds = Path.Combine(newSettingsDir, "google_credentials.json");
+        if (File.Exists(legacyCreds) && !File.Exists(newCreds))
+        {
+        try
+        {
+        File.Move(legacyCreds, newCreds);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён google_credentials.json: {legacyCreds} → {newCreds}");
+        }
+        catch (Exception ex)
+        {
+        BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения google_credentials.json: {ex.Message}");
+        }
+        }
 
-			// master_guide_<guildId>.txt — переносим по glob-шаблону.
-			if (Directory.Exists(oldSettingsDir))
-			{
-				foreach (var file in Directory.GetFiles(oldSettingsDir, "master_guide_*.txt"))
-				{
-					var dst = Path.Combine(newSettingsDir, Path.GetFileName(file));
-					if (!File.Exists(dst))
-					{
-						try
-						{
-							File.Move(file, dst);
-							BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {Path.GetFileName(file)}: Settings/ → {newSettingsDir}");
-						}
-						catch (Exception ex)
-						{
-							BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {Path.GetFileName(file)}: {ex.Message}");
-						}
-					}
-				}
-			}
+    // master_guide_<guildId>.txt — переносим по glob-шаблону.
+    if (Directory.Exists(oldSettingsDir))
+    {
+    foreach (var file in Directory.GetFiles(oldSettingsDir, "master_guide_*.txt"))
+    {
+    var dst = Path.Combine(newSettingsDir, Path.GetFileName(file));
+    if (!File.Exists(dst))
+    {
+        try
+        {
+        File.Move(file, dst);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] Перемещён {Path.GetFileName(file)}: Settings/ → {newSettingsDir}");
+        }
+        catch (Exception ex)
+        {
+        BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка перемещения {Path.GetFileName(file)}: {ex.Message}");
+        }
+    }
+    }
+    }
 
-			// Numbers/ (папка с картинками кубиков) — из Data/ → Data/.
-			var oldNumbers = Path.Combine(oldDataDir, "Numbers");
-			var newNumbers = Path.Combine(newDataDir, "Numbers");
-			if (Directory.Exists(oldNumbers) && !Directory.Exists(newNumbers))
-			{
-				try
-				{
-					CopyDirectory(oldNumbers, newNumbers);
-					BotLogger.Info(LogCategory.Boot, $"[Migration] Скопирована папка Numbers/: → {newNumbers}");
-				}
-				catch (Exception ex)
-				{
-					BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка копирования Numbers/: {ex.Message}");
-				}
-			}
+    // Numbers/ (папка с картинками кубиков) — из Data/ → Data/.
+    var oldNumbers = Path.Combine(oldDataDir, "Numbers");
+    var newNumbers = Path.Combine(newDataDir, "Numbers");
+    if (Directory.Exists(oldNumbers) && !Directory.Exists(newNumbers))
+    {
+    try
+    {
+    CopyDirectory(oldNumbers, newNumbers);
+    BotLogger.Info(LogCategory.Boot, $"[Migration] Скопирована папка Numbers/: → {newNumbers}");
+    }
+    catch (Exception ex)
+    {
+    BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка копирования Numbers/: {ex.Message}");
+    }
+    }
 
-			// Logs/ — копируем подпапки со старыми логами (не перемещаем, чтобы можно было сравнить).
-			if (Directory.Exists(oldLogsDir))
-			{
-				var newLogsDir = Path.Combine(newRoot, LogsFolderName);
-				Directory.CreateDirectory(newLogsDir);
-				foreach (var sub in Directory.GetDirectories(oldLogsDir))
-				{
-					var dst = Path.Combine(newLogsDir, Path.GetFileName(sub));
-					if (!Directory.Exists(dst))
-					{
-						try
-						{
-							CopyDirectory(sub, dst);
-							BotLogger.Info(LogCategory.Boot, $"[Migration] Скопированы логи {Path.GetFileName(sub)}: → {newLogsDir}");
-						}
-						catch (Exception ex)
-						{
-							BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка копирования логов: {ex.Message}");
-						}
-					}
-				}
-			}
+    // Logs/ — копируем подпапки со старыми логами (не перемещаем, чтобы можно было сравнить).
+    if (Directory.Exists(oldLogsDir))
+    {
+    var newLogsDir = Path.Combine(newRoot, LogsFolderName);
+    Directory.CreateDirectory(newLogsDir);
+    foreach (var sub in Directory.GetDirectories(oldLogsDir))
+    {
+    var dst = Path.Combine(newLogsDir, Path.GetFileName(sub));
+    if (!Directory.Exists(dst))
+    {
+        try
+        {
+        CopyDirectory(sub, dst);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] Скопированы логи {Path.GetFileName(sub)}: → {newLogsDir}");
+        }
+        catch (Exception ex)
+        {
+        BotLogger.Error(LogCategory.Boot, $"[Migration] Ошибка копирования логов: {ex.Message}");
+        }
+    }
+    }
+    }
 
-			// Чистим legacy-путь LogDirectory из конфига, если он указывал на Settings/Logs.
-			if (Current != null)
-			{
-				var legacyLogs = Path.Combine(SettingsFolderName, LogsFolderName);
-				if (string.Equals(Current.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase) ||
-				    string.Equals(Current.LogDirectory, LogsFolderName, StringComparison.OrdinalIgnoreCase))
-				{
-					Current.LogDirectory = LogsFolderName;
-					try
-					{
-						var cfgPath = Path.Combine(newSettingsDir, "config.json");
-						if (File.Exists(cfgPath)) Current.Save(cfgPath);
-					}
-					catch { /* не критично */ }
-				}
+    // Чистим legacy-путь LogDirectory из конфига, если он указывал на Settings/Logs.
+    if (Current != null)
+    {
+    var legacyLogs = Path.Combine(SettingsFolderName, LogsFolderName);
+    if (string.Equals(Current.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(Current.LogDirectory, LogsFolderName, StringComparison.OrdinalIgnoreCase))
+    {
+    Current.LogDirectory = LogsFolderName;
+    try
+    {
+        var cfgPath = Path.Combine(newSettingsDir, "config.json");
+        if (File.Exists(cfgPath)) Current.Save(cfgPath);
+    }
+    catch { /* не критично */ }
+    }
 
-							// Нормализуем устаревший дефолт GoogleSheetsCredentialsPath.
-							// В старых конфигах могло остаться "google_credentials.json" — это резолвится
-							// в bin\...\google_credentials.json (рядом с .exe) и сыпет Warn при каждом старте.
-							// Новый дефолт — Settings/google_credentials.json (рядом с config.json).
-							var oldDefault = "google_credentials.json";
-							var newDefault = Path.Combine(SettingsFolderName, "google_credentials.json");
-							if (string.Equals(Current.GoogleSheetsCredentialsPath, oldDefault, StringComparison.OrdinalIgnoreCase))
-							{
-								Current.GoogleSheetsCredentialsPath = newDefault;
-								try
-								{
-									var cfgPath = Path.Combine(newSettingsDir, "config.json");
-									if (File.Exists(cfgPath)) Current.Save(cfgPath);
-									BotLogger.Info(LogCategory.Boot, $"[Migration] GoogleSheetsCredentialsPath обновлён до {newDefault}");
-								}
-								catch (Exception ex)
-								{
-									BotLogger.Warn(LogCategory.Boot, $"[Migration] Не удалось обновить GoogleSheetsCredentialsPath: {ex.Message}");
-								}
-							}
-						}
-		}
+        // Нормализуем устаревший дефолт GoogleSheetsCredentialsPath.
+        // В старых конфигах могло остаться "google_credentials.json" — это резолвится
+        // в bin\...\google_credentials.json (рядом с .exe) и сыпет Warn при каждом старте.
+        // Новый дефолт — Settings/google_credentials.json (рядом с config.json).
+        var oldDefault = "google_credentials.json";
+        var newDefault = Path.Combine(SettingsFolderName, "google_credentials.json");
+        if (string.Equals(Current.GoogleSheetsCredentialsPath, oldDefault, StringComparison.OrdinalIgnoreCase))
+        {
+        Current.GoogleSheetsCredentialsPath = newDefault;
+        try
+        {
+        var cfgPath = Path.Combine(newSettingsDir, "config.json");
+        if (File.Exists(cfgPath)) Current.Save(cfgPath);
+        BotLogger.Info(LogCategory.Boot, $"[Migration] GoogleSheetsCredentialsPath обновлён до {newDefault}");
+        }
+        catch (Exception ex)
+        {
+        BotLogger.Warn(LogCategory.Boot, $"[Migration] Не удалось обновить GoogleSheetsCredentialsPath: {ex.Message}");
+        }
+        }
+        }
+}
 
-		private static void CopyDirectory(string src, string dst)
-		{
-			Directory.CreateDirectory(dst);
-			foreach (var file in Directory.GetFiles(src))
-				File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: false);
-			foreach (var dir in Directory.GetDirectories(src))
-				CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
-		}
+private static void CopyDirectory(string src, string dst)
+{
+    Directory.CreateDirectory(dst);
+    foreach (var file in Directory.GetFiles(src))
+    File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: false);
+    foreach (var dir in Directory.GetDirectories(src))
+    CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+}
 
-		// Текущая загруженная конфигурация (удобство для доступа из других классов)
-		public static BotConfig? Current { get; private set; }
+// Текущая загруженная конфигурация (удобство для доступа из других классов)
+public static BotConfig? Current { get; private set; }
 
         // === ИДЕНТИФИКАЦИЯ И БАЗОВЫЕ НАСТРОЙКИ ===
 
@@ -418,35 +418,35 @@ namespace RPBot
         // резолвится в <DataRoot>/Data/Numbers.
         public string NumbersDirectory { get; set; } = Path.Combine(DataFolderName, "Numbers");
 
-		// === GOOGLE SHEETS ===
+// === GOOGLE SHEETS ===
 
-		// Путь к файлу credentials (сервисный аккаунт JSON), относительный или абсолютный.
-				// По умолчанию лежит в Settings/ — рядом с config.json и serverconfigs.json.
-				// Абсолютный путь тоже допустим (если credentials хранятся вне каталога данных).
-				public string? GoogleSheetsCredentialsPath { get; set; } = Path.Combine(SettingsFolderName, "google_credentials.json");
+// Путь к файлу credentials (сервисный аккаунт JSON), относительный или абсолютный.
+    // По умолчанию лежит в Settings/ — рядом с config.json и serverconfigs.json.
+    // Абсолютный путь тоже допустим (если credentials хранятся вне каталога данных).
+    public string? GoogleSheetsCredentialsPath { get; set; } = Path.Combine(SettingsFolderName, "google_credentials.json");
 
-		// ID таблицы (из URL: .../spreadsheets/d/{ID}/edit)
-		public string? GoogleSpreadsheetId { get; set; } = null;
+// ID таблицы (из URL: .../spreadsheets/d/{ID}/edit)
+public string? GoogleSpreadsheetId { get; set; } = null;
 
-		// Название листа, куда пишется статистика
-		public string GoogleSheetName { get; set; } = "2026 год";
+// Название листа, куда пишется статистика
+public string GoogleSheetName { get; set; } = "2026 год";
 
-		// Первая строка с данными (строка 1 = заголовки, данные с 2)
-		public int GoogleSheetDataStartRow { get; set; } = 2;
+// Первая строка с данными (строка 1 = заголовки, данные с 2)
+public int GoogleSheetDataStartRow { get; set; } = 2;
 
-		// Включить запись статистики сессий в Google Sheets
-		public bool GoogleSheetsEnabled { get; set; } = false;
+// Включить запись статистики сессий в Google Sheets
+public bool GoogleSheetsEnabled { get; set; } = false;
 
-		// === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
+// === ЕЖЕДНЕВНЫЙ РЕСТАРТ ===
 
-		// Включить/выключить ежедневную плановую перезагрузку
-		public bool DailyRestartEnabled { get; set; } = false;
-		// Время плановой перезагрузки по локальному времени (формат: HH:mm или HH:mm:ss)
-		public string? DailyRestartLocalTime { get; set; } = null;
-		// Время плановой перезагрузки по Москве, если локальная таймзона = Москва (формат: HH:mm или HH:mm:ss)
-		public string? DailyRestartMoscowTime { get; set; } = null;
-		// Если true и локальная таймзона = Москва — использовать DailyRestartMoscowTime, иначе DailyRestartLocalTime
-		public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
+// Включить/выключить ежедневную плановую перезагрузку
+public bool DailyRestartEnabled { get; set; } = false;
+// Время плановой перезагрузки по локальному времени (формат: HH:mm или HH:mm:ss)
+public string? DailyRestartLocalTime { get; set; } = null;
+// Время плановой перезагрузки по Москве, если локальная таймзона = Москва (формат: HH:mm или HH:mm:ss)
+public string? DailyRestartMoscowTime { get; set; } = null;
+// Если true и локальная таймзона = Москва — использовать DailyRestartMoscowTime, иначе DailyRestartLocalTime
+public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
 
         // Загрузить конфигурацию из файла
         public static BotConfig Load(string path = "config.json")
@@ -457,37 +457,37 @@ namespace RPBot
             {
                 try
                 {
-					string json = File.ReadAllText(resolvedPath);
-					var options = new JsonSerializerOptions
-					{
-						PropertyNameCaseInsensitive = true,
-						ReadCommentHandling = JsonCommentHandling.Skip,
-						AllowTrailingCommas = true
-					};
+    string json = File.ReadAllText(resolvedPath);
+    var options = new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
                     var cfg = JsonSerializer.Deserialize<BotConfig>(json, options) ?? new BotConfig();
                     Current = cfg;
 
-					// Автодополнение/миграция конфига новыми полями: если их не было в json,
-					// пересохраняем, чтобы они появились в файле.
-					var needsResave = false;
-					if (!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
-							!json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
-							!json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
-							!json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
-						{
-							needsResave = true;
-						}
+    // Автодополнение/миграция конфига новыми полями: если их не было в json,
+    // пересохраняем, чтобы они появились в файле.
+    var needsResave = false;
+    if (!json.Contains("\"DailyRestartEnabled\"", StringComparison.Ordinal) ||
+        !json.Contains("\"DailyRestartLocalTime\"", StringComparison.Ordinal) ||
+        !json.Contains("\"DailyRestartMoscowTime\"", StringComparison.Ordinal) ||
+        !json.Contains("\"DailyRestartPreferMoscowTimeWhenLocalIsMoscow\"", StringComparison.Ordinal))
+        {
+        needsResave = true;
+        }
 
-						if (!json.Contains("\"GoogleSheetsEnabled\"", StringComparison.Ordinal) ||
-							!json.Contains("\"GoogleSpreadsheetId\"", StringComparison.Ordinal) ||
-							!json.Contains("\"GoogleSheetName\"", StringComparison.Ordinal) ||
-							!json.Contains("\"GoogleSheetsCredentialsPath\"", StringComparison.Ordinal) ||
-							!json.Contains("\"GoogleSheetDataStartRow\"", StringComparison.Ordinal))
-						{
-							needsResave = true;
-						}
+        if (!json.Contains("\"GoogleSheetsEnabled\"", StringComparison.Ordinal) ||
+        !json.Contains("\"GoogleSpreadsheetId\"", StringComparison.Ordinal) ||
+        !json.Contains("\"GoogleSheetName\"", StringComparison.Ordinal) ||
+        !json.Contains("\"GoogleSheetsCredentialsPath\"", StringComparison.Ordinal) ||
+        !json.Contains("\"GoogleSheetDataStartRow\"", StringComparison.Ordinal))
+        {
+        needsResave = true;
+        }
 
-               // Telegram settings moved to serverconfigs.json (ServerConfig)
+                // Telegram settings moved to serverconfigs.json (ServerConfig)
                 if (json.Contains("\"TelegramEnabled\"", StringComparison.Ordinal) ||
                     json.Contains("\"TelegramBotToken\"", StringComparison.Ordinal) ||
                     json.Contains("\"TelegramChatId\"", StringComparison.Ordinal))
@@ -495,28 +495,28 @@ namespace RPBot
                     needsResave = true;
                 }
 
-				// Если в старом config.json есть устаревшее поле RestartScriptPath,
-				// пересохраняем файл, чтобы удалить его из структуры.
-				if (json.Contains("\"RestartScriptPath\"", StringComparison.Ordinal))
-				{
-					needsResave = true;
-				}
+    // Если в старом config.json есть устаревшее поле RestartScriptPath,
+    // пересохраняем файл, чтобы удалить его из структуры.
+    if (json.Contains("\"RestartScriptPath\"", StringComparison.Ordinal))
+    {
+    needsResave = true;
+    }
 
-				// Миграция старого значения LogDirectory из "Settings/Logs" в "Logs",
-					// чтобы не создавать папку Settings/Logs рядом с EXE.
-					var legacyLogs = Path.Combine(SettingsFolderName, "Logs");
-					if (string.Equals(cfg.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase))
-					{
-						cfg.LogDirectory = "Logs";
-						needsResave = true;
-					}
+    // Миграция старого значения LogDirectory из "Settings/Logs" в "Logs",
+    // чтобы не создавать папку Settings/Logs рядом с EXE.
+    var legacyLogs = Path.Combine(SettingsFolderName, "Logs");
+    if (string.Equals(cfg.LogDirectory, legacyLogs, StringComparison.OrdinalIgnoreCase))
+    {
+        cfg.LogDirectory = "Logs";
+        needsResave = true;
+    }
 
-					if (needsResave)
-					{
-						cfg.Save(resolvedPath);
-					}
+    if (needsResave)
+    {
+        cfg.Save(resolvedPath);
+    }
 
-					return cfg;
+    return cfg;
                 }
                 catch (Exception ex)
                 {
@@ -527,43 +527,43 @@ namespace RPBot
                 }
             }
 
-			// Создать конфиг по умолчанию и сохранить
-			var config = new BotConfig();
-			Current = config;
+    // Создать конфиг по умолчанию и сохранить
+    var config = new BotConfig();
+    Current = config;
 
-			// Генерируем config.json с комментариями и полной структурой всех разделов,
-			// используя обычную сериализацию BotConfig, чтобы не терять поля.
-			var defaultDir = Path.GetDirectoryName(resolvedPath) ?? AppContext.BaseDirectory;
-			Directory.CreateDirectory(defaultDir);
+    // Генерируем config.json с комментариями и полной структурой всех разделов,
+    // используя обычную сериализацию BotConfig, чтобы не терять поля.
+    var defaultDir = Path.GetDirectoryName(resolvedPath) ?? AppContext.BaseDirectory;
+    Directory.CreateDirectory(defaultDir);
 
-			var serializerOptions = new JsonSerializerOptions
-			{
-				WriteIndented = true,
-				Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-			};
-			var jsonBody = JsonSerializer.Serialize(config, serializerOptions);
-			var header =
-				"// Основные настройки бота (config.json)\n" +
-				"// BotToken можно оставить пустым и задать через переменную окружения DISCORD_BOT_TOKEN.\n" +
-				"// GuildIDs — список ID серверов, на которых бот работает.\n" +
-				"// LogDirectory — папка для логов. По умолчанию 'Logs', резолвится в <DataRoot>/Logs.\n" +
-				"// BugReportDirectory — папка для отчётов об ошибках (bug_report_*.txt).\n" +
-				"// TextBlocksPath — файл с текстовыми блоками для команд.\n" +
-				"// NumbersDirectory — папка с картинками для бросков кубиков.\n" +
-				"// DailyRestart* — настройки ежедневной перезагрузки (локальное время и время по МСК).\n" +
-				"// DefaultSwearWords — базовый список слов для фильтра мата.\n";
-			var defaultJsonWithComments = header + Environment.NewLine + jsonBody + Environment.NewLine;
-			FileStream? defaultLockHandle = SafeJsonIO.AcquireLock(resolvedPath, retries: 5, retryDelayMs: 50);
-						try
-						{
-							SafeJsonIO.WriteAtomic(resolvedPath, defaultJsonWithComments);
-						}
-						finally
-						{
-							defaultLockHandle?.Dispose();
-						}
-						return config;
-			        }
+    var serializerOptions = new JsonSerializerOptions
+    {
+    WriteIndented = true,
+    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+    var jsonBody = JsonSerializer.Serialize(config, serializerOptions);
+    var header =
+    "// Основные настройки бота (config.json)\n" +
+    "// BotToken можно оставить пустым и задать через переменную окружения DISCORD_BOT_TOKEN.\n" +
+    "// GuildIDs — список ID серверов, на которых бот работает.\n" +
+    "// LogDirectory — папка для логов. По умолчанию 'Logs', резолвится в <DataRoot>/Logs.\n" +
+    "// BugReportDirectory — папка для отчётов об ошибках (bug_report_*.txt).\n" +
+    "// TextBlocksPath — файл с текстовыми блоками для команд.\n" +
+    "// NumbersDirectory — папка с картинками для бросков кубиков.\n" +
+    "// DailyRestart* — настройки ежедневной перезагрузки (локальное время и время по МСК).\n" +
+    "// DefaultSwearWords — базовый список слов для фильтра мата.\n";
+    var defaultJsonWithComments = header + Environment.NewLine + jsonBody + Environment.NewLine;
+    FileStream? defaultLockHandle = SafeJsonIO.AcquireLock(resolvedPath, retries: 5, retryDelayMs: 50);
+        try
+        {
+        SafeJsonIO.WriteAtomic(resolvedPath, defaultJsonWithComments);
+        }
+        finally
+        {
+        defaultLockHandle?.Dispose();
+        }
+        return config;
+            }
 
         // Сохранить конфигурацию в файл
         public void Save(string path = "config.json")

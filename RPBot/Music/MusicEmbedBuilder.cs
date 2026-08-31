@@ -156,7 +156,7 @@ namespace RPBot.Music
             if (master.Count == 0) return (0, 0);
             int historyCount = currentIndex < 0 ? 0 : currentIndex;           // треков до текущего
             int futureCount  = currentIndex < 0 ? master.Count
-                             : master.Count - currentIndex - 1;               // треков после текущего
+                            : master.Count - currentIndex - 1;               // треков после текущего
 
             // Страница 0 вмещает min(3, historyCount) + 1 + min(16, futureCount)
             int histExtra = Math.Max(0, historyCount - HistoryOnPage0);       // история сверх стр.0

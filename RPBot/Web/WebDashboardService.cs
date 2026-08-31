@@ -379,7 +379,7 @@ namespace RPBot.Web
                         break;
                     case "/api/activity":
                         var activity = SafeInvoke(_activityProvider) as IReadOnlyList<ActivityBucket>
-                                       ?? Array.Empty<ActivityBucket>();
+                                        ?? Array.Empty<ActivityBucket>();
                         await WriteJsonAsync(context.Response, activity.Select(b => new
                         {
                             Minute = b.Minute.ToString("HH:mm"),

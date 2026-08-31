@@ -77,10 +77,10 @@ namespace RPBot
         private ReconnectionService? _reconnectionService;
         private ConnectionPredictor? _connectionPredictor;
         private StatusNotifier? _statusNotifier;
-		private PointsService _pointsService;
-      private PointsUserIndex _pointsUserIndex;
-		private PredictionService? _predictionService;
-		private VoicePointsService? _voicePointsService;
+private PointsService _pointsService;
+        private PointsUserIndex _pointsUserIndex;
+private PredictionService? _predictionService;
+private VoicePointsService? _voicePointsService;
         private TelegramNotifier? _telegramNotifier;
         private EventAnnouncementStore? _eventAnnouncementStore;
         private EventOpsOrchestrator? _eventOpsOrchestrator;
@@ -113,10 +113,10 @@ private MusicStats? _musicStats;
         // Простая версия бота для /api/health (читается из атрибута сборки при наличии, иначе — константа)
         public const string BotVersion = "dev";
 
-		private Task? _backgroundMonitoringTask;
-		private CancellationTokenSource? _backgroundMonitoringCts;
-		private CancellationTokenSource? _dailyRestartCts;
-		private Task? _dailyRestartTask;
+private Task? _backgroundMonitoringTask;
+private CancellationTokenSource? _backgroundMonitoringCts;
+private CancellationTokenSource? _dailyRestartCts;
+private Task? _dailyRestartTask;
         private string _restartInitiator = "console";
 
         public static Action<string>? CommandLogSink { get; private set; }
@@ -262,7 +262,7 @@ private MusicStats? _musicStats;
                 await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
                 return;
             }
-         try
+        try
             {
                 _pointsUserIndex.UpsertFromUser(guildId, user);
                 _ = Task.Run(() => _pointsUserIndex.SaveAsync());
@@ -534,7 +534,7 @@ private MusicStats? _musicStats;
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(seconds));
-                  try
+                try
                     {
                         // Followups are real messages; delete them via channel REST fetch.
                         var ch = _client?.GetChannel(message.Channel.Id) as IMessageChannel;
@@ -751,10 +751,10 @@ private MusicStats? _musicStats;
         private string _serverConfigsPath;
         // Bwonk counts persisted between runs
         private Dictionary<ulong, int> _bwonkCounts = new Dictionary<ulong, int>();
-		private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "bwonks.json"));
+private string _bwonkFilePath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "bwonks.json"));
 
-		private EventNotificationService? _eventNotifications;
-		private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "event-notify.json"));
+private EventNotificationService? _eventNotifications;
+private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "event-notify.json"));
 
         // Слияние конфигурации сервера из статического словаря (дефолты)
         // и конфигурации из файла/памяти (переопределения).
@@ -832,37 +832,37 @@ private MusicStats? _musicStats;
             };
         }
 
-		// Сохранение/загрузка конфигураций серверов
-		private void SaveServerConfigs()
-		{
-			// Защита: не перезаписываем файл пустым словарём
-			if (_serverConfigs == null || _serverConfigs.Count == 0)
-			{
-				_ = LogError("[ServerConfig] SaveServerConfigs: словарь пуст — сохранение отменено.");
-				return;
-			}
-			try
-			{
-				var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
-				var resolved = BotConfig.ResolvePath(path);
-				var options = new JsonSerializerOptions
-				{
-					WriteIndented = true,
-					Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-				};
-				var json = JsonSerializer.Serialize(_serverConfigs, options);
-				// SafeJsonIO делает .tmp → File.Move(overwrite:true); межпроцессный
-				// лок и .bak-фолбэк для serverconfigs всё ещё держим локально (это было
-				// до появления SafeJsonIO и не сломано — только упрощаем запись).
-				SafeJsonIO.WriteAtomic(resolved, json);
-				if (File.Exists(resolved))
-					SafeJsonIO.WriteAtomic(resolved + ".bak", json);
-			}
-			catch (Exception ex)
-			{
-				_ = LogError($"[ServerConfig] Ошибка сохранения serverconfigs: {ex.Message}");
-			}
-		}
+// Сохранение/загрузка конфигураций серверов
+private void SaveServerConfigs()
+{
+    // Защита: не перезаписываем файл пустым словарём
+    if (_serverConfigs == null || _serverConfigs.Count == 0)
+    {
+    _ = LogError("[ServerConfig] SaveServerConfigs: словарь пуст — сохранение отменено.");
+    return;
+    }
+    try
+    {
+    var path = _serverConfigsPath ?? BotConfig.ResolvePath("serverconfigs.json");
+    var resolved = BotConfig.ResolvePath(path);
+    var options = new JsonSerializerOptions
+    {
+    WriteIndented = true,
+    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+    var json = JsonSerializer.Serialize(_serverConfigs, options);
+    // SafeJsonIO делает .tmp → File.Move(overwrite:true); межпроцессный
+    // лок и .bak-фолбэк для serverconfigs всё ещё держим локально (это было
+    // до появления SafeJsonIO и не сломано — только упрощаем запись).
+    SafeJsonIO.WriteAtomic(resolved, json);
+    if (File.Exists(resolved))
+    SafeJsonIO.WriteAtomic(resolved + ".bak", json);
+    }
+    catch (Exception ex)
+    {
+    _ = LogError($"[ServerConfig] Ошибка сохранения serverconfigs: {ex.Message}");
+    }
+}
 
         private void LoadServerConfigs()
         {
@@ -934,343 +934,343 @@ private MusicStats? _musicStats;
 
         public Program()
         {
-			Instance = this;
-			var configRelativePath = Path.Combine("Settings", "config.json");
-			var configResolvedPath = BotConfig.ResolvePath(configRelativePath);
-			_config = BotConfig.Load(configRelativePath);
+    Instance = this;
+    var configRelativePath = Path.Combine("Settings", "config.json");
+    var configResolvedPath = BotConfig.ResolvePath(configRelativePath);
+    _config = BotConfig.Load(configRelativePath);
 
-			// Автоматически мигрируем файлы данных из Settings/ в Data/ (один раз)
-			BotConfig.MigrateDataFiles();
+    // Автоматически мигрируем файлы данных из Settings/ в Data/ (один раз)
+    BotConfig.MigrateDataFiles();
 
-			// Критическая проверка: GuildIDs должен быть задан в config.json
-			if (_config.GuildIDs == null || _config.GuildIDs.Count == 0)
-			{
-				Console.ForegroundColor = ConsoleColor.Red;
-				Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
-				Console.WriteLine("Укажите список ID серверов, например:");
-				Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
-				Console.ResetColor();
-				throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
-			}
+    // Критическая проверка: GuildIDs должен быть задан в config.json
+    if (_config.GuildIDs == null || _config.GuildIDs.Count == 0)
+    {
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
+    Console.WriteLine("Укажите список ID серверов, например:");
+    Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
+    Console.ResetColor();
+    throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
+    }
 
-			_serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
+    _serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
             ServerConfigResolver = GetServerConfigInternal;
 
-			// Создаём файлы шаблонов памятки мастера для всех загруженных серверов при первом запуске
-			try
-			{
-			    if (_serverConfigs != null && _serverConfigs.Count > 0)
-			    {
-			        MasterGuideService.EnsureAllTemplates(_serverConfigs.Keys);
-			    }
-			    else if (_config?.GuildIDs != null)
-			    {
-			        MasterGuideService.EnsureAllTemplates(_config.GuildIDs);
-			    }
-			}
-			catch (Exception ex)
-			{
-			    BotLogger.Warn(LogCategory.System, $"[MasterGuide] Ошибка при массовом создании шаблонов: {ex.Message}");
-			}
+    // Создаём файлы шаблонов памятки мастера для всех загруженных серверов при первом запуске
+    try
+    {
+        if (_serverConfigs != null && _serverConfigs.Count > 0)
+        {
+            MasterGuideService.EnsureAllTemplates(_serverConfigs.Keys);
+        }
+        else if (_config?.GuildIDs != null)
+        {
+            MasterGuideService.EnsureAllTemplates(_config.GuildIDs);
+        }
+    }
+    catch (Exception ex)
+    {
+        BotLogger.Warn(LogCategory.System, $"[MasterGuide] Ошибка при массовом создании шаблонов: {ex.Message}");
+    }
 
-			// Загружаем историю отправленных памяток (для кулдауна между перезагрузками)
-			LoadMasterGuideHistory();
+    // Загружаем историю отправленных памяток (для кулдауна между перезагрузками)
+    LoadMasterGuideHistory();
 
-			// Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
-			try
-			{
-				Console.WriteLine($"Config: {configResolvedPath}");
-				Console.WriteLine($"Config BotToken present: {!string.IsNullOrWhiteSpace(_config?.BotToken)}");
-			}
-			catch { }
+    // Диагностика: куда именно мы загрузили конфиг и видим ли токен (не печатаем сам токен)
+    try
+    {
+    Console.WriteLine($"Config: {configResolvedPath}");
+    Console.WriteLine($"Config BotToken present: {!string.IsNullOrWhiteSpace(_config?.BotToken)}");
+    }
+    catch { }
 
             _client = CreateDiscordClient();
             _commandService = new CommandService();
 
-			// Load persisted DM event-notification subscriptions BEFORE EventAnnouncer,
-			// иначе _eventNotifications остаётся null и AnnounceCreatedInternalAsync
-			// падает с NRE на строке GetActiveSubscribers(...).
-			try
-			{
-				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
-			}
-			catch
-			{
-				_eventNotifications = new EventNotificationService(_eventNotificationsPath);
-			}
+    // Load persisted DM event-notification subscriptions BEFORE EventAnnouncer,
+    // иначе _eventNotifications остаётся null и AnnounceCreatedInternalAsync
+    // падает с NRE на строке GetActiveSubscribers(...).
+    try
+    {
+    _eventNotifications = new EventNotificationService(_eventNotificationsPath);
+    }
+    catch
+    {
+    _eventNotifications = new EventNotificationService(_eventNotificationsPath);
+    }
 
-			// ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
-			_reconnectionService = new ReconnectionService(_client!) { LogSink = ServiceLogSink };
-			_connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
-			_statusNotifier = new StatusNotifier(_client!, GetServerConfigInternal) { LogSink = ServiceLogSink };
-          _telegramNotifier = new TelegramNotifier(guildId =>
+    // ИНИЦИАЛИЗАЦИЯ НОВЫХ СЕРВИСОВ
+    _reconnectionService = new ReconnectionService(_client!) { LogSink = ServiceLogSink };
+    _connectionPredictor = new ConnectionPredictor(_reconnectionService, BotConfig.Current?.Prediction);
+    _statusNotifier = new StatusNotifier(_client!, GetServerConfigInternal) { LogSink = ServiceLogSink };
+        _telegramNotifier = new TelegramNotifier(guildId =>
             {
                 return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
             });
-			_eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.GetDataDirectory(), "event_announcements.json"));
-			var eventOpsRenderer = new EventOpsRenderer();
-			_eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
-						_eventOpsRemigrator = new RPBot.EventOps.EventOpsRemigrationService(_eventAnnouncementStore);
-			_eventAnnouncer = new EventAnnouncer(
-				() => _client!,
-				() => _serverConfigs!,
-				_telegramNotifier,
-				_eventAnnouncementStore,
-				_eventNotifications!);
-			_eventOpsOrchestrator.OnCreatedAsync = e => _eventAnnouncer!.AnnounceCreatedAsync(e);
-			_eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(default, current);
-			_eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
-			_eventOpsOrchestrator.OnCancelledAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "cancelled");
-			_eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
+    _eventAnnouncementStore = new EventAnnouncementStore(Path.Combine(BotConfig.GetDataDirectory(), "event_announcements.json"));
+    var eventOpsRenderer = new EventOpsRenderer();
+    _eventOpsOrchestrator = new EventOpsOrchestrator(eventOpsRenderer, _eventAnnouncementStore);
+        _eventOpsRemigrator = new RPBot.EventOps.EventOpsRemigrationService(_eventAnnouncementStore);
+    _eventAnnouncer = new EventAnnouncer(
+    () => _client!,
+    () => _serverConfigs!,
+    _telegramNotifier,
+    _eventAnnouncementStore,
+    _eventNotifications!);
+    _eventOpsOrchestrator.OnCreatedAsync = e => _eventAnnouncer!.AnnounceCreatedAsync(e);
+    _eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(default, current);
+    _eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
+    _eventOpsOrchestrator.OnCancelledAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "cancelled");
+    _eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
 
-			_webDashboard = new WebDashboardService(
-				host: "127.0.0.1",
-				port: 5057,
-				healthProvider: () => new
-				{
-					Connected = _client?.ConnectionState == ConnectionState.Connected,
-					Guilds = _client?.Guilds?.Count ?? 0,
-					StartupType = GetStartupTypeDisplay(),
-					UtcNow = DateTimeOffset.UtcNow,
-					Version = BotVersion,
-					Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
-				},
-				serverConfigsProvider: () => _serverConfigs!,
-				sessionsProvider: () =>
-								{
-									var client = _client;
-									return GameSessionCommands._sessions
-										.ToDictionary(
-										g => g.Key,
-										g =>
-										{
-											SocketGuild? sguild = null;
-											try { sguild = client?.GetGuild(g.Key); } catch { }
-											var guildName = sguild?.Name;
-											// Считаем "сбор бросков активен" по двум признакам:
-											// 1) в GameSession включён TrackRolls (мастер не отключал);
-											// 2) в QueueModule для этой гильдии есть живая очередь (IsActive=true, MaxRolls>0).
-											// Иначе флаг TrackRolls=true на сессии может висеть без реального сбора.
-											bool queueActive = false;
-											int queueRollsCount = 0;
-											try
-											{
-												if (QueueModule._guildQueues != null
-												    && QueueModule._guildQueues.TryGetValue(g.Key, out var q)
-												    && q != null)
-												{
-													queueActive = q.IsActive && q.MaxRolls > 0;
-													if (q.UserRolls != null)
-														queueRollsCount = q.UserRolls.Sum(kv => kv.Value?.Count ?? 0);
-												}
-											}
-											catch { }
-							return g.Value.Values.Select(s => new
-							{
-								s.SessionId,
-								GuildId = g.Key,
-								GuildName = guildName,
-								Name = s.GameName,
-								Status = s.IsStopped
-									? "завершена"
-									: s.IsPaused
-										? "на паузе"
-										: "активна",
-								// ✅ Bug 2/4: каждый переключатель привязан к КОНКРЕТНОЙ сессии.
-								// Раньше здесь считали «любая сессия в гильдии собирает броски»
-								// и отдавали одну булку на всю гильдию — дашборд менял флаг
-								// для всех сессий при переключении в одной. Теперь TrackRolls
-								// живёт в GameSession, и здесь мы просто прокидываем его.
-								RollCollecting = !s.IsStopped && !s.IsPaused && s.TrackRolls,
-								// ✅ Bug 2: счётчик бросков — строго по конкретной сессии
-								// (session.Rolls). Очередь не суммируется сюда, чтобы не
-								// «размазывать» счётчик по сессиям.
-								RollsCount = s.Rolls?.Count ?? 0,
-								CreatedAt = s.StartTime,
-								LeaderId = s.MasterId,
-								MasterName = s.MasterName,
-							}).ToList();
-						});
-				},
-								eventsProvider: () =>
-								{
-									if (_eventAnnouncementStore == null) return "event announcements not ready";
-									try
-									{
-										var entries = _eventAnnouncementStore.GetEntriesSnapshot();
-										var client = _client;
-										return entries.Select(e =>
-										{
-											SocketGuild? g = null;
-											try { g = client?.GetGuild(e.GuildId); } catch { }
-											// Локализованная подпись статуса: берём из LastUpdatedMark («▶️ Событие началось: 12.08.2026 14:00»),
-											// оставляя только первую часть строки (смайл + статус) — без даты, она выводится отдельно.
-											string? statusLabel = null;
-											if (!string.IsNullOrEmpty(e.LastUpdatedMark))
-											{
-												var mark = e.LastUpdatedMark!;
-												var colon = mark.IndexOf(':');
-												statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
-											}
-											string? whenMsk = null;
-											try
-											{
-												if (e.LastStartTimeUtc.HasValue)
-													whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
-											} catch { }
-											return new
-											{
-											    GuildId = e.GuildId,
-											    GuildName = g?.Name,
-											    EventId = e.EventId,
-											    Name = e.LastName ?? "(без названия)",
-											    Description = e.LastDescription,
-											    StartsAtMsk = whenMsk,
-											    Location = e.LastLocation,
-											    ChannelId = e.LastChannelId,
-											    CoverImageUrl = e.LastCoverImageUrl,
-											    StatusLabel = statusLabel,
-											    LastUpdatedAtUtc = e.LastUpdatedAtUtc,
-											};
-										}).ToList();
-									}
-									catch (Exception ex) { return ex.Message; }
-								},
-				clientProvider: () => _client,
-				rollsTodayProvider: () => _rollsTodayCount,
-				activeSessionsProvider: () => GameSessionCommands._sessions.Sum(g => g.Value.Count(s => !s.Value.IsPaused)),
-				chatMessagesTodayProvider: () => _chatMessagesTodayCount,
-				usersInVoiceProvider: () => _usersInVoiceCount,
-				activityProvider: () => GetActivityBuckets(),
-				versionProvider: () => BotVersion,
-				uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc,
-				systemsProvider: () =>
-				{
-					var checks = new List<object>();
-					try { checks.Add(new { Name = "Discord Gateway",  Healthy = _client?.ConnectionState == Discord.ConnectionState.Connected, Kind = (_client?.ConnectionState == Discord.ConnectionState.Connected) ? "ok" : "err", Message = _client?.ConnectionState == Discord.ConnectionState.Connected ? $"Подключено ({_client.Latency} мс)" : $"Не подключено ({_client?.ConnectionState})" }); } catch { }
-					try { var guildsCount = _client?.Guilds?.Count ?? 0; checks.Add(new { Name = "Серверы Discord", Healthy = guildsCount > 0, Kind = guildsCount > 0 ? "ok" : "err", Message = guildsCount > 0 ? $"Доступно: {guildsCount}" : "Нет доступных серверов" }); } catch { }
-					try { var cfgN = _serverConfigs?.Count ?? 0; checks.Add(new { Name = "Конфигурация", Healthy = cfgN > 0, Kind = cfgN > 0 ? "ok" : "err", Message = cfgN > 0 ? $"Настроено: {cfgN}" : "Нет настроенных серверов" }); } catch { }
-					try
-					{
-						var predEnabled = _serverConfigs?.Values?.Count(c => c.PredictionsEnabled) ?? 0;
-						checks.Add(new { Name = "Прогнозы", Healthy = predEnabled > 0, Kind = predEnabled > 0 ? "ok" : "mute", Message = predEnabled > 0 ? $"Включены на {predEnabled} серверах" : "Не включены ни на одном сервере" });
-					}
-					catch { }
-					try
-					{
-						if (_telegramNotifier != null)
-						{
-							var probes = new List<string>();
-							foreach (var kvp in _serverConfigs ?? new Dictionary<ulong, ServerConfig>())
-							{
-								if (!kvp.Value.TelegramEnabled) continue;
-													var r = _telegramNotifier.ProbeAsync(kvp.Key).GetAwaiter().GetResult();
-								probes.Add($"{kvp.Key}: {(r.Success ? "OK" : r.Message)}");
-							}
-												var ok = probes.Count > 0 && probes.All(s => s.EndsWith("OK"));
-							checks.Add(new { Name = "Telegram", Healthy = ok, Kind = ok ? "ok" : (probes.Count == 0 ? "mute" : "err"), Message = probes.Count > 0 ? string.Join("\n", probes) : "Telegram-интеграция выключена на всех серверах" });
-						}
-						else
-						{
-							checks.Add(new { Name = "Telegram", Healthy = false, Kind = "mute", Message = "Telegram-нотификатор отключён в конфиге" });
-						}
-					}
-					catch (Exception ex) { checks.Add(new { Name = "Telegram", Healthy = false, Kind = "err", Message = ex.Message }); }
-					try { checks.Add(new { Name = "Голосовые поинты", Healthy = _voicePointsService != null, Kind = (_voicePointsService != null) ? "ok" : "err", Message = _voicePointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
-					try { checks.Add(new { Name = "Хранилище поинтов", Healthy = _pointsService != null, Kind = (_pointsService != null) ? "ok" : "err", Message = _pointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
-					try
-					{
-						if (_googleSheetsService == null)
-						{
-							// google_credentials.json не задан — это сознательное выключение,
-							// а не рабочее состояние сервиса. Healthy=false, Kind=mute.
-							checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "mute", Message = "Отключено (google_credentials.json не задан)" });
-						}
-						else
-						{
-							var probe = _googleSheetsService.ProbeAsync().GetAwaiter().GetResult();
-							checks.Add(new { Name = "Google Sheets", Healthy = probe.Success, Kind = probe.Success ? "ok" : "err", Message = probe.Message });
-						}
-					}
-					catch (Exception ex) { checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "err", Message = ex.Message }); }
-					try
-					{
-						if (_lavalinkService == null)
-						{
-							checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "mute", Message = "Отключено (Music.Enabled=false)" });
-						}
-						else
-						{
-							// LavalinkService.ProbeAsync() дёргает /version по HTTP с таймаутом 3с —
-							// гораздо надёжнее, чем Process.HasExited (процесс может быть жив,
-							// но HTTP-сервер ещё не поднялся, или упасть сразу после старта).
-							var probeErr = _lavalinkService.ProbeAsync().GetAwaiter().GetResult();
-							var procOk = string.IsNullOrEmpty(probeErr);
-							checks.Add(new { Name = "Музыка (Lavalink)", Healthy = procOk, Kind = procOk ? "ok" : "err", Message = procOk ? $"Отвечает на {_config!.Music.Host}:{_config!.Music.Port}/version" : $"Не отвечает: {probeErr}" });
-						}
-					}
-					catch (Exception ex) { checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "err", Message = ex.Message }); }
-					try
-					{
-						var loaded = _textBlocks?.Count ?? 0;
-						// Пустой файл — не «работает», а «нет шаблонов». Нейтральный статус info
-						// показывает это без ложной зелёной галочки.
-						var kind = loaded > 0 ? "ok" : "info";
-						checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = loaded > 0, Kind = kind, Message = loaded > 0 ? $"Загружено {loaded} шаблонов" : "Файл отсутствует — шаблоны пустые (не критично)" });
-					}
-					catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
-					return checks;
-				});
-			_webDashboard.Start();
+    _webDashboard = new WebDashboardService(
+    host: "127.0.0.1",
+    port: 5057,
+    healthProvider: () => new
+    {
+    Connected = _client?.ConnectionState == ConnectionState.Connected,
+    Guilds = _client?.Guilds?.Count ?? 0,
+    StartupType = GetStartupTypeDisplay(),
+    UtcNow = DateTimeOffset.UtcNow,
+    Version = BotVersion,
+    Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
+    },
+    serverConfigsProvider: () => _serverConfigs!,
+    sessionsProvider: () =>
+        {
+        var client = _client;
+        return GameSessionCommands._sessions
+        .ToDictionary(
+        g => g.Key,
+        g =>
+        {
+            SocketGuild? sguild = null;
+            try { sguild = client?.GetGuild(g.Key); } catch { }
+            var guildName = sguild?.Name;
+            // Считаем "сбор бросков активен" по двум признакам:
+            // 1) в GameSession включён TrackRolls (мастер не отключал);
+            // 2) в QueueModule для этой гильдии есть живая очередь (IsActive=true, MaxRolls>0).
+            // Иначе флаг TrackRolls=true на сессии может висеть без реального сбора.
+            bool queueActive = false;
+            int queueRollsCount = 0;
+            try
+            {
+            if (QueueModule._guildQueues != null
+                && QueueModule._guildQueues.TryGetValue(g.Key, out var q)
+                && q != null)
+            {
+            queueActive = q.IsActive && q.MaxRolls > 0;
+            if (q.UserRolls != null)
+                queueRollsCount = q.UserRolls.Sum(kv => kv.Value?.Count ?? 0);
+            }
+            }
+            catch { }
+        return g.Value.Values.Select(s => new
+        {
+        s.SessionId,
+        GuildId = g.Key,
+        GuildName = guildName,
+        Name = s.GameName,
+        Status = s.IsStopped
+        ? "завершена"
+        : s.IsPaused
+        ? "на паузе"
+        : "активна",
+        // ✅ Bug 2/4: каждый переключатель привязан к КОНКРЕТНОЙ сессии.
+        // Раньше здесь считали «любая сессия в гильдии собирает броски»
+        // и отдавали одну булку на всю гильдию — дашборд менял флаг
+        // для всех сессий при переключении в одной. Теперь TrackRolls
+        // живёт в GameSession, и здесь мы просто прокидываем его.
+        RollCollecting = !s.IsStopped && !s.IsPaused && s.TrackRolls,
+        // ✅ Bug 2: счётчик бросков — строго по конкретной сессии
+        // (session.Rolls). Очередь не суммируется сюда, чтобы не
+        // «размазывать» счётчик по сессиям.
+        RollsCount = s.Rolls?.Count ?? 0,
+        CreatedAt = s.StartTime,
+        LeaderId = s.MasterId,
+        MasterName = s.MasterName,
+        }).ToList();
+        });
+    },
+        eventsProvider: () =>
+        {
+        if (_eventAnnouncementStore == null) return "event announcements not ready";
+        try
+        {
+        var entries = _eventAnnouncementStore.GetEntriesSnapshot();
+        var client = _client;
+        return entries.Select(e =>
+        {
+            SocketGuild? g = null;
+            try { g = client?.GetGuild(e.GuildId); } catch { }
+            // Локализованная подпись статуса: берём из LastUpdatedMark («▶️ Событие началось: 12.08.2026 14:00»),
+            // оставляя только первую часть строки (смайл + статус) — без даты, она выводится отдельно.
+            string? statusLabel = null;
+            if (!string.IsNullOrEmpty(e.LastUpdatedMark))
+            {
+            var mark = e.LastUpdatedMark!;
+            var colon = mark.IndexOf(':');
+            statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
+            }
+            string? whenMsk = null;
+            try
+            {
+            if (e.LastStartTimeUtc.HasValue)
+            whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+            } catch { }
+            return new
+            {
+                GuildId = e.GuildId,
+                GuildName = g?.Name,
+                EventId = e.EventId,
+                Name = e.LastName ?? "(без названия)",
+                Description = e.LastDescription,
+                StartsAtMsk = whenMsk,
+                Location = e.LastLocation,
+                ChannelId = e.LastChannelId,
+                CoverImageUrl = e.LastCoverImageUrl,
+                StatusLabel = statusLabel,
+                LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+            };
+        }).ToList();
+        }
+        catch (Exception ex) { return ex.Message; }
+        },
+    clientProvider: () => _client,
+    rollsTodayProvider: () => _rollsTodayCount,
+    activeSessionsProvider: () => GameSessionCommands._sessions.Sum(g => g.Value.Count(s => !s.Value.IsPaused)),
+    chatMessagesTodayProvider: () => _chatMessagesTodayCount,
+    usersInVoiceProvider: () => _usersInVoiceCount,
+    activityProvider: () => GetActivityBuckets(),
+    versionProvider: () => BotVersion,
+    uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc,
+    systemsProvider: () =>
+    {
+    var checks = new List<object>();
+    try { checks.Add(new { Name = "Discord Gateway",  Healthy = _client?.ConnectionState == Discord.ConnectionState.Connected, Kind = (_client?.ConnectionState == Discord.ConnectionState.Connected) ? "ok" : "err", Message = _client?.ConnectionState == Discord.ConnectionState.Connected ? $"Подключено ({_client.Latency} мс)" : $"Не подключено ({_client?.ConnectionState})" }); } catch { }
+    try { var guildsCount = _client?.Guilds?.Count ?? 0; checks.Add(new { Name = "Серверы Discord", Healthy = guildsCount > 0, Kind = guildsCount > 0 ? "ok" : "err", Message = guildsCount > 0 ? $"Доступно: {guildsCount}" : "Нет доступных серверов" }); } catch { }
+    try { var cfgN = _serverConfigs?.Count ?? 0; checks.Add(new { Name = "Конфигурация", Healthy = cfgN > 0, Kind = cfgN > 0 ? "ok" : "err", Message = cfgN > 0 ? $"Настроено: {cfgN}" : "Нет настроенных серверов" }); } catch { }
+    try
+    {
+        var predEnabled = _serverConfigs?.Values?.Count(c => c.PredictionsEnabled) ?? 0;
+        checks.Add(new { Name = "Прогнозы", Healthy = predEnabled > 0, Kind = predEnabled > 0 ? "ok" : "mute", Message = predEnabled > 0 ? $"Включены на {predEnabled} серверах" : "Не включены ни на одном сервере" });
+    }
+    catch { }
+    try
+    {
+        if (_telegramNotifier != null)
+        {
+        var probes = new List<string>();
+        foreach (var kvp in _serverConfigs ?? new Dictionary<ulong, ServerConfig>())
+        {
+        if (!kvp.Value.TelegramEnabled) continue;
+            var r = _telegramNotifier.ProbeAsync(kvp.Key).GetAwaiter().GetResult();
+        probes.Add($"{kvp.Key}: {(r.Success ? "OK" : r.Message)}");
+        }
+            var ok = probes.Count > 0 && probes.All(s => s.EndsWith("OK"));
+        checks.Add(new { Name = "Telegram", Healthy = ok, Kind = ok ? "ok" : (probes.Count == 0 ? "mute" : "err"), Message = probes.Count > 0 ? string.Join("\n", probes) : "Telegram-интеграция выключена на всех серверах" });
+        }
+        else
+        {
+        checks.Add(new { Name = "Telegram", Healthy = false, Kind = "mute", Message = "Telegram-нотификатор отключён в конфиге" });
+        }
+    }
+    catch (Exception ex) { checks.Add(new { Name = "Telegram", Healthy = false, Kind = "err", Message = ex.Message }); }
+    try { checks.Add(new { Name = "Голосовые поинты", Healthy = _voicePointsService != null, Kind = (_voicePointsService != null) ? "ok" : "err", Message = _voicePointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+    try { checks.Add(new { Name = "Хранилище поинтов", Healthy = _pointsService != null, Kind = (_pointsService != null) ? "ok" : "err", Message = _pointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+    try
+    {
+        if (_googleSheetsService == null)
+        {
+        // google_credentials.json не задан — это сознательное выключение,
+        // а не рабочее состояние сервиса. Healthy=false, Kind=mute.
+        checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "mute", Message = "Отключено (google_credentials.json не задан)" });
+        }
+        else
+        {
+        var probe = _googleSheetsService.ProbeAsync().GetAwaiter().GetResult();
+        checks.Add(new { Name = "Google Sheets", Healthy = probe.Success, Kind = probe.Success ? "ok" : "err", Message = probe.Message });
+        }
+    }
+    catch (Exception ex) { checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "err", Message = ex.Message }); }
+    try
+    {
+        if (_lavalinkService == null)
+        {
+        checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "mute", Message = "Отключено (Music.Enabled=false)" });
+        }
+        else
+        {
+        // LavalinkService.ProbeAsync() дёргает /version по HTTP с таймаутом 3с —
+        // гораздо надёжнее, чем Process.HasExited (процесс может быть жив,
+        // но HTTP-сервер ещё не поднялся, или упасть сразу после старта).
+        var probeErr = _lavalinkService.ProbeAsync().GetAwaiter().GetResult();
+        var procOk = string.IsNullOrEmpty(probeErr);
+        checks.Add(new { Name = "Музыка (Lavalink)", Healthy = procOk, Kind = procOk ? "ok" : "err", Message = procOk ? $"Отвечает на {_config!.Music.Host}:{_config!.Music.Port}/version" : $"Не отвечает: {probeErr}" });
+        }
+    }
+    catch (Exception ex) { checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "err", Message = ex.Message }); }
+    try
+    {
+        var loaded = _textBlocks?.Count ?? 0;
+        // Пустой файл — не «работает», а «нет шаблонов». Нейтральный статус info
+        // показывает это без ложной зелёной галочки.
+        var kind = loaded > 0 ? "ok" : "info";
+        checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = loaded > 0, Kind = kind, Message = loaded > 0 ? $"Загружено {loaded} шаблонов" : "Файл отсутствует — шаблоны пустые (не критично)" });
+    }
+    catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
+    return checks;
+    });
+    _webDashboard.Start();
 
-			_googleSheetsService = GoogleSheetsService.TryCreate(_config!);
-			if (_googleSheetsService != null)
-				_googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
+    _googleSheetsService = GoogleSheetsService.TryCreate(_config!);
+    if (_googleSheetsService != null)
+    _googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
 
-			// Сервисы для костяшек
-			var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points.json"));
-			_pointsService = new PointsService(pointsPath);
-			// Загрузка балансов костяшек из файла
-			_pointsService.LoadAsync().GetAwaiter().GetResult();
+    // Сервисы для костяшек
+    var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points.json"));
+    _pointsService = new PointsService(pointsPath);
+    // Загрузка балансов костяшек из файла
+    _pointsService.LoadAsync().GetAwaiter().GetResult();
 
-			var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points_users.json"));
-			_pointsUserIndex = new PointsUserIndex(pointsUsersPath);
-			_pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
+    var pointsUsersPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points_users.json"));
+    _pointsUserIndex = new PointsUserIndex(pointsUsersPath);
+    _pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
 
-			var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
-			_predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
-						// ✅ R6 fix: подписываемся на resolve/cancel прогноза, чтобы почистить _pendingBetUi
-						// для затронутой гильдии (удаляем «висящие» кнопки «Продолжить»).
-						if (_predictionService != null)
-						{
-							_predictionService.PredictionResolved += OnPredictionResolvedForUi;
-							_predictionService.PredictionCancelled += OnPredictionCancelledForUi;
-												// ✅ Round 7-C6: убрали преждевременный LoadStateOnStartupAsync.
-												// Раньше он звался здесь ДО BootstrapFirstRunSettingsAsync и
-												// Race-конкурировал с SaveStateAsync. Теперь вся загрузка
-												// проходит ОДИН раз, синхронно, в ЭТАП 3/4 — через
-												// _predictionService.RunStage3RestoreAsync().
-											}
-												// ✅ Round 7-C8: подключаем мост из GameSession → PredictionService,
-												// чтобы cleanup осиротевших сессий мог отменить связанный
-												// с событием прогноз.
-												GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
-									_voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
+    var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
+    _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+        // ✅ R6 fix: подписываемся на resolve/cancel прогноза, чтобы почистить _pendingBetUi
+        // для затронутой гильдии (удаляем «висящие» кнопки «Продолжить»).
+        if (_predictionService != null)
+        {
+        _predictionService.PredictionResolved += OnPredictionResolvedForUi;
+        _predictionService.PredictionCancelled += OnPredictionCancelledForUi;
+            // ✅ Round 7-C6: убрали преждевременный LoadStateOnStartupAsync.
+            // Раньше он звался здесь ДО BootstrapFirstRunSettingsAsync и
+            // Race-конкурировал с SaveStateAsync. Теперь вся загрузка
+            // проходит ОДИН раз, синхронно, в ЭТАП 3/4 — через
+            // _predictionService.RunStage3RestoreAsync().
+            }
+            // ✅ Round 7-C8: подключаем мост из GameSession → PredictionService,
+            // чтобы cleanup осиротевших сессий мог отменить связанный
+            // с событием прогноз.
+            GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
+        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
 
-			// Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
-			if (_config.Music.Enabled)
-			{
-				_lavalinkService = new LavalinkService(() => _client!, _config.Music);
-					_lavalinkService.LogSink = msg => BotLogger.Info(LogCategory.Music, msg);
-					_playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
-						_ = _playlistStore.LoadAsync();
-						_musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
-						_musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
-						_musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats);
-				}
+    // Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
+    if (_config.Music.Enabled)
+    {
+    _lavalinkService = new LavalinkService(() => _client!, _config.Music);
+    _lavalinkService.LogSink = msg => BotLogger.Info(LogCategory.Music, msg);
+    _playlistStore = new MusicPlaylistStore(AppContext.BaseDirectory);
+        _ = _playlistStore.LoadAsync();
+        _musicQueueStore = new MusicQueueStore(AppContext.BaseDirectory);
+        _musicStats = MusicStats.LoadAsync(AppContext.BaseDirectory).GetAwaiter().GetResult();
+        _musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats);
+    }
 
-			// ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
+    // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
             _reconnectionService.OnReconnectStarted += OnReconnectStarted;
             _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -1278,42 +1278,42 @@ private MusicStats? _musicStats;
             _reconnectionService.OnFullRestartRequested += OnFullRestartRequested;
             _connectionPredictor.OnPredictionMade += OnPredictionMade;
 
-			var serviceCollection = new ServiceCollection()
-				.AddSingleton(_client)
-				.AddSingleton(_commandService)
-				.AddSingleton(_reconnectionService)
-				.AddSingleton(_connectionPredictor)
-				.AddSingleton(_statusNotifier)
-				.AddSingleton(_pointsService)
-				.AddSingleton(_pointsUserIndex)
-				.AddSingleton(_predictionService!)
-				.AddSingleton(_voicePointsService)
-				.AddSingleton<QueueModule>()
-				.AddSingleton<InfoCommands>()
-				.AddSingleton<RollDiceCommands>()
-				.AddSingleton<GameSessionCommands>()
-				.AddSingleton<ModerationCommands>();
+    var serviceCollection = new ServiceCollection()
+    .AddSingleton(_client)
+    .AddSingleton(_commandService)
+    .AddSingleton(_reconnectionService)
+    .AddSingleton(_connectionPredictor)
+    .AddSingleton(_statusNotifier)
+    .AddSingleton(_pointsService)
+    .AddSingleton(_pointsUserIndex)
+    .AddSingleton(_predictionService!)
+    .AddSingleton(_voicePointsService)
+    .AddSingleton<QueueModule>()
+    .AddSingleton<InfoCommands>()
+    .AddSingleton<RollDiceCommands>()
+    .AddSingleton<GameSessionCommands>()
+    .AddSingleton<ModerationCommands>();
 
-			if (_googleSheetsService != null)
-				serviceCollection.AddSingleton(_googleSheetsService);
+    if (_googleSheetsService != null)
+    serviceCollection.AddSingleton(_googleSheetsService);
 
-			_services = serviceCollection.BuildServiceProvider();
+    _services = serviceCollection.BuildServiceProvider();
             // Load persisted bwonk counts
             try
             {
                 _bwonkCounts = LoadBwonkCounts();
             }
-			catch { _bwonkCounts = new Dictionary<ulong, int>(); }
+    catch { _bwonkCounts = new Dictionary<ulong, int>(); }
         }
 
         private DiscordSocketClient CreateDiscordClient()
         {
             var config = new DiscordSocketConfig
             {
-			GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
-                                   GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
-                                   GatewayIntents.GuildScheduledEvents | GatewayIntents.DirectMessages |
-                                   GatewayIntents.GuildVoiceStates | GatewayIntents.GuildPresences,
+    GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers |
+                                    GatewayIntents.GuildMessages | GatewayIntents.MessageContent |
+                                    GatewayIntents.GuildScheduledEvents | GatewayIntents.DirectMessages |
+                                    GatewayIntents.GuildVoiceStates | GatewayIntents.GuildPresences,
                 ConnectionTimeout = _config.Connection.ConnectionTimeout,
                 MessageCacheSize = _config.Connection.MessageCacheSize,
                 LogLevel = LogSeverity.Info,
@@ -1347,383 +1347,383 @@ private MusicStats? _musicStats;
         public StartupType NextStartupType => _nextStartupType;
         public string? NextStartupReason => _nextStartupReason;
 
-		public Task RestartAsync()
-				{
-					// Перезапуск по команде из консоли
-					return RestartWithReasonAsync(
-						initiator: "console",
-						reason: "Перезапуск по команде из консоли");
-				}
+public Task RestartAsync()
+    {
+    // Перезапуск по команде из консоли
+    return RestartWithReasonAsync(
+        initiator: "console",
+        reason: "Перезапуск по команде из консоли");
+    }
 
-				/// <summary>
-				/// ✅ Bug 6 / Round 7-A2: помечает «следующее отключение — это рестарт»,
-				/// чтобы PredictionService.OnClientDisconnected отличил его от «настоящего» offline.
-				/// Файл удаляется в PredictionService при первом успешном Ready после рестарта.
-				/// </summary>
-				public static void WriteRestartPendingFlag()
-				{
-					try
-					{
-						var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
-						var dir = Path.GetDirectoryName(path);
-						if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-						File.WriteAllText(path, DateTimeOffset.UtcNow.ToString("O"));
-					}
-					catch
-					{
-						// Не критично: если флаг не записан — следующий Disconnected будет «offline».
-					}
-				}
+    /// <summary>
+    /// ✅ Bug 6 / Round 7-A2: помечает «следующее отключение — это рестарт»,
+    /// чтобы PredictionService.OnClientDisconnected отличил его от «настоящего» offline.
+    /// Файл удаляется в PredictionService при первом успешном Ready после рестарта.
+    /// </summary>
+    public static void WriteRestartPendingFlag()
+    {
+    try
+    {
+        var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllText(path, DateTimeOffset.UtcNow.ToString("O"));
+    }
+    catch
+    {
+        // Не критично: если флаг не записан — следующий Disconnected будет «offline».
+    }
+    }
 
-				/// <summary>
-				/// Снимает флаг «идёт рестарт» после успешного Ready.
-				/// Вызывается из PredictionService.
-				/// </summary>
-				public static void ClearRestartPendingFlag()
-				{
-					try
-					{
-						var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
-						if (File.Exists(path)) File.Delete(path);
-					}
-					catch { /* ignore */ }
-				}
+    /// <summary>
+    /// Снимает флаг «идёт рестарт» после успешного Ready.
+    /// Вызывается из PredictionService.
+    /// </summary>
+    public static void ClearRestartPendingFlag()
+    {
+    try
+    {
+        var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+        if (File.Exists(path)) File.Delete(path);
+    }
+    catch { /* ignore */ }
+    }
 
-						private async Task RestartWithReasonAsync(string initiator, string reason)
-						{
-							// Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
-							if (_shouldExit)
-								return;
+        private async Task RestartWithReasonAsync(string initiator, string reason)
+        {
+        // Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
+        if (_shouldExit)
+        return;
 
-							// Останавливаем планировщик, чтобы он не сработал повторно во время выключения
-							StopDailyRestartScheduler();
+        // Останавливаем планировщик, чтобы он не сработал повторно во время выключения
+        StopDailyRestartScheduler();
 
-							// ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
-							WriteRestartPendingFlag();
+        // ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
+        WriteRestartPendingFlag();
 
-							// ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
-							// пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
-							// HttpClient и сообщение в канал не уйдёт. kind="restart" даёт текст
-							// «Бот ушёл на перезагрузку» (а не «…завершил работу»).
-							try
-							{
-								if (_predictionService != null)
-									await _predictionService.AnnounceShutdownAsync("restart").ConfigureAwait(false);
-							}
-							catch { }
+        // ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
+        // пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
+        // HttpClient и сообщение в канал не уйдёт. kind="restart" даёт текст
+        // «Бот ушёл на перезагрузку» (а не «…завершил работу»).
+        try
+        {
+        if (_predictionService != null)
+        await _predictionService.AnnounceShutdownAsync("restart").ConfigureAwait(false);
+        }
+        catch { }
 
-							// Signal UI and background tasks to prepare for restart
-			_restartInitiator = initiator;
-			if (_ui != null && _uiStarted)
-			{
-				// Требование: логировать "Ежедневная перезагрузка" при плановом рестарте
-				if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
-					_ui.AddLog("Ежедневная перезагрузка");
+        // Signal UI and background tasks to prepare for restart
+    _restartInitiator = initiator;
+    if (_ui != null && _uiStarted)
+    {
+    // Требование: логировать "Ежедневная перезагрузка" при плановом рестарте
+    if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
+    _ui.AddLog("Ежедневная перезагрузка");
 
-				_ui.AddLog($"Перезапуск... Инициатор: {_restartInitiator}");
-				_ui.ClearForRestart();
-				// Do not dispose UI here — the persistent UI thread will remain active
-			}
+    _ui.AddLog($"Перезапуск... Инициатор: {_restartInitiator}");
+    _ui.ClearForRestart();
+    // Do not dispose UI here — the persistent UI thread will remain active
+    }
 
-			// Отправляем уведомление в Discord о перезапуске (best-effort)
-			try
-			{
-				if (_statusNotifier != null)
-					await _statusNotifier.SendRestartNotification(reason);
-			}
-			catch { }
+    // Отправляем уведомление в Discord о перезапуске (best-effort)
+    try
+    {
+    if (_statusNotifier != null)
+    await _statusNotifier.SendRestartNotification(reason);
+    }
+    catch { }
 
-			_shouldRestart = true;
-			_shouldExit = true;
-			_currentStartupType = StartupType.Restart;
-			_startupReason = reason;
-			_nextStartupType = StartupType.Restart;
-			_nextStartupReason = _startupReason;
-			_statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
-			_reconnectionService?.Shutdown();
+    _shouldRestart = true;
+    _shouldExit = true;
+    _currentStartupType = StartupType.Restart;
+    _startupReason = reason;
+    _nextStartupType = StartupType.Restart;
+    _nextStartupReason = _startupReason;
+    _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
+    _reconnectionService?.Shutdown();
 
-			// При ежедневной перезагрузке — очищаем висящие сессии со статистикой
-			if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
-			{
-				try { await GameSessionCommands.ClearSessionsOnDailyRestartAsync(_client!); } catch { }
-			}
+    // При ежедневной перезагрузке — очищаем висящие сессии со статистикой
+    if (string.Equals(reason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase))
+    {
+    try { await GameSessionCommands.ClearSessionsOnDailyRestartAsync(_client!); } catch { }
+    }
 
-			// Отменяем фоновый мониторинг и ждём его завершения
-				try { _backgroundMonitoringCts?.Cancel(); } catch { }
+    // Отменяем фоновый мониторинг и ждём его завершения
+    try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
-				// Stop Discord client (best-effort)
-				try { if (_client != null) await _client.StopAsync(); } catch { }
+    // Stop Discord client (best-effort)
+    try { if (_client != null) await _client.StopAsync(); } catch { }
 
-				// Await background monitoring task to finish (with timeout)
-				if (_backgroundMonitoringTask != null)
-				{
-					try
-					{
-						var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
-						if (t != _backgroundMonitoringTask)
-						{
-							await LogStartup("Background tasks did not complete within timeout before restart.");
-						}
-					}
-					catch { }
-				}
+    // Await background monitoring task to finish (with timeout)
+    if (_backgroundMonitoringTask != null)
+    {
+    try
+    {
+        var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
+        if (t != _backgroundMonitoringTask)
+        {
+        await LogStartup("Background tasks did not complete within timeout before restart.");
+        }
+    }
+    catch { }
+    }
 
-			await LogShutdownState(isRestart: true, initiator: _restartInitiator);
-		}
+    await LogShutdownState(isRestart: true, initiator: _restartInitiator);
+}
 
-		public Task StopAsync()
-		{
-			// Остановка по команде из консоли с общей логикой выключения
-			return StopInternalAsync(
-				initiator: "console",
-				startupLogMessage: "Остановка из консоли...",
-				shutdownNotificationReason: "Остановка по команде из консоли");
-		}
+public Task StopAsync()
+{
+    // Остановка по команде из консоли с общей логикой выключения
+    return StopInternalAsync(
+    initiator: "console",
+    startupLogMessage: "Остановка из консоли...",
+    shutdownNotificationReason: "Остановка по команде из консоли");
+}
 
-		private async Task StopInternalAsync(string initiator, string startupLogMessage, string shutdownNotificationReason)
-				{
-					await LogStartup(startupLogMessage);
+private async Task StopInternalAsync(string initiator, string startupLogMessage, string shutdownNotificationReason)
+    {
+    await LogStartup(startupLogMessage);
 
-					try
-					{
-						if (_statusNotifier != null)
-							await _statusNotifier.SendShutdownNotification(shutdownNotificationReason);
-					}
-					catch { }
+    try
+    {
+        if (_statusNotifier != null)
+        await _statusNotifier.SendShutdownNotification(shutdownNotificationReason);
+    }
+    catch { }
 
-					// ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
-					// пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
-					// HttpClient и сообщение в канал не уйдёт. kind="stop" даёт текст
-					// «Бот завершил работу» (а не «…на перезагрузку»).
-					try
-					{
-						if (_predictionService != null)
-							await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
-					}
-					catch { }
+    // ✅ Round 7-C7: отправляем «Бот ушёл…» в каналы прогнозов ДО _client.StopAsync(),
+    // пока Discord-клиент ещё живой. Иначе OnClientDisconnected попадёт в disposed
+    // HttpClient и сообщение в канал не уйдёт. kind="stop" даёт текст
+    // «Бот завершил работу» (а не «…на перезагрузку»).
+    try
+    {
+        if (_predictionService != null)
+        await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
+    }
+    catch { }
 
-					if (_ui != null && _uiStarted)
-					{
-						_ui.AddLog(startupLogMessage);
-					}
+    if (_ui != null && _uiStarted)
+    {
+        _ui.AddLog(startupLogMessage);
+    }
 
-					_shouldExit = true;
-						StopDailyRestartScheduler();
-						_reconnectionService?.Shutdown();
+    _shouldExit = true;
+        StopDailyRestartScheduler();
+        _reconnectionService?.Shutdown();
 
-						// Отменяем фоновый мониторинг
-						try { _backgroundMonitoringCts?.Cancel(); } catch { }
+        // Отменяем фоновый мониторинг
+        try { _backgroundMonitoringCts?.Cancel(); } catch { }
 
-						try { if (_client != null) await _client.StopAsync(); } catch { }
+        try { if (_client != null) await _client.StopAsync(); } catch { }
 
-				if (_backgroundMonitoringTask != null)
-				{
-					try
-					{
-						var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
-						if (t != _backgroundMonitoringTask)
-						{
-							await LogStartup("Background tasks did not complete within timeout before stop.");
-						}
-					}
-					catch { }
-				}
+    if (_backgroundMonitoringTask != null)
+    {
+    try
+    {
+        var t = await Task.WhenAny(_backgroundMonitoringTask, Task.Delay(3000));
+        if (t != _backgroundMonitoringTask)
+        {
+        await LogStartup("Background tasks did not complete within timeout before stop.");
+        }
+    }
+    catch { }
+    }
 
-			await LogShutdownState(isRestart: false, initiator: initiator);
+    await LogShutdownState(isRestart: false, initiator: initiator);
 
-			// Dispose and exit
-			try { await DisposeAsync(); } catch { }
-			Environment.Exit(0);
-		}
+    // Dispose and exit
+    try { await DisposeAsync(); } catch { }
+    Environment.Exit(0);
+}
 
-		/// <summary>
-		/// Корректная остановка без выхода из процесса (graceful shutdown без Environment.Exit).
-		/// Используется в качестве хука на сигналы Windows (Ctrl+C / logoff) — дашборд и фоновые
-		/// таймеры гасятся в том же порядке, что и в DisposeAsync, но процесс продолжает жить.
-		/// </summary>
-		public async Task GracefulShutdownAsync(string reason)
-		{
-			_shouldExit = true;
-			try { await LogStartup($"[SHUTDOWN] graceful shutdown: {reason}"); } catch { }
+/// <summary>
+/// Корректная остановка без выхода из процесса (graceful shutdown без Environment.Exit).
+/// Используется в качестве хука на сигналы Windows (Ctrl+C / logoff) — дашборд и фоновые
+/// таймеры гасятся в том же порядке, что и в DisposeAsync, но процесс продолжает жить.
+/// </summary>
+public async Task GracefulShutdownAsync(string reason)
+{
+    _shouldExit = true;
+    try { await LogStartup($"[SHUTDOWN] graceful shutdown: {reason}"); } catch { }
 
-			// Сообщаем в Discord о завершении работы — пользовательские сценарии:
-			// крестик в окне консоли, диспетчер задач "Завершить", taskkill /F,
-			// logoff, SIGTERM. До рефакторинга этого не было — пропало.
-			try
-			{
-				if (_statusNotifier != null)
-					await _statusNotifier.SendShutdownNotification(reason);
-			}
-			catch { }
+    // Сообщаем в Discord о завершении работы — пользовательские сценарии:
+    // крестик в окне консоли, диспетчер задач "Завершить", taskkill /F,
+    // logoff, SIGTERM. До рефакторинга этого не было — пропало.
+    try
+    {
+    if (_statusNotifier != null)
+    await _statusNotifier.SendShutdownNotification(reason);
+    }
+    catch { }
 
-						// ✅ Round 7-C7: для graceful shutdown (Ctrl+C, SIGTERM, logoff) тоже отправляем
-						// «Бот ушёл…» в каналы прогнозов ДО того, как _client будет отключен.
-						// Это решает гонку с disposed HttpClient. kind="stop" даёт текст
-						// «Бот завершил работу» (это полное завершение, не рестарт).
-						try
-						{
-							if (_predictionService != null)
-								await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
-						}
-						catch { }
+        // ✅ Round 7-C7: для graceful shutdown (Ctrl+C, SIGTERM, logoff) тоже отправляем
+        // «Бот ушёл…» в каналы прогнозов ДО того, как _client будет отключен.
+        // Это решает гонку с disposed HttpClient. kind="stop" даёт текст
+        // «Бот завершил работу» (это полное завершение, не рестарт).
+        try
+        {
+        if (_predictionService != null)
+        await _predictionService.AnnounceShutdownAsync("stop").ConfigureAwait(false);
+        }
+        catch { }
 
-						try { _backgroundMonitoringCts?.Cancel(); } catch { }
-						StopDailyRestartScheduler();
+        try { _backgroundMonitoringCts?.Cancel(); } catch { }
+        StopDailyRestartScheduler();
 
-			try { _reconnectionService?.Shutdown(); } catch { }
+    try { _reconnectionService?.Shutdown(); } catch { }
 
-			try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
-			try { _webDashboard?.Dispose(); } catch { }
-			_webDashboard = null;
+    try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
+    try { _webDashboard?.Dispose(); } catch { }
+    _webDashboard = null;
 
-			try { if (_ui != null && _uiStarted) { _ui.Dispose(); _ui = null; _uiStarted = false; } } catch { }
-		}
+    try { if (_ui != null && _uiStarted) { _ui.Dispose(); _ui = null; _uiStarted = false; } } catch { }
+}
 
-		private void StartDailyRestartScheduler()
-		{
-			if (_config != null && !_config.DailyRestartEnabled)
-				return;
+private void StartDailyRestartScheduler()
+{
+    if (_config != null && !_config.DailyRestartEnabled)
+    return;
 
-			if (_dailyRestartTask != null && !_dailyRestartTask.IsCompleted)
-				return;
+    if (_dailyRestartTask != null && !_dailyRestartTask.IsCompleted)
+    return;
 
-			StopDailyRestartScheduler();
-			_dailyRestartCts = new CancellationTokenSource();
-			_dailyRestartTask = Task.Run(() => DailyRestartLoopAsync(_dailyRestartCts.Token));
-		}
+    StopDailyRestartScheduler();
+    _dailyRestartCts = new CancellationTokenSource();
+    _dailyRestartTask = Task.Run(() => DailyRestartLoopAsync(_dailyRestartCts.Token));
+}
 
-		private void StopDailyRestartScheduler()
-		{
-			try { _dailyRestartCts?.Cancel(); } catch { }
-			try { _dailyRestartCts?.Dispose(); } catch { }
-			_dailyRestartCts = null;
-		}
+private void StopDailyRestartScheduler()
+{
+    try { _dailyRestartCts?.Cancel(); } catch { }
+    try { _dailyRestartCts?.Dispose(); } catch { }
+    _dailyRestartCts = null;
+}
 
-		private async Task DailyRestartLoopAsync(CancellationToken ct)
-		{
-			try
-			{
-				if (_config != null && !_config.DailyRestartEnabled)
-					return;
+private async Task DailyRestartLoopAsync(CancellationToken ct)
+{
+    try
+    {
+    if (_config != null && !_config.DailyRestartEnabled)
+    return;
 
-				var (nextUtc, planText) = GetNextDailyRestartUtc();
-				var delay = nextUtc - DateTimeOffset.UtcNow;
-				if (delay < TimeSpan.Zero)
-					delay = TimeSpan.Zero;
+    var (nextUtc, planText) = GetNextDailyRestartUtc();
+    var delay = nextUtc - DateTimeOffset.UtcNow;
+    if (delay < TimeSpan.Zero)
+    delay = TimeSpan.Zero;
 
-				await LogStartup($"Ежедневная перезагрузка: запланирована на {planText}");
+    await LogStartup($"Ежедневная перезагрузка: запланирована на {planText}");
 
-				await Task.Delay(delay, ct);
+    await Task.Delay(delay, ct);
 
-				if (ct.IsCancellationRequested || _shouldExit)
-					return;
+    if (ct.IsCancellationRequested || _shouldExit)
+    return;
 
-				await RestartWithReasonAsync(
-					initiator: "scheduler",
-					reason: "Ежедневная перезагрузка");
-			}
-			catch (TaskCanceledException)
-			{
-				// normal
-			}
-			catch (Exception ex)
-			{
-				try { await LogStartup($"⚠️ DailyRestartLoop error: {ex.Message}"); } catch { }
-			}
-		}
+    await RestartWithReasonAsync(
+    initiator: "scheduler",
+    reason: "Ежедневная перезагрузка");
+    }
+    catch (TaskCanceledException)
+    {
+    // normal
+    }
+    catch (Exception ex)
+    {
+    try { await LogStartup($"⚠️ DailyRestartLoop error: {ex.Message}"); } catch { }
+    }
+}
 
-		private (DateTimeOffset NextUtc, string PlanText) GetNextDailyRestartUtc()
-		{
-			var nowUtc = DateTimeOffset.UtcNow;
-			var localTz = TimeZoneInfo.Local;
+private (DateTimeOffset NextUtc, string PlanText) GetNextDailyRestartUtc()
+{
+    var nowUtc = DateTimeOffset.UtcNow;
+    var localTz = TimeZoneInfo.Local;
 
-			static bool TryParseTime(string? value, out TimeSpan time)
-			{
-				time = default;
-				if (string.IsNullOrWhiteSpace(value))
-					return false;
+    static bool TryParseTime(string? value, out TimeSpan time)
+    {
+    time = default;
+    if (string.IsNullOrWhiteSpace(value))
+    return false;
 
-				var trimmed = value.Trim();
-				if (TimeSpan.TryParse(trimmed, CultureInfo.InvariantCulture, out var parsed) || TimeSpan.TryParse(trimmed, out parsed))
-				{
-					time = new TimeSpan(parsed.Hours, parsed.Minutes, parsed.Seconds);
-					return true;
-				}
+    var trimmed = value.Trim();
+    if (TimeSpan.TryParse(trimmed, CultureInfo.InvariantCulture, out var parsed) || TimeSpan.TryParse(trimmed, out parsed))
+    {
+    time = new TimeSpan(parsed.Hours, parsed.Minutes, parsed.Seconds);
+    return true;
+    }
 
-				return false;
-			}
+    return false;
+    }
 
-			static DateTime BuildUnspecifiedDateTime(DateTime date, TimeSpan time)
-			{
-				return new DateTime(date.Year, date.Month, date.Day, time.Hours, time.Minutes, time.Seconds, DateTimeKind.Unspecified);
-			}
+    static DateTime BuildUnspecifiedDateTime(DateTime date, TimeSpan time)
+    {
+    return new DateTime(date.Year, date.Month, date.Day, time.Hours, time.Minutes, time.Seconds, DateTimeKind.Unspecified);
+    }
 
-			static DateTimeOffset NextInZoneUtc(TimeZoneInfo tz, TimeSpan targetTime, DateTimeOffset currentUtc)
-			{
-				var nowInZone = TimeZoneInfo.ConvertTime(currentUtc, tz);
-				var nextDate = nowInZone.Date;
-				if (nowInZone.TimeOfDay >= targetTime)
-					nextDate = nextDate.AddDays(1);
+    static DateTimeOffset NextInZoneUtc(TimeZoneInfo tz, TimeSpan targetTime, DateTimeOffset currentUtc)
+    {
+    var nowInZone = TimeZoneInfo.ConvertTime(currentUtc, tz);
+    var nextDate = nowInZone.Date;
+    if (nowInZone.TimeOfDay >= targetTime)
+    nextDate = nextDate.AddDays(1);
 
-				var nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
-				var nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
+    var nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
+    var nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
 
-				// Safety: гарантируем, что время действительно в будущем.
-				if (nextUtc <= currentUtc.UtcDateTime)
-				{
-					nextDate = nextDate.AddDays(1);
-					nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
-					nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
-				}
+    // Safety: гарантируем, что время действительно в будущем.
+    if (nextUtc <= currentUtc.UtcDateTime)
+    {
+    nextDate = nextDate.AddDays(1);
+    nextLocal = BuildUnspecifiedDateTime(nextDate, targetTime);
+    nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, tz);
+    }
 
-				return new DateTimeOffset(nextUtc, TimeSpan.Zero);
-			}
+    return new DateTimeOffset(nextUtc, TimeSpan.Zero);
+    }
 
-			if (!TryParseTime(_config?.DailyRestartLocalTime, out var localTarget))
-				throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
+    if (!TryParseTime(_config?.DailyRestartLocalTime, out var localTarget))
+    throw new InvalidOperationException("Daily restart time is not configured. Set DailyRestartLocalTime in config.json.");
 
-			if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
-							MoscowTime.TryGetTimeZone(out var mskTz) && mskTz != null &&
-							string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
-							TryParseTime(_config?.DailyRestartMoscowTime, out var mskTarget))
-						{
-							var nextUtc = NextInZoneUtc(mskTz, mskTarget, nowUtc);
-							var nextMsk = TimeZoneInfo.ConvertTime(nextUtc, mskTz);
-							return (nextUtc, $"{nextMsk:dd.MM.yyyy HH:mm:ss} (МСК)");
-						}
+    if (_config?.DailyRestartPreferMoscowTimeWhenLocalIsMoscow == true &&
+        MoscowTime.TryGetTimeZone(out var mskTz) && mskTz != null &&
+        string.Equals(TimeZoneInfo.Local.Id, mskTz.Id, StringComparison.OrdinalIgnoreCase) &&
+        TryParseTime(_config?.DailyRestartMoscowTime, out var mskTarget))
+        {
+        var nextUtc = NextInZoneUtc(mskTz, mskTarget, nowUtc);
+        var nextMsk = TimeZoneInfo.ConvertTime(nextUtc, mskTz);
+        return (nextUtc, $"{nextMsk:dd.MM.yyyy HH:mm:ss} (МСК)");
+        }
 
-						var nextLocalUtc = NextInZoneUtc(localTz, localTarget, nowUtc);
-						var nextLocal = TimeZoneInfo.ConvertTime(nextLocalUtc, localTz);
-						return (nextLocalUtc, $"{nextLocal:dd.MM.yyyy HH:mm:ss} (локальное)");
-					}
+        var nextLocalUtc = NextInZoneUtc(localTz, localTarget, nowUtc);
+        var nextLocal = TimeZoneInfo.ConvertTime(nextLocalUtc, localTz);
+        return (nextLocalUtc, $"{nextLocal:dd.MM.yyyy HH:mm:ss} (локальное)");
+    }
 
         // Методы для доступа из UI (реализация IBotController)
         public Task<Dictionary<ulong, ServerConfig>> GetAllServerConfigsAsync()
         {
-			// Клонируем текущий словарь _serverConfigs, чтобы избежать внешней модификации.
-			return Task.FromResult(new Dictionary<ulong, ServerConfig>(_serverConfigs));
+    // Клонируем текущий словарь _serverConfigs, чтобы избежать внешней модификации.
+    return Task.FromResult(new Dictionary<ulong, ServerConfig>(_serverConfigs));
         }
 
         public Task<ServerConfig?> GetServerConfigAsync(ulong guildId)
         {
-			if (_serverConfigs.TryGetValue(guildId, out var cfg))
-				return Task.FromResult<ServerConfig?>(cfg);
+    if (_serverConfigs.TryGetValue(guildId, out var cfg))
+    return Task.FromResult<ServerConfig?>(cfg);
 			
-			return Task.FromResult<ServerConfig?>(null);
+    return Task.FromResult<ServerConfig?>(null);
         }
 
-		private ServerConfig? GetServerConfigInternal(ulong guildId)
-		{
-			if (_serverConfigs.TryGetValue(guildId, out var cfg))
-				return cfg;
-			return null;
-		}
+private ServerConfig? GetServerConfigInternal(ulong guildId)
+{
+    if (_serverConfigs.TryGetValue(guildId, out var cfg))
+    return cfg;
+    return null;
+}
 
-		public Task ReloadServerConfigsAsync()
-		{
-			LoadServerConfigs();
-			return Task.CompletedTask;
-		}
+public Task ReloadServerConfigsAsync()
+{
+    LoadServerConfigs();
+    return Task.CompletedTask;
+}
 
         public async Task SetServerConfigValueAsync(ulong guildId, string key, string? value = null, ulong? channelId = null, bool? toggle = null)
         {
@@ -1793,13 +1793,13 @@ private MusicStats? _musicStats;
                         if (resolved.HasValue) sconfig.MasterRoleId = resolved.Value;
                     }
                     break;
-				case "super_user_role":
-                   if (guild != null)
+    case "super_user_role":
+                    if (guild != null)
                     {
                         var resolved = ResolveRoleId(guild, value);
                         if (resolved.HasValue) sconfig.SuperUserRoleId = resolved.Value;
                     }
-					break;
+    break;
                 case "swear_filter":
                     if (toggle.HasValue) sconfig.SwearFilterEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var b)) sconfig.SwearFilterEnabled = b;
@@ -1830,11 +1830,11 @@ private MusicStats? _musicStats;
                         if (resolved.HasValue) sconfig.EventVoiceChannelID = resolved.Value;
                     }
                     break;
-				default:
-					break;
-			}
+    default:
+    break;
+    }
 
-			SaveServerConfigs();
+    SaveServerConfigs();
 
             try
             {
@@ -1886,17 +1886,17 @@ private MusicStats? _musicStats;
 
                     if (sconfig.MasterRoleId.HasValue && sconfig.MasterRoleId.Value != 0)
                     {
-                       var masterRole = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.MasterRoleId.Value);
+                        var masterRole = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.MasterRoleId.Value);
                         if (masterRole == null)
                             _ = LogInfo($"Предупреждение: MasterRoleId {sconfig.MasterRoleId.Value} не найдена на сервере {guildId}.");
                     }
 
-					if (sconfig.SuperUserRoleId.HasValue && sconfig.SuperUserRoleId.Value != 0)
-					{
+    if (sconfig.SuperUserRoleId.HasValue && sconfig.SuperUserRoleId.Value != 0)
+    {
                         var suRole = validationGuild.Roles.FirstOrDefault(r => r.Id == sconfig.SuperUserRoleId.Value);
-						if (suRole == null)
-							_ = LogInfo($"Предупреждение: SuperUserRoleId {sconfig.SuperUserRoleId.Value} не найдена на сервере {guildId}.");
-					}
+        if (suRole == null)
+        _ = LogInfo($"Предупреждение: SuperUserRoleId {sconfig.SuperUserRoleId.Value} не найдена на сервере {guildId}.");
+    }
                 }
 
             }
@@ -1998,77 +1998,77 @@ private MusicStats? _musicStats;
 
             } while (restart);
 
-			BotLogger.Info(LogCategory.Boot, "Бот остановлен.");
-		}
+    BotLogger.Info(LogCategory.Boot, "Бот остановлен.");
+}
 
-		/// <summary>
-		/// Убивает процессы Lavalink (java) занимающие порт 2333.
-		/// Вызывается при любом завершении — штатном или через VS Stop/taskkill.
-		/// </summary>
-		private static void KillOrphanedLavalink()
-		{
-			try
-			{
-				var connections = System.Net.NetworkInformation.IPGlobalProperties
-					.GetIPGlobalProperties()
-					.GetActiveTcpListeners()
-					.Where(ep => ep.Port == 2333)
-					.ToArray();
+/// <summary>
+/// Убивает процессы Lavalink (java) занимающие порт 2333.
+/// Вызывается при любом завершении — штатном или через VS Stop/taskkill.
+/// </summary>
+private static void KillOrphanedLavalink()
+{
+    try
+    {
+    var connections = System.Net.NetworkInformation.IPGlobalProperties
+    .GetIPGlobalProperties()
+    .GetActiveTcpListeners()
+    .Where(ep => ep.Port == 2333)
+    .ToArray();
 
-				if (connections.Length == 0) return;
+    if (connections.Length == 0) return;
 
-				// Убиваем все java-процессы слушающие порт 2333
-				foreach (var proc in Process.GetProcessesByName("java"))
-				{
-					try { proc.Kill(entireProcessTree: true); } catch { }
-				}
-			}
-			catch { }
-		}
+    // Убиваем все java-процессы слушающие порт 2333
+    foreach (var proc in Process.GetProcessesByName("java"))
+    {
+    try { proc.Kill(entireProcessTree: true); } catch { }
+    }
+    }
+    catch { }
+}
 
-		/// <summary>
-		/// Простой классификатор сообщения лога по категории (по подстроке в тексте).
-		/// Используется только для подсветки в дашборде — не влияет на содержимое.
-		/// </summary>
-		public static LogCategory? DetectCategory(string msg)
-		{
-		    foreach (LogCategory cat in Enum.GetValues<LogCategory>())
-		    {
-		        var token = cat.ToString();
-		        if (msg.Contains(token, StringComparison.OrdinalIgnoreCase))
-		            return cat;
-		    }
-		    return null;
-		}
+/// <summary>
+/// Простой классификатор сообщения лога по категории (по подстроке в тексте).
+/// Используется только для подсветки в дашборде — не влияет на содержимое.
+/// </summary>
+public static LogCategory? DetectCategory(string msg)
+{
+        foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+        {
+        var token = cat.ToString();
+        if (msg.Contains(token, StringComparison.OrdinalIgnoreCase))
+                return cat;
+        }
+        return null;
+}
 
-		/// <summary>Маппинг категории на CSS-класс для дашборда.</summary>
-		public static string CategoryCssClass(LogCategory category) => category switch
-		{
-		    LogCategory.Rolls   => "cat-rolls",
-		    LogCategory.Music   => "cat-music",
-		    LogCategory.Predict => "cat-predict",
-		    LogCategory.Points  => "cat-points",
-		    LogCategory.Session => "cat-session",
-		    LogCategory.System  => "cat-system",
-		    LogCategory.Boot    => "cat-boot",
-		    LogCategory.Discord => "cat-discord",
-		    LogCategory.Sheets  => "cat-sheets",
-		    LogCategory.Config  => "cat-config",
-		    LogCategory.Cmd     => "cat-cmd",
-		    _                   => "cat-other",
-		};
+/// <summary>Маппинг категории на CSS-класс для дашборда.</summary>
+public static string CategoryCssClass(LogCategory category) => category switch
+{
+        LogCategory.Rolls   => "cat-rolls",
+        LogCategory.Music   => "cat-music",
+        LogCategory.Predict => "cat-predict",
+        LogCategory.Points  => "cat-points",
+        LogCategory.Session => "cat-session",
+        LogCategory.System  => "cat-system",
+        LogCategory.Boot    => "cat-boot",
+        LogCategory.Discord => "cat-discord",
+        LogCategory.Sheets  => "cat-sheets",
+        LogCategory.Config  => "cat-config",
+        LogCategory.Cmd     => "cat-cmd",
+        _                   => "cat-other",
+};
 
-		/// <summary>Маппинг уровня лога на CSS-класс для дашборда.</summary>
-		public static string LevelCssClass(LogLevel level) => level switch
-		{
-		    LogLevel.Debug => "lv-debug",
-		    LogLevel.Info  => "lv-info",
-		    LogLevel.Warn  => "lv-warn",
-		    LogLevel.Error => "lv-error",
-		    _              => "lv-other",
-		};
+/// <summary>Маппинг уровня лога на CSS-класс для дашборда.</summary>
+public static string LevelCssClass(LogLevel level) => level switch
+{
+        LogLevel.Debug => "lv-debug",
+        LogLevel.Info  => "lv-info",
+        LogLevel.Warn  => "lv-warn",
+        LogLevel.Error => "lv-error",
+        _              => "lv-other",
+};
 
-		private static BotUI? _ui;
+private static BotUI? _ui;
         private static bool _uiStarted = false;
 
         /// <summary>
@@ -2136,33 +2136,33 @@ private MusicStats? _musicStats;
         }
 
         public async Task RunBotAsync()
-		{
-			_startupTime = DateTime.UtcNow;
-			_startupTimeUtc = DateTimeOffset.UtcNow;
-			_rollsTodayCount = 0;
-			_chatMessagesTodayCount = 0;
-			_usersInVoiceCount = 0;
-			_lastCountersResetDate = DateTime.UtcNow.Date;
-			lock (_activityLock) _activityBuckets.Clear();
+{
+    _startupTime = DateTime.UtcNow;
+    _startupTimeUtc = DateTimeOffset.UtcNow;
+    _rollsTodayCount = 0;
+    _chatMessagesTodayCount = 0;
+    _usersInVoiceCount = 0;
+    _lastCountersResetDate = DateTime.UtcNow.Date;
+    lock (_activityLock) _activityBuckets.Clear();
 
-			if (_ui == null)
-			{
-				var logDirRaw = _config?.LogDirectory;
-				var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-				BotLogger.Initialize(logDir, DateTime.Now);
-				// Возвращаем строку-маркер: заголовок «=== Бот запускается: … ===»
-				// пишется только в run.log (в самом файле), в Logs Panel он не виден,
-				// поэтому для пользователя в терминале нужна явная запись отсюда.
-				BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
+    if (_ui == null)
+    {
+    var logDirRaw = _config?.LogDirectory;
+    var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+    BotLogger.Initialize(logDir, DateTime.Now);
+    // Возвращаем строку-маркер: заголовок «=== Бот запускается: … ===»
+    // пишется только в run.log (в самом файле), в Logs Panel он не виден,
+    // поэтому для пользователя в терминале нужна явная запись отсюда.
+    BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
 
-				_ui = new BotUI(
-					_client!,
-					this,
-					_reconnectionService!,
-					_connectionPredictor!,
-					_statusNotifier!,
-					_pointsService
-				);
+    _ui = new BotUI(
+    _client!,
+    this,
+    _reconnectionService!,
+    _connectionPredictor!,
+    _statusNotifier!,
+    _pointsService
+    );
 
                 // Запускаем UI в отдельном потоке
                 var uiThread = new Thread(() =>
@@ -2225,8 +2225,8 @@ private MusicStats? _musicStats;
                 CommandLogSink = msg => BotLogger.Info(LogCategory.Cmd, msg);
             }
 
-			// Загрузка текстовых блоков из пути конфига (относительные пути считаем от каталога приложения)
-			_textBlocks = LoadTextFromFile(BotConfig.ResolvePath(_config!.TextBlocksPath));
+    // Загрузка текстовых блоков из пути конфига (относительные пути считаем от каталога приложения)
+    _textBlocks = LoadTextFromFile(BotConfig.ResolvePath(_config!.TextBlocksPath));
 
             while (!_isDisposed && !_shouldExit)
             {
@@ -2239,18 +2239,18 @@ private MusicStats? _musicStats;
                     }
 
                     // Показываем специальное сообщение при рестарте
-         var version = _config?.BotVersion ?? BotConfig.Current?.BotVersion ?? "?";
-                             StartupRenderer.Instance.WriteHeader(_currentStartupType == StartupType.Restart
-                                 ? "ЗАПУСК ПОСЛЕ ПЕРЕЗАГРУЗКИ"
-                                 : "ЗАПУСК");
-                             if (_currentStartupType == StartupType.Restart)
-                             {
-                                 StartupRenderer.Instance.WriteLine($"Инициализация бота после перезапуска... Версия {version}");
-                             }
-                             else
-                             {
-                                 StartupRenderer.Instance.WriteLine($"Инициализация бота... Версия {version}");
-                             }
+        var version = _config?.BotVersion ?? BotConfig.Current?.BotVersion ?? "?";
+                            StartupRenderer.Instance.WriteHeader(_currentStartupType == StartupType.Restart
+                                ? "ЗАПУСК ПОСЛЕ ПЕРЕЗАГРУЗКИ"
+                                : "ЗАПУСК");
+                            if (_currentStartupType == StartupType.Restart)
+                            {
+                                StartupRenderer.Instance.WriteLine($"Инициализация бота после перезапуска... Версия {version}");
+                            }
+                            else
+                            {
+                                StartupRenderer.Instance.WriteLine($"Инициализация бота... Версия {version}");
+                            }
 
                     if (_client == null || _client.ConnectionState == ConnectionState.Disconnected)
                     {
@@ -2394,8 +2394,8 @@ private MusicStats? _musicStats;
                                                                                                                                                                             await LogStartup($" ⚠️ После инициализации не созданы сервисы: {string.Join(", ", missingServices)}. Бот продолжит работу, но часть функций будет недоступна.");
                                                                                                                                                                         }
 
-						// Ежедневный плановый перезапуск (время задаётся в config.json)
-						StartDailyRestartScheduler();
+        // Ежедневный плановый перезапуск (время задаётся в config.json)
+        StartDailyRestartScheduler();
 
                         // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
                         _backgroundMonitoringCts?.Cancel();
@@ -2465,7 +2465,7 @@ private MusicStats? _musicStats;
         {
             try
             {
-               try
+                try
                 {
                     Console.WriteLine($"[EVENT] created guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
                 }
@@ -2564,7 +2564,7 @@ private MusicStats? _musicStats;
             try
             {
                 await GameSessionCommands.OnGuildScheduledEventStarted(guildEvent, _client!);
-               try
+                try
                 {
                     Console.WriteLine($"[EVENT] started guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
                 }
@@ -2591,7 +2591,7 @@ private MusicStats? _musicStats;
             try
             {
                 await GameSessionCommands.OnGuildScheduledEventCompleted(guildEvent, _client!, _googleSheetsService, CommandLogSink);
-               try
+                try
                 {
                     Console.WriteLine($"[EVENT] completed guild={guildEvent.Guild?.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
                 }
@@ -3246,9 +3246,9 @@ private MusicStats? _musicStats;
             try
             {
                 await LogStartup("Авто-перезапуск: превышено число попыток реконнекта, инициируем полный перезапуск клиента...");
-				await RestartWithReasonAsync(
-					initiator: "discord",
-					reason: "Авто-перезапуск из-за множества попыток переподключения");
+    await RestartWithReasonAsync(
+    initiator: "discord",
+    reason: "Авто-перезапуск из-за множества попыток переподключения");
             }
             catch (Exception ex)
             {
@@ -3262,28 +3262,28 @@ private MusicStats? _musicStats;
             await SendPredictionMessage(prediction);
         }
 
-		private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult prediction)
-		{
-			try
-			{
-				// Глобальная проверка: если в конфиге отключены прогнозы ОТКЛЮЧЕНИЙ соединения — не отправляем сообщения
-				if (_config?.Prediction != null && !_config.Prediction.EnableConnectionPredictions)
-					return;
+private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult prediction)
+{
+    try
+    {
+    // Глобальная проверка: если в конфиге отключены прогнозы ОТКЛЮЧЕНИЙ соединения — не отправляем сообщения
+    if (_config?.Prediction != null && !_config.Prediction.EnableConnectionPredictions)
+    return;
 
-				foreach (var guild in _client!.Guilds)
-				{
-					if (!_serverConfigs.TryGetValue(guild.Id, out var config))
-						continue;
-					if (config.ModerateChannelID == 0)
-						continue;
+    foreach (var guild in _client!.Guilds)
+    {
+    if (!_serverConfigs.TryGetValue(guild.Id, out var config))
+        continue;
+    if (config.ModerateChannelID == 0)
+        continue;
 
-					var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
-					if (channel != null)
-					{
-						var embed = StatusMessageBuilder.BuildPredictionEmbed(prediction);
-						await channel.SendMessageAsync(embed: embed);
-					}
-				}
+    var channel = await _client.GetChannelAsync(config.ModerateChannelID) as ITextChannel;
+    if (channel != null)
+    {
+        var embed = StatusMessageBuilder.BuildPredictionEmbed(prediction);
+        await channel.SendMessageAsync(embed: embed);
+    }
+    }
             }
             catch (Exception ex)
             {
@@ -3303,8 +3303,8 @@ private MusicStats? _musicStats;
                 return _config.BotToken.Trim();
 
             // Если токен не найден — бросаем, чтобы не пытаться залогиниться пустым токеном
-			var cfgPath = BotConfig.ResolvePath(Path.Combine("Settings", "config.json"));
-			throw new InvalidOperationException($"Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in '{cfgPath}'.");
+    var cfgPath = BotConfig.ResolvePath(Path.Combine("Settings", "config.json"));
+    throw new InvalidOperationException($"Discord bot token not provided. Set DISCORD_BOT_TOKEN env or BotToken in '{cfgPath}'.");
         }
 
         private DateTime _readyTime = DateTime.MinValue; // Инициализируем MinValue
@@ -3319,10 +3319,10 @@ private MusicStats? _musicStats;
                                 BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
 
 // ✅ Загрузка сохранённых сессий игр переехала в ЭТАП 3 — СИНХРОНИЗАЦИЯ.
-           // После RESYNC и prediction snapshot дёргаем LoadSessionsAsync, который
-           // прогонит CleanupStaleSessionsAsync и RecreateControlMessagesAsync.
-           // Вне этапа 3 этот вызов был фоновым Task.Run, из-за чего cleanup
-           // пропадал из визуализации.
+            // После RESYNC и prediction snapshot дёргаем LoadSessionsAsync, который
+            // прогонит CleanupStaleSessionsAsync и RecreateControlMessagesAsync.
+            // Вне этапа 3 этот вызов был фоновым Task.Run, из-за чего cleanup
+            // пропадал из визуализации.
 
 await Task.CompletedTask;
         }
@@ -3681,7 +3681,7 @@ await Task.CompletedTask;
         {
             try
             {
-               if (_currentStartupType == StartupType.FirstStart)
+                if (_currentStartupType == StartupType.FirstStart)
                 {
                     await BootstrapFirstRunSettingsAsync().ConfigureAwait(false);
                 }
@@ -3691,165 +3691,165 @@ await Task.CompletedTask;
                     await EnsureConfigFieldsAsync().ConfigureAwait(false);
                 }
 
-				// ЭТАП 1: Регистрация команд
-				                var isDailyRestart =
-				                	_currentStartupType == StartupType.Restart &&
-				                	string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
+    // ЭТАП 1: Регистрация команд
+                    var isDailyRestart =
+                    _currentStartupType == StartupType.Restart &&
+                    string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
 
-				                                var stage1Lines = new List<string>();
+                                    var stage1Lines = new List<string>();
 
-				                // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
-				                // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
-				                StartupRenderer.Instance.WriteHeader("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД");
+                    // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
+                    // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
+                    StartupRenderer.Instance.WriteHeader("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД");
 
-				                if (isDailyRestart)
-				                {
-				                    // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
-				                    StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
-				                                    await _commandHandler.ListSlashCommandsAsync();
-				                }
-				                else
-				                {
-				                    if (_ui != null && await _ui.AskYesNoQuestion(
-				                            "Нужно ли перерегистрировать команды?",
-				                            "Y - Да, N - Нет, таймаут 60 секунд",
-				                            60
-				                        ) == true)
-				                    {
-				                        await _commandHandler.InitializeAsync();
-				                        // При регистрации список уже описан пошагово — печатать его повторно не нужно.
-				                    }
-				                    else
-				                    {
-				                       StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
-				                        await _commandHandler.ListSlashCommandsAsync();
-				                    }
-				                }
+                    if (isDailyRestart)
+                    {
+                        // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
+                        StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
+                                        await _commandHandler.ListSlashCommandsAsync();
+                    }
+                    else
+                    {
+                        if (_ui != null && await _ui.AskYesNoQuestion(
+                                "Нужно ли перерегистрировать команды?",
+                                "Y - Да, N - Нет, таймаут 60 секунд",
+                                60
+                            ) == true)
+                        {
+                            await _commandHandler.InitializeAsync();
+                            // При регистрации список уже описан пошагово — печатать его повторно не нужно.
+                        }
+                        else
+                        {
+                            StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
+                            await _commandHandler.ListSlashCommandsAsync();
+                        }
+                    }
 
-				                // Закрывающая линия этапа 1 — симметрично заголовку.
-				                StartupRenderer.Instance.WriteFooter("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
+                    // Закрывающая линия этапа 1 — симметрично заголовку.
+                    StartupRenderer.Instance.WriteFooter("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");
 
-				                // ЭТАП 2: Синхронизация Discord-событий и активных сессий.
-				                // Здесь же подписываемся на Discord-эвенты (Ready/MessageReceived/
-				                // GuildScheduledEventCreated|Updated|Started|Cancelled|Completed/
-				                // GuildMemberUpdated/ButtonExecuted/SelectMenuExecuted).
-				                // Раньше эти подписки делались в отдельном «Этапе 2: АКТИВАЦИЯ
-				                // ОБРАБОТЧИКОВ» — теперь они естественно живут рядом с RESYNC,
-				                // потому что дальше идёт работа именно с эвентами.
-				                StartupRenderer.Instance.WriteHeader("ЭТАП 2/4: СИНХРОНИЗАЦИЯ");
-				                // SetupDiscordEvents сам пишет «События Discord настроены»
-				                // — повторять это явно не нужно.
-				                await SetupDiscordEvents();
-				                await ResyncEventAnnouncementsOnStartupAsync();
-				                // Подтягиваем сессии из файла и прогоняем cleanup + recreate.
-				                // LoadSessionsAsync сам пишет в визуализацию через WriteStageLine.
-				                await GameSessionCommands.LoadSessionsAsync(_client!);
-				                StartupRenderer.Instance.WriteFooter("ЭТАП 2/4: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
+                    // ЭТАП 2: Синхронизация Discord-событий и активных сессий.
+                    // Здесь же подписываемся на Discord-эвенты (Ready/MessageReceived/
+                    // GuildScheduledEventCreated|Updated|Started|Cancelled|Completed/
+                    // GuildMemberUpdated/ButtonExecuted/SelectMenuExecuted).
+                    // Раньше эти подписки делались в отдельном «Этапе 2: АКТИВАЦИЯ
+                    // ОБРАБОТЧИКОВ» — теперь они естественно живут рядом с RESYNC,
+                    // потому что дальше идёт работа именно с эвентами.
+                    StartupRenderer.Instance.WriteHeader("ЭТАП 2/4: СИНХРОНИЗАЦИЯ");
+                    // SetupDiscordEvents сам пишет «События Discord настроены»
+                    // — повторять это явно не нужно.
+                    await SetupDiscordEvents();
+                    await ResyncEventAnnouncementsOnStartupAsync();
+                    // Подтягиваем сессии из файла и прогоняем cleanup + recreate.
+                    // LoadSessionsAsync сам пишет в визуализацию через WriteStageLine.
+                    await GameSessionCommands.LoadSessionsAsync(_client!);
+                    StartupRenderer.Instance.WriteFooter("ЭТАП 2/4: СИНХРОНИЗАЦИЯ — ЗАВЕРШЕНА");
 
-				                // ЭТАП 3: Снимок активных прогнозов (выводится по гильдиям).
-				                StartupRenderer.Instance.WriteHeader("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ");
-				                var stage3Lines = new List<string>();
-				                try
-				                {
-				                    static string Trunc(string? s, int max)
-				                    {
-				                        if (string.IsNullOrWhiteSpace(s)) return string.Empty;
-				                        s = s.Trim();
-				                        return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
-				                    }
+                    // ЭТАП 3: Снимок активных прогнозов (выводится по гильдиям).
+                    StartupRenderer.Instance.WriteHeader("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ");
+                    var stage3Lines = new List<string>();
+                    try
+                    {
+                        static string Trunc(string? s, int max)
+                        {
+                            if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+                            s = s.Trim();
+                            return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
+                        }
 
-				                    // ✅ Round 7-C6: вся загрузка прогнозов живёт ЗДЕСЬ, в ЭТАП 3/4.
-				                    //   1) RunStage3RestoreAsync → LoadStateAsync (без Discord API,
-				                    //      синхронно из файла), затем ValidateActiveAfterReadyAsync
-				                    //      (проверка канала/сообщения через Discord API — к этому
-				                    //      моменту клиент уже в Connected, см. WaitForReadyAsync выше),
-				                    //      затем AnnounceOnlineForRestoredAsync (сдвиг таймера,
-				                    //      "Бот снова в сети", чистка старых offline-сообщений).
-				                    //   2) После возврата — печать активных прогнозов по гильдиям,
-				                    //      как и раньше.
-				                    // Никаких гонок с Ready event, никакого фонового Task.Run:
-				                    // всё последовательно, в одном месте, с гарантированным
-				                    // порядком строк.
-				                    if (_predictionService != null)
-				                    {
-				                        try
-				                        {
-				                            await _predictionService.RunStage3RestoreAsync().ConfigureAwait(false);
-				                        }
-				                        catch (Exception restoreEx)
-				                        {
-				                            stage3Lines.Add($"[PRED] RESTORE_ERROR {restoreEx.GetType().Name}: {restoreEx.Message}");
-				                        }
-				                    }
+                        // ✅ Round 7-C6: вся загрузка прогнозов живёт ЗДЕСЬ, в ЭТАП 3/4.
+                        //   1) RunStage3RestoreAsync → LoadStateAsync (без Discord API,
+                        //      синхронно из файла), затем ValidateActiveAfterReadyAsync
+                        //      (проверка канала/сообщения через Discord API — к этому
+                        //      моменту клиент уже в Connected, см. WaitForReadyAsync выше),
+                        //      затем AnnounceOnlineForRestoredAsync (сдвиг таймера,
+                        //      "Бот снова в сети", чистка старых offline-сообщений).
+                        //   2) После возврата — печать активных прогнозов по гильдиям,
+                        //      как и раньше.
+                        // Никаких гонок с Ready event, никакого фонового Task.Run:
+                        // всё последовательно, в одном месте, с гарантированным
+                        // порядком строк.
+                        if (_predictionService != null)
+                        {
+                            try
+                            {
+                                await _predictionService.RunStage3RestoreAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception restoreEx)
+                            {
+                                stage3Lines.Add($"[PRED] RESTORE_ERROR {restoreEx.GetType().Name}: {restoreEx.Message}");
+                            }
+                        }
 
-				                    var anyPred = false;
-				                    foreach (var g in _client!.Guilds)
-				                    {
-				                        var ap = _predictionService?.GetActive(g.Id);
-				                        if (ap == null || ap.IsResolved)
-				                            continue;
+                        var anyPred = false;
+                        foreach (var g in _client!.Guilds)
+                        {
+                            var ap = _predictionService?.GetActive(g.Id);
+                            if (ap == null || ap.IsResolved)
+                                continue;
 
-				                        anyPred = true;
-				                        var lockText = ap.IsLocked ? "LOCK" : "OPEN";
-				                        var closes = ap.BetsCloseAtUtc.ToLocalTime();
-				                        stage3Lines.Add($"[PRED] {lockText} | {g.Name} | ставок: {ap.Bets.Count} | пул: {ap.TotalPool}");
-				                        stage3Lines.Add($"title: {Trunc(ap.Title, 60)}");
-				                        stage3Lines.Add($"closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} | o2={ap.Outcome2.TotalStake}");
+                            anyPred = true;
+                            var lockText = ap.IsLocked ? "LOCK" : "OPEN";
+                            var closes = ap.BetsCloseAtUtc.ToLocalTime();
+                            stage3Lines.Add($"[PRED] {lockText} | {g.Name} | ставок: {ap.Bets.Count} | пул: {ap.TotalPool}");
+                            stage3Lines.Add($"title: {Trunc(ap.Title, 60)}");
+                            stage3Lines.Add($"closes: {closes:dd.MM HH:mm:ss} | o1={ap.Outcome1.TotalStake} | o2={ap.Outcome2.TotalStake}");
 
-				                        // Print up to N bets to keep startup log compact.
-				                        var betLines = ap.Bets.Values
-				                            .OrderByDescending(b => b.Amount)
-				                            .Take(6)
-				                            .Select(b => $"{b.UserId}:{b.Amount}#{b.OutcomeId}")
-				                            .ToList();
+                            // Print up to N bets to keep startup log compact.
+                            var betLines = ap.Bets.Values
+                                .OrderByDescending(b => b.Amount)
+                                .Take(6)
+                                .Select(b => $"{b.UserId}:{b.Amount}#{b.OutcomeId}")
+                                .ToList();
 
-				                        if (betLines.Count == 0)
-				                        {
-				                            stage3Lines.Add("bets: (нет ставок)");
-				                        }
-				                        else
-				                        {
-				                            var joined = string.Join(" | ", betLines);
-				                            stage3Lines.Add($"bets: {Trunc(joined, 60)}");
-				                        }
-				                    }
+                            if (betLines.Count == 0)
+                            {
+                                stage3Lines.Add("bets: (нет ставок)");
+                            }
+                            else
+                            {
+                                var joined = string.Join(" | ", betLines);
+                                stage3Lines.Add($"bets: {Trunc(joined, 60)}");
+                            }
+                        }
 
-				                    if (!anyPred)
-				                    {
-				                        stage3Lines.Add("[PRED] активных прогнозов не найдено");
-				                    }
-				                }
-				                catch { }
-				                // ✅ Round 7-C5: отчёт о восстановлении/проверке попадает
-				                // в ЭТАП 3/4 через DrainRestoreReport(). Строки печатаются
-				                // ПОСЛЕ активных прогнозов, чтобы блок шёл в порядке:
-				                //   - снимок по гильдиям
-				                //   - потом детальный отчёт восстановления
-				                if (_predictionService != null)
-				                {
-				                    var report = _predictionService.DrainRestoreReport();
-				                    if (report.Count > 0)
-				                    {
-				                        stage3Lines.AddRange(report);
-				                    }
-				                }
-				                if (stage3Lines.Count == 0)
-				                    stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
-				                foreach (var line in stage3Lines)
-				                    StartupRenderer.Instance.WriteLine(line);
-				                StartupRenderer.Instance.WriteFooter("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ — ЗАВЕРШЁН");
+                        if (!anyPred)
+                        {
+                            stage3Lines.Add("[PRED] активных прогнозов не найдено");
+                        }
+                    }
+                    catch { }
+                    // ✅ Round 7-C5: отчёт о восстановлении/проверке попадает
+                    // в ЭТАП 3/4 через DrainRestoreReport(). Строки печатаются
+                    // ПОСЛЕ активных прогнозов, чтобы блок шёл в порядке:
+                    //   - снимок по гильдиям
+                    //   - потом детальный отчёт восстановления
+                    if (_predictionService != null)
+                    {
+                        var report = _predictionService.DrainRestoreReport();
+                        if (report.Count > 0)
+                        {
+                            stage3Lines.AddRange(report);
+                        }
+                    }
+                    if (stage3Lines.Count == 0)
+                        stage3Lines.Add("Синхронизация завершена без дополнительных данных.");
+                    foreach (var line in stage3Lines)
+                        StartupRenderer.Instance.WriteLine(line);
+                    StartupRenderer.Instance.WriteFooter("ЭТАП 3/4: АКТИВНЫЕ ПРОГНОЗЫ — ЗАВЕРШЁН");
 
-				                // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
-				                                if (_config.Music.Enabled && _lavalinkService is not null)
-				                                {
-				                                    // Перенаправляем весь поток логов LavalinkService в рендерер,
-				                                    // чтобы строки появлялись по одной внутри этапа, без буферизации.
-				                                    // ВАЖНО: BotLogger.Info(Music) игнорируем в startup-режиме, иначе UI получит дубль.
-				                                    _lavalinkService.StartupLogSink = msg =>
-				                                    {
-				                                        StartupRenderer.Instance.WriteLine(msg);
-				                                    };
-				                                    StartupRenderer.Instance.WriteHeader("ЭТАП 4/4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ");
+                    // ЭТАП 4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ
+                                    if (_config.Music.Enabled && _lavalinkService is not null)
+                                    {
+                                        // Перенаправляем весь поток логов LavalinkService в рендерер,
+                                        // чтобы строки появлялись по одной внутри этапа, без буферизации.
+                                        // ВАЖНО: BotLogger.Info(Music) игнорируем в startup-режиме, иначе UI получит дубль.
+                                        _lavalinkService.StartupLogSink = msg =>
+                                        {
+                                            StartupRenderer.Instance.WriteLine(msg);
+                                        };
+                                        StartupRenderer.Instance.WriteHeader("ЭТАП 4/4: ИНИЦИАЛИЗАЦИЯ МУЗЫКИ");
                                     try
                                     {
                                         var lavalinkReady = await _lavalinkService.LaunchProcessAsync();
@@ -4076,10 +4076,10 @@ await Task.CompletedTask;
             if (_isDisposed) return;
             _isDisposed = true;
 
-			_shouldExit = true;
-			StopDailyRestartScheduler();
-			try { _backgroundMonitoringCts?.Cancel(); } catch { }
-			try { _backgroundMonitoringCts?.Dispose(); _backgroundMonitoringCts = null; } catch { }
+    _shouldExit = true;
+    StopDailyRestartScheduler();
+    try { _backgroundMonitoringCts?.Cancel(); } catch { }
+    try { _backgroundMonitoringCts?.Dispose(); _backgroundMonitoringCts = null; } catch { }
 
             try
             {
@@ -4155,7 +4155,7 @@ await Task.CompletedTask;
             try
             {
                 await LogInfo($"Modal submitted: CustomId={customId} User={modal.User?.Id} Username={modal.User?.Username}");
-               // Respond directly (ephemeral) so we can delete the original response reliably.
+                // Respond directly (ephemeral) so we can delete the original response reliably.
                 var parts = customId.Split(':');
                 if (parts.Length == 0) return;
 
@@ -4727,75 +4727,75 @@ await Task.CompletedTask;
                     var cid = component.Data.CustomId;
                     if (_musicCommands is not null &&
                         (cid.StartsWith("music_search_") ||
-                         cid.StartsWith("playlist_public_yes_") ||
-                         cid.StartsWith("playlist_public_no_") ||
-                         cid.StartsWith("playlist_overwrite_yes_") ||
-                         cid.StartsWith("playlist_overwrite_no_")))
+                        cid.StartsWith("playlist_public_yes_") ||
+                        cid.StartsWith("playlist_public_no_") ||
+                        cid.StartsWith("playlist_overwrite_yes_") ||
+                        cid.StartsWith("playlist_overwrite_no_")))
                     {
                         await _musicCommands.HandleButtonAsync(component);
                     }
-					break;
-			}
-		}
+    break;
+    }
+}
 
-		private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
-		{
-			var text = (message.Content ?? string.Empty).Trim();
-			if (text.Length == 0)
-				return false;
+private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
+{
+    var text = (message.Content ?? string.Empty).Trim();
+    if (text.Length == 0)
+    return false;
 
-			// Нормализуем пробелы и приводим к нижнему регистру
-			var normalized = Regex.Replace(text, "\\s+", " ").Trim().ToLowerInvariant();
-			var userId = message.Author.Id;
+    // Нормализуем пробелы и приводим к нижнему регистру
+    var normalized = Regex.Replace(text, "\\s+", " ").Trim().ToLowerInvariant();
+    var userId = message.Author.Id;
 
-			if (_eventNotifications == null)
-				return false;
+    if (_eventNotifications == null)
+    return false;
 
-			if (normalized is "стоп" or "хватит" or "stop")
-			{
-				_eventNotifications.Pause(userId);
-				await message.AddReactionAsync(new Emoji("✅"));
-				await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши мне «хочу» или подпишись заново через /event_notify subscribe на сервере.");
-				return true;
-			}
+    if (normalized is "стоп" or "хватит" or "stop")
+    {
+    _eventNotifications.Pause(userId);
+    await message.AddReactionAsync(new Emoji("✅"));
+    await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши мне «хочу» или подпишись заново через /event_notify subscribe на сервере.");
+    return true;
+    }
 
-			if (normalized is "хочу" or "включи" or "start")
-			{
-				_eventNotifications.Unpause(userId);
-				await message.AddReactionAsync(new Emoji("✅"));
-				await message.Channel.SendMessageAsync("[Сохранено] Личные уведомления снова включены (если ты был подписан на сервере). Проверить/подписаться: /event_notify status или /event_notify subscribe в нужном сервере.");
-				return true;
-			}
+    if (normalized is "хочу" or "включи" or "start")
+    {
+    _eventNotifications.Unpause(userId);
+    await message.AddReactionAsync(new Emoji("✅"));
+    await message.Channel.SendMessageAsync("[Сохранено] Личные уведомления снова включены (если ты был подписан на сервере). Проверить/подписаться: /event_notify status или /event_notify subscribe в нужном сервере.");
+    return true;
+    }
 
-			if (normalized is "статус" or "status")
-			{
-				var paused = _eventNotifications.IsPaused(userId);
-				await message.AddReactionAsync(new Emoji("✅"));
-				await message.Channel.SendMessageAsync(paused
-					? "[Статус] Сейчас личные уведомления поставлены на паузу. Чтобы вернуть — напиши «хочу»."
-					: "[Статус] Сейчас личные уведомления не на паузе. Подписка на конкретный сервер проверяется командой /event_notify status на сервере.");
-				return true;
-			}
+    if (normalized is "статус" or "status")
+    {
+    var paused = _eventNotifications.IsPaused(userId);
+    await message.AddReactionAsync(new Emoji("✅"));
+    await message.Channel.SendMessageAsync(paused
+    ? "[Статус] Сейчас личные уведомления поставлены на паузу. Чтобы вернуть — напиши «хочу»."
+    : "[Статус] Сейчас личные уведомления не на паузе. Подписка на конкретный сервер проверяется командой /event_notify status на сервере.");
+    return true;
+    }
 
-			if (normalized is "подписка" or "subscribe" or "отписка" or "unsubscribe")
-			{
-				await message.Channel.SendMessageAsync("Подписка/отписка делается на конкретном сервере: используй /event_notify subscribe или /event_notify unsubscribe в нужном сервере.");
-				return true;
-			}
+    if (normalized is "подписка" or "subscribe" or "отписка" or "unsubscribe")
+    {
+    await message.Channel.SendMessageAsync("Подписка/отписка делается на конкретном сервере: используй /event_notify subscribe или /event_notify unsubscribe в нужном сервере.");
+    return true;
+    }
 
-			return false;
-		}
+    return false;
+}
 
         private async Task HandleCommandAsync(SocketMessage arg)
         {
             if (arg is not SocketUserMessage message || message.Author.IsBot) return;
 
-			// DM команды для управления уведомлениями о событиях
-			if (message.Channel is IDMChannel)
-			{
-				if (await TryHandleEventNotifyDirectMessageAsync(message))
-					return;
-			}
+    // DM команды для управления уведомлениями о событиях
+    if (message.Channel is IDMChannel)
+    {
+    if (await TryHandleEventNotifyDirectMessageAsync(message))
+    return;
+    }
 
             var context = new SocketCommandContext(_client, message);
             var user = message.Author as SocketGuildUser;
@@ -5011,9 +5011,9 @@ await Task.CompletedTask;
         private (ulong welcomeChannelId, ulong rollChannelId, ulong generalRGChannelID, string lineMessages, string emoteKappa, string emoteAga) GetResponseData(SocketMessage message)
         {
             var channel = message.Channel as SocketGuildChannel;
-			if (channel == null || !_serverConfigs.TryGetValue(channel.Guild.Id, out var config))
+    if (channel == null || !_serverConfigs.TryGetValue(channel.Guild.Id, out var config))
             {
-             return (0, 0, 0, string.Empty, string.Empty, string.Empty);
+            return (0, 0, 0, string.Empty, string.Empty, string.Empty);
             }
 
             // Для тестового сервера
@@ -5029,7 +5029,7 @@ await Task.CompletedTask;
                     "<:kappa:1100150992428871720>", "<:Agakakskagesh:1316461730569916557>");
             }
 
-         return (0, 0, 0, string.Empty, string.Empty, string.Empty);
+        return (0, 0, 0, string.Empty, string.Empty, string.Empty);
         }
 
         private async Task HandleDictatorCommand(SocketGuildUser? user, SocketMessage message)
@@ -5092,10 +5092,10 @@ await Task.CompletedTask;
 
         private int GetBugReportCounter()
         {
-			var logDirRaw = _config?.LogDirectory;
-			var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-			Directory.CreateDirectory(logDir);
-			string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
+    var logDirRaw = _config?.LogDirectory;
+    var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
+    Directory.CreateDirectory(logDir);
+    string counterFilePath = Path.Combine(logDir, "bug_report_counter.txt");
 
             if (File.Exists(counterFilePath))
             {
@@ -5159,7 +5159,7 @@ await Task.CompletedTask;
                     case "bug_report":
                         await Bug_ReportCommand(command);
                         break;
-    				case "start":
+        case "start":
                         await StartGameSession(command);
                         break;
                     case "settings":
@@ -5218,63 +5218,63 @@ await Task.CompletedTask;
             }
         }
 
-		private async Task EventNotifyCommand(SocketSlashCommand command)
-		{
-			var guildId = command.GuildId;
-			if (!guildId.HasValue)
-			{
-				await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
-				return;
-			}
+private async Task EventNotifyCommand(SocketSlashCommand command)
+{
+    var guildId = command.GuildId;
+    if (!guildId.HasValue)
+    {
+    await command.RespondAsync("Эта команда доступна только на сервере.", ephemeral: true);
+    return;
+    }
 
-			if (_eventNotifications == null)
-			{
-				await command.RespondAsync("Сервис уведомлений не инициализирован.", ephemeral: true);
-				return;
-			}
+    if (_eventNotifications == null)
+    {
+    await command.RespondAsync("Сервис уведомлений не инициализирован.", ephemeral: true);
+    return;
+    }
 
-			try
-			{
-				var action = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString();
-				action = string.IsNullOrWhiteSpace(action) ? "status" : action;
+    try
+    {
+    var action = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString();
+    action = string.IsNullOrWhiteSpace(action) ? "status" : action;
 
-				switch (action.ToLowerInvariant())
-				{
-					case "subscribe":
-					{
-						_eventNotifications.Subscribe(guildId.Value, command.User.Id);
-						await command.RespondAsync("Готово. Буду присылать в личные сообщения уведомления о новых событиях на этом сервере. Чтобы отключить — /event_notify unsubscribe или напиши мне «стоп».", ephemeral: true);
-						break;
-					}
-					case "unsubscribe":
-					{
-						var removed = _eventNotifications.Unsubscribe(guildId.Value, command.User.Id);
-						await command.RespondAsync(removed
-							? "Ок, отписал от уведомлений по этому серверу."
-							: "Вы и так не были подписаны на уведомления по этому серверу.", ephemeral: true);
-						break;
-					}
-					case "status":
-					default:
-					{
-						var subscribed = _eventNotifications.IsSubscribed(guildId.Value, command.User.Id);
-						var paused = _eventNotifications.IsPaused(command.User.Id);
-						var txt = $"Подписка на этот сервер: {(subscribed ? "✅ да" : "❌ нет")}. Пауза личных уведомлений: {(paused ? "⏸️ да" : "▶️ нет")}.";
-						await command.RespondAsync(txt, ephemeral: true);
-						break;
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				await LogError($"Ошибка в EventNotifyCommand: {ex.Message}");
-				try
-				{
-					await command.RespondAsync("Произошла ошибка при работе с подпиской. Попробуйте ещё раз позже или сообщите администратору.", ephemeral: true);
-				}
-				catch { }
-			}
-		}
+    switch (action.ToLowerInvariant())
+    {
+    case "subscribe":
+    {
+        _eventNotifications.Subscribe(guildId.Value, command.User.Id);
+        await command.RespondAsync("Готово. Буду присылать в личные сообщения уведомления о новых событиях на этом сервере. Чтобы отключить — /event_notify unsubscribe или напиши мне «стоп».", ephemeral: true);
+        break;
+    }
+    case "unsubscribe":
+    {
+        var removed = _eventNotifications.Unsubscribe(guildId.Value, command.User.Id);
+        await command.RespondAsync(removed
+        ? "Ок, отписал от уведомлений по этому серверу."
+        : "Вы и так не были подписаны на уведомления по этому серверу.", ephemeral: true);
+        break;
+    }
+    case "status":
+    default:
+    {
+        var subscribed = _eventNotifications.IsSubscribed(guildId.Value, command.User.Id);
+        var paused = _eventNotifications.IsPaused(command.User.Id);
+        var txt = $"Подписка на этот сервер: {(subscribed ? "✅ да" : "❌ нет")}. Пауза личных уведомлений: {(paused ? "⏸️ да" : "▶️ нет")}.";
+        await command.RespondAsync(txt, ephemeral: true);
+        break;
+    }
+    }
+    }
+    catch (Exception ex)
+    {
+    await LogError($"Ошибка в EventNotifyCommand: {ex.Message}");
+    try
+    {
+    await command.RespondAsync("Произошла ошибка при работе с подпиской. Попробуйте ещё раз позже или сообщите администратору.", ephemeral: true);
+    }
+    catch { }
+    }
+}
 
         private async Task StopQueue(SocketSlashCommand command)
         {
@@ -5690,30 +5690,30 @@ await Task.CompletedTask;
                 return;
             }
 
-			var guildId = command.GuildId.Value;
-			var user = command.User as SocketGuildUser;
-			if (user == null)
-			{
-				await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
-				return;
-			}
+    var guildId = command.GuildId.Value;
+    var user = command.User as SocketGuildUser;
+    if (user == null)
+    {
+    await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+    return;
+    }
 
-			// Проверка прав: администратор/ManageGuild или наличие роли суперпользователя (если она настроена на сервере)
-			var isAdmin = user.GuildPermissions.Administrator || user.GuildPermissions.ManageGuild;
-			ulong? superUserRoleId = null;
-			if (_serverConfigs.TryGetValue(guildId, out var existingCfg))
-			{
-				superUserRoleId = existingCfg.SuperUserRoleId;
-			}
+    // Проверка прав: администратор/ManageGuild или наличие роли суперпользователя (если она настроена на сервере)
+    var isAdmin = user.GuildPermissions.Administrator || user.GuildPermissions.ManageGuild;
+    ulong? superUserRoleId = null;
+    if (_serverConfigs.TryGetValue(guildId, out var existingCfg))
+    {
+    superUserRoleId = existingCfg.SuperUserRoleId;
+    }
 
-			var hasSuperUserRole = superUserRoleId.HasValue && superUserRoleId.Value != 0 &&
-				user.Roles.Any(r => r.Id == superUserRoleId.Value);
+    var hasSuperUserRole = superUserRoleId.HasValue && superUserRoleId.Value != 0 &&
+    user.Roles.Any(r => r.Id == superUserRoleId.Value);
 
-			if (!isAdmin && !hasSuperUserRole)
-			{
-				await command.RespondAsync("У вас нет прав для управления настройками (требуется роль суперпользователя или права Manage Guild/Admin).", ephemeral: true);
-				return;
-			}
+    if (!isAdmin && !hasSuperUserRole)
+    {
+    await command.RespondAsync("У вас нет прав для управления настройками (требуется роль суперпользователя или права Manage Guild/Admin).", ephemeral: true);
+    return;
+    }
 
             var actionOpt = command.Data.Options.FirstOrDefault(o => o.Name == "action")?.Value?.ToString()?.ToLowerInvariant();
             var keyOpt = command.Data.Options.FirstOrDefault(o => o.Name == "key")?.Value?.ToString()?.ToLowerInvariant();
@@ -5721,11 +5721,11 @@ await Task.CompletedTask;
             var channelOpt = command.Data.Options.FirstOrDefault(o => o.Name == "channel")?.Value;
             var toggleOpt = command.Data.Options.FirstOrDefault(o => o.Name == "toggle")?.Value;
 
-			if (string.IsNullOrWhiteSpace(actionOpt))
-			{
-				await command.RespondAsync("Укажите действие: get/set/list/reset/reload/help", ephemeral: true);
-				return;
-			}
+    if (string.IsNullOrWhiteSpace(actionOpt))
+    {
+    await command.RespondAsync("Укажите действие: get/set/list/reset/reload/help", ephemeral: true);
+    return;
+    }
 
             if (!_serverConfigs.TryGetValue(guildId, out var sconfig))
             {
@@ -5733,106 +5733,106 @@ await Task.CompletedTask;
                 _serverConfigs[guildId] = sconfig;
             }
 
-			switch (actionOpt)
-			{
-				case "help":
-					{
-						var sb = new StringBuilder();
-						sb.AppendLine("Справка по /settings:");
-						sb.AppendLine("/settings action:list — показать все текущие настройки сервера.");
-						sb.AppendLine("/settings action:get key:<ключ> — показать значение одного параметра.");
-						sb.AppendLine("/settings action:set key:<ключ> value:<значение> — изменить параметр.");
-						sb.AppendLine("/settings action:reset — сбросить настройки этого сервера.");
-						sb.AppendLine("/settings action:reload — перечитать настройки всех серверов из serverconfigs.json.");
-						sb.AppendLine();
-						sb.AppendLine("Передача значений:");
-                      sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
+    switch (actionOpt)
+    {
+    case "help":
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Справка по /settings:");
+        sb.AppendLine("/settings action:list — показать все текущие настройки сервера.");
+        sb.AppendLine("/settings action:get key:<ключ> — показать значение одного параметра.");
+        sb.AppendLine("/settings action:set key:<ключ> value:<значение> — изменить параметр.");
+        sb.AppendLine("/settings action:reset — сбросить настройки этого сервера.");
+        sb.AppendLine("/settings action:reload — перечитать настройки всех серверов из serverconfigs.json.");
+        sb.AppendLine();
+        sb.AppendLine("Передача значений:");
+                        sb.AppendLine("- Для каналов (moderation_channel, welcome_channel, general_rg_channel, roll_channel, stats_channel, record_channel)");
                         sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с ID или названием канала.");
-						sb.AppendLine("  Если указаны оба, приоритет у channel.");
-                       sb.AppendLine("- Для ролей (default_role, master_role, super_user_role) указывайте ID роли или её название в value.");
-					   sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
-					   sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
-						sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
-						sb.AppendLine("- Для swear_words укажите слова через запятую в value (например: слово1,слово2). value:clear — очистить список.");
-						sb.AppendLine();
-						sb.AppendLine("Примеры:");
-						sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
-						sb.AppendLine("/settings action:set key:moderation_channel value:123456789012345678");
-						sb.AppendLine("/settings action:set key:default_role value:@Игрок");
-						sb.AppendLine("/settings action:set key:master_role value:Мастер НРИ");
-						sb.AppendLine("/settings action:set key:swear_filter toggle:true");
-						sb.AppendLine("/settings action:set key:swear_words value:слово1,слово2,слово3");
-						sb.AppendLine("/settings action:set key:swear_words value:clear");
-						sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
-						await command.RespondAsync(sb.ToString(), ephemeral: true);
-						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
-					}
-					break;
+        sb.AppendLine("  Если указаны оба, приоритет у channel.");
+                        sb.AppendLine("- Для ролей (default_role, master_role, super_user_role) указывайте ID роли или её название в value.");
+        sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
+        sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
+        sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+        sb.AppendLine("- Для swear_words укажите слова через запятую в value (например: слово1,слово2). value:clear — очистить список.");
+        sb.AppendLine();
+        sb.AppendLine("Примеры:");
+        sb.AppendLine("/settings action:set key:moderation_channel channel:#модерация");
+        sb.AppendLine("/settings action:set key:moderation_channel value:123456789012345678");
+        sb.AppendLine("/settings action:set key:default_role value:@Игрок");
+        sb.AppendLine("/settings action:set key:master_role value:Мастер НРИ");
+        sb.AppendLine("/settings action:set key:swear_filter toggle:true");
+        sb.AppendLine("/settings action:set key:swear_words value:слово1,слово2,слово3");
+        sb.AppendLine("/settings action:set key:swear_words value:clear");
+        sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
+        await command.RespondAsync(sb.ToString(), ephemeral: true);
+        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
+    }
+    break;
 
-				case "reload":
-					{
-						LoadServerConfigs();
-						await command.RespondAsync("Конфигурации серверов перезагружены из файла serverconfigs.json.", ephemeral: true);
-					}
-					break;
+    case "reload":
+    {
+        LoadServerConfigs();
+        await command.RespondAsync("Конфигурации серверов перезагружены из файла serverconfigs.json.", ephemeral: true);
+    }
+    break;
 
-				case "list":
-					{
-						var sb = new StringBuilder();
-						sb.AppendLine($"Настройки для сервера {guildId}:");
-						sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
-						sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
-						sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
-						sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
-						sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
-						sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
-						sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
-						sb.AppendLine($"line_message: {sconfig.LineMessage}");
-						sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
+    case "list":
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Настройки для сервера {guildId}:");
+        sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
+        sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
+        sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
+        sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
+        sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
+        sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
+        sb.AppendLine($"welcome_message: {sconfig.WelcomeMessage}");
+        sb.AppendLine($"line_message: {sconfig.LineMessage}");
+        sb.AppendLine($"default_role: {sconfig.DefaultRoleID}");
                         sb.AppendLine($"master_role: {(sconfig.MasterRoleId.HasValue ? sconfig.MasterRoleId.Value.ToString() : "null")}");
-						sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
-						sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
-						sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
-						sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
-                       sb.AppendLine($"roll_pictures: {sconfig.RollPicturesEnabled}");
-						sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
-						await command.RespondAsync(sb.ToString(), ephemeral: true);
-						ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
-					}
-					break;
+        sb.AppendLine($"super_user_role: {(sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "null")}");
+        sb.AppendLine($"swear_filter: {sconfig.SwearFilterEnabled}");
+        sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
+        sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
+                        sb.AppendLine($"roll_pictures: {sconfig.RollPicturesEnabled}");
+        sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
+        await command.RespondAsync(sb.ToString(), ephemeral: true);
+        ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
+    }
+    break;
 
                 case "get":
-					{
-						if (string.IsNullOrWhiteSpace(keyOpt))
-						{
-							await command.RespondAsync("Укажите ключ настройки (например: moderation_channel).", ephemeral: true);
-							return;
-						}
+    {
+        if (string.IsNullOrWhiteSpace(keyOpt))
+        {
+        await command.RespondAsync("Укажите ключ настройки (например: moderation_channel).", ephemeral: true);
+        return;
+        }
 
-						string result = keyOpt switch
-						{
-							"moderation_channel" => sconfig.ModerateChannelID.ToString(),
-							"welcome_channel" => sconfig.WelcomeChannelID.ToString(),
-							"roll_channel" => sconfig.RollChannelID.ToString(),
-							"stats_channel" => sconfig.StatsChannelID.ToString(),
-							"record_channel" => sconfig.RecordChannelID.ToString(),
-							"welcome_message" => sconfig.WelcomeMessage ?? "",
-							"line_message" => sconfig.LineMessage ?? "",
-							"general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
-							"default_role" => sconfig.DefaultRoleID.ToString(),
-                          "master_role" => sconfig.MasterRoleId.HasValue ? sconfig.MasterRoleId.Value.ToString() : "",
-							"super_user_role" => sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "",
-							"swear_filter" => sconfig.SwearFilterEnabled.ToString(),
-							"swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
-							"predictions" => sconfig.PredictionsEnabled.ToString(),
+        string result = keyOpt switch
+        {
+        "moderation_channel" => sconfig.ModerateChannelID.ToString(),
+        "welcome_channel" => sconfig.WelcomeChannelID.ToString(),
+        "roll_channel" => sconfig.RollChannelID.ToString(),
+        "stats_channel" => sconfig.StatsChannelID.ToString(),
+        "record_channel" => sconfig.RecordChannelID.ToString(),
+        "welcome_message" => sconfig.WelcomeMessage ?? "",
+        "line_message" => sconfig.LineMessage ?? "",
+        "general_rg_channel" => sconfig.GeneralRGChannelID.ToString(),
+        "default_role" => sconfig.DefaultRoleID.ToString(),
+                        "master_role" => sconfig.MasterRoleId.HasValue ? sconfig.MasterRoleId.Value.ToString() : "",
+        "super_user_role" => sconfig.SuperUserRoleId.HasValue ? sconfig.SuperUserRoleId.Value.ToString() : "",
+        "swear_filter" => sconfig.SwearFilterEnabled.ToString(),
+        "swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
+        "predictions" => sconfig.PredictionsEnabled.ToString(),
                             "roll_pictures" => sconfig.RollPicturesEnabled.ToString(),
                             "event_voice_channel" => sconfig.EventVoiceChannelID.ToString(),
-							_ => "Неизвестный ключ"
-						};
+        _ => "Неизвестный ключ"
+        };
 
-						await command.RespondAsync(result, ephemeral: true);
-					}
-					break;
+        await command.RespondAsync(result, ephemeral: true);
+    }
+    break;
 
                 case "set":
                     {
@@ -5927,8 +5927,8 @@ await Task.CompletedTask;
                                 await command.RespondAsync($"{keyOpt} установлен: {roleId.Value}", ephemeral: true);
                                 }
                                 break;
-							case "super_user_role":
-								{
+        case "super_user_role":
+        {
                                     var guild = _client!.GetGuild(guildId);
                                     var roleId = guild == null ? null : ResolveRoleId(guild, valueOpt);
                                     if (!roleId.HasValue)
@@ -5940,8 +5940,8 @@ await Task.CompletedTask;
                                     sconfig.SuperUserRoleId = roleId.Value;
                                     SaveServerConfigs();
                                     await command.RespondAsync($"super_user_role установлен: {roleId.Value}", ephemeral: true);
-								}
-								break;
+        }
+        break;
                             case "swear_words":
                                 {
                                     if (string.IsNullOrWhiteSpace(valueOpt))
@@ -6267,11 +6267,11 @@ catch (Exception ex)
             return checks;
         }
 
-		private Task LogStartup(string message)
-				{
-					StartupRenderer.Instance.WriteLine(message);
-					return Task.CompletedTask;
-				}
+private Task LogStartup(string message)
+    {
+    StartupRenderer.Instance.WriteLine(message);
+    return Task.CompletedTask;
+    }
 
         private async Task LogShutdownState(bool isRestart, string initiator)
         {
@@ -6346,11 +6346,11 @@ catch (Exception ex)
                                 .WithName("Смотрящий за костром")
                                 .WithIconUrl("https://media.discordapp.net/attachments/710469293996769405/1241391979477205192/1.png?ex=664a07df&is=6648b65f&hm=b8a054e85315f85feb24a756fed87bfffd8a004e6e32bf1eb77db58f41f9b62e&=&format=webp&quality=lossless"))
                             /*.WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
-                                             "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
-                                             "На сервере также действует несколько команд через `!`, которые работают только в следующих чатах: **флудилка** и **общий-ролевой-чат**, с важной информацией:\n" +
-                                             "1. `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
-                                             "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
-                                             "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")*/
+                                            "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                            "На сервере также действует несколько команд через `!`, которые работают только в следующих чатах: **флудилка** и **общий-ролевой-чат**, с важной информацией:\n" +
+                                            "1. `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                            "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                            "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")*/
                             .WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
                                                 "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
                                                 "На сервере помимо команд через `/` также действует несколько команд через `!` с важной информацией:\n" +
