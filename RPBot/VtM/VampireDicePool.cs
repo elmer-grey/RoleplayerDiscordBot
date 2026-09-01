@@ -216,11 +216,11 @@ namespace RPBot.VtM
                 bonusValue = b;
                 if (b == 10)
                 {
-                    if (!isBestial) isBestial = true;
+                                if (!isMessy) isMessy = true;
                 }
                 else if (b == 1)
                 {
-                    if (!isMessy) isMessy = true;
+                                if (!isBestial) isBestial = true;
                 }
                 else if (b >= SuccessThreshold)
                 {
