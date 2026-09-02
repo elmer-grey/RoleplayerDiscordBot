@@ -44,16 +44,49 @@ public class VampireParameterCatalogTests
     }
 
     [Fact]
-    public void Skills_HasTen()
+        public void Talents_MatchV20Anniversary()
     {
-        Assert.Equal(10, VampireParameterCatalog.Skills.Count);
-    }
+            var expected = new[]
+            {
+                "Атлетика", "Бдительность", "Драка", "Запугивание", "Красноречие",
+                "Лидерство", "Уличное чутьё", "Хитрость", "Шестое чувство", "Эмпатия"
+            };
+            Assert.Equal(expected, VampireParameterCatalog.Talents);
+        }
 
-    [Fact]
-    public void Knowledges_HasTen()
-    {
-        Assert.Equal(10, VampireParameterCatalog.Knowledges.Count);
-    }
+        [Fact]
+        public void Skills_HasTen()
+        {
+            Assert.Equal(10, VampireParameterCatalog.Skills.Count);
+        }
+
+        [Fact]
+        public void Skills_MatchV20Anniversary()
+        {
+            var expected = new[]
+            {
+                "Вождение", "Воровство", "Выживание", "Исполнение", "Обращение с животными",
+                "Ремесло", "Скрытность", "Стрельба", "Фехтование", "Этикет"
+            };
+            Assert.Equal(expected, VampireParameterCatalog.Skills);
+        }
+
+        [Fact]
+        public void Knowledges_HasTen()
+        {
+            Assert.Equal(10, VampireParameterCatalog.Knowledges.Count);
+        }
+
+        [Fact]
+        public void Knowledges_MatchV20Anniversary()
+        {
+            var expected = new[]
+            {
+                "Гуманитарные науки", "Естественные науки", "Информатика", "Медицина",
+                "Оккультизм", "Политика", "Расследование", "Финансы", "Электроника", "Юриспруденция"
+            };
+            Assert.Equal(expected, VampireParameterCatalog.Knowledges);
+        }
 
     [Fact]
     public void IsCharacteristic_TrueForStrength()
@@ -68,7 +101,7 @@ public class VampireParameterCatalogTests
     {
         Assert.False(VampireParameterCatalog.IsCharacteristic("Драка"));
         Assert.False(VampireParameterCatalog.IsCharacteristic("Вождение"));
-        Assert.False(VampireParameterCatalog.IsCharacteristic("Законы"));
+            Assert.False(VampireParameterCatalog.IsCharacteristic("Юриспруденция"));
     }
 
     [Fact]
@@ -76,26 +109,27 @@ public class VampireParameterCatalogTests
     {
         Assert.True(VampireParameterCatalog.IsValid("Сила"));
         Assert.True(VampireParameterCatalog.IsValid("Драка"));
-        Assert.True(VampireParameterCatalog.IsValid("Законы"));
-    }
+            Assert.True(VampireParameterCatalog.IsValid("Юриспруденция"));
+            Assert.True(VampireParameterCatalog.IsValid("Шестое чувство"));
+        }
 
-    [Fact]
-    public void IsValid_RejectsUnknown()
-    {
-        Assert.False(VampireParameterCatalog.IsValid("Несуществующий"));
-        Assert.False(VampireParameterCatalog.IsValid(""));
-    }
+        [Fact]
+        public void IsValid_RejectsUnknown()
+        {
+            Assert.False(VampireParameterCatalog.IsValid("Несуществующий"));
+            Assert.False(VampireParameterCatalog.IsValid(""));
+        }
 
-    [Fact]
-    public void GetCategory_ReturnsCorrectCategory()
-    {
-        Assert.Equal("Физические", VampireParameterCatalog.GetCategory("Сила"));
-        Assert.Equal("Социальные", VampireParameterCatalog.GetCategory("Обаяние"));
-        Assert.Equal("Ментальные", VampireParameterCatalog.GetCategory("Восприятие"));
-        Assert.Equal("Таланты", VampireParameterCatalog.GetCategory("Драка"));
-        Assert.Equal("Навыки", VampireParameterCatalog.GetCategory("Вождение"));
-        Assert.Equal("Знания", VampireParameterCatalog.GetCategory("Законы"));
-    }
+        [Fact]
+        public void GetCategory_ReturnsCorrectCategory()
+        {
+            Assert.Equal("Физические", VampireParameterCatalog.GetCategory("Сила"));
+            Assert.Equal("Социальные", VampireParameterCatalog.GetCategory("Обаяние"));
+            Assert.Equal("Ментальные", VampireParameterCatalog.GetCategory("Восприятие"));
+            Assert.Equal("Таланты", VampireParameterCatalog.GetCategory("Драка"));
+            Assert.Equal("Навыки", VampireParameterCatalog.GetCategory("Вождение"));
+            Assert.Equal("Знания", VampireParameterCatalog.GetCategory("Юриспруденция"));
+        }
 
     [Fact]
     public void GetCategory_UnknownReturnsEmpty()

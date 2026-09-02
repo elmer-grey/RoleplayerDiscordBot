@@ -42,6 +42,25 @@ public sealed class VampireCharacter
     [JsonPropertyName("hunger")]
     public int Hunger { get; set; } = 1;
 
+        /// <summary>
+        /// Атрибут «Воля» (1..10). Базовое значение обсуждается отдельно.
+        /// </summary>
+        [JsonPropertyName("willpower")]
+        public int Willpower { get; set; } = 5;
+
+        /// <summary>
+        /// Текущий запас пунктов воли (0..<see cref="Willpower"/>).
+        /// Стартовое значение = <see cref="Willpower"/>. Восстанавливается по завершении истории.
+        /// </summary>
+        [JsonPropertyName("willpowerPoints")]
+        public int WillpowerPoints { get; set; } = 5;
+
+        /// <summary>
+        /// Флаг «уже тратил пункт воли в этом ходу». Сбрасывается в начале каждого хода рассказчиком.
+        /// </summary>
+        [JsonPropertyName("willpowerSpentThisTurn")]
+        public bool WillpowerSpentThisTurn { get; set; }
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>
@@ -67,4 +86,15 @@ public sealed class VampireCharacter
         int dots = isCharacteristic ? Math.Min(v + 1, 5) : Math.Min(v, 5);
         return Math.Max(dots, 0);
     }
+
+        /// <summary>
+        /// Подтянуть запас пунктов воли к потолку после повышения атрибута «Воля».
+        /// Вызывать при изменении <see cref="Willpower"/> (создание персонажа, покупка за опыт).
+        /// </summary>
+        public void EnsureWillpowerPointsValid()
+        {
+            if (Willpower < 0) Willpower = 0;
+            if (WillpowerPoints < 0) WillpowerPoints = 0;
+            if (WillpowerPoints > Willpower) WillpowerPoints = Willpower;
+        }
 }
