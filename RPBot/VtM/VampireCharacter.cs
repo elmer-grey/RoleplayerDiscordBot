@@ -71,6 +71,61 @@ public sealed class VampireCharacter
         [JsonPropertyName("willpowerSpentThisTurn")]
         public bool WillpowerSpentThisTurn { get; set; }
 
+        /// <summary>
+        /// Свободное описание персонажа (биография, концепт, клан, поколение и т. п.).
+        /// Показывается в embed'е листа персонажа и в личных сообщениях игрока.
+        /// </summary>
+        /// <remarks>
+        /// Опционально. Поддерживает обычный текст; переносы строк сохраняются Discord'ом.
+        /// Не сериализуется, если пустое — для обратной совместимости со старыми персонажами.
+        /// </remarks>
+        [JsonPropertyName("bio")]
+        public string Bio { get; set; } = "";
+
+        /// <summary>
+        /// URL картинки-аватара персонажа (Discord attachment URL или иной https-адрес).
+        /// Используется как <c>thumbnail</c> в embed'е листа.
+        /// </summary>
+        /// <remarks>
+        /// Опционально. Если пусто или невалидно — thumbnail не задаётся.
+        /// Discord ограничивает размер thumbnail до 5 МБ и допускает только http/https.
+        /// </remarks>
+        [JsonPropertyName("avatarUrl")]
+        public string AvatarUrl { get; set; } = "";
+
+        /// <summary>
+        /// Человечность / Путь совести (1..10). По умолчанию 7.
+        /// </summary>
+        /// <remarks>
+        /// Показывается в embed'е листа персонажа.
+        /// </remarks>
+        [JsonPropertyName("humanity")]
+        public int Humanity { get; set; } = 7;
+
+        /// <summary>
+        /// Шкала здоровья персонажа. Может быть null, если персонаж ещё не создан / не загружен.
+        /// </summary>
+        [JsonPropertyName("health")]
+        public HealthState? Health { get; set; }
+
+        /// <summary>
+        /// Дисциплины: имя → уровень (1..5). Опционально.
+        /// </summary>
+        [JsonPropertyName("disciplines")]
+        public Dictionary<string, int> Disciplines { get; set; } = new();
+
+        /// <summary>
+        /// Текущий опыт (необязательно). Показывается в embed'е листа.
+        /// </summary>
+        [JsonPropertyName("experienceCurrent")]
+        public int ExperienceCurrent { get; set; }
+
+        /// <summary>
+        /// Всего получено опыта за всю историю персонажа (необязательно).
+        /// </summary>
+        [JsonPropertyName("experienceTotal")]
+        public int ExperienceTotal { get; set; }
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>
