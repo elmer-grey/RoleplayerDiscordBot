@@ -15,6 +15,16 @@ public sealed class VampireCharacter
     [JsonPropertyName("playerName")]
     public string PlayerName { get; set; } = "";
 
+        /// <summary>
+        /// Discord user ID игрока (ulong). Нужен для отправки листа в DM по команде <c>/vampire_show</c>.
+        /// </summary>
+        /// <remarks>
+        /// Опциональное поле — у старых персонажей 0. Заполняется при создании/обновлении.
+        /// Используется <see cref="VampireStorage"/> как вторичный индекс наряду с <see cref="PlayerName"/>.
+        /// </remarks>
+        [JsonPropertyName("playerId")]
+        public ulong PlayerId { get; set; }
+
     /// <summary>Имя персонажа.</summary>
     [JsonPropertyName("characterName")]
     public string CharacterName { get; set; } = "";

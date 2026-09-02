@@ -91,6 +91,72 @@ public class VampireStorageTests : IDisposable
         Assert.Equal("Vamp1", s.GetCharacter("alice")!.CharacterName);
     }
 
+        [Fact]
+        public async Task UpsertAsync_WithPlayerId_BuildsSecondaryIndex()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            await s.UpsertAsync(new VampireCharacter
+            {
+                PlayerName = "alice",
+                PlayerId = 12345UL,
+                CharacterName = "Vamp1"
+            });
+
+            var byId = s.GetByPlayerId(12345UL);
+            Assert.NotNull(byId);
+            Assert.Equal("alice", byId!.PlayerName);
+            Assert.Equal("Vamp1", byId.CharacterName);
+        }
+
+        [Fact]
+        public async Task GetByPlayerId_Zero_ReturnsNull()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            Assert.Null(s.GetByPlayerId(0));
+        }
+
+        [Fact]
+        public async Task GetByPlayerId_Unknown_ReturnsNull()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            await s.UpsertAsync(new VampireCharacter { PlayerName = "alice", PlayerId = 11, CharacterName = "A" });
+            Assert.Null(s.GetByPlayerId(99));
+        }
+
+        [Fact]
+        public async Task RemoveAsync_ClearsSecondaryIndex()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            await s.UpsertAsync(new VampireCharacter { PlayerName = "alice", PlayerId = 11, CharacterName = "A" });
+            Assert.NotNull(s.GetByPlayerId(11));
+
+            await s.RemoveAsync("alice");
+            Assert.Null(s.GetByPlayerId(11));
+        }
+
+        [Fact]
+        public async Task LoadAsync_RestoresPlayerIdIndex()
+        {
+            var s1 = NewStorage(guildId: 444);
+            await s1.LoadAsync();
+            await s1.UpsertAsync(new VampireCharacter
+            {
+                PlayerName = "zoe",
+                PlayerId = 999UL,
+                CharacterName = "Зоя"
+            });
+            await s1.SaveAsync();
+
+            var s2 = NewStorage(guildId: 444);
+            await s2.LoadAsync();
+            Assert.NotNull(s2.GetByPlayerId(999UL));
+            Assert.Equal("Зоя", s2.GetByPlayerId(999UL)!.CharacterName);
+        }
+
     [Fact]
     public async Task UpsertAsync_Existing_ReturnsFalse()
     {

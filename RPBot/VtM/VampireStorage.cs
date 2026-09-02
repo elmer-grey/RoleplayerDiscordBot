@@ -34,8 +34,10 @@ namespace RPBot.VtM
 
         // PlayerName → VampireCharacter
         private Dictionary<string, VampireCharacter> _characters = new(StringComparer.Ordinal);
+                // Вторичный индекс PlayerId → PlayerName (для поиска по Discord user ID).
+                private Dictionary<ulong, string> _byPlayerId = new();
 
-        public VampireStorage(ulong guildId)
+                public VampireStorage(ulong guildId)
         {
             var dataDir = BotConfig.GetDataDirectory();
             var vtmDir = Path.Combine(dataDir, "vtm");
@@ -65,7 +67,8 @@ namespace RPBot.VtM
                     _characters = loaded != null
                         ? new Dictionary<string, VampireCharacter>(loaded, StringComparer.Ordinal)
                         : new Dictionary<string, VampireCharacter>(StringComparer.Ordinal);
-                }
+                                    RebuildPlayerIdIndex();
+                                }
                 catch
                 {
                     // Битый JSON — не падаем, начинаем с пустого словаря.
@@ -102,6 +105,34 @@ namespace RPBot.VtM
             return c;
         }
 
+                /// <summary>
+                /// Найти персонажа по Discord user ID (ulong). Возвращает null, если такого ID нет.
+                /// </summary>
+                public VampireCharacter? GetByPlayerId(ulong playerId)
+                {
+                    if (playerId == 0) return null;
+                    if (_byPlayerId.TryGetValue(playerId, out var name))
+                    {
+                        return GetCharacter(name);
+                    }
+                    return null;
+                }
+
+                /// <summary>
+                /// Перестроить вторичный индекс PlayerId → PlayerName (вызывать после Load и при ручных правках).
+                /// </summary>
+                private void RebuildPlayerIdIndex()
+                {
+                    _byPlayerId.Clear();
+                    foreach (var c in _characters.Values)
+                    {
+                        if (c.PlayerId != 0)
+                        {
+                            _byPlayerId[c.PlayerId] = c.PlayerName;
+                        }
+                    }
+                }
+
         /// <summary>Создать или перезаписать персонажа. Возвращает true, если создан новый.</summary>
         public async Task<bool> UpsertAsync(VampireCharacter character, CancellationToken ct = default)
         {
@@ -113,14 +144,19 @@ namespace RPBot.VtM
             try
             {
                 bool isNew = !_characters.ContainsKey(character.PlayerName);
-                _characters[character.PlayerName] = character;
-                return isNew;
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        }
+                            // Если у нового/обновлённого персонажа есть PlayerId, индексируем.
+                            _characters[character.PlayerName] = character;
+                            if (character.PlayerId != 0)
+                            {
+                                _byPlayerId[character.PlayerId] = character.PlayerName;
+                            }
+                            return isNew;
+                        }
+                        finally
+                        {
+                            _gate.Release();
+                        }
+                    }
 
         /// <summary>Удалить персонажа. Возвращает true, если что-то удалено.</summary>
         public async Task<bool> RemoveAsync(string playerName, CancellationToken ct = default)
@@ -129,13 +165,17 @@ namespace RPBot.VtM
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                return _characters.Remove(playerName);
+                        if (_characters.TryGetValue(playerName, out var existing) && existing.PlayerId != 0)
+                        {
+                            _byPlayerId.Remove(existing.PlayerId);
+                        }
+                        return _characters.Remove(playerName);
             }
-            finally
-            {
-                _gate.Release();
-            }
-        }
+                    finally
+                    {
+                        _gate.Release();
+                    }
+                }
 
         /// <summary>Все персонажи гильдии (для /vampire_list).</summary>
         public IReadOnlyList<VampireCharacter> ListAll()
