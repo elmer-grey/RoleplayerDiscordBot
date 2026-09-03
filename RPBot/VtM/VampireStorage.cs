@@ -237,6 +237,29 @@ namespace RPBot.VtM
                     }
                 }
 
+                /// <summary>
+                /// Сохранить черновик из визарда как готового персонажа.
+                /// </summary>
+                /// <remarks>
+                /// <para>В Этапе 1 черновик сохраняется по PlayerName (так же, как старые
+                /// персонажи). В Этапе 3 будет переход на ключ CharacterName с миграцией.</para>
+                /// </remarks>
+                public Task<bool> UpsertDraftAsync(VampireCharacter draft, CancellationToken ct = default)
+                {
+                    if (draft == null) throw new ArgumentNullException(nameof(draft));
+                    if (draft.CharacterId == Guid.Empty)
+                        draft.CharacterId = Guid.NewGuid();
+                    if (string.IsNullOrEmpty(draft.PlayerName))
+                        throw new ArgumentException("PlayerName обязателен у draft", nameof(draft));
+                    if (string.IsNullOrEmpty(draft.CharacterName))
+                    {
+                        // На Этапе 1 имя персонажа не запрашивается отдельно — берём как PlayerName,
+                        // чтобы лист был виден в /vampire show. На Этапе 3 будет отдельное поле.
+                        draft.CharacterName = draft.PlayerName;
+                    }
+                    return UpsertAsync(draft, ct);
+                }
+
                 /// <summary>Найти персонажа по имени (CharacterName). Case-insensitive.</summary>
                 /// <returns>0 или 1 персонажа; при >1 — исключение <see cref="InvalidOperationException"/>.</returns>
                 public VampireCharacter? FindByCharacterName(string characterName)

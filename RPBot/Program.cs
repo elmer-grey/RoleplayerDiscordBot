@@ -8,6 +8,7 @@ using RPBot.EventOps;
 using RPBot.SlashModules;
 using RPBot.Startup;
 using RPBot.Util;
+using RPBot.VtM;
 using RPBot.Web;
 using System;
 using System.Collections.Concurrent;
@@ -4736,6 +4737,16 @@ await Task.CompletedTask;
 
                 default:
                     var cid = component.Data.CustomId;
+                    if (cid.StartsWith("vtm_btn:", StringComparison.Ordinal))
+                    {
+                        await new VampireCommands().HandleSheetButtonAsync(component);
+                        return;
+                    }
+                    if (cid.StartsWith("vtm_wiz:", StringComparison.Ordinal))
+                    {
+                        await new VampireCommands().HandleWizardButtonAsync(component);
+                        return;
+                    }
                     if (_musicCommands is not null &&
                         (cid.StartsWith("music_search_") ||
                         cid.StartsWith("playlist_public_yes_") ||
@@ -4747,6 +4758,56 @@ await Task.CompletedTask;
                     }
     break;
     }
+}
+
+private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage message)
+{
+    // Только DM и не от ботов.
+    if (!(message.Channel is IDMChannel)) return false;
+    if (message.Author.IsBot) return false;
+
+    var userId = message.Author.Id;
+    var session = VampireWizardRegistry.Instance.GetByUser(userId);
+    if (session == null) return false; // нет активного визарда — пусть обработает event-notify
+
+    var text = (message.Content ?? string.Empty).Trim();
+    if (text.Length == 0) return false;
+
+    // Если сейчас бот ждёт значение поля.
+    if (string.IsNullOrEmpty(session.PendingField))
+    {
+        // Не запрошен ввод — подсказываем, что визард ждёт кнопок.
+        await message.Channel.SendMessageAsync(
+            "ℹ️ Сейчас я жду нажатия кнопки в визарде. Текст пока не нужен. " +
+            "Если хотите отменить — нажмите «Отмена» в визарде.");
+        return true;
+    }
+
+    var field = session.PendingField;
+    session.PendingField = null;
+
+    VampireCreateConceptDecision decision;
+    try
+    {
+        decision = VampireCreateResolver.ApplyConceptField(session.Draft, field, text);
+    }
+    catch (Exception ex)
+    {
+        await message.Channel.SendMessageAsync($"⚠️ Ошибка при сохранении: {ex.Message}");
+        return true;
+    }
+
+    if (decision.Failure != VampireCreateConceptFailure.None)
+    {
+        await message.Channel.SendMessageAsync($"❌ {decision.Message}\nПопробуйте ввести значение заново:");
+        session.PendingField = field; // повторить
+        return true;
+    }
+
+    // Успех — перерисуем экран.
+    await VampireWizardDmHandler.RenderConceptStepAsync((IDMChannel)message.Channel, session);
+    await message.AddReactionAsync(new Emoji("✅"));
+    return true;
 }
 
 private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessage message)
@@ -4804,6 +4865,8 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
     // DM команды для управления уведомлениями о событиях
     if (message.Channel is IDMChannel)
     {
+    if (await TryHandleWizardDirectMessageAsync(message))
+    return;
     if (await TryHandleEventNotifyDirectMessageAsync(message))
     return;
     }

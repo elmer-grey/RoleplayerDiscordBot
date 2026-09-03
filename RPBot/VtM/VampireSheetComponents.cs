@@ -15,6 +15,10 @@ namespace RPBot.VtM
         Willpower,
         /// <summary>Открыть/скрыть блок «Здоровье».</summary>
         Health,
+        /// <summary>Открыть/скрыть блок «Клан» (клановые дисциплины + изъян).</summary>
+        Clan,
+        /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
+        ToggleActive,
     }
 
     /// <summary>
@@ -35,25 +39,49 @@ namespace RPBot.VtM
         private const string ButtonLabelDescription = "Описание";
         private const string ButtonLabelWillpower   = "Воля";
         private const string ButtonLabelHealth      = "Здоровье";
+            private const string ButtonLabelClan        = "Клан";
+            private const string ButtonLabelActive      = "✅ Активный";
+            private const string ButtonLabelInactive    = "❌ Неактивный";
 
-        /// <summary>
-        /// Собрать 3 кнопки под листом в одном ActionRow.
-        /// </summary>
-        public static MessageComponent Build(VampireCharacter character)
-        {
-            if (character == null) throw new ArgumentNullException(nameof(character));
-            if (character.CharacterId == Guid.Empty)
-                throw new ArgumentException("CharacterId обязателен", nameof(character));
+            /// <summary>
+            /// Собрать кнопки под листом в одном ActionRow.
+            /// </summary>
+            /// <param name="character">Чарник, для которого строится ряд кнопок.</param>
+            /// <param name="showActiveToggle">
+            /// true — добавить кнопку активности (если у игрока несколько чарников).
+            /// false — не показывать (один чарник).
+            /// </param>
+            /// <param name="isActive">
+            /// true если этот чарник сейчас активный. Влияет на текст кнопки активности.
+            /// </param>
+            public static MessageComponent Build(
+                VampireCharacter character,
+                bool showActiveToggle = false,
+                bool isActive = true)
+            {
+                if (character == null) throw new ArgumentNullException(nameof(character));
+                if (character.CharacterId == Guid.Empty)
+                    throw new ArgumentException("CharacterId обязателен", nameof(character));
 
-            var cb = new ComponentBuilder()
-                .WithButton(ButtonLabelDescription, BuildCustomId(VampireSheetAction.Description, character.CharacterId),
-                    ButtonStyle.Primary)
-                .WithButton(ButtonLabelWillpower, BuildCustomId(VampireSheetAction.Willpower, character.CharacterId),
-                    ButtonStyle.Primary)
-                .WithButton(ButtonLabelHealth, BuildCustomId(VampireSheetAction.Health, character.CharacterId),
-                    ButtonStyle.Primary);
-            return cb.Build();
-        }
+                var cb = new ComponentBuilder()
+                    .WithButton(ButtonLabelDescription, BuildCustomId(VampireSheetAction.Description, character.CharacterId),
+                        ButtonStyle.Primary)
+                    .WithButton(ButtonLabelWillpower, BuildCustomId(VampireSheetAction.Willpower, character.CharacterId),
+                        ButtonStyle.Primary)
+                    .WithButton(ButtonLabelHealth, BuildCustomId(VampireSheetAction.Health, character.CharacterId),
+                        ButtonStyle.Primary)
+                    .WithButton(ButtonLabelClan, BuildCustomId(VampireSheetAction.Clan, character.CharacterId),
+                        ButtonStyle.Secondary);
+
+                if (showActiveToggle)
+                {
+                    var label = isActive ? ButtonLabelActive : ButtonLabelInactive;
+                    var style = isActive ? ButtonStyle.Success : ButtonStyle.Secondary;
+                    cb.WithButton(label, BuildCustomId(VampireSheetAction.ToggleActive, character.CharacterId), style);
+                }
+
+                return cb.Build();
+            }
 
         /// <summary>Собрать customId для одной кнопки.</summary>
         public static string BuildCustomId(VampireSheetAction action, Guid characterId)
@@ -84,6 +112,8 @@ namespace RPBot.VtM
             VampireSheetAction.Description => "desc",
             VampireSheetAction.Willpower   => "wp",
             VampireSheetAction.Health      => "hp",
+            VampireSheetAction.Clan        => "clan",
+            VampireSheetAction.ToggleActive => "active",
             _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
         };
 
@@ -91,10 +121,12 @@ namespace RPBot.VtM
         {
             switch (s)
             {
-                case "desc": action = VampireSheetAction.Description; return true;
-                case "wp":   action = VampireSheetAction.Willpower;   return true;
-                case "hp":   action = VampireSheetAction.Health;      return true;
-                default:     action = default;                        return false;
+                case "desc":   action = VampireSheetAction.Description; return true;
+                case "wp":     action = VampireSheetAction.Willpower;   return true;
+                case "hp":     action = VampireSheetAction.Health;      return true;
+                case "clan":   action = VampireSheetAction.Clan;        return true;
+                case "active": action = VampireSheetAction.ToggleActive; return true;
+                default:       action = default;                        return false;
             }
         }
     }

@@ -1,0 +1,372 @@
+using System;
+using System.Linq;
+using Discord;
+using RPBot.VtM;
+using Xunit;
+
+namespace SmokeTests;
+
+/// <summary>
+/// Smoke-тесты для VtM V20 визарда создания персонажа (Этап 1 — шаг 1 «Концепция»).
+/// </summary>
+public class VampireWizardTests
+{
+    private static VampireCharacter NewDraft() => new VampireCharacter
+    {
+        CharacterId = Guid.NewGuid(),
+        PlayerId = 42,
+        PlayerName = "TestUser",
+        Generation = 13,
+        Hunger = 1,
+    };
+
+    // ── Каталог: канонические кланы V20 (из PDF) ─────────────────────
+
+    [Fact]
+    public void Catalog_HasAll14CanonicalV20Clans()
+    {
+        var expected = new[]
+        {
+            "Ассамит", "Бруха", "Вентру", "Гангрел", "Джованни", "Каитиф",
+            "Ласомбра", "Малкавиан", "Носферату", "Последователь Сета",
+            "Равнос", "Тореадор", "Тремер", "Цимисхи",
+        };
+        foreach (var name in expected)
+        {
+            Assert.True(
+                VampireParameterCatalog.IsValidClan(name),
+                $"Канонический клан {name} должен быть в каталоге");
+        }
+    }
+
+    [Fact]
+    public void Catalog_InvalidClan_ReturnsFalse()
+    {
+        Assert.False(VampireParameterCatalog.IsValidClan("Танкреди"));
+        Assert.False(VampireParameterCatalog.IsValidClan(""));
+    }
+
+    [Theory]
+    [InlineData("Ассамит",          "Стремительность,Сокрытие,Упокоение")]
+    [InlineData("Бруха",            "Стремительность,Мощь,Величие")]
+    [InlineData("Вентру",           "Доминирование,Стойкость,Величие")]
+    [InlineData("Гангрел",          "Анимализм,Стойкость,Метаморфозы")]
+    [InlineData("Джованни",         "Доминирование,Некромантия,Мощь")]
+    [InlineData("Каитиф",           "")]
+    [InlineData("Ласомбра",         "Доминирование,Затемнение,Мощь")]
+    [InlineData("Малкавиан",        "Ясновидение,Помешательство,Сокрытие")]
+    [InlineData("Носферату",        "Анимализм,Сокрытие,Мощь")]
+    [InlineData("Последователь Сета", "Сокрытие,Величие,Серпентис")]
+    [InlineData("Равнос",           "Анимализм,Фантасмагория,Стойкость")]
+    [InlineData("Тореадор",         "Ясновидение,Стремительность,Величие")]
+    [InlineData("Тремер",           "Ясновидение,Доминирование,Тауматургия")]
+    [InlineData("Цимисхи",          "Анимализм,Ясновидение,Преображение")]
+    public void Catalog_GetClanDisciplines_MatchesV20Pdf(string clan, string expectedCsv)
+    {
+        var actual = VampireParameterCatalog.GetClanDisciplines(clan);
+        var expected = string.IsNullOrEmpty(expectedCsv)
+            ? Array.Empty<string>()
+            : expectedCsv.Split(',');
+        Assert.Equal(expected, actual.ToArray());
+    }
+
+    [Fact]
+    public void Catalog_CaitiffHasNoClanDisciplines()
+    {
+        var d = VampireParameterCatalog.GetClanDisciplines("Каитиф");
+        Assert.Empty(d);
+    }
+
+    [Fact]
+    public void Catalog_GetClanFlawShort_NotEmpty()
+    {
+        foreach (var clan in VampireParameterCatalog.Clans)
+        {
+            var s = VampireParameterCatalog.GetClanFlawShort(clan);
+            Assert.False(string.IsNullOrWhiteSpace(s), $"У {clan} должен быть клановый изъян");
+        }
+    }
+
+    [Fact]
+    public void Catalog_GetClanFlawLong_NotShorterThanShort()
+    {
+        foreach (var clan in VampireParameterCatalog.Clans)
+        {
+            var s = VampireParameterCatalog.GetClanFlawShort(clan);
+            var l = VampireParameterCatalog.GetClanFlawLong(clan);
+            Assert.True(l.Length >= s.Length,
+                $"У {clan} полный изъян должен быть ≥ краткого");
+        }
+    }
+
+    // ── Resolver: ApplyConceptField ──────────────────────────────────
+
+    [Fact]
+    public void Apply_ValidConcept_SetsFieldAndCompleteFalse()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "concept", "Циничный детектив");
+        Assert.Equal(VampireCreateConceptFailure.None, r.Failure);
+        Assert.Equal("Циничный детектив", d.Concept);
+        Assert.False(r.ConceptComplete);
+    }
+
+    [Fact]
+    public void Apply_EmptyConcept_FailsConceptRequired()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "concept", "");
+        Assert.Equal(VampireCreateConceptFailure.ConceptRequired, r.Failure);
+    }
+
+    [Fact]
+    public void Apply_ValidClan_SetsClanAndWeakness()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "clan", "Бруха");
+        Assert.Equal(VampireCreateConceptFailure.None, r.Failure);
+        Assert.Equal("Бруха", d.Clan);
+        Assert.False(string.IsNullOrEmpty(d.Weakness),
+            "При выборе клана должен подставиться клановый изъян");
+    }
+
+    [Fact]
+    public void Apply_InvalidClan_FailsClanInvalid()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "clan", "Несуществующий");
+        Assert.Equal(VampireCreateConceptFailure.ClanInvalid, r.Failure);
+        Assert.Equal("", d.Clan);
+    }
+
+    [Fact]
+    public void Apply_ClanCaitiff_NoClanDisciplinesInDraft()
+    {
+        var d = NewDraft();
+        VampireCreateResolver.ApplyConceptField(d, "clan", "Каитиф");
+        Assert.Equal("Каитиф", d.Clan);
+    }
+
+    [Fact]
+    public void Apply_AllFourFields_MarksConceptComplete()
+    {
+        var d = NewDraft();
+        VampireCreateResolver.ApplyConceptField(d, "concept", "Герой");
+        VampireCreateResolver.ApplyConceptField(d, "clan", "Тремер");
+        VampireCreateResolver.ApplyConceptField(d, "nature", "Судья");
+        var r = VampireCreateResolver.ApplyConceptField(d, "demeanor", "Традиционалист");
+        Assert.True(r.ConceptComplete);
+        Assert.True(VampireCreateResolver.IsConceptComplete(d));
+    }
+
+    [Fact]
+    public void Apply_BioEmpty_IsAllowed()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "bio", "");
+        Assert.Equal(VampireCreateConceptFailure.None, r.Failure);
+    }
+
+    [Fact]
+    public void Apply_UnknownField_Fails()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "weapons", "AK-47");
+        Assert.NotEqual(VampireCreateConceptFailure.None, r.Failure);
+    }
+
+    [Fact]
+    public void Apply_ClanTrimsAndAccepts()
+    {
+        var d = NewDraft();
+        var r = VampireCreateResolver.ApplyConceptField(d, "clan", "  Бруха  ");
+        Assert.Equal(VampireCreateConceptFailure.None, r.Failure);
+        Assert.Equal("Бруха", d.Clan);
+    }
+
+    // ── Resolver: ClearConceptField ──────────────────────────────────
+
+    [Fact]
+    public void Clear_RemovesValue()
+    {
+        var d = NewDraft();
+        VampireCreateResolver.ApplyConceptField(d, "clan", "Бруха");
+        VampireCreateResolver.ClearConceptField(d, "clan");
+        Assert.Equal("", d.Clan);
+        Assert.Equal("", d.Weakness);
+    }
+
+    // ── Resolver: BuildConceptStatusMessage ──────────────────────────
+
+    [Fact]
+    public void BuildStatus_ContainsAllFiveFields()
+    {
+        var d = NewDraft();
+        var msg = VampireCreateResolver.BuildConceptStatusMessage(d);
+        Assert.Contains("Амплуа", msg);
+        Assert.Contains("Клан", msg);
+        Assert.Contains("Натура", msg);
+        Assert.Contains("Маска", msg);
+        Assert.Contains("Описание", msg);
+    }
+
+    [Fact]
+    public void BuildStatus_ShowsCompletionHint()
+    {
+        var d = NewDraft();
+        var msg = VampireCreateResolver.BuildConceptStatusMessage(d);
+        Assert.Contains("заполн", msg.ToLowerInvariant());
+    }
+
+    // ── Wizard components ────────────────────────────────────────────
+
+    [Fact]
+    public void BuildConceptStep_AlwaysHasCancel()
+    {
+        var d = NewDraft();
+        var mc = VampireWizardComponents.BuildForConceptStep(d);
+        // Кнопки распределятся по рядам; проверим, что Cancel где-то есть.
+        var labels = mc.Components.OfType<ActionRowComponent>()
+            .SelectMany(r => r.Components.OfType<ButtonComponent>())
+            .Select(b => b.Label)
+            .ToList();
+        Assert.Contains("Отмена", labels);
+    }
+
+    [Fact]
+    public void BuildConceptStep_ShowsNext_WhenComplete()
+    {
+        var d = NewDraft();
+        VampireCreateResolver.ApplyConceptField(d, "concept", "X");
+        VampireCreateResolver.ApplyConceptField(d, "clan", "Бруха");
+        VampireCreateResolver.ApplyConceptField(d, "nature", "Y");
+        VampireCreateResolver.ApplyConceptField(d, "demeanor", "Z");
+
+        var mc = VampireWizardComponents.BuildForConceptStep(d);
+        var labels = mc.Components.OfType<ActionRowComponent>()
+            .SelectMany(r => r.Components.OfType<ButtonComponent>())
+            .Select(b => b.Label)
+            .ToList();
+        Assert.Contains(labels, l => l != null && l.Contains("Далее"));
+    }
+
+    [Fact]
+    public void BuildConceptStep_HidesNext_WhenIncomplete()
+    {
+        var d = NewDraft();
+        var mc = VampireWizardComponents.BuildForConceptStep(d);
+        var labels = mc.Components.OfType<ActionRowComponent>()
+            .SelectMany(r => r.Components.OfType<ButtonComponent>())
+            .Select(b => b.Label)
+            .ToList();
+        Assert.DoesNotContain(labels, l => l != null && l.StartsWith("Далее"));
+    }
+
+    [Fact]
+    public void BuildCustomId_RoundTripsAllActions()
+    {
+        var id = Guid.NewGuid();
+        var actions = new[]
+        {
+            VampireWizardAction.SetConcept,  VampireWizardAction.SetClan,
+            VampireWizardAction.SetNature,   VampireWizardAction.SetDemeanor,
+            VampireWizardAction.SetBio,      VampireWizardAction.SkipBio,
+            VampireWizardAction.ClearBio,    VampireWizardAction.ClearConcept,
+            VampireWizardAction.ClearClan,   VampireWizardAction.ClearNature,
+            VampireWizardAction.ClearDemeanor, VampireWizardAction.Next, VampireWizardAction.Cancel,
+        };
+        foreach (var a in actions)
+        {
+            var cid = VampireWizardComponents.BuildCustomId(a, id);
+            Assert.True(VampireWizardComponents.TryParse(cid, out var parsed, out var parsedId),
+                $"Parse failed for {a}");
+            Assert.Equal(a, parsed);
+            Assert.Equal(id, parsedId);
+        }
+    }
+
+    [Fact]
+    public void Parse_ForeignCustomId_ReturnsFalse()
+    {
+        Assert.False(VampireWizardComponents.TryParse("foo:bar:baz", out _, out _));
+        Assert.False(VampireWizardComponents.TryParse("vtm_btn:desc:abc", out _, out _));
+        Assert.False(VampireWizardComponents.TryParse("", out _, out _));
+    }
+
+    [Fact]
+    public void IsOurButton_OnlyForWizardPrefix()
+    {
+        Assert.True(VampireWizardComponents.IsOurButton("vtm_wiz:next:abc"));
+        Assert.False(VampireWizardComponents.IsOurButton("vtm_btn:desc:abc"));
+    }
+
+    // ── Wizard session / registry ────────────────────────────────────
+
+    [Fact]
+    public void Registry_SetGetRemove_Works()
+    {
+        var r = VampireWizardRegistry.Instance;
+        var g = 100UL; var p = 200UL;
+        var session = new VampireWizardSession { GuildId = g, PlayerId = p };
+        // На Этапе 1 у пользователя 0-1 сессий; используем уникального игрока.
+        var initial = r.Get(g, p);
+        if (initial != null) r.Remove(g, p);
+
+        r.Set(g, p, session);
+        var got = r.Get(g, p);
+        Assert.NotNull(got);
+        Assert.Same(session, got);
+
+        r.Remove(g, p);
+        Assert.Null(r.Get(g, p));
+    }
+
+    [Fact]
+    public void Registry_GetByUser_FindsAcrossGuilds()
+    {
+        var r = VampireWizardRegistry.Instance;
+        var p = 999_999UL;
+        // Уникальный id — чтобы не пересечься с другими тестами.
+        var s1 = new VampireWizardSession { GuildId = 1, PlayerId = p };
+        var s2 = new VampireWizardSession { GuildId = 2, PlayerId = p };
+        r.Set(1, p, s1);
+        r.Set(2, p, s2);
+
+        var found = r.GetByUser(p);
+        Assert.NotNull(found);
+        Assert.Equal(p, found!.PlayerId);
+
+        r.RemoveByUser(p);
+        Assert.Null(r.GetByUser(p));
+    }
+
+    // ── Active registry ──────────────────────────────────────────────
+
+    [Fact]
+    public void ActiveRegistry_SetGetClear()
+    {
+        var reg = VampireActiveRegistry.Instance;
+        var g = 5000UL; var p = 6000UL; var c = Guid.NewGuid();
+        reg.ClearActiveCharacterId(g, p);
+
+        Assert.False(reg.GetActiveCharacterId(g, p).HasValue);
+        reg.SetActiveCharacterId(g, p, c);
+        Assert.Equal(c, reg.GetActiveCharacterId(g, p));
+        reg.ClearActiveCharacterId(g, p);
+        Assert.False(reg.GetActiveCharacterId(g, p).HasValue);
+    }
+
+    [Fact]
+    public void ActiveRegistry_ClearByCharacterId_RemovesOnlyMatching()
+    {
+        var reg = VampireActiveRegistry.Instance;
+        var g = 5001UL;
+        var c1 = Guid.NewGuid();
+        var c2 = Guid.NewGuid();
+        reg.SetActiveCharacterId(g, 1, c1);
+        reg.SetActiveCharacterId(g, 2, c2);
+        reg.ClearByCharacterId(g, c1);
+        Assert.Null(reg.GetActiveCharacterId(g, 1));
+        Assert.Equal(c2, reg.GetActiveCharacterId(g, 2));
+    }
+}

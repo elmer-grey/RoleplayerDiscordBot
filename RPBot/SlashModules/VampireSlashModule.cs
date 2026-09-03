@@ -44,6 +44,7 @@ public sealed class VampireSlashModule : ISlashCommandModule
                     .AddChoice("bind",   "bind")
                     .AddChoice("unbind", "unbind")
                     .AddChoice("show",   "show")
+                    .AddChoice("create", "create")
                     .WithRequired(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("name")
@@ -82,8 +83,11 @@ public sealed class VampireSlashModule : ISlashCommandModule
             case "show":
                 await _commands.HandleShowAsync(command);
                 return true;
+            case "create":
+                await _commands.HandleCreateAsync(command);
+                return true;
             default:
-                await command.RespondAsync("Неизвестное действие. Укажите `bind`, `unbind` или `show`.", ephemeral: true);
+                await command.RespondAsync("Неизвестное действие. Укажите `bind`, `unbind`, `show` или `create`.", ephemeral: true);
                 return true;
         }
     }
