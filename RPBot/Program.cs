@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RPBot;
 using RPBot.Music;
 using RPBot.EventOps;
+using RPBot.SlashModules;
 using RPBot.Startup;
 using RPBot.Util;
 using RPBot.Web;
@@ -93,6 +94,7 @@ private MusicCommands? _musicCommands;
 private MusicPlaylistStore? _playlistStore;
 private MusicQueueStore? _musicQueueStore;
 private MusicStats? _musicStats;
+private VampireCommands? _vampireCommands;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent?> _pendingBetUi = new();
 
@@ -1270,7 +1272,16 @@ private void SaveServerConfigs()
         _musicCommands = new MusicCommands(_lavalinkService, _client, _playlistStore, _musicQueueStore, _musicStats);
     }
 
-    // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
+        // === VtM-модуль ===
+        // VtM — самостоятельный модуль (не зависит от внешних сервисов типа Lavalink),
+        // поэтому регистрируем всегда. Если в будущем появятся настройки VtM.Enabled —
+        // обернём по аналогии с Music.Enabled.
+        {
+            _vampireCommands ??= new VampireCommands();
+            SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
+        }
+
+        // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
             _reconnectionService.OnReconnectStarted += OnReconnectStarted;
             _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -5192,7 +5203,22 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                         else
                             await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
                         break;
-                    default:
+                                        case "vampire":
+                                            {
+                                                // Поиск модуля через реестр; сегодня только VampireSlashModule,
+                                                // но архитектура уже модульная.
+                                                var module = SlashModuleRegistry.FindByCommand("vampire");
+                                                if (module is not null)
+                                                {
+                                                    await module.DispatchAsync(command);
+                                                }
+                                                else
+                                                {
+                                                    await command.RespondAsync("❌ VtM-модуль не зарегистрирован.", ephemeral: true);
+                                                }
+                                            }
+                                            break;
+                                        default:
                         await command.RespondAsync("Команда не распознана.");
                         break;
                 }

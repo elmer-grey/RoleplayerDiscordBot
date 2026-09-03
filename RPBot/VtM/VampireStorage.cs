@@ -225,24 +225,194 @@ namespace RPBot.VtM
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                                if (_characters.TryGetValue(playerName, out var existing))
+                        if (_characters.TryGetValue(playerName, out var existing))
                         {
-                                    if (existing.PlayerId != 0)
-                                    {
-                                        _byPlayerId.Remove(existing.PlayerId);
-                                    }
-                                    if (existing.CharacterId != Guid.Empty)
-                                    {
-                                        _byCharacterId.Remove(existing.CharacterId);
-                                    }
-                                }
-                                return _characters.Remove(playerName);
-                    }
-                            finally
-                            {
-                                _gate.Release();
-                            }
+                            UnregisterIndices(existing);
                         }
+                        return _characters.Remove(playerName);
+                    }
+                    finally
+                    {
+                        _gate.Release();
+                    }
+                }
+
+                /// <summary>Найти персонажа по имени (CharacterName). Case-insensitive.</summary>
+                /// <returns>0 или 1 персонажа; при >1 — исключение <see cref="InvalidOperationException"/>.</returns>
+                public VampireCharacter? FindByCharacterName(string characterName)
+                {
+                    if (string.IsNullOrWhiteSpace(characterName)) return null;
+                    int matches = 0;
+                    VampireCharacter? found = null;
+                    foreach (var c in _characters.Values)
+                    {
+                        if (string.Equals(c.CharacterName, characterName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matches++;
+                            found = c;
+                        }
+                    }
+                    if (matches > 1)
+                        throw new InvalidOperationException(
+                            $"Несколько персонажей с именем '{characterName}' ({matches} шт.)");
+                    return found;
+                }
+
+                /// <summary>Все персонажи с указанным CharacterName (для диагностики коллизий имён).</summary>
+                public IReadOnlyList<VampireCharacter> FindAllByCharacterName(string characterName)
+                {
+                    if (string.IsNullOrWhiteSpace(characterName)) return Array.Empty<VampireCharacter>();
+                    var list = new List<VampireCharacter>();
+                    foreach (var c in _characters.Values)
+                    {
+                        if (string.Equals(c.CharacterName, characterName, StringComparison.OrdinalIgnoreCase))
+                            list.Add(c);
+                    }
+                    return list;
+                }
+
+                /// <summary>
+                /// Результат <see cref="BindAsync"/> и <see cref="UnbindAsync"/> —
+                /// дискриминированный исход, потому что при отказе нужна причина
+                /// для embed-ответа команды.
+                /// </summary>
+                public enum BindResultKind
+                {
+                    Ok,
+                    NotFound,
+                    AlreadyBoundToSame,
+                    AlreadyBoundToOther,
+                    InvalidUserId,
+                }
+
+                public readonly record struct BindResult(
+                    BindResultKind Kind,
+                    VampireCharacter? Character,
+                    ulong CurrentPlayerId,
+                    string Message);
+
+                /// <summary>
+                /// Привязать Discord-пользователя к персонажу (по CharacterName).
+                /// </summary>
+                /// <remarks>
+                /// <para>Сначала ищет персонажа по <see cref="VampireCharacter.CharacterName"/>
+                /// (case-insensitive). Если найдено несколько — возвращает
+                /// <see cref="BindResultKind.NotFound"/> с пояснением (команда должна
+                /// уточнить у ST).</para>
+                /// <para>Правила:</para>
+                /// <list type="bullet">
+                /// <item>userId == 0 → <see cref="BindResultKind.InvalidUserId"/>.</item>
+                /// <item>Уже привязан к этому же userId → <see cref="BindResultKind.AlreadyBoundToSame"/>
+                /// (no-op, ошибка не отдаётся).</item>
+                /// <item>Уже привязан к другому userId → <see cref="BindResultKind.AlreadyBoundToOther"/>;
+                /// сначала нужно <see cref="UnbindAsync"/>.</item>
+                /// </list>
+                /// </remarks>
+                public async Task<BindResult> BindAsync(string characterName, ulong userId, CancellationToken ct = default)
+                {
+                    if (userId == 0)
+                        return new BindResult(BindResultKind.InvalidUserId, null, 0, "userId == 0");
+
+                    VampireCharacter? ch;
+                    try
+                    {
+                        ch = FindByCharacterName(characterName);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return new BindResult(BindResultKind.NotFound, null, 0, ex.Message);
+                    }
+                    if (ch == null)
+                        return new BindResult(BindResultKind.NotFound, null, 0, $"«{characterName}» не найден");
+
+                    await _gate.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        if (ch.PlayerId == userId)
+                        {
+                            return new BindResult(
+                                BindResultKind.AlreadyBoundToSame, ch, userId,
+                                "уже привязан к этому игроку");
+                        }
+                        if (ch.PlayerId != 0 && ch.PlayerId != userId)
+                        {
+                            return new BindResult(
+                                BindResultKind.AlreadyBoundToOther, ch, ch.PlayerId,
+                                $"уже привязан к <@{ch.PlayerId}>; сначала /vampire unbind");
+                        }
+
+                        // Снимаем старый индекс, если был.
+                        ch.PlayerId = userId;
+                        _byPlayerId[userId] = ch.PlayerName;
+
+                        var json = JsonSerializer.Serialize(_characters, _json);
+                        await SafeJsonIO.WriteAtomicAsync(_filePath, json, ct).ConfigureAwait(false);
+
+                        return new BindResult(BindResultKind.Ok, ch, userId, "привязано");
+                    }
+                    finally
+                    {
+                        _gate.Release();
+                    }
+                }
+
+                /// <summary>
+                /// Отменить привязку Discord-пользователя от персонажа (по CharacterName).
+                /// </summary>
+                public async Task<BindResult> UnbindAsync(string characterName, CancellationToken ct = default)
+                {
+                    VampireCharacter? ch;
+                    try
+                    {
+                        ch = FindByCharacterName(characterName);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return new BindResult(BindResultKind.NotFound, null, 0, ex.Message);
+                    }
+                    if (ch == null)
+                        return new BindResult(BindResultKind.NotFound, null, 0, $"«{characterName}» не найден");
+
+                    await _gate.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        if (ch.PlayerId == 0)
+                        {
+                            return new BindResult(
+                                BindResultKind.AlreadyBoundToSame, ch, 0,
+                                "привязки и так нет");
+                        }
+
+                        ulong old = ch.PlayerId;
+                        ch.PlayerId = 0;
+                        // Удаляем индекс, только если он указывает на этого персонажа.
+                        if (_byPlayerId.TryGetValue(old, out var name) && name == ch.PlayerName)
+                        {
+                            _byPlayerId.Remove(old);
+                        }
+
+                        var json = JsonSerializer.Serialize(_characters, _json);
+                        await SafeJsonIO.WriteAtomicAsync(_filePath, json, ct).ConfigureAwait(false);
+
+                        return new BindResult(BindResultKind.Ok, ch, 0, $"снято (был <@{old}>)");
+                    }
+                    finally
+                    {
+                        _gate.Release();
+                    }
+                }
+
+                private void UnregisterIndices(VampireCharacter c)
+                {
+                    if (c.PlayerId != 0 && _byPlayerId.TryGetValue(c.PlayerId, out var name) && name == c.PlayerName)
+                    {
+                        _byPlayerId.Remove(c.PlayerId);
+                    }
+                    if (c.CharacterId != Guid.Empty)
+                    {
+                        _byCharacterId.Remove(c.CharacterId);
+                    }
+                }
 
         /// <summary>Все персонажи гильдии (для /vampire_list).</summary>
         public IReadOnlyList<VampireCharacter> ListAll()

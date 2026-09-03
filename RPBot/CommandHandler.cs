@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using RPBot.SlashModules;
 
 namespace RPBot
 {
@@ -134,8 +135,8 @@ namespace RPBot
 
         private List<SlashCommandBuilder> GetAllCommands()
         {
-    return new List<SlashCommandBuilder>
-    {
+                    var list = new List<SlashCommandBuilder>
+                    {
     new SlashCommandBuilder()
     .WithName("help")
     .WithDescription("Показывает список всех доступных команд бота"),
@@ -431,8 +432,23 @@ new SlashCommandBuilder()
                         .AddChoice("личный",   "private")
                         .AddChoice("публичный","public")
                         .WithRequired(false)),
-            };
-        }
-    }
-}
+
+                                    // === МОДУЛИ (slash-реестр) ===
+                                    // Новые команды добавляются не сюда, а отдельным ISlashCommandModule
+                                    // и регистрируются в SlashModuleRegistry. Старые блоки выше со временем
+                                    // тоже будут вынесены в модули.
+                                };
+
+                                foreach (var module in SlashModuleRegistry.All)
+                                {
+                                    foreach (var builder in module.Register())
+                                    {
+                                        list.Add(builder);
+                                    }
+                                }
+
+                                return list;
+                            }
+                        }
+                    }
 
