@@ -6,6 +6,7 @@ using Xunit;
 
 namespace SmokeTests;
 
+[Collection("BotConfig")]
 public class VampireSyncServiceTests : IDisposable
 {
     private readonly string _tmp;
