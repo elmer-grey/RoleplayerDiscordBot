@@ -306,4 +306,143 @@ public class VampireStorageTests : IDisposable
         for (int i = 0; i < 50; i++)
             Assert.Equal(i % 6, ch.Attributes[$"Attr{i}"]);
     }
-}
+
+        // ─── UUID (CharacterId) ──────────────────────────────────────────
+
+        [Fact]
+        public async Task UpsertAsync_AutoAssignsCharacterId_WhenEmpty()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            var c = new VampireCharacter { PlayerName = "alice", CharacterName = "A" };
+            Assert.Equal(Guid.Empty, c.CharacterId);
+
+            await s.UpsertAsync(c);
+
+            Assert.NotEqual(Guid.Empty, c.CharacterId);
+            Assert.Equal(c.CharacterId, s.GetCharacter("alice")!.CharacterId);
+        }
+
+        [Fact]
+        public async Task UpsertAsync_PreservesExistingCharacterId()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            var preset = Guid.NewGuid();
+
+            var c = new VampireCharacter { PlayerName = "alice", CharacterName = "A", CharacterId = preset };
+            await s.UpsertAsync(c);
+
+            Assert.Equal(preset, s.GetCharacter("alice")!.CharacterId);
+        }
+
+        [Fact]
+        public async Task GetByCharacterId_ReturnsCharacter()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            var preset = Guid.NewGuid();
+            await s.UpsertAsync(new VampireCharacter
+            {
+                PlayerName = "bob",
+                CharacterName = "B",
+                CharacterId = preset
+            });
+
+            var ch = s.GetByCharacterId(preset);
+            Assert.NotNull(ch);
+            Assert.Equal("bob", ch!.PlayerName);
+        }
+
+        [Fact]
+        public async Task GetByCharacterId_Empty_ReturnsNull()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            Assert.Null(s.GetByCharacterId(Guid.Empty));
+        }
+
+        [Fact]
+        public async Task GetByCharacterId_Unknown_ReturnsNull()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            await s.UpsertAsync(new VampireCharacter { PlayerName = "alice", CharacterName = "A" });
+            Assert.Null(s.GetByCharacterId(Guid.NewGuid()));
+        }
+
+        [Fact]
+        public async Task RemoveAsync_ClearsCharacterIdIndex()
+        {
+            var s = NewStorage();
+            await s.LoadAsync();
+            var preset = Guid.NewGuid();
+            await s.UpsertAsync(new VampireCharacter { PlayerName = "alice", CharacterId = preset });
+            Assert.NotNull(s.GetByCharacterId(preset));
+
+            await s.RemoveAsync("alice");
+            Assert.Null(s.GetByCharacterId(preset));
+        }
+
+        [Fact]
+        public async Task LoadAsync_MigratesCharactersWithoutId()
+        {
+            var s1 = NewStorage(guildId: 200);
+            await s1.LoadAsync();
+            // Запишем «старый» персонаж без characterId, отредактировав JSON.
+            await File.WriteAllTextAsync(s1.FilePath, "{\"eve\":{\"playerName\":\"eve\",\"characterName\":\"Е\"}}");
+            s1 = NewStorage(guildId: 200);
+            await s1.LoadAsync();
+
+            var ch = s1.GetCharacter("eve");
+            Assert.NotNull(ch);
+            Assert.NotEqual(Guid.Empty, ch!.CharacterId);
+            // И должен индексироваться.
+            Assert.NotNull(s1.GetByCharacterId(ch.CharacterId));
+        }
+
+        [Fact]
+        public async Task LoadAsync_RestoresCharacterIdIndex()
+        {
+            var s1 = NewStorage(guildId: 300);
+            await s1.LoadAsync();
+            var preset = Guid.NewGuid();
+            await s1.UpsertAsync(new VampireCharacter
+            {
+                PlayerName = "hugo",
+                CharacterName = "H",
+                CharacterId = preset
+            });
+            await s1.SaveAsync();
+
+            var s2 = NewStorage(guildId: 300);
+            await s2.LoadAsync();
+            Assert.Equal(preset, s2.GetByCharacterId(preset)!.CharacterId);
+            Assert.Equal("hugo", s2.GetByCharacterId(preset)!.PlayerName);
+        }
+
+        [Fact]
+        public async Task RebuildCharacterIds_IsIdempotent()
+        {
+            var s1 = NewStorage(guildId: 400);
+            await s1.LoadAsync();
+            var preset = Guid.NewGuid();
+            await s1.UpsertAsync(new VampireCharacter { PlayerName = "ivy", CharacterId = preset });
+
+            // Несколько прогонов — id не должен меняться.
+            var first = s1.GetCharacter("ivy")!.CharacterId;
+            Assert.Equal(preset, first);
+            // Грубая проверка: повторные load+rebuild не дублируют.
+            int m = s1.RebuildCharacterIds();
+            Assert.Equal(0, m);
+            Assert.Equal(first, s1.GetCharacter("ivy")!.CharacterId);
+        }
+
+        [Fact]
+        public void DefaultCharacterId_IsEmpty()
+        {
+            // Контракт: новые инстансы начинают с Empty — генерация только в storage.
+            var c = new VampireCharacter();
+            Assert.Equal(Guid.Empty, c.CharacterId);
+        }
+    }

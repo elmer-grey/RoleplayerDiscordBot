@@ -11,6 +11,23 @@ namespace RPBot.VtM;
 /// </remarks>
 public sealed class VampireCharacter
 {
+    /// <summary>
+    /// Стабильный UUID персонажа. Генерируется при первом сохранении и больше не меняется.
+    /// Используется как ключ в <see cref="VampireDisplayIndex"/> и
+    /// <see cref="VampireDmBlockIndex"/> для глобальной синхронизации сообщений.
+    /// </summary>
+    /// <remarks>
+    /// <para>Для уже существующих персонажей UUID проставляется лениво при
+    /// следующей загрузке (<see cref="VampireStorage.RebuildCharacterIds"/>) —
+    /// каждая запись при чтении проверяется и при отсутствии Id получает
+    /// сгенерированный, а файл сохраняется.</para>
+    /// <para>Игрок в одной гильдии — один персонаж (по дизайну на сейчас);
+    /// UUID не привязан к игроку, поэтому если когда-нибудь модель поменяется,
+    /// старые индексы продолжат работать.</para>
+    /// </remarks>
+    [JsonPropertyName("characterId")]
+    public Guid CharacterId { get; set; } = Guid.Empty;
+
     /// <summary>Имя игрока (Discord username, не ID).</summary>
     [JsonPropertyName("playerName")]
     public string PlayerName { get; set; } = "";

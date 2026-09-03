@@ -36,8 +36,10 @@ namespace RPBot.VtM
         private Dictionary<string, VampireCharacter> _characters = new(StringComparer.Ordinal);
                 // Вторичный индекс PlayerId → PlayerName (для поиска по Discord user ID).
                 private Dictionary<ulong, string> _byPlayerId = new();
+                // Вторичный индекс CharacterId → PlayerName (для поиска по UUID).
+                private Dictionary<Guid, string> _byCharacterId = new();
 
-                public VampireStorage(ulong guildId)
+                        public VampireStorage(ulong guildId)
         {
             var dataDir = BotConfig.GetDataDirectory();
             var vtmDir = Path.Combine(dataDir, "vtm");
@@ -60,27 +62,34 @@ namespace RPBot.VtM
                     return;
                 }
                 try
-                {
-                    var text = await File.ReadAllTextAsync(_filePath, ct).ConfigureAwait(false);
-                    var loaded = JsonSerializer.Deserialize<Dictionary<string, VampireCharacter>>(
-                        text, _json);
-                    _characters = loaded != null
-                        ? new Dictionary<string, VampireCharacter>(loaded, StringComparer.Ordinal)
-                        : new Dictionary<string, VampireCharacter>(StringComparer.Ordinal);
+                                {
+                                    var text = await File.ReadAllTextAsync(_filePath, ct).ConfigureAwait(false);
+                                    var loaded = JsonSerializer.Deserialize<Dictionary<string, VampireCharacter>>(
+                                        text, _json);
+                                    _characters = loaded != null
+                                        ? new Dictionary<string, VampireCharacter>(loaded, StringComparer.Ordinal)
+                                        : new Dictionary<string, VampireCharacter>(StringComparer.Ordinal);
+                                    var migrated = RebuildCharacterIds();
                                     RebuildPlayerIdIndex();
+                                    if (migrated > 0)
+                                    {
+                                        // Сохраняем, чтобы UUID'ы попали на диск, а жили только в RAM.
+                                        var json = JsonSerializer.Serialize(_characters, _json);
+                                        await SafeJsonIO.WriteAtomicAsync(_filePath, json, ct).ConfigureAwait(false);
+                                    }
                                 }
-                catch
-                {
-                    // Битый JSON — не падаем, начинаем с пустого словаря.
-                    // Старый файл можно восстановить из .bak, если он есть.
-                    _characters = new(StringComparer.Ordinal);
-                }
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        }
+                                catch
+                                {
+                                    // Битый JSON — не падаем, начинаем с пустого словаря.
+                                    // Старый файл можно восстановить из .bak, если он есть.
+                                    _characters = new(StringComparer.Ordinal);
+                                }
+                            }
+                            finally
+                            {
+                                _gate.Release();
+                            }
+                        }
 
         /// <summary>Сохранить текущий снэпшот на диск атомарно.</summary>
         public async Task SaveAsync(CancellationToken ct = default)
@@ -119,44 +128,95 @@ namespace RPBot.VtM
                 }
 
                 /// <summary>
-                /// Перестроить вторичный индекс PlayerId → PlayerName (вызывать после Load и при ручных правках).
-                /// </summary>
-                private void RebuildPlayerIdIndex()
-                {
-                    _byPlayerId.Clear();
-                    foreach (var c in _characters.Values)
-                    {
-                        if (c.PlayerId != 0)
+                                /// Найти персонажа по его стабильному UUID (CharacterId). Возвращает null,
+                                /// если такого Id нет в индексе.
+                                /// </summary>
+                                /// <remarks>
+                                /// Используется в сценариях, когда команда/кнопка сначала получает UUID
+                                /// (например, из CustomId кнопки под листом).
+                                /// </remarks>
+                                public VampireCharacter? GetByCharacterId(Guid characterId)
+                                {
+                                    if (characterId == Guid.Empty) return null;
+                                    if (_byCharacterId.TryGetValue(characterId, out var name))
+                                    {
+                                        return GetCharacter(name);
+                                    }
+                                    return null;
+                                }
+
+                                /// <summary>
+                                /// Перестроить вторичный индекс PlayerId → PlayerName (вызывать после Load и при ручных правках).
+                                /// </summary>
+                                private void RebuildPlayerIdIndex()
+                                {
+                                    _byPlayerId.Clear();
+                                    foreach (var c in _characters.Values)
+                                    {
+                                        if (c.PlayerId != 0)
+                                        {
+                                            _byPlayerId[c.PlayerId] = c.PlayerName;
+                                        }
+                                    }
+                                }
+
+                                /// <summary>
+                                /// Проставить CharacterId персонажам без него (для миграции со старых
+                                /// сохранений). Возвращает количество персонажей, получивших новый UUID.
+                                /// </summary>
+                                /// <remarks>
+                                /// Вызывать из <see cref="LoadAsync"/> сразу после десериализации,
+                                /// чтобы индекс <see cref="_byCharacterId"/> был согласован с диском.
+                                /// </remarks>
+                                public int RebuildCharacterIds()
+                                {
+                                    _byCharacterId.Clear();
+                                    int migrated = 0;
+                                    foreach (var c in _characters.Values)
+                                    {
+                                        if (c.CharacterId == Guid.Empty)
+                                        {
+                                            c.CharacterId = Guid.NewGuid();
+                                            migrated++;
+                                        }
+                                        if (c.CharacterId != Guid.Empty)
+                                        {
+                                            _byCharacterId[c.CharacterId] = c.PlayerName;
+                                        }
+                                    }
+                                    return migrated;
+                                }
+
+                        /// <summary>Создать или перезаписать персонажа. Возвращает true, если создан новый.</summary>
+                        public async Task<bool> UpsertAsync(VampireCharacter character, CancellationToken ct = default)
                         {
-                            _byPlayerId[c.PlayerId] = c.PlayerName;
-                        }
-                    }
-                }
+                            if (character == null) throw new ArgumentNullException(nameof(character));
+                            if (string.IsNullOrEmpty(character.PlayerName))
+                                throw new ArgumentException("PlayerName обязателен", nameof(character));
 
-        /// <summary>Создать или перезаписать персонажа. Возвращает true, если создан новый.</summary>
-        public async Task<bool> UpsertAsync(VampireCharacter character, CancellationToken ct = default)
-        {
-            if (character == null) throw new ArgumentNullException(nameof(character));
-            if (string.IsNullOrEmpty(character.PlayerName))
-                throw new ArgumentException("PlayerName обязателен", nameof(character));
-
-            await _gate.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                bool isNew = !_characters.ContainsKey(character.PlayerName);
-                            // Если у нового/обновлённого персонажа есть PlayerId, индексируем.
-                            _characters[character.PlayerName] = character;
-                            if (character.PlayerId != 0)
+                            await _gate.WaitAsync(ct).ConfigureAwait(false);
+                            try
                             {
-                                _byPlayerId[character.PlayerId] = character.PlayerName;
-                            }
-                            return isNew;
-                        }
-                        finally
-                        {
-                            _gate.Release();
-                        }
-                    }
+                                bool isNew = !_characters.ContainsKey(character.PlayerName);
+                                            // Если у нового/обновлённого персонажа есть PlayerId, индексируем.
+                                            // Если у нового/обновлённого персонажа ещё нет CharacterId — генерируем.
+                                            if (character.CharacterId == Guid.Empty)
+                                            {
+                                                character.CharacterId = Guid.NewGuid();
+                                            }
+                                            _characters[character.PlayerName] = character;
+                                            if (character.PlayerId != 0)
+                                            {
+                                                _byPlayerId[character.PlayerId] = character.PlayerName;
+                                            }
+                                            _byCharacterId[character.CharacterId] = character.PlayerName;
+                                            return isNew;
+                                        }
+                                        finally
+                                        {
+                                            _gate.Release();
+                                        }
+                                    }
 
         /// <summary>Удалить персонажа. Возвращает true, если что-то удалено.</summary>
         public async Task<bool> RemoveAsync(string playerName, CancellationToken ct = default)
@@ -165,17 +225,24 @@ namespace RPBot.VtM
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                        if (_characters.TryGetValue(playerName, out var existing) && existing.PlayerId != 0)
+                                if (_characters.TryGetValue(playerName, out var existing))
                         {
-                            _byPlayerId.Remove(existing.PlayerId);
-                        }
-                        return _characters.Remove(playerName);
-            }
-                    finally
-                    {
-                        _gate.Release();
+                                    if (existing.PlayerId != 0)
+                                    {
+                                        _byPlayerId.Remove(existing.PlayerId);
+                                    }
+                                    if (existing.CharacterId != Guid.Empty)
+                                    {
+                                        _byCharacterId.Remove(existing.CharacterId);
+                                    }
+                                }
+                                return _characters.Remove(playerName);
                     }
-                }
+                            finally
+                            {
+                                _gate.Release();
+                            }
+                        }
 
         /// <summary>Все персонажи гильдии (для /vampire_list).</summary>
         public IReadOnlyList<VampireCharacter> ListAll()
