@@ -570,7 +570,27 @@ public sealed class VampireCommands
                     "Введите **описание** (Bio) — свободный текст, до 4000 символов. Можно пропустить.");
                 return;
 
-            case VampireWizardAction.SkipBio:
+                        case VampireWizardAction.SetSire:
+                            await AskAndStoreAsync(component, session, "sire",
+                                "Введите имя **сира** (Sire) — кто обратил персонажа. Пустое сообщение = очистить.");
+                            return;
+
+                        case VampireWizardAction.ClearSire:
+                            VampireCreateResolver.ApplyConceptField(session.Draft, "sire", "");
+                            await RerenderWizardAsync(component, session);
+                            return;
+
+                        case VampireWizardAction.SetGeneration:
+                            await AskAndStoreAsync(component, session, "generation",
+                                "Введите **поколение** персонажа (число от 3 до 15; дефолт 13). Пустое сообщение = сброс к 13.");
+                            return;
+
+                        case VampireWizardAction.ResetGeneration:
+                            VampireCreateResolver.ApplyConceptField(session.Draft, "generation", "13");
+                            await RerenderWizardAsync(component, session);
+                            return;
+
+                        case VampireWizardAction.SkipBio:
                 VampireCreateResolver.ApplyConceptField(session.Draft, "bio", "");
                 await RerenderWizardAsync(component, session);
                 return;

@@ -369,4 +369,158 @@ public class VampireWizardTests
         Assert.Null(reg.GetActiveCharacterId(g, 1));
         Assert.Equal(c2, reg.GetActiveCharacterId(g, 2));
     }
-}
+
+            // ── Step 1 patch: Sire + Generation ────────────────────────────────
+
+            [Fact]
+            public void ApplySire_ValidName_SetsSire()
+            {
+                var draft = NewDraft();
+                var dec = VampireCreateResolver.ApplyConceptField(draft, "sire", "Граф Владимир Ромашков");
+                Assert.Equal(VampireCreateConceptFailure.None, dec.Failure);
+                Assert.Equal("Граф Владимир Ромашков", dec.Draft.Sire);
+            }
+
+            [Fact]
+            public void ApplySire_Empty_IsAllowedButDraftRemainsEmpty()
+            {
+                var draft = NewDraft();
+                draft.Sire = "Старый Сир";
+                var dec = VampireCreateResolver.ApplyConceptField(draft, "sire", "");
+                Assert.Equal(VampireCreateConceptFailure.None, dec.Failure);
+                Assert.Equal("", dec.Draft.Sire);
+            }
+
+            [Fact]
+            public void ApplyGeneration_Valid_SetsValue()
+            {
+                var draft = NewDraft();
+                Assert.Equal(13, draft.Generation);
+                var dec = VampireCreateResolver.ApplyConceptField(draft, "generation", "9");
+                Assert.Equal(VampireCreateConceptFailure.None, dec.Failure);
+                Assert.Equal(9, dec.Draft.Generation);
+            }
+
+            [Theory]
+            [InlineData("2")]
+            [InlineData("16")]
+            [InlineData("0")]
+            [InlineData("-1")]
+            [InlineData("abc")]
+            public void ApplyGeneration_OutOfRange_Fails(string value)
+            {
+                var draft = NewDraft();
+                var dec = VampireCreateResolver.ApplyConceptField(draft, "generation", value);
+                Assert.Equal(VampireCreateConceptFailure.GenerationOutOfRange, dec.Failure);
+                // Generation не должно меняться при провале.
+                Assert.Equal(13, dec.Draft.Generation);
+            }
+
+            [Fact]
+            public void ClearGeneration_ResetsTo13()
+            {
+                var draft = NewDraft();
+                draft.Generation = 5;
+                var dec = VampireCreateResolver.ClearConceptField(draft, "generation");
+                Assert.Equal(VampireCreateConceptFailure.None, dec.Failure);
+                Assert.Equal(13, dec.Draft.Generation);
+            }
+
+            [Fact]
+            public void ConceptComplete_DoesNotRequireSireOrGeneration()
+            {
+                var draft = NewDraft();
+                Assert.False(VampireCreateResolver.IsConceptComplete(draft));
+                VampireCreateResolver.ApplyConceptField(draft, "concept", "детектив");
+                VampireCreateResolver.ApplyConceptField(draft, "clan", "Носферату");
+                VampireCreateResolver.ApplyConceptField(draft, "nature", "Бродяга");
+                VampireCreateResolver.ApplyConceptField(draft, "demeanor", "Призрак");
+                Assert.True(VampireCreateResolver.IsConceptComplete(draft));
+            }
+
+            [Fact]
+            public void BuildStatus_ContainsSireAndGeneration()
+            {
+                var draft = NewDraft();
+                var msg = VampireCreateResolver.BuildConceptStatusMessage(draft);
+                Assert.Contains("Сир", msg);
+                Assert.Contains("Поколение", msg);
+                Assert.Contains("13", msg); // дефолт
+            }
+
+            [Fact]
+            public void BuildConceptStep_ShowsSireButtonAlways()
+            {
+                var draft = NewDraft();
+                var comp = VampireWizardComponents.BuildForConceptStep(draft);
+                var rows = GetRows(comp);
+                var buttons = rows.SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                // Всегда показываем кнопку для сира.
+                Assert.Contains(buttons, b => b.CustomId.Contains("set_sire"));
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("clear_sire"));
+            }
+
+            [Fact]
+            public void BuildConceptStep_ShowsClearSireWhenSireSet()
+            {
+                var draft = NewDraft();
+                draft.Sire = "Анна";
+                var comp = VampireWizardComponents.BuildForConceptStep(draft);
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                Assert.Contains(buttons, b => b.CustomId.Contains("set_sire"));
+                Assert.Contains(buttons, b => b.CustomId.Contains("clear_sire"));
+                Assert.Contains(buttons, b => b.Label != null && b.Label.Contains("Анна"));
+            }
+
+            [Fact]
+            public void BuildConceptStep_ShowsResetGeneration_WhenNotDefault()
+            {
+                var draft = NewDraft();
+                draft.Generation = 7;
+                var comp = VampireWizardComponents.BuildForConceptStep(draft);
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                Assert.Contains(buttons, b => b.CustomId.Contains("reset_generation"));
+                Assert.Contains(buttons, b => b.Label != null && b.Label.Contains("7"));
+            }
+
+            [Fact]
+            public void BuildConceptStep_HidesResetGeneration_WhenDefault()
+            {
+                var draft = NewDraft();
+                var comp = VampireWizardComponents.BuildForConceptStep(draft);
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("reset_generation"));
+            }
+
+            [Fact]
+            public void WizardActions_RoundTrip_NewSireGenActions()
+            {
+                var cid = Guid.NewGuid();
+                Assert.True(VampireWizardComponents.TryParse(
+                    VampireWizardComponents.BuildCustomId(VampireWizardAction.SetSire, cid),
+                    out var a1, out _));
+                Assert.Equal(VampireWizardAction.SetSire, a1);
+
+                Assert.True(VampireWizardComponents.TryParse(
+                    VampireWizardComponents.BuildCustomId(VampireWizardAction.ClearSire, cid),
+                    out var a2, out _));
+                Assert.Equal(VampireWizardAction.ClearSire, a2);
+
+                Assert.True(VampireWizardComponents.TryParse(
+                    VampireWizardComponents.BuildCustomId(VampireWizardAction.SetGeneration, cid),
+                    out var a3, out _));
+                Assert.Equal(VampireWizardAction.SetGeneration, a3);
+
+                Assert.True(VampireWizardComponents.TryParse(
+                    VampireWizardComponents.BuildCustomId(VampireWizardAction.ResetGeneration, cid),
+                    out var a4, out _));
+                Assert.Equal(VampireWizardAction.ResetGeneration, a4);
+            }
+
+            // Хелпер: достать ряды из MessageComponent.
+            // Использует публичное свойство `Components` (как в существующих тестах).
+            private static System.Collections.Generic.IEnumerable<ActionRowComponent> GetRows(MessageComponent comp)
+            {
+                return comp.Components.OfType<ActionRowComponent>();
+            }
+        }

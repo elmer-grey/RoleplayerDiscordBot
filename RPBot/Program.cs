@@ -4786,11 +4786,17 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
     var field = session.PendingField;
     session.PendingField = null;
 
-    VampireCreateConceptDecision decision;
-    try
+        // Пустое значение для generation = «сбросить к дефолту 13».
+        if (field == "generation" && string.IsNullOrEmpty(text))
     {
-        decision = VampireCreateResolver.ApplyConceptField(session.Draft, field, text);
+            text = "13";
     }
+
+        VampireCreateConceptDecision decision;
+        try
+        {
+            decision = VampireCreateResolver.ApplyConceptField(session.Draft, field, text);
+        }
     catch (Exception ex)
     {
         await message.Channel.SendMessageAsync($"⚠️ Ошибка при сохранении: {ex.Message}");

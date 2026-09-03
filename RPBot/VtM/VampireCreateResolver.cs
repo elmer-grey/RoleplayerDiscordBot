@@ -14,6 +14,7 @@ public enum VampireCreateConceptFailure
     ClanInvalid,
     NatureRequired,
     DemeanorRequired,
+    GenerationOutOfRange,
     UnknownField,
 }
 
@@ -98,13 +99,28 @@ public static class VampireCreateResolver
                 draft.Bio = value;
                 break;
 
-            default:
-                return Fail(draft, VampireCreateConceptFailure.UnknownField,
-                    $"Неизвестное поле «{field}». Допустимые: concept, clan, nature, demeanor, bio.");
-        }
+                        case "sire":
+                            // Sire опционален. Пустое значение трактуется как «очистить».
+                            draft.Sire = value;
+                            break;
 
-        return CompleteCheck(draft);
-    }
+                        case "generation":
+                            if (!int.TryParse(value, out var gen))
+                                return Fail(draft, VampireCreateConceptFailure.GenerationOutOfRange,
+                                    "Поколение должно быть числом от 3 до 15.");
+                            if (gen < 3 || gen > 15)
+                                return Fail(draft, VampireCreateConceptFailure.GenerationOutOfRange,
+                                    $"Поколение должно быть от 3 до 15 (получено {gen}).");
+                            draft.Generation = gen;
+                            break;
+
+                        default:
+                            return Fail(draft, VampireCreateConceptFailure.UnknownField,
+                                $"Неизвестное поле «{field}». Допустимые: concept, clan, nature, demeanor, bio, sire, generation.");
+                    }
+
+                    return CompleteCheck(draft);
+                }
 
     /// <summary>
     /// Очистить поле (для команды «отмена ввода»). Полезно в UI визарда.
@@ -122,9 +138,11 @@ public static class VampireCreateResolver
             case "nature":  draft.Nature = ""; break;
             case "demeanor": draft.Demeanor = ""; break;
             case "bio":     draft.Bio = ""; break;
-            default:
-                return Fail(draft, VampireCreateConceptFailure.UnknownField,
-                    $"Неизвестное поле «{field}».");
+                        case "sire":    draft.Sire = ""; break;
+                        case "generation": draft.Generation = 13; break; // возврат к дефолту
+                        default:
+                            return Fail(draft, VampireCreateConceptFailure.UnknownField,
+                                $"Неизвестное поле «{field}».");
         }
         return CompleteCheck(draft);
     }
@@ -158,7 +176,11 @@ public static class VampireCreateResolver
         AppendFieldStatus(sb, "Маска (demeanor)", draft.Demeanor);
         AppendFieldStatus(sb, "Описание (bio)",   draft.Bio, optional: true);
 
-        if (!string.IsNullOrEmpty(draft.Clan))
+                // Sire и Generation — опциональные, но Generation всегда показывается.
+                AppendFieldStatus(sb, "Сир (sire)",      draft.Sire, optional: true);
+                sb.AppendLine($"• Поколение (generation): **{draft.Generation}**  _(можно изменить кнопкой выше; 3–15)_");
+
+                if (!string.IsNullOrEmpty(draft.Clan))
         {
             var discs = VampireParameterCatalog.GetClanDisciplines(draft.Clan);
             if (discs.Count > 0)

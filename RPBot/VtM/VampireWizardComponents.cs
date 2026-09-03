@@ -37,6 +37,14 @@ public enum VampireWizardAction
     ClearNature,
     /// <summary>Очистить поле «Маска».</summary>
     ClearDemeanor,
+    /// <summary>Задать поле «Сир» (Sire) — кто обратил. Опционально.</summary>
+    SetSire,
+    /// <summary>Очистить поле «Сир».</summary>
+    ClearSire,
+    /// <summary>Задать поле «Поколение» (Generation, 3-15).</summary>
+    SetGeneration,
+    /// <summary>Сбросить поколение к 13 (дефолт).</summary>
+    ResetGeneration,
     /// <summary>Перейти к следующему шагу (доступно, когда все обязательные поля заполнены).</summary>
     Next,
     /// <summary>Отменить визард и закрыть DM.</summary>
@@ -69,7 +77,26 @@ public static class VampireWizardComponents
           .WithButton("Натура", BuildCustomId(VampireWizardAction.SetNature, draft.CharacterId), ButtonStyle.Secondary)
           .WithButton("Маска",  BuildCustomId(VampireWizardAction.SetDemeanor, draft.CharacterId), ButtonStyle.Secondary);
 
-        // Ряд 2: описание (bio) — пропустить или задать.
+        // Ряд 2: сир (опционально).
+        if (string.IsNullOrWhiteSpace(draft.Sire))
+        {
+            cb.WithButton("Указать сира", BuildCustomId(VampireWizardAction.SetSire, draft.CharacterId), ButtonStyle.Secondary);
+        }
+        else
+        {
+            cb.WithButton($"Сир: {TruncateLabel(draft.Sire, 18)}", BuildCustomId(VampireWizardAction.SetSire, draft.CharacterId), ButtonStyle.Secondary)
+              .WithButton("Очистить сира", BuildCustomId(VampireWizardAction.ClearSire, draft.CharacterId), ButtonStyle.Secondary);
+        }
+
+        // Ряд 3: поколение (3-15). Дефолт 13.
+        var genStyle = draft.Generation == 13 ? ButtonStyle.Secondary : ButtonStyle.Primary;
+        cb.WithButton($"Поколение: {draft.Generation}", BuildCustomId(VampireWizardAction.SetGeneration, draft.CharacterId), genStyle);
+        if (draft.Generation != 13)
+        {
+            cb.WithButton("Сбросить поколение (13)", BuildCustomId(VampireWizardAction.ResetGeneration, draft.CharacterId), ButtonStyle.Secondary);
+        }
+
+        // Ряд 4: описание (bio) — пропустить или задать.
         if (string.IsNullOrWhiteSpace(draft.Bio))
         {
             cb.WithButton("Добавить описание", BuildCustomId(VampireWizardAction.SetBio, draft.CharacterId), ButtonStyle.Secondary)
@@ -81,7 +108,7 @@ public static class VampireWizardComponents
               .WithButton("Очистить описание", BuildCustomId(VampireWizardAction.ClearBio, draft.CharacterId), ButtonStyle.Secondary);
         }
 
-        // Ряд 3: «Далее» (если шаг завершён) + «Отмена».
+        // Ряд 5: «Далее» (если шаг завершён) + «Отмена».
         if (VampireCreateResolver.IsConceptComplete(draft))
         {
             cb.WithButton("Далее → Шаг 2 (характеристики)", BuildCustomId(VampireWizardAction.Next, draft.CharacterId), ButtonStyle.Success);
@@ -89,6 +116,13 @@ public static class VampireWizardComponents
         cb.WithButton("Отмена", BuildCustomId(VampireWizardAction.Cancel, draft.CharacterId), ButtonStyle.Danger);
 
         return cb.Build();
+    }
+
+    private static string TruncateLabel(string s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        if (s.Length <= max) return s;
+        return s.Substring(0, max - 1) + "…";
     }
 
     public static string BuildCustomId(VampireWizardAction action, Guid characterId)
@@ -123,6 +157,10 @@ public static class VampireWizardComponents
         VampireWizardAction.ClearClan   => "clear_clan",
         VampireWizardAction.ClearNature => "clear_nature",
         VampireWizardAction.ClearDemeanor => "clear_demeanor",
+        VampireWizardAction.SetSire      => "set_sire",
+        VampireWizardAction.ClearSire    => "clear_sire",
+        VampireWizardAction.SetGeneration => "set_generation",
+        VampireWizardAction.ResetGeneration => "reset_generation",
         VampireWizardAction.Next        => "next",
         VampireWizardAction.Cancel      => "cancel",
         _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
@@ -143,6 +181,10 @@ public static class VampireWizardComponents
             case "clear_clan":     action = VampireWizardAction.ClearClan;    return true;
             case "clear_nature":   action = VampireWizardAction.ClearNature;  return true;
             case "clear_demeanor": action = VampireWizardAction.ClearDemeanor; return true;
+            case "set_sire":       action = VampireWizardAction.SetSire;      return true;
+            case "clear_sire":     action = VampireWizardAction.ClearSire;    return true;
+            case "set_generation": action = VampireWizardAction.SetGeneration; return true;
+            case "reset_generation": action = VampireWizardAction.ResetGeneration; return true;
             case "next":           action = VampireWizardAction.Next;         return true;
             case "cancel":         action = VampireWizardAction.Cancel;       return true;
             default:               action = default;                         return false;
