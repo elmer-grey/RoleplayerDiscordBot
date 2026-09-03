@@ -213,7 +213,10 @@ public sealed class VampireCommands
             SheetMessageKind.DmSheetWithButtons);
         await displayIndex.SaveAsync();
 
-        await command.RespondAsync($"✉️ Лист «{character.CharacterName}» отправлен в личку <@{recipientId}>.", ephemeral: true);
+        await command.RespondAsync(
+            $"✉️ Лист «{character.CharacterName}» отправлен в личку <@{recipientId}>.\n" +
+            "Под листом кнопки Описание / Воля / Здоровье — нажатие переключает блоки.",
+            ephemeral: true);
     }
 
     private static async Task SendSheetPublicAsync(
