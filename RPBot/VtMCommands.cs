@@ -111,6 +111,131 @@ public sealed class VampireCommands
 
     // ── Хелперы ─────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// <c>/vampire show &lt;name|user&gt; [where]</c>. Доступно всем, кто видит команду.
+    /// DM (default): лист с кнопками уходит получателю в личку; в канале — ephemeral «отправлено».
+    /// Public: лист публикуется embed'ом в текущем канале (без кнопок).
+    /// </summary>
+    public async Task HandleShowAsync(SocketSlashCommand command)
+    {
+        var guildId = command.GuildId;
+        if (!guildId.HasValue)
+        {
+            await command.RespondAsync("Команда доступна только на сервере.", ephemeral: true);
+            return;
+        }
+
+        var name = GetString(command, "name");
+        var userOpt = GetUser(command, "user");
+        var whereRaw = GetString(command, "where");
+        var mode = string.Equals(whereRaw, "public", StringComparison.OrdinalIgnoreCase)
+            ? VampireShowResolver.Mode.Public
+            : VampireShowResolver.Mode.Dm;
+
+        var mention = userOpt.HasValue && command.Channel is IGuildChannel gc
+            ? $"<@{userOpt.Value.id}>"
+            : null;
+
+        var storage = await VampireStorageCache.GetAsync(guildId.Value);
+
+        var decision = VampireShowResolver.Resolve(
+            storage,
+            mode,
+            name,
+            userOpt?.id,
+            mention);
+
+        if (decision.FailureCode != VampireShowResolver.Failure.None)
+        {
+            await command.RespondAsync(decision.Message, ephemeral: true);
+            return;
+        }
+
+        var character = decision.Character!;
+        var displayIndex = new VampireDisplayIndex(guildId.Value);
+        await displayIndex.LoadAsync();
+
+        if (mode == VampireShowResolver.Mode.Dm)
+        {
+            await SendSheetToDmAsync(command, character, displayIndex, guildId.Value);
+        }
+        else
+        {
+            await SendSheetPublicAsync(command, character, displayIndex, guildId.Value);
+        }
+    }
+
+    private static async Task SendSheetToDmAsync(
+        SocketSlashCommand command,
+        VampireCharacter character,
+        VampireDisplayIndex displayIndex,
+        ulong guildId)
+    {
+        // Цель DM — если @user указан, шлём ему; иначе — вызывающему.
+        ulong recipientId = command.User.Id;
+        var userOpt = GetUser(command, "user");
+        if (userOpt.HasValue) recipientId = userOpt.Value.id;
+
+        var guild = (command.Channel as SocketGuildChannel)?.Guild;
+        if (guild == null)
+        {
+            await command.RespondAsync("Не удалось получить гильдию для отправки в личку.", ephemeral: true);
+            return;
+        }
+
+        var recipient = guild.GetUser(recipientId);
+        if (recipient == null)
+        {
+            await command.RespondAsync($"<@{recipientId}> не найден на сервере.", ephemeral: true);
+            return;
+        }
+
+        IUserMessage dmMessage;
+        try
+        {
+            var dm = await recipient.CreateDMChannelAsync();
+            dmMessage = await dm.SendMessageAsync(
+                embed: VampireSheetEmbed.Build(character),
+                components: VampireSheetComponents.Build(character));
+        }
+        catch (Exception ex)
+        {
+            await command.RespondAsync(
+                $"Не удалось отправить личное сообщение <@{recipientId}>: {ex.Message}",
+                ephemeral: true);
+            return;
+        }
+
+        await displayIndex.RegisterAsync(
+            character.CharacterId.ToString("N"),
+            dmMessage.Channel.Id,
+            dmMessage.Id,
+            SheetMessageKind.DmSheetWithButtons);
+        await displayIndex.SaveAsync();
+
+        await command.RespondAsync($"✉️ Лист «{character.CharacterName}» отправлен в личку <@{recipientId}>.", ephemeral: true);
+    }
+
+    private static async Task SendSheetPublicAsync(
+        SocketSlashCommand command,
+        VampireCharacter character,
+        VampireDisplayIndex displayIndex,
+        ulong guildId)
+    {
+        var msg = await command.Channel.SendMessageAsync(embed: VampireSheetEmbed.Build(character));
+
+        await displayIndex.RegisterAsync(
+            character.CharacterId.ToString("N"),
+            msg.Channel.Id,
+            msg.Id,
+            SheetMessageKind.PublicSheet);
+        await displayIndex.SaveAsync();
+
+        await command.RespondAsync($"📜 Лист «{character.CharacterName}» опубликован.", ephemeral: true);
+    }
+
+    // ── Хелперы ─────────────────────────────────────────────────────────
+
     private static async Task<bool> IsStorytellerAsync(SocketSlashCommand command)
     {
         if (command.User is not SocketGuildUser g) return false;

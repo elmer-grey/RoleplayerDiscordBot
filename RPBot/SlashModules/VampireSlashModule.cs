@@ -37,23 +37,30 @@ public sealed class VampireSlashModule : ISlashCommandModule
             new SlashCommandBuilder()
                 .WithName("vampire")
                 .WithDescription("Действия над персонажами VtM (Vampire: the Masquerade V20).")
-                .WithDefaultMemberPermissions(GuildPermission.ManageRoles)
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("action")
                     .WithDescription("Действие")
                     .WithType(ApplicationCommandOptionType.String)
                     .AddChoice("bind",   "bind")
                     .AddChoice("unbind", "unbind")
+                    .AddChoice("show",   "show")
                     .WithRequired(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("name")
-                    .WithDescription("Имя персонажа")
+                    .WithDescription("Имя персонажа. Обязательно для bind/unbind; для show можно не указывать, если выбран свой @user.")
                     .WithType(ApplicationCommandOptionType.String)
-                    .WithRequired(true))
+                    .WithRequired(false))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("user")
-                    .WithDescription("Игрок (если не указан — привязывается к ST). Только для bind.")
+                    .WithDescription("Игрок (для bind — кого привязать; для show — чей лист показать).")
                     .WithType(ApplicationCommandOptionType.User)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("where")
+                    .WithDescription("Куда отправить лист (только show): dm — в личку с кнопками, public — в канал без кнопок.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .AddChoice("dm",     "dm")
+                    .AddChoice("public", "public")
                     .WithRequired(false)),
         };
     }
@@ -72,8 +79,11 @@ public sealed class VampireSlashModule : ISlashCommandModule
             case "unbind":
                 await _commands.HandleUnbindAsync(command);
                 return true;
+            case "show":
+                await _commands.HandleShowAsync(command);
+                return true;
             default:
-                await command.RespondAsync("Неизвестное действие. Укажите `bind` или `unbind`.", ephemeral: true);
+                await command.RespondAsync("Неизвестное действие. Укажите `bind`, `unbind` или `show`.", ephemeral: true);
                 return true;
         }
     }
