@@ -29,6 +29,96 @@ public sealed class VampireCharacter
     [JsonPropertyName("characterName")]
     public string CharacterName { get; set; } = "";
 
+    // ─── Шапка листа V20 (стр. 92) ───────────────────────────────────
+
+    /// <summary>
+    /// Натура (Archetype / Nature) — глубинная суть персонажа. Свободный текст.
+    /// Примеры из V20: «Герой», «Судья», «Отступник», «Чудовище».
+    /// </summary>
+    [JsonPropertyName("nature")]
+    public string Nature { get; set; } = "";
+
+    /// <summary>
+    /// Маска / Амплуа (Demeanor) — социальная роль, которую персонаж играет.
+    /// Примеры: «Конформист», «Традиционалист», «Ребел», «Бунтарь».
+    /// </summary>
+    [JsonPropertyName("demeanor")]
+    public string Demeanor { get; set; } = "";
+
+    /// <summary>
+    /// Концепт / Амплуа (Concept) — краткое описание роли персонажа в хронике.
+    /// Пример: «Полицейский под прикрытием, ставший вампиром», «Искательница запретных знаний».
+    /// </summary>
+    [JsonPropertyName("concept")]
+    public string Concept { get; set; } = "";
+
+    /// <summary>
+    /// Хроника, в которой участвует персонаж (название сюжета).
+    /// </summary>
+    [JsonPropertyName("chronicle")]
+    public string Chronicle { get; set; } = "";
+
+    /// <summary>
+    /// Клан персонажа (название из <see cref="VampireParameterCatalog.Clans"/>).
+    /// </summary>
+    [JsonPropertyName("clan")]
+    public string Clan { get; set; } = "";
+
+    /// <summary>
+    /// Поколение (1..13+). По умолчанию 13 (новорождённый).
+    /// 13 = новообращённый, 8 и ниже — очень древние вампиры.
+    /// </summary>
+    [JsonPropertyName("generation")]
+    public int Generation { get; set; } = 13;
+
+    /// <summary>
+    /// Сир (имя вампира, обратившего этого персонажа). Свободный текст.
+    /// </summary>
+    [JsonPropertyName("sire")]
+    public string Sire { get; set; } = "";
+
+    // ─── V20 особые поля ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Клановый изъян (Clan Flaw, V20 стр. 60-88). Один на клан.
+    /// Примеры: «утончённый вкус» (Вентру), «приступы ярости» (Гангрел),
+    /// «безумие» (Малкавиан), «уродство» (Носферату), «одержимость прекрасным» (Тореадор).
+    /// </summary>
+    [JsonPropertyName("weakness")]
+    public string Weakness { get; set; } = "";
+
+    /// <summary>
+    /// Запас крови (Blood Pool) — максимум равен Стойкости (обычно 4..10).
+    /// По умолчанию 10 (стандартное для вампира со Стойкостью 3-4).
+    /// </summary>
+    [JsonPropertyName("bloodPool")]
+    public int BloodPool { get; set; } = 10;
+
+    /// <summary>
+    /// Специализации: способность → узкая сфера применения.
+    /// V20 стр. 101: рекомендуется при значении ≥ 4, но допускается и ниже.
+    /// </summary>
+    /// <remarks>
+    /// Одна специализация на способность. Пример:
+    /// { "Ремесло": "кузнечное дело", "Атлетика": "плавание" }.
+    /// </remarks>
+    [JsonPropertyName("specializations")]
+    public Dictionary<string, string> Specializations { get; set; } = new();
+
+    /// <summary>
+    /// Достоинства (Merits) — название → цена (1..7).
+    /// V20 стр. 485+: покупаются за опыт на этапе создания или позже.
+    /// </summary>
+    [JsonPropertyName("merits")]
+    public Dictionary<string, int> Merits { get; set; } = new();
+
+    /// <summary>
+    /// Недостатки (Flaws) — название → цена (1..7).
+    /// V20 стр. 523+: дают бонусные очки опыта при создании персонажа.
+    /// </summary>
+    [JsonPropertyName("flaws")]
+    public Dictionary<string, int> Flaws { get; set; } = new();
+
     /// <summary>
     /// Характеристики и атрибуты по русским названиям из <see cref="VampireParameterCatalog"/>.
     /// Ключ — название, значение — количество точек (0..5).
