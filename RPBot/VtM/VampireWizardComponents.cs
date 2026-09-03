@@ -49,7 +49,22 @@ public enum VampireWizardAction
     Next,
     /// <summary>Отменить визард и закрыть DM.</summary>
     Cancel,
-}
+
+        // ── Шаг 2 «Характеристики 7/5/3» ─────────────────────────────────────
+
+        /// <summary>Увеличить атрибут на 1 (Шаг 2). Action-arg = имя атрибута.</summary>
+        AttrInc,
+        /// <summary>Уменьшить атрибут на 1 (Шаг 2).</summary>
+        AttrDec,
+                /// <summary>SelectMenu выбора приоритета 7/5/3 (Шаг 2).</summary>
+                AttrPriority,
+                /// <summary>Сбросить прогресс Шага 2 (только атрибуты; приоритет сохраняется).</summary>
+                ResetAttrProgress,
+                /// <summary>Сбросить всё на Шаге 2 (приоритет и атрибуты).</summary>
+                ResetAttrAll,
+                /// <summary>Вернуться на Шаг 1 (Концепция).</summary>
+                BackToConcept,
+    }
 
 /// <summary>
 /// Кнопки визарда создания персонажа для DM-сообщения.
@@ -118,7 +133,138 @@ public static class VampireWizardComponents
         return cb.Build();
     }
 
-    private static string TruncateLabel(string s, int max)
+            /// <summary>
+            /// Собрать компоненты для Шага 2 «Характеристики 7/5/3».
+            ///
+            /// <para>Структура (Discord-лимит: 5 рядов × 5 кнопок):</para>
+            /// <list type="bullet">
+            /// <item>Ряд 1: SelectMenu с 6 приоритетами групп.</item>
+            /// <item>Ряд 2: 3 кнопки −/+ для Физ (Сила, Ловкость, Выносливость).</item>
+            /// <item>Ряд 3: 3 кнопки −/+ для Соц (Обаяние, Манипуляция, Привлекательность).</item>
+            /// <item>Ряд 4: 3 кнопки −/+ для Мент (Восприятие, Интеллект, Смекалка).</item>
+            /// <item>Ряд 5: «Назад / Сбросить / Отмена / Далее».</item>
+            /// </list>
+            /// </summary>
+            public static MessageComponent BuildForAttributesStep(VampireCharacter draft)
+            {
+                if (draft == null) throw new ArgumentNullException(nameof(draft));
+                if (draft.CharacterId == Guid.Empty)
+                    throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                var cb = new ComponentBuilder();
+
+                // Ряд 1: SelectMenu с приоритетами.
+                // Ряд 1: SelectMenu с приоритетами.
+                                var menu = new SelectMenuBuilder()
+                                    .WithCustomId(BuildCustomId(VampireWizardAction.AttrPriority, draft.CharacterId))
+                                    .WithPlaceholder(HasPriority(draft)
+                                        ? $"Приоритет: {draft.AttributesPriority} (по группам)"
+                                        : "Выберите приоритет групп (7/5/3)…");
+                                foreach (var p in VampireAttributePriorityExtensions.All)
+                                {
+                                    menu.AddOption(p.HumanName(), p.ToString());
+                                }
+                                cb.WithSelectMenu(menu);
+
+                                // Ряды 2-4: по одному SelectMenu на группу — 6 опций (+/-, по 3 атрибута).
+                                cb.WithSelectMenu(BuildAttrGroupSelect(draft, VampireAttributeGroup.Physical));
+                                cb.WithSelectMenu(BuildAttrGroupSelect(draft, VampireAttributeGroup.Social));
+                                cb.WithSelectMenu(BuildAttrGroupSelect(draft, VampireAttributeGroup.Mental));
+
+                // Ряд 5: вспомогательные действия.
+                cb.WithButton("⬅ Назад (Шаг 1)", BuildCustomId(VampireWizardAction.BackToConcept, draft.CharacterId), ButtonStyle.Secondary)
+                  .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAttrProgress, draft.CharacterId), ButtonStyle.Secondary)
+                  .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAttrAll, draft.CharacterId), ButtonStyle.Danger);
+
+                if (VampireAttributesResolver.IsAttributesComplete(draft))
+                {
+                    cb.WithButton("Далее → Шаг 3 (способности)", BuildCustomId(VampireWizardAction.Next, draft.CharacterId), ButtonStyle.Success);
+                }
+
+                return cb.Build();
+            }
+
+                            /// <summary>
+                            /// SelectMenu для изменения одного атрибута в группе.
+                            /// Опции: +Сила, −Сила, +Ловк, −Ловк, +Выносл, −Выносл (6 опций, макс Discord).
+                            /// Value: <c>{sign}:{attributeName}</c>, например <c>+:Сила</c>.
+                            /// </summary>
+                            private static SelectMenuBuilder BuildAttrGroupSelect(
+                                VampireCharacter draft,
+                                VampireAttributeGroup group)
+                            {
+                                var groupLabel = group switch
+                                {
+                                    VampireAttributeGroup.Physical => "Физ",
+                                    VampireAttributeGroup.Social   => "Соц",
+                                    VampireAttributeGroup.Mental   => "Мент",
+                                    _ => group.ToString()
+                                };
+
+                                var remaining = VampireAttributesResolver.RemainingInGroup(draft, group);
+                                var placeholder = $"{groupLabel} (±): ост. {remaining}";
+
+                                var menu = new SelectMenuBuilder()
+                                    .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.AttrInc, draft.CharacterId, group.ToString()))
+                                    .WithPlaceholder(placeholder);
+
+                                foreach (var name in VampireAttributeCatalog.NamesInGroup(group))
+                                {
+                                    var baseVal = GetBaseValue(draft, name);
+                                    var cur = GetAttrValue(draft, name);
+
+                                    // Опция «+».
+                                    var incVal = $"+:{name}";
+                                    var incDesc = $"текущее: {cur}, макс шага 2 = 7";
+                                    if (cur >= 7) incDesc = "уже 7 (макс шага 2)";
+                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                        .WithLabel($"+ {name} ({cur})")
+                                        .WithValue(incVal)
+                                        .WithDescription(incDesc));
+
+                                    // Опция «−».
+                                    var decVal = $"−:{name}";
+                                    var decDesc = $"текущее: {cur}, база = {baseVal}";
+                                    if (cur <= baseVal) decDesc = "уже на базе";
+                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                        .WithLabel($"− {name} ({cur})")
+                                        .WithValue(decVal)
+                                        .WithDescription(decDesc));
+                                }
+
+                                return menu;
+                            }
+
+                            private static bool HasPriority(VampireCharacter d)
+                            {
+                                return !string.IsNullOrEmpty(d.AttributesPriority);
+                            }
+
+            private static int GetAttrValue(VampireCharacter draft, string name) => name switch
+            {
+                "Сила"              => draft.AttributesStruct.Strength,
+                "Ловкость"          => draft.AttributesStruct.Dexterity,
+                "Выносливость"      => draft.AttributesStruct.Stamina,
+                "Обаяние"           => draft.AttributesStruct.Charisma,
+                "Манипуляция"       => draft.AttributesStruct.Manipulation,
+                "Привлекательность" => draft.AttributesStruct.Appearance,
+                "Восприятие"        => draft.AttributesStruct.Perception,
+                "Интеллект"         => draft.AttributesStruct.Intelligence,
+                "Смекалка"          => draft.AttributesStruct.Wits,
+                _ => 0,
+            };
+
+            private static int GetBaseValue(VampireCharacter draft, string name)
+            {
+                if (name == "Привлекательность"
+                    && (draft.Clan == "Носферату" || draft.Clan == "Последователь Сета"))
+                {
+                    return 0;
+                }
+                return 1;
+            }
+
+            private static string TruncateLabel(string s, int max)
     {
         if (string.IsNullOrEmpty(s)) return "";
         if (s.Length <= max) return s;
@@ -127,6 +273,13 @@ public static class VampireWizardComponents
 
     public static string BuildCustomId(VampireWizardAction action, Guid characterId)
         => $"{Prefix}:{ActionToString(action)}:{characterId:N}";
+
+        /// <summary>
+        /// Собрать customId с дополнительным аргументом (например, имя атрибута).
+        /// Формат: <c>vtm_wiz:{action_str}:{characterId}:{arg}</c>.
+        /// </summary>
+        public static string BuildCustomIdWithArg(VampireWizardAction action, Guid characterId, string arg)
+            => $"{Prefix}:{ActionToString(action)}:{characterId:N}:{(arg ?? "")}";
 
     public static bool TryParse(string customId, out VampireWizardAction action, out Guid characterId)
     {
@@ -140,6 +293,30 @@ public static class VampireWizardComponents
         if (!Guid.TryParseExact(parts[2], "N", out characterId)) return false;
         return characterId != Guid.Empty;
     }
+
+        /// <summary>
+        /// Распарсить customId с дополнительным аргументом (например, имя атрибута).
+        /// Формат: <c>vtm_wiz:{action}:{characterId:N}:{arg}</c>.
+        /// </summary>
+        public static bool TryParseWithArg(
+            string customId,
+            out VampireWizardAction action,
+            out Guid characterId,
+            out string arg)
+        {
+            action = default;
+            characterId = Guid.Empty;
+            arg = "";
+            if (string.IsNullOrEmpty(customId)) return false;
+            if (!customId.StartsWith(Prefix + ":")) return false;
+            var parts = customId.Split(':', 4);
+            if (parts.Length != 4) return false;
+            if (!TryParseAction(parts[1], out action)) return false;
+            if (!Guid.TryParseExact(parts[2], "N", out characterId)) return false;
+            if (characterId == Guid.Empty) return false;
+            arg = parts[3] ?? "";
+            return true;
+        }
 
     public static bool IsOurButton(string customId)
         => !string.IsNullOrEmpty(customId) && customId.StartsWith(Prefix + ":");
@@ -163,6 +340,12 @@ public static class VampireWizardComponents
         VampireWizardAction.ResetGeneration => "reset_generation",
         VampireWizardAction.Next        => "next",
         VampireWizardAction.Cancel      => "cancel",
+                VampireWizardAction.AttrInc     => "attr_inc",
+                VampireWizardAction.AttrDec     => "attr_dec",
+                                VampireWizardAction.AttrPriority => "attr_priority",
+                VampireWizardAction.ResetAttrProgress => "reset_attr_progress",
+                VampireWizardAction.ResetAttrAll      => "reset_attr_all",
+                VampireWizardAction.BackToConcept     => "back_to_concept",
         _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
 
@@ -187,6 +370,12 @@ public static class VampireWizardComponents
             case "reset_generation": action = VampireWizardAction.ResetGeneration; return true;
             case "next":           action = VampireWizardAction.Next;         return true;
             case "cancel":         action = VampireWizardAction.Cancel;       return true;
+                        case "attr_inc":       action = VampireWizardAction.AttrInc;       return true;
+                        case "attr_dec":       action = VampireWizardAction.AttrDec;       return true;
+                                                case "attr_priority":  action = VampireWizardAction.AttrPriority;  return true;
+                        case "reset_attr_progress": action = VampireWizardAction.ResetAttrProgress; return true;
+                        case "reset_attr_all": action = VampireWizardAction.ResetAttrAll;  return true;
+                        case "back_to_concept": action = VampireWizardAction.BackToConcept; return true;
             default:               action = default;                         return false;
         }
     }

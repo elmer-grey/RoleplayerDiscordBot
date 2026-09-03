@@ -74,8 +74,50 @@ public static class VampireWizardDmHandler
         "✅ Шаг 1 (Концепция) сохранён. Шаги 2-5 появятся в следующих обновлениях.";
 
     /// <summary>
-    /// Сообщение об отмене визарда.
+        /// Шаг 2 «Характеристики 7/5/3» — рендер/правка DM-сообщения.
     /// </summary>
+        public static async Task RenderAttributesStepAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session)
+        {
+            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+            if (session == null) throw new ArgumentNullException(nameof(session));
+
+            session.Step = VampireWizardStep.Attributes;
+            session.DmChannelId = dmChannel.Id;
+
+            var text = VampireAttributesResolver.BuildAttributesStatusMessage(session.Draft);
+            var components = VampireWizardComponents.BuildForAttributesStep(session.Draft);
+
+            if (session.DmMessageId == null)
+            {
+                var sent = await dmChannel.SendMessageAsync(text, components: components);
+                session.DmMessageId = sent.Id;
+            }
+            else
+            {
+                try
+                {
+                    var msg = await dmChannel.GetMessageAsync(session.DmMessageId.Value);
+                    if (msg is IUserMessage um)
+                    {
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                        return;
+                    }
+                }
+                catch
+                {
+                    // Сообщение недоступно — отправим заново.
+                }
+
+                var sent = await dmChannel.SendMessageAsync(text, components: components);
+                session.DmMessageId = sent.Id;
+            }
+        }
+
+        /// <summary>
+        /// Сообщение об отмене визарда.
+        /// </summary>
     public static string BuildCancelledMessage() =>
         "❌ Создание персонажа отменено. Все введённые данные сброшены. " +
         "Чтобы начать заново — вызовите `/vampire action:create` в канале.";

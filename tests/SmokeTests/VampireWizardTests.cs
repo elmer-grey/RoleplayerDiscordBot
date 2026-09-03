@@ -517,6 +517,117 @@ public class VampireWizardTests
                 Assert.Equal(VampireWizardAction.ResetGeneration, a4);
             }
 
+            // ── Step 2 build ─────────────────────────────────────────────────────
+
+                        [Fact]
+            public void BuildAttributesStep_HasPrioritySelectMenuFirst()
+            {
+                var draft = NewDraft();
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                var menus = GetRows(comp)
+                    .SelectMany(r => r.Components)
+                    .OfType<SelectMenuComponent>()
+                    .ToList();
+                Assert.NotEmpty(menus);
+                Assert.Equal(6, menus[0].Options.Count);
+                Assert.Contains("attr_priority", menus[0].CustomId);
+            }
+
+            [Fact]
+            public void BuildAttributesStep_HasThreeGroupSelectMenus()
+            {
+                var draft = NewDraft();
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                var menus = GetRows(comp)
+                    .SelectMany(r => r.Components)
+                    .OfType<SelectMenuComponent>()
+                    .ToList();
+                // 1 (приоритет) + 3 (группы) = 4 SelectMenu.
+                Assert.Equal(4, menus.Count);
+                var groupMenus = menus.Skip(1).ToList();
+                Assert.All(groupMenus, m => Assert.Equal(6, m.Options.Count));
+                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Сила"));
+                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Ловкость"));
+                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Выносливость"));
+                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Обаяние"));
+                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Манипуляция"));
+                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Привлекательность"));
+                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Восприятие"));
+                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Интеллект"));
+                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Смекалка"));
+                        }
+
+                        [Fact]
+                        public void BuildAttributesStep_NextButtonHiddenUntilComplete()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            Assert.DoesNotContain(buttons, b => b.CustomId.Contains(":next:") && b.Label != null && b.Label.Contains("Шаг 3"));
+                        }
+
+                        [Fact]
+                        public void BuildAttributesStep_NextButtonVisibleWhenComplete()
+                        {
+                            var draft = NewDraft();
+                            draft.AttributesPriority = VampireAttributePriority.PhysicalPrimary.ToString();
+                                                    // PhysicalPrimary: Физ=7, Соц=5, Мент=3.
+                                                    // Базовые 1,1,1 — потрачено в группе: sum - 3.
+                                                    // Физ: 4+2+4 - 3 = 7 ✓
+                                                    // Соц: 3+2+3 - 3 = 5 ✓
+                                                    // Мент: 2+1+3 - 3 = 3 ✓
+                                                    draft.AttributesStruct = new VampireAttributes
+                                                    {
+                                                        Strength = 4, Dexterity = 2, Stamina = 4,
+                                                        Charisma = 3, Manipulation = 2, Appearance = 3,
+                                                        Perception = 2, Intelligence = 1, Wits = 3
+                                                    };
+                                                    var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                                                    var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                                                    Assert.Contains(buttons, b => b.CustomId.Contains(":next:") && b.Label != null && b.Label.Contains("Шаг 3"));
+                                                }
+
+                        [Fact]
+                        public void BuildAttributesStep_BackToConceptAlwaysPresent()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            Assert.Contains(buttons, b => b.CustomId.Contains("back_to_concept:"));
+                        }
+
+                        [Fact]
+                        public void BuildAttributesStep_RowsWithinDiscordLimit()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                            // Discord: 5 ActionRows max.
+                                                        var rowCount = GetRows(comp).Count();
+                                                        Assert.True(rowCount <= 5,
+                                                            $"UI должно помещаться в лимит Discord (5 рядов), сейчас {rowCount}.");
+                                                    }
+
+                        [Fact]
+                        public void TryParseWithArg_RoundTrip_AttrInc()
+                        {
+                            var cid = Guid.NewGuid();
+                            var id = VampireWizardComponents.BuildCustomIdWithArg(
+                                VampireWizardAction.AttrInc, cid, "Physical");
+                            Assert.True(VampireWizardComponents.TryParseWithArg(id, out var a, out var rid, out var arg));
+                            Assert.Equal(VampireWizardAction.AttrInc, a);
+                            Assert.Equal(cid, rid);
+                            Assert.Equal("Physical", arg);
+                        }
+
+                        [Fact]
+                        public void TryParseWithArg_RejectsStandardCustomId()
+                        {
+                            var cid = Guid.NewGuid();
+                            var id = VampireWizardComponents.BuildCustomId(VampireWizardAction.SetConcept, cid);
+                            // Без 4-й части TryParseWithArg должен вернуть false.
+                            Assert.False(VampireWizardComponents.TryParseWithArg(id, out _, out _, out _));
+                        }
+
             // Хелпер: достать ряды из MessageComponent.
             // Использует публичное свойство `Components` (как в существующих тестах).
             private static System.Collections.Generic.IEnumerable<ActionRowComponent> GetRows(MessageComponent comp)

@@ -143,9 +143,23 @@ public sealed class VampireCharacter
     [JsonPropertyName("attributes")]
     public Dictionary<string, int> Attributes { get; set; } = new();
 
-    /// <summary>Способности (Disciplines, Способности).</summary>
-    [JsonPropertyName("abilities")]
-    public List<string> Abilities { get; set; } = new();
+        /// <summary>
+        /// Структурированные 9 характеристик VtM V20 (Сила, Ловкость, …, Смекалка).
+        /// Используется визардом создания персонажа (Шаг 2 «Характеристики 7/5/3»).
+        /// </summary>
+        [JsonPropertyName("attributesStruct")]
+        public VampireAttributes AttributesStruct { get; set; } = new();
+
+        /// <summary>
+        /// Приоритет групп характеристик (Шаг 2): одна из 6 стандартных перестановок 7/5/3.
+        /// Хранится строкой имени enum (<see cref="VampireAttributePriority"/>).
+        /// </summary>
+        [JsonPropertyName("attributesPriority")]
+        public string AttributesPriority { get; set; } = "";
+
+        /// <summary>Способности (Disciplines, Способности).</summary>
+        [JsonPropertyName("abilities")]
+        public List<string> Abilities { get; set; } = new();
 
     /// <summary>Факты биографии.</summary>
     [JsonPropertyName("backgrounds")]

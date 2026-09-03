@@ -524,11 +524,19 @@ public sealed class VampireCommands
     /// </summary>
     public async Task HandleWizardButtonAsync(SocketMessageComponent component)
     {
-        if (!VampireWizardComponents.TryParse(component.Data.CustomId, out var action, out var _))
-        {
-            await component.RespondAsync("⚠️ Не удалось разобрать кнопку визарда.", ephemeral: true);
-            return;
-        }
+            // Если у кнопки есть arg-часть (Шаг 2: имя атрибута), пробуем TryParseWithArg.
+            if (VampireWizardComponents.TryParseWithArg(
+                    component.Data.CustomId, out var argAction, out var _, out var arg))
+            {
+                await HandleWizardButtonWithArgAsync(component, argAction, arg);
+                return;
+            }
+
+            if (!VampireWizardComponents.TryParse(component.Data.CustomId, out var action, out var _))
+            {
+                await component.RespondAsync("⚠️ Не удалось разобрать кнопку визарда.", ephemeral: true);
+                return;
+            }
 
         // Визард живёт только в DM. Ищем сессию автора кнопки — в любой гильдии,
         // где у него есть активная сессия (для Этапа 1 — она одна).
@@ -622,25 +630,84 @@ public sealed class VampireCommands
                 return;
 
             case VampireWizardAction.Next:
-                if (!VampireCreateResolver.IsConceptComplete(session.Draft))
-                {
-                    var d = session.Draft;
-                    var missing = new List<string>();
-                    if (string.IsNullOrWhiteSpace(d.Concept))  missing.Add("Амплуа");
-                    if (string.IsNullOrWhiteSpace(d.Clan))     missing.Add("Клан");
-                    if (string.IsNullOrWhiteSpace(d.Nature))   missing.Add("Натура");
-                    if (string.IsNullOrWhiteSpace(d.Demeanor)) missing.Add("Маска");
-                    await component.RespondAsync(
-                        "❌ Концепция ещё не заполнена. Не хватает: " + string.Join(", ", missing) + ".",
-                        ephemeral: true);
-                    return;
-                }
-                await component.RespondAsync(VampireWizardDmHandler.BuildAdvancedMessage(), ephemeral: true);
-                // Сохраняем draft в storage, чтобы было видно в /vampire show.
-                await CommitDraftAsync(component, session);
-                return;
+                            // Поведение «Далее» зависит от текущего шага.
+                            if (session.Step == VampireWizardStep.Attributes)
+                            {
+                                if (!VampireAttributesResolver.IsAttributesComplete(session.Draft))
+                                {
+                                    await component.RespondAsync(
+                                        "❌ Шаг 2 ещё не завершён. Распределите все 15 пунктов по приоритету 7/5/3.",
+                                        ephemeral: true);
+                                    return;
+                                }
+                                await component.RespondAsync(
+                                    "✅ Шаг 2 (характеристики) сохранён. Шаг 3 (способности) появится в следующем обновлении.",
+                                    ephemeral: true);
+                                await CommitDraftAsync(component, session);
+                                return;
+                            }
 
-            case VampireWizardAction.Cancel:
+                            // По умолчанию — Шаг 1 «Концепция».
+                            if (!VampireCreateResolver.IsConceptComplete(session.Draft))
+                            {
+                                var d = session.Draft;
+                                var missing = new List<string>();
+                                if (string.IsNullOrWhiteSpace(d.Concept))  missing.Add("Амплуа");
+                                if (string.IsNullOrWhiteSpace(d.Clan))     missing.Add("Клан");
+                                if (string.IsNullOrWhiteSpace(d.Nature))   missing.Add("Натура");
+                                if (string.IsNullOrWhiteSpace(d.Demeanor)) missing.Add("Маска");
+                                await component.RespondAsync(
+                                    "❌ Концепция ещё не заполнена. Не хватает: " + string.Join(", ", missing) + ".",
+                                    ephemeral: true);
+                                return;
+                            }
+                            // Переход 1 → 2: рендерим Шаг 2 в DM.
+                            await component.RespondAsync("✅ Шаг 1 сохранён. Переходим к Шагу 2 (характеристики).", ephemeral: true);
+                            await CommitDraftAsync(component, session);
+                            try
+                            {
+                                var dm = await component.User.CreateDMChannelAsync();
+                                await VampireWizardDmHandler.RenderAttributesStepAsync(dm, session);
+                            }
+                            catch (Exception ex)
+                            {
+                                BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 1→2: {ex.Message}");
+                            }
+                            return;
+
+                        case VampireWizardAction.BackToConcept:
+                            await component.RespondAsync("⬅ Возврат на Шаг 1 (Концепция).", ephemeral: true);
+                            try
+                            {
+                                var dm = await component.User.CreateDMChannelAsync();
+                                await VampireWizardDmHandler.RenderConceptStepAsync(dm, session);
+                            }
+                            catch (Exception ex)
+                            {
+                                BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 2→1: {ex.Message}");
+                            }
+                            return;
+
+                        case VampireWizardAction.ResetAttrProgress:
+                            VampireAttributesResolver.ResetProgress(session.Draft);
+                            await RerenderWizardAsync(component, session);
+                            return;
+
+                        case VampireWizardAction.ResetAttrAll:
+                            VampireAttributesResolver.ResetAll(session.Draft);
+                            await RerenderWizardAsync(component, session);
+                            return;
+
+                        case VampireWizardAction.AttrInc:
+                        case VampireWizardAction.AttrDec:
+                            {
+                                // Эти actions на Шаге 2 несут имя атрибута в customId-arg.
+                                // Парсинг и обработка делаются через отдельный entry-point из HandleWizardButtonWithArgAsync.
+                                await component.RespondAsync("⚠️ Внутренняя ошибка визарда (attr без аргумента).", ephemeral: true);
+                                return;
+                            }
+
+                        case VampireWizardAction.Cancel:
                 VampireWizardRegistry.Instance.RemoveByUser(component.User.Id);
                 try
                 {
@@ -665,6 +732,64 @@ public sealed class VampireCommands
         }
     }
 
+                    /// <summary>
+                    /// Обработка кнопок визарда с дополнительным аргументом (Шаг 2 «Характеристики»).
+                    /// Поддерживает attr_inc / attr_dec с именем атрибута в arg.
+                    /// </summary>
+                    private async Task HandleWizardButtonWithArgAsync(
+                        SocketMessageComponent component,
+                        VampireWizardAction action,
+                        string arg)
+                    {
+                        var session = FindActiveSessionForUser(component.User.Id);
+                        if (session == null)
+                        {
+                            await component.RespondAsync(
+                                "❌ Сессия создания персонажа не найдена. " +
+                                "Запустите `/vampire action:create` в канале заново.",
+                                ephemeral: true);
+                            return;
+                        }
+
+                        if (session.Step != VampireWizardStep.Attributes)
+                        {
+                            await component.RespondAsync(
+                                "⚠️ Эта кнопка доступна только на Шаге 2 (характеристики). " +
+                                $"Текущий шаг: {session.Step}.",
+                                ephemeral: true);
+                            return;
+                        }
+
+                        switch (action)
+                        {
+                            case VampireWizardAction.AttrInc:
+                                {
+                                    var dec = VampireAttributesResolver.Increment(session.Draft, arg);
+                                    if (!dec.IsSuccess)
+                                    {
+                                        await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                        return;
+                                    }
+                                    await RerenderWizardAsync(component, session);
+                                    return;
+                                }
+                            case VampireWizardAction.AttrDec:
+                                {
+                                    var dec = VampireAttributesResolver.Decrement(session.Draft, arg);
+                                    if (!dec.IsSuccess)
+                                    {
+                                        await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                        return;
+                                    }
+                                    await RerenderWizardAsync(component, session);
+                                    return;
+                                }
+                            default:
+                                await component.RespondAsync("⚠️ Неизвестное действие с аргументом: " + action, ephemeral: true);
+                                return;
+                        }
+                    }
+
     private static async Task AskAndStoreAsync(
         SocketMessageComponent component,
         VampireWizardSession session,
@@ -687,14 +812,23 @@ public sealed class VampireCommands
             var msg = await dm.GetMessageAsync(session.DmMessageId.Value);
             if (msg is IUserMessage um)
             {
-                var text = VampireCreateResolver.BuildConceptStatusMessage(session.Draft);
-                var components = VampireWizardComponents.BuildForConceptStep(session.Draft);
-                await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                    if (session.Step == VampireWizardStep.Attributes)
+                    {
+                        var text = VampireAttributesResolver.BuildAttributesStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForAttributesStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                    }
+                    else
+                    {
+                        var text = VampireCreateResolver.BuildConceptStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForConceptStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                    }
+                }
             }
+            catch { /* не критично */ }
+            await component.RespondAsync("✅ Обновлено.", ephemeral: true);
         }
-        catch { /* не критично */ }
-        await component.RespondAsync("✅ Обновлено.", ephemeral: true);
-    }
 
     private async Task CommitDraftAsync(SocketMessageComponent component, VampireWizardSession session)
     {
