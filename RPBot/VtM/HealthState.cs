@@ -317,11 +317,11 @@ public sealed class HealthState
 
     private void RecomputePenalty()
     {
-        // Позиция последнего X или A сверху (ячейка 0 = 0 = штраф 0).
+            // Позиция последнего X или A сверху (ячейка 0 = 0 = штраф 0).
         int last = -1;
         for (int i = 0; i < _cells.Length; i++)
         {
-            if (_cells[i] == CellState.Lethal || _cells[i] == CellState.Aggravated)
+                if (_cells[i] == CellState.Lethal || _cells[i] == CellState.Aggravated)
                 last = i;
         }
         Penalty = Math.Max(0, last);
@@ -340,10 +340,10 @@ public sealed class HealthState
         int last = -1;
         for (int i = 0; i < cells.Length; i++)
         {
-            if (cells[i] == CellState.Lethal || cells[i] == CellState.Aggravated)
+                if (cells[i] == CellState.Lethal || cells[i] == CellState.Aggravated)
                 last = i;
         }
-        if (last < 0) return 0; // без повреждений — без штрафа
+            if (last < 0) return 0; // без летального/агравированного — штраф 0 по таблице
         // V20 стр. 92:
         // 0  Помят       -0
         // 1  Легко ранен -1

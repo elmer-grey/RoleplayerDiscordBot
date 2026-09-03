@@ -394,6 +394,10 @@ public static class VampireSheetEmbed
             else
                 sb.Append("**Штраф:** 0");
         }
+                else
+                {
+                    sb.Append("**Штраф:** —");
+                }
         if (h.IsIncapacitated) sb.Append("  ·  *Небоеспособен*");
         if (h.IsTorpor) sb.Append("  ·  *Торпор*");
         if (h.IsDestroyed) sb.Append("  ·  *Уничтожен*");
