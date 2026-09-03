@@ -7,22 +7,27 @@ using Discord;
 namespace RPBot.VtM;
 
 /// <summary>
-/// Чистый конструктор embed'а листа персонажа по V20 Anniversary.
+/// Чистый конструктор embed'а листа персонажа по VtM V20 Anniversary, стр. 92.
 /// </summary>
 /// <remarks>
 /// <para>Структура листа (как на официальной странице персонажа V20):</para>
 /// <list type="bullet">
-/// <item>Заголовок: имя персонажа + клан/поколение (из Bio).</item>
-/// <item>Характеристики (Сила, Ловкость, Выносливость / Обаяние, Манипуляция, Привлекательность /
-/// Восприятие, Интеллект, Смекалка) — 9 точек в три колонки, по 5 точек на атрибут (+1 «изначальная»
-/// для характеристик, итого максимум 5 видимых).</item>
-/// <item>Атрибуты: 10 талантов, 10 навыков, 10 знаний — каждый до 5 точек.</item>
-/// <item>Добродетели: Совесть/Самоконтроль/Смелость (1..5).</item>
-/// <item>Человечность (Humanity) — отдельный блок, default 7.</item>
-/// <item>Воля и Голод — отдельный блок, до 10 круглых точек.</item>
-/// <item>Шкала здоровья — буфер «S / / X A» в строку.</item>
-/// <item>Опыт (Exp) — строка вида «Текущий / Всего».</item>
-/// <item>Фон + Дисциплины — текстовые списки.</item>
+/// <item>Заголовок: имя персонажа + аватар thumbnail; в footer — V20 стр. 92.</item>
+/// <item>Description: краткое Bio.</item>
+/// <item>Шапка V20: Хроника / Натура / Маска / Амплуа / Клан / Поколение / Сир.</item>
+/// <item>Характеристики (9 шт) — один центрированный блок, три колонки inline
+/// (Физические / Социальные / Ментальные).</item>
+/// <item>Способности (30 шт) — один центрированный блок, три колонки inline
+/// (Таланты / Навыки / Знания). При value ≥ 4 показывается специализация в скобках.</item>
+/// <item>Преимущества — один центрированный блок, три колонки inline
+/// (Дисциплины / Факты биографии / Добродетели с 5 ячейками).</item>
+/// <item>Нижний ряд, 3 колонки inline:
+/// <list type="number">
+/// <item>Достоинства и Недостатки (Merits + Flaws с ценами).</item>
+/// <item>Человечность / Воля / Голод (+ Кровь).</item>
+/// <item>Здоровье (V20 стр. 92, штраф по таблице) / Изъян / Опыт.</item>
+/// </list>
+/// </item>
 /// </list>
 /// <para>Источник истины для имён параметров — <see cref="VampireParameterCatalog"/>.</para>
 /// </remarks>
@@ -48,11 +53,12 @@ public static class VampireSheetEmbed
             Title = string.IsNullOrWhiteSpace(character.CharacterName)
                 ? "Безымянный вампир"
                 : character.CharacterName,
-            Color = DefaultColor
+            Color = DefaultColor,
         };
 
-        if (!string.IsNullOrWhiteSpace(character.Bio))
-            eb.Description = Truncate(character.Bio, EmbedBuilder.MaxDescriptionLength);
+        // Bio НЕ выводится в основном листе — место нужно под важные данные.
+        // Полное описание с фото показывается отдельным embed'ом по кнопке «Описание»:
+        // см. <see cref="VampireDescriptionEmbed"/>.
 
         if (!string.IsNullOrWhiteSpace(character.AvatarUrl) &&
             Uri.TryCreate(character.AvatarUrl, UriKind.Absolute, out var uri) &&
@@ -68,78 +74,90 @@ public static class VampireSheetEmbed
                 : character.PlayerName
         };
 
+        var headerLines = BuildHeaderLines(character);
+        if (headerLines.Count > 0)
+        {
+            eb.AddField(new EmbedFieldBuilder
+            {
+                Name = "════════ Идентификация ════════",
+                Value = string.Join("\n", headerLines),
+                IsInline = false,
+            });
+        }
+
+        // Характеристики — три inline-колонки (заголовок + два пустых для колоночной вёрстки).
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "════════ Характеристики ════════",
+            Name = "──────── Характеристики ────────",
             Value = BuildCharacteristicsBlock(character),
-            IsInline = false
+            IsInline = true,
         });
+        eb.AddField(new EmbedFieldBuilder { Name = "\u200B", Value = "\u200B", IsInline = true });
+        eb.AddField(new EmbedFieldBuilder { Name = "\u200B", Value = "\u200B", IsInline = true });
 
+        // Способности: три колонки (Таланты / Навыки / Знания) со специализациями при value ≥ 4.
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "════════ Таланты ════════",
-            Value = BuildAbilityBlock(character, VampireParameterCatalog.Talents),
-            IsInline = true
-        });
-        eb.AddField(new EmbedFieldBuilder
-        {
-            Name = "════════ Навыки ════════",
-            Value = BuildAbilityBlock(character, VampireParameterCatalog.Skills),
-            IsInline = true
+            Name = "──────── Способности ────────",
+            Value = BuildAbilityColumn(character, VampireParameterCatalog.Talents),
+            IsInline = true,
         });
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "════════ Знания ════════",
-            Value = BuildAbilityBlock(character, VampireParameterCatalog.Knowledges),
-            IsInline = true
-        });
-
-        eb.AddField(new EmbedFieldBuilder
-        {
-            Name = "════════ Добродетели ════════",
-            Value = BuildVirtuesBlock(character),
-            IsInline = true
+            Name = "\u200B",
+            Value = BuildAbilityColumn(character, VampireParameterCatalog.Skills),
+            IsInline = true,
         });
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "════════ Прочее ════════",
-            Value = BuildMiscBlock(character),
-            IsInline = true
+            Name = "\u200B",
+            Value = BuildAbilityColumn(character, VampireParameterCatalog.Knowledges),
+            IsInline = true,
         });
 
-        if (character.Health != null)
+        // Преимущества: три колонки (Дисциплины / Факты биографии / Добродетели).
+        eb.AddField(new EmbedFieldBuilder
         {
-            eb.AddField(new EmbedFieldBuilder
-            {
-                Name = "════════ Здоровье ════════",
-                Value = BuildHealthBlock(character.Health),
-                IsInline = false
-            });
-        }
+            Name = "──────── Преимущества ────────",
+            Value = BuildAdvantagesColumn(character),
+            IsInline = true,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
+            Value = BuildBackgroundsColumn(character),
+            IsInline = true,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
+            Value = BuildVirtuesColumn(character),
+            IsInline = true,
+        });
 
-        if (character.Disciplines != null && character.Disciplines.Count > 0)
+        // Нижний ряд: Достоинства-Недостатки / Суть / Здоровье-Изъян-Опыт.
+        eb.AddField(new EmbedFieldBuilder
         {
-            eb.AddField(new EmbedFieldBuilder
-            {
-                Name = "════════ Дисциплины ════════",
-                Value = BuildDisciplinesBlock(character.Disciplines),
-                IsInline = false
-            });
-        }
-
-        if (character.Backgrounds != null && character.Backgrounds.Count > 0)
+            Name = "──────── Достоинства и недостатки ────────",
+            Value = BuildMeritsFlawsBlock(character),
+            IsInline = true,
+        });
+        eb.AddField(new EmbedFieldBuilder
         {
-            eb.AddField(new EmbedFieldBuilder
-            {
-                Name = "════════ Фон ════════",
-                Value = string.Join("\n", character.Backgrounds.Select(b => $"• {b}")),
-                IsInline = false
-            });
-        }
+            Name = "──────── Суть ────────",
+            Value = BuildEssenceBlock(character),
+            IsInline = true,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "──────── Здоровье и опыт ────────",
+            Value = BuildHealthExperienceBlock(character),
+            IsInline = true,
+        });
 
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "Лист персонажа по VtM V20 Anniversary · /vampire_show"
+            Text = "Лист персонажа по VtM V20 Anniversary, стр. 92 · /vampire_show",
         };
 
         return eb.Build();
@@ -147,89 +165,250 @@ public static class VampireSheetEmbed
 
     // ─── Блоки ────────────────────────────────────────────────────────────
 
-    private static string BuildCharacteristicsBlock(VampireCharacter c)
+    private static List<string> BuildHeaderLines(VampireCharacter c)
+    {
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(c.Chronicle))
+            lines.Add($"**Хроника:** {c.Chronicle}");
+        if (!string.IsNullOrWhiteSpace(c.Nature))
+            lines.Add($"**Натура:** {c.Nature}");
+        if (!string.IsNullOrWhiteSpace(c.Demeanor))
+            lines.Add($"**Маска:** {c.Demeanor}");
+        if (!string.IsNullOrWhiteSpace(c.Concept))
+            lines.Add($"**Амплуа:** {c.Concept}");
+        // Клан/поколение выводим, только если задан клан (поколение — опциональный атрибут клана).
+        if (!string.IsNullOrWhiteSpace(c.Clan))
+        {
+            var clanLine = new StringBuilder("**Клан:** ").Append(c.Clan);
+            if (c.Generation > 0 && c.Generation != 13) // 13 = default новообращённого, не показываем без клана
+                clanLine.Append($" ({c.Generation}-е поколение)");
+            lines.Add(clanLine.ToString());
+        }
+        else if (c.Generation > 0 && c.Generation != 13)
+        {
+            lines.Add($"**Поколение:** {c.Generation}-е");
+        }
+        if (!string.IsNullOrWhiteSpace(c.Sire))
+            lines.Add($"**Сир:** {c.Sire}");
+        return lines;
+    }
+
+    /// <summary>Сводный блок «Характеристики» — 9 строк.</summary>
+    public static string BuildCharacteristicsBlock(VampireCharacter c)
     {
         var sb = new StringBuilder();
-        AppendCharacteristicRow(sb, "Физические", VampireParameterCatalog.Physical, c);
-        sb.AppendLine();
-        AppendCharacteristicRow(sb, "Социальные", VampireParameterCatalog.Social, c);
-        sb.AppendLine();
-        AppendCharacteristicRow(sb, "Ментальные", VampireParameterCatalog.Mental, c);
+        AppendCategorySection(sb, "Физические", VampireParameterCatalog.Physical, c, isCharacteristic: true);
+        AppendCategorySection(sb, "Социальные", VampireParameterCatalog.Social, c, isCharacteristic: true);
+        AppendCategorySection(sb, "Ментальные", VampireParameterCatalog.Mental, c, isCharacteristic: true);
         return sb.ToString();
     }
 
-    private static void AppendCharacteristicRow(StringBuilder sb, string title, IReadOnlyList<string> names, VampireCharacter c)
+    private static void AppendCategorySection(StringBuilder sb, string title, IReadOnlyList<string> names, VampireCharacter c, bool isCharacteristic)
     {
         sb.Append("**").Append(title).AppendLine(":**");
         foreach (var name in names)
         {
             int value = c.Attributes.TryGetValue(name, out var v) ? v : 0;
-            sb.Append("`").Append(PadRight(name, 16)).Append("` ");
-            sb.AppendLine(DotsString(c.DisplayDots(name, isCharacteristic: true), 5));
+            sb.Append("`").Append(PadRight(name, 13)).Append("` ");
+            sb.AppendLine(DotsString(c.DisplayDots(name, isCharacteristic), 5));
         }
     }
 
-    private static string BuildAbilityBlock(VampireCharacter c, IReadOnlyList<string> names)
+    /// <summary>Столбец способностей (Таланты / Навыки / Знания) со специализациями при value ≥ 4.</summary>
+    public static string BuildAbilityColumn(VampireCharacter c, IReadOnlyList<string> names)
     {
         var sb = new StringBuilder();
+        string groupName = GroupNameForAbilities(names);
+        if (!string.IsNullOrEmpty(groupName))
+            sb.Append("**").Append(groupName).AppendLine(":**");
         foreach (var name in names)
         {
             int value = c.Attributes.TryGetValue(name, out var v) ? v : 0;
-            sb.Append("`").Append(PadRight(name, 22)).Append("` ");
-            sb.AppendLine(DotsString(Math.Min(value, 5), 5));
+            sb.Append("`").Append(PadRight(name, 13)).Append("` ");
+            int dots = Math.Min(value, 5);
+            string dotsStr = DotsString(dots, 5);
+            if (dots >= 4
+                && c.Specializations != null
+                && c.Specializations.TryGetValue(name, out var spec)
+                && !string.IsNullOrWhiteSpace(spec))
+            {
+                sb.Append(dotsStr).Append(" (").Append(spec).Append(')');
+            }
+            else
+            {
+                sb.Append(dotsStr);
+            }
+            sb.AppendLine();
         }
         return sb.ToString();
     }
 
-    private static string BuildVirtuesBlock(VampireCharacter c)
+    /// <summary>Колонка «Дисциплины» (до 5 строк).</summary>
+    public static string BuildAdvantagesColumn(VampireCharacter c)
     {
         var sb = new StringBuilder();
-        foreach (var name in VampireParameterCatalog.Virtues)
+        sb.AppendLine("**Дисциплины:**");
+        if (c.Disciplines != null && c.Disciplines.Count > 0)
         {
-            int value = c.Virtues.TryGetValue(name, out var v) ? v : 0;
-            sb.Append("`").Append(PadRight(name, 12)).Append("` ");
-            sb.AppendLine(DotsString(Math.Min(value, 5), 5));
+            int shown = 0;
+            foreach (var kv in c.Disciplines)
+            {
+                if (shown >= 5) break;
+                sb.Append("`").Append(PadRight(kv.Key, 13)).Append("` ");
+                sb.AppendLine(DotsString(Math.Clamp(kv.Value, 0, 5), 5));
+                shown++;
+            }
+        }
+        else
+        {
+            sb.AppendLine("`—`");
         }
         return sb.ToString();
     }
 
-    private static string BuildMiscBlock(VampireCharacter c)
+    /// <summary>Колонка «Факты биографии» (Backgrounds) — до 5 строк.</summary>
+    public static string BuildBackgroundsColumn(VampireCharacter c)
     {
         var sb = new StringBuilder();
-        sb.Append("`").Append(PadRight("Человечность", 14)).Append("` ");
-        sb.AppendLine(DotsString(Math.Clamp(c.Humanity, 0, 10), 10));
-        sb.Append("`").Append(PadRight("Воля", 14)).Append("` ");
-        sb.AppendLine(DotsString(c.WillpowerPoints, Math.Max(c.Willpower, c.WillpowerPoints)));
-        sb.Append("`").Append(PadRight("Голод", 14)).Append("` ");
-        sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
-        sb.Append("`").Append(PadRight("Опыт", 14)).Append("` ");
-        sb.Append(c.ExperienceCurrent).Append(" / ").Append(c.ExperienceTotal);
+        sb.AppendLine("**Факты биографии:**");
+        if (c.Backgrounds != null && c.Backgrounds.Count > 0)
+        {
+            int shown = 0;
+            foreach (var b in c.Backgrounds)
+            {
+                if (shown >= 5) break;
+                sb.Append("• ").AppendLine(b);
+                shown++;
+            }
+        }
+        else
+        {
+            sb.AppendLine("`—`");
+        }
         return sb.ToString();
     }
 
-    private static string BuildHealthBlock(HealthState h)
+    /// <summary>Колонка «Добродетели»: Совесть/Решимость, Самоконтроль/Инстинкты, Смелость — по 5 ячеек.</summary>
+    public static string BuildVirtuesColumn(VampireCharacter c)
     {
         var sb = new StringBuilder();
-        sb.Append("Шкала: ").AppendLine(h.Render());
-        sb.Append("Штраф: **-").Append(h.Penalty).Append("**");
+        sb.AppendLine("**Добродетели:**");
+        foreach (var slot in VirtueSlots)
+        {
+            int value = 0;
+            if (c.Virtues != null)
+            {
+                if (c.Virtues.TryGetValue(slot.Primary, out var p)) value = Math.Max(value, p);
+                if (!string.IsNullOrEmpty(slot.Alt) && c.Virtues.TryGetValue(slot.Alt, out var a)) value = Math.Max(value, a);
+            }
+            string label = string.IsNullOrEmpty(slot.Alt) ? slot.Primary : $"{slot.Primary}/{slot.Alt}";
+            sb.Append("`").Append(PadRight(label, 18)).Append("` ");
+            sb.AppendLine(DotsString(Math.Clamp(value, 0, 5), 5));
+        }
+        return sb.ToString();
+    }
+
+    private static readonly IReadOnlyList<(string Primary, string Alt)> VirtueSlots = new[]
+    {
+        ("Совесть", "Решимость"),
+        ("Самоконтроль", "Инстинкты"),
+        ("Смелость", ""),
+    };
+
+    /// <summary>Колонка «Достоинства и недостатки» — Merits + Flaws с ценами.</summary>
+    public static string BuildMeritsFlawsBlock(VampireCharacter c)
+    {
+        var sb = new StringBuilder();
+        bool hasMerits = c.Merits != null && c.Merits.Count > 0;
+        bool hasFlaws = c.Flaws != null && c.Flaws.Count > 0;
+        if (!hasMerits && !hasFlaws)
+        {
+            sb.AppendLine("`—`");
+            return sb.ToString();
+        }
+        if (hasMerits)
+        {
+            sb.AppendLine("**Достоинства**");
+            foreach (var kv in c.Merits!)
+                sb.Append("• ").Append(kv.Key).Append(" — ").Append(kv.Value).AppendLine();
+        }
+        if (hasFlaws)
+        {
+            sb.AppendLine("**Недостатки**");
+            foreach (var kv in c.Flaws!)
+                sb.Append("• ").Append(kv.Key).Append(" — ").Append(kv.Value).AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Колонка «Суть»: Человечность / Воля / Голод / Кровь.</summary>
+    public static string BuildEssenceBlock(VampireCharacter c)
+    {
+        var sb = new StringBuilder();
+        sb.Append("`").Append(PadRight("Человечность", 13)).Append("` ");
+        sb.AppendLine(DotsString(Math.Clamp(c.Humanity, 0, 10), 10));
+        sb.Append("`").Append(PadRight("Воля", 13)).Append("` ");
+        sb.AppendLine(DotsString(c.WillpowerPoints, Math.Max(c.Willpower, c.WillpowerPoints)));
+        sb.Append("`").Append(PadRight("Голод", 13)).Append("` ");
+        sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
+        if (c.BloodPool > 0)
+        {
+            sb.Append("`").Append(PadRight("Кровь", 13)).Append("` ");
+            int max = Math.Max(c.BloodPool, 20);
+            sb.AppendLine(DotsString(c.BloodPool, max));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Колонка «Здоровье и опыт»: V20 стр. 92 шкала + штраф по таблице + Изъян + Опыт.</summary>
+    public static string BuildHealthExperienceBlock(VampireCharacter c)
+    {
+        var sb = new StringBuilder();
+        if (c.Health != null)
+        {
+            sb.AppendLine(BuildHealthTableV20(c.Health));
+        }
+        else
+        {
+            sb.AppendLine("`Здоровье не инициализировано`");
+        }
+        if (!string.IsNullOrWhiteSpace(c.Weakness))
+        {
+            sb.Append("**Изъян:** ").AppendLine(c.Weakness);
+        }
+        sb.Append("**Опыт:** ").Append(c.ExperienceCurrent).Append(" / ").Append(c.ExperienceTotal);
+        return sb.ToString();
+    }
+
+    /// <summary>Шкала здоровья в формате V20 стр. 92: рендер шкалы + штраф по таблице.</summary>
+    public static string BuildHealthTableV20(HealthState h)
+    {
+        var sb = new StringBuilder();
+        sb.Append("**Здоровье:** ").AppendLine(h.Render());
+        int? penalty = h.TablePenalty;
+        if (penalty.HasValue)
+        {
+            int p = penalty.Value;
+            if (p < 0)
+                sb.Append("**Штраф:** -").Append(-p);
+            else
+                sb.Append("**Штраф:** 0");
+        }
+        if (h.IsIncapacitated) sb.Append("  ·  *Небоеспособен*");
         if (h.IsTorpor) sb.Append("  ·  *Торпор*");
         if (h.IsDestroyed) sb.Append("  ·  *Уничтожен*");
         if (h.IsDead) sb.Append("  ·  *Финальная смерть*");
         return sb.ToString();
     }
-
-    private static string BuildDisciplinesBlock(IReadOnlyDictionary<string, int> disciplines)
-    {
-        var sb = new StringBuilder();
-        foreach (var kv in disciplines)
-        {
-            sb.Append("`").Append(PadRight(kv.Key, 18)).Append("` ");
-            sb.AppendLine(DotsString(Math.Clamp(kv.Value, 0, 5), 5));
-        }
-        return sb.ToString();
-    }
-
     // ─── Утилиты ──────────────────────────────────────────────────────────
+
+    private static string GroupNameForAbilities(IReadOnlyList<string> names)
+    {
+        if (ReferenceEquals(names, VampireParameterCatalog.Talents)) return "Таланты";
+        if (ReferenceEquals(names, VampireParameterCatalog.Skills)) return "Навыки";
+        if (ReferenceEquals(names, VampireParameterCatalog.Knowledges)) return "Знания";
+        return "";
+    }
 
     /// <summary>Строка из <paramref name="filled"/> закрашенных и пустых точек суммарной длины <paramref name="total"/>.</summary>
     public static string DotsString(int filled, int total)
@@ -244,8 +423,6 @@ public static class VampireSheetEmbed
     private static string PadRight(string s, int width)
     {
         if (s == null) s = "";
-        // Учитываем, что имена — кириллица; PadRight считает по .NET-символам, не по ширине,
-        // но для фиксированной таблицы это приемлемо.
         return s.Length >= width ? s : s + new string(' ', width - s.Length);
     }
 

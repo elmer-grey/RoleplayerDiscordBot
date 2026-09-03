@@ -6,12 +6,12 @@ using Xunit;
 namespace SmokeTests;
 
 /// <summary>
-/// Smoke-тесты для <see cref="VampireSheetEmbed"/>.
+/// Smoke-тесты для <see cref="VampireSheetEmbed"/> — структура листа по V20 стр. 92.
 /// </summary>
 /// <remarks>
-/// Покрывают только структурные инварианты embed'а: количество блоков, видимые поля,
-/// корректное число точек, безопасное поведение на пустых/неполных персонажах.
-/// Discord-рендеринг самих блоков (картинки, цвета) — за пределами smoke-тестов.
+/// Покрывают структурные инварианты: наличие 3-колоночных рядов, имена блоков,
+/// корректное число точек, специализации при ≥ 4, поведение на пустых полях.
+/// Discord-рендеринг (картинки, цвета) — за пределами smoke-тестов.
 /// </remarks>
 public class VampireSheetEmbedTests
 {
@@ -23,6 +23,7 @@ public class VampireSheetEmbedTests
         Willpower = 5,
         WillpowerPoints = 4,
         Humanity = 7,
+        BloodPool = 12,
         Attributes =
         {
             ["Сила"] = 3,
@@ -34,28 +35,41 @@ public class VampireSheetEmbedTests
             ["Восприятие"] = 3,
             ["Интеллект"] = 2,
             ["Смекалка"] = 2,
-            ["Атлетика"] = 2,
+            ["Атлетика"] = 4,
             ["Драка"] = 3,
             ["Хитрость"] = 1,
             ["Вождение"] = 1,
             ["Скрытность"] = 2,
             ["Медицина"] = 1,
-            ["Оккультизм"] = 2
+            ["Оккультизм"] = 2,
         },
         Virtues =
         {
             ["Совесть"] = 3,
             ["Самоконтроль"] = 2,
-            ["Смелость"] = 4
+            ["Смелость"] = 4,
         },
         Backgrounds = { "Старейшина 3", "Ресурсы 2" },
         Disciplines = { ["Стойкость"] = 2, ["Потенциал"] = 1 },
+        Specializations = { ["Атлетика"] = "плавание" },
+        Merits = { ["Острые чувства"] = 2, ["Связи"] = 3 },
+        Flaws = { ["Заразный укус"] = 2 },
         Health = new HealthState(size: 7),
         Bio = "Виктор из клана Гангрел, 11-е поколение.",
         AvatarUrl = "https://example.com/avatar.png",
         ExperienceCurrent = 12,
-        ExperienceTotal = 40
+        ExperienceTotal = 40,
+        Nature = "Судья",
+        Demeanor = "Конформист",
+        Concept = "Староста поневоле",
+        Chronicle = "Киев-1240",
+        Clan = "Гангрел",
+        Generation = 11,
+        Sire = "Элеонора фон Штейн",
+        Weakness = "Приступы ярости в ближнем бою",
     };
+
+    // ─── Базовая сборка ──────────────────────────────────────────────────
 
     [Fact]
     public void Build_NullCharacter_Throws()
@@ -87,12 +101,12 @@ public class VampireSheetEmbedTests
     }
 
     [Fact]
-    public void Build_WithBio_DescriptionContainsBio()
+    public void Build_WithBio_DescriptionIsEmptyByDefault()
     {
-        var c = NewCharacter();
-        var embed = VampireSheetEmbed.Build(c);
-        Assert.NotNull(embed.Description);
-        Assert.Contains("Гангрел", embed.Description);
+        // Bio НЕ встраивается в основной embed — для него отдельный
+        // VampireDescriptionEmbed, который показывается по кнопке «Описание».
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        Assert.Null(embed.Description);
     }
 
     [Fact]
@@ -130,127 +144,6 @@ public class VampireSheetEmbedTests
     }
 
     [Fact]
-    public void Build_HasNineCharacteristicRows()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var charsField = embed.Fields.First(f => f.Name.Contains("Характеристики"));
-        // Каждая характеристика в отдельной строке, плюс 3 заголовка категорий.
-        var lines = charsField.Value.ToString()!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        int attrRows = lines.Count(l => l.Contains('`'));
-        Assert.Equal(9, attrRows);
-    }
-
-    [Fact]
-    public void Build_HasTalentsSkillsKnowledgesBlocks()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        Assert.Contains(embed.Fields, f => f.Name.Contains("Таланты"));
-        Assert.Contains(embed.Fields, f => f.Name.Contains("Навыки"));
-        Assert.Contains(embed.Fields, f => f.Name.Contains("Знания"));
-    }
-
-    [Fact]
-    public void Build_TalentsBlock_ContainsAllTenTalents()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var talentsField = embed.Fields.First(f => f.Name.Contains("Таланты"));
-        var body = talentsField.Value.ToString()!;
-        foreach (var talent in VampireParameterCatalog.Talents)
-            Assert.Contains(talent, body);
-    }
-
-    [Fact]
-    public void Build_SkillsBlock_ContainsAllTenSkills()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var skillsField = embed.Fields.First(f => f.Name.Contains("Навыки"));
-        var body = skillsField.Value.ToString()!;
-        foreach (var skill in VampireParameterCatalog.Skills)
-            Assert.Contains(skill, body);
-    }
-
-    [Fact]
-    public void Build_KnowledgesBlock_ContainsAllTenKnowledges()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var kField = embed.Fields.First(f => f.Name.Contains("Знания"));
-        var body = kField.Value.ToString()!;
-        foreach (var k in VampireParameterCatalog.Knowledges)
-            Assert.Contains(k, body);
-    }
-
-    [Fact]
-    public void Build_HasVirtuesBlock()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        Assert.Contains(embed.Fields, f => f.Name.Contains("Добродетели"));
-    }
-
-    [Fact]
-    public void Build_HasMiscBlockWithHumanityWillpowerHunger()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var misc = embed.Fields.First(f => f.Name.Contains("Прочее"));
-        var body = misc.Value.ToString()!;
-        Assert.Contains("Человечность", body);
-        Assert.Contains("Воля", body);
-        Assert.Contains("Голод", body);
-        Assert.Contains("Опыт", body);
-    }
-
-    [Fact]
-    public void Build_HasHealthBlock()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var h = embed.Fields.First(f => f.Name.Contains("Здоровье"));
-        Assert.Contains("Шкала", h.Value.ToString());
-    }
-
-    [Fact]
-    public void Build_NullHealth_OmitsHealthField()
-    {
-        var c = NewCharacter();
-        c.Health = null;
-        var embed = VampireSheetEmbed.Build(c);
-        Assert.DoesNotContain(embed.Fields, f => f.Name.Contains("Здоровье"));
-    }
-
-    [Fact]
-    public void Build_HasDisciplinesBlock()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var d = embed.Fields.First(f => f.Name.Contains("Дисциплины"));
-        Assert.Contains("Стойкость", d.Value.ToString());
-        Assert.Contains("Потенциал", d.Value.ToString());
-    }
-
-    [Fact]
-    public void Build_EmptyDisciplines_OmitsDisciplinesField()
-    {
-        var c = NewCharacter();
-        c.Disciplines.Clear();
-        var embed = VampireSheetEmbed.Build(c);
-        Assert.DoesNotContain(embed.Fields, f => f.Name.Contains("Дисциплины"));
-    }
-
-    [Fact]
-    public void Build_HasBackgroundsBlock()
-    {
-        var embed = VampireSheetEmbed.Build(NewCharacter());
-        var b = embed.Fields.First(f => f.Name.Contains("Фон"));
-        Assert.Contains("Старейшина", b.Value.ToString());
-    }
-
-    [Fact]
-    public void Build_EmptyBackgrounds_OmitsBackgroundsField()
-    {
-        var c = NewCharacter();
-        c.Backgrounds.Clear();
-        var embed = VampireSheetEmbed.Build(c);
-        Assert.DoesNotContain(embed.Fields, f => f.Name.Contains("Фон"));
-    }
-
-    [Fact]
     public void Build_HasAuthorPlayerName()
     {
         var embed = VampireSheetEmbed.Build(NewCharacter());
@@ -274,15 +167,234 @@ public class VampireSheetEmbedTests
     }
 
     [Fact]
-    public void Build_LongBio_TruncatedToDiscordLimit()
+    public void Build_NormalBio_DoesNotEmbedIntoMainSheet()
     {
         var c = NewCharacter();
-        c.Bio = new string('ы', 5000);
+        c.Bio = "Краткое био.";
         var embed = VampireSheetEmbed.Build(c);
-        Assert.NotNull(embed.Description);
-        // Discord EmbedBuilder.MaxDescriptionLength = 4096; наш Truncate оставляет +1 символ «…».
-        Assert.True(embed.Description!.Length <= 4097);
+        Assert.Null(embed.Description);
     }
+
+    // ─── Шапка V20 ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_Header_ContainsAllV20Fields()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var header = embed.Fields.First(f => f.Name.Contains("Идентификация"));
+        var body = header.Value.ToString()!;
+        Assert.Contains("Хроника", body);
+        Assert.Contains("Натура", body);
+        Assert.Contains("Маска", body);
+        Assert.Contains("Амплуа", body);
+        Assert.Contains("Клан", body);
+        Assert.Contains("поколение", body);
+        Assert.Contains("Сир", body);
+    }
+
+    [Fact]
+    public void Build_NoHeader_WhenAllFieldsEmpty()
+    {
+        var c = new VampireCharacter();
+        var embed = VampireSheetEmbed.Build(c);
+        // Если все поля шапки пусты — блок «Идентификация» отсутствует.
+        Assert.DoesNotContain(embed.Fields, f => f.Name.Contains("Идентификация"));
+    }
+
+    // ─── Характеристики ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_Characteristics_ContainsAllThreeGroups()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var charsField = embed.Fields.First(f => f.Name.Contains("Характеристики"));
+        var body = charsField.Value.ToString()!;
+        Assert.Contains("Физические", body);
+        Assert.Contains("Социальные", body);
+        Assert.Contains("Ментальные", body);
+    }
+
+    [Fact]
+    public void Build_Characteristics_ContainsAllNine()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var charsField = embed.Fields.First(f => f.Name.Contains("Характеристики"));
+        var body = charsField.Value.ToString()!;
+        foreach (var cat in VampireParameterCatalog.Physical
+            .Concat(VampireParameterCatalog.Social)
+            .Concat(VampireParameterCatalog.Mental))
+        {
+            Assert.Contains(cat, body);
+        }
+    }
+
+    // ─── Способности (Таланты / Навыки / Знания) ────────────────────────
+
+    [Fact]
+    public void Build_Abilities_ContainAllThreeGroups()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Таланты", allText);
+        Assert.Contains("Навыки", allText);
+        Assert.Contains("Знания", allText);
+        foreach (var t in VampireParameterCatalog.Talents) Assert.Contains(t, allText);
+        foreach (var s in VampireParameterCatalog.Skills) Assert.Contains(s, allText);
+        foreach (var k in VampireParameterCatalog.Knowledges) Assert.Contains(k, allText);
+    }
+
+    [Fact]
+    public void Build_Abilities_SpecializationShown_WhenDotsAtLeast4()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("плавание", allText); // specialization for Атлетика
+    }
+
+    [Fact]
+    public void Build_Abilities_NoSpecialization_WhenDotsBelow4()
+    {
+        var c = NewCharacter();
+        c.Specializations = new() { ["Атлетика"] = "плавание" };
+        c.Attributes["Атлетика"] = 2;
+        var embed = VampireSheetEmbed.Build(c);
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.DoesNotContain("плавание", allText);
+    }
+
+    // ─── Преимущества ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_Advantages_ContainsThreeSubheaders()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Дисциплины", allText);
+        Assert.Contains("Факты биографии", allText);
+        Assert.Contains("Добродетели", allText);
+    }
+
+    [Fact]
+    public void Build_Disciplines_ListsAll()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Стойкость", allText);
+        Assert.Contains("Потенциал", allText);
+    }
+
+    [Fact]
+    public void Build_Backgrounds_ListsAll()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Старейшина", allText);
+        Assert.Contains("Ресурсы", allText);
+    }
+
+    [Fact]
+    public void Build_Virtues_ShowsBothNames()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Совесть/Решимость", allText);
+        Assert.Contains("Самоконтроль/Инстинкты", allText);
+        Assert.Contains("Смелость", allText);
+    }
+
+    [Fact]
+    public void Build_Virtues_DisplayFiveCells()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        int fiveCells = System.Text.RegularExpressions.Regex.Matches(allText, @"●{1,5}○{1,5}").Count;
+        Assert.True(fiveCells >= 3, $"ожидаем минимум 3 строки ●○, получили {fiveCells}");
+    }
+
+    // ─── Нижний ряд ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_BottomRow_HasThreeColumns()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var bottom = embed.Fields
+            .Where(f => f.Name.Contains("Достоинства") || f.Name.Contains("Суть") || f.Name.Contains("Здоровье и опыт"))
+            .ToList();
+        Assert.Equal(3, bottom.Count);
+    }
+
+    [Fact]
+    public void Build_MeritsFlaws_ShowsMeritsAndFlaws()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var mf = embed.Fields.First(f => f.Name.Contains("Достоинства и недостатки"));
+        var body = mf.Value.ToString()!;
+        Assert.Contains("Острые чувства", body);
+        Assert.Contains("Связи", body);
+        Assert.Contains("Заразный укус", body);
+    }
+
+    [Fact]
+    public void Build_Essence_ShowsHumanityWillpowerHungerBlood()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        var body = e.Value.ToString()!;
+        Assert.Contains("Человечность", body);
+        Assert.Contains("Воля", body);
+        Assert.Contains("Голод", body);
+        Assert.Contains("Кровь", body);
+    }
+
+    [Fact]
+    public void Build_HealthExperience_HasAllParts()
+    {
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var h = embed.Fields.First(f => f.Name.Contains("Здоровье и опыт"));
+        var body = h.Value.ToString()!;
+        Assert.Contains("Здоровье", body);
+        Assert.Contains("Штраф", body);
+        Assert.Contains("Изъян", body);
+        Assert.Contains("Приступы ярости", body);
+        Assert.Contains("Опыт", body);
+        Assert.Contains("12 / 40", body);
+    }
+
+    [Fact]
+    public void Build_HealthExperience_NullHealth_ShowsPlaceholder()
+    {
+        var c = NewCharacter();
+        c.Health = null;
+        var embed = VampireSheetEmbed.Build(c);
+        var h = embed.Fields.First(f => f.Name.Contains("Здоровье и опыт"));
+        Assert.Contains("не инициализировано", h.Value.ToString());
+    }
+
+    [Fact]
+    public void Build_HealthExperience_ReflectsTablePenalty()
+    {
+        var c = NewCharacter();
+        c.Health!.ApplyNonLethal(1); // одна косая черта — штраф 0 по таблице
+        var embed = VampireSheetEmbed.Build(c);
+        var h = embed.Fields.First(f => f.Name.Contains("Здоровье и опыт"));
+        var body = h.Value.ToString()!;
+        Assert.Contains("Здоровье:", body);
+        Assert.Contains("Штраф", body);
+        // Один нелетальный → ячейка с косой чертой, штраф по таблице = 0.
+        Assert.Contains("0", body);
+    }
+
+    [Fact]
+    public void Build_HealthExperience_ShowsIncapacitatedMark()
+    {
+        var c = NewCharacter();
+        for (int i = 0; i < 7; i++) c.Health!.ApplyLethal(1);
+        var embed = VampireSheetEmbed.Build(c);
+        var h = embed.Fields.First(f => f.Name.Contains("Здоровье и опыт"));
+        Assert.Contains("Небоеспособен", h.Value.ToString());
+    }
+
+    // ─── Прочее ──────────────────────────────────────────────────────────
 
     [Fact]
     public void DotsString_NormalCase()
@@ -309,22 +421,25 @@ public class VampireSheetEmbedTests
     }
 
     [Fact]
-    public void Build_HighHunger_Displayed()
+    public void Build_MeritsFlaws_Empty_ShowsDash()
     {
         var c = NewCharacter();
-        c.Hunger = 5;
+        c.Merits.Clear();
+        c.Flaws.Clear();
         var embed = VampireSheetEmbed.Build(c);
-        var misc = embed.Fields.First(f => f.Name.Contains("Прочее"));
-        Assert.Contains("●●●●●", misc.Value.ToString());
+        var mf = embed.Fields.First(f => f.Name.Contains("Достоинства и недостатки"));
+        Assert.Contains("—", mf.Value.ToString());
     }
 
     [Fact]
-    public void Build_HealthWithNonLethal_ReflectedInRender()
+    public void Build_EmptyCharacter_NoHeaderButAllRowsPresent()
     {
-        var c = NewCharacter();
-        c.Health!.ApplyNonLethal(2);
+        var c = new VampireCharacter();
         var embed = VampireSheetEmbed.Build(c);
-        var h = embed.Fields.First(f => f.Name.Contains("Здоровье"));
-        Assert.Contains("//", h.Value.ToString());
+        Assert.DoesNotContain(embed.Fields, f => f.Name.Contains("Идентификация"));
+        Assert.Contains(embed.Fields, f => f.Name.Contains("Характеристики"));
+        Assert.Contains(embed.Fields, f => f.Name.Contains("Достоинства и недостатки"));
+        Assert.Contains(embed.Fields, f => f.Name.Contains("Суть"));
+        Assert.Contains(embed.Fields, f => f.Name.Contains("Здоровье и опыт"));
     }
 }
