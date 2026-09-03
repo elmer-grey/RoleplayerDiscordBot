@@ -375,6 +375,7 @@ public class HealthStateTests
     public void Penalty_AllEmpty_IsZero()
     {
         Assert.Equal(0, H().Penalty);
+        Assert.Equal(0, H().TablePenalty);
     }
 
     [Fact]
@@ -383,6 +384,7 @@ public class HealthStateTests
         var h = H();
         h.ApplyNonLethal(3);
         Assert.Equal(0, h.Penalty);
+        Assert.Equal(0, h.TablePenalty);
     }
 
     [Fact]
@@ -391,8 +393,80 @@ public class HealthStateTests
         var h = H();
         h.ApplyAggravated(2); // AA.....
         Assert.Equal(1, h.Penalty);
+        Assert.Equal(-1, h.TablePenalty); // Легко ранен
         h.ApplyAggravated(1); // AAA....
         Assert.Equal(2, h.Penalty);
+        Assert.Equal(-1, h.TablePenalty); // Ранен
+    }
+
+    // ─── V20 таблица штрафов здоровья (стр. 92) ─────────────────────────
+
+    [Theory]
+    [InlineData(0, 0)]    // Помят
+    [InlineData(1, -1)]   // Легко ранен
+    [InlineData(2, -1)]   // Ранен
+    [InlineData(3, -2)]   // Серьёзно
+    [InlineData(4, -2)]   // Тяжело
+    [InlineData(5, -5)]   // Совсем плох
+    [InlineData(6, 0)]    // Небоеспособен
+    public void TablePenalty_FollowsV20Page92(int lastFilledCell, int expectedPenalty)
+    {
+        var cells = new CellState[7];
+        for (int i = 0; i <= lastFilledCell; i++)
+            cells[i] = CellState.Lethal;
+        Assert.Equal(expectedPenalty, HealthState.ComputeTablePenalty(cells));
+    }
+
+    [Fact]
+    public void TablePenalty_AggravatedAlsoTriggers()
+    {
+        var cells = new CellState[] { CellState.Aggravated, CellState.Aggravated, CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty };
+        Assert.Equal(-1, HealthState.ComputeTablePenalty(cells)); // Ранен
+    }
+
+    [Fact]
+    public void TablePenalty_EmptyArray_IsNull()
+    {
+        Assert.Null(HealthState.ComputeTablePenalty(Array.Empty<CellState>()));
+        Assert.Null(HealthState.ComputeTablePenalty(null!));
+    }
+
+    // ─── Небоеспособен (V20 стр. 274) ───────────────────────────────────
+
+    [Fact]
+    public void IsIncapacitated_OnlyWhenLastCellFilled()
+    {
+        var h = H();
+        Assert.False(h.IsIncapacitated);
+        for (int i = 0; i < 6; i++) h.ApplyLethal(1);
+        Assert.False(h.IsIncapacitated); // 6 из 7 заполнено — ещё нет
+        h.ApplyLethal(1); // 7-я ячейка
+        Assert.True(h.IsIncapacitated);
+    }
+
+    [Fact]
+    public void IsIncapacitated_AggravatedAlsoTriggers()
+    {
+        var h = H();
+        for (int i = 0; i < 6; i++) h.ApplyAggravated(1);
+        Assert.False(h.IsIncapacitated);
+        h.ApplyAggravated(1);
+        Assert.True(h.IsIncapacitated);
+    }
+
+    [Fact]
+    public void Incapacitated_HasZeroTablePenalty_ButCannotRoll()
+    {
+        // По таблице V20 «нет штрафа на 7 строках» — числовой штраф = 0.
+        // Но логика бросков должна проверять IsIncapacitated отдельно.
+        var h = new HealthState(7, new CellState[]
+        {
+            CellState.Lethal, CellState.Lethal, CellState.Lethal,
+            CellState.Lethal, CellState.Lethal, CellState.Lethal,
+            CellState.Lethal,
+        });
+        Assert.Equal(0, h.TablePenalty);
+        Assert.True(h.IsIncapacitated);
     }
 
     [Fact]

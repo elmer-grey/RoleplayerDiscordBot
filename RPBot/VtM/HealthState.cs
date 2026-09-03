@@ -48,6 +48,34 @@ public sealed class HealthState
     [JsonPropertyName("penalty")]
     public int Penalty { get; private set; }
 
+    /// <summary>
+    /// Штраф по таблице V20 (стр. 92):
+    /// Помят → -0, Легко ранен → -1, Ранен → -1, Серьёзно → -2, Тяжело → -2,
+    /// Совсем плох → -5, Небоеспособен → без штрафа (рассказчик решает).
+    /// null — шкала пуста.
+    /// </summary>
+    /// <remarks>
+    /// Это «логический» штраф по строкам таблицы, а не арифметический по индексу ячейки.
+    /// Может отличаться от <see cref="Penalty"/> в редких случаях
+    /// (например, оголённый X поверх S без /).
+    /// <para>
+    /// ⚠️ Для «Небоеспособен» штраф численно = 0, но по правилам V20 (стр. 274)
+    /// персонаж не может совершать действия — проверяйте <see cref="IsIncapacitated"/>
+    /// в логике бросков, не только <see cref="TablePenalty"/>.
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("tablePenalty")]
+    public int? TablePenalty { get; private set; }
+
+    /// <summary>
+    /// Небоеспособен (последняя ячейка шкалы заполнена X или A).
+    /// По V20 стр. 274 персонаж не может совершать действия, кроме попытки выйти
+    /// из этого состояния. <see cref="TablePenalty"/> для этого случая = 0,
+    /// но применять его к пулу **нельзя** — см. <see cref="TablePenalty"/>.
+    /// </summary>
+    [JsonPropertyName("isIncapacitated")]
+    public bool IsIncapacitated { get; private set; }
+
     /// <summary>Все ячейки Lethal или Aggravated, и хотя бы одна Lethal → торпор.</summary>
     [JsonPropertyName("isTorpor")]
     public bool IsTorpor =>
@@ -70,6 +98,7 @@ public sealed class HealthState
         if (size < 1) throw new ArgumentOutOfRangeException(nameof(size), size, "минимум 1 ячейка");
         _cells = Enumerable.Repeat(CellState.Empty, size).ToArray();
         RecomputePenalty();
+        TablePenalty = ComputeTablePenalty(_cells);
     }
 
     /// <summary>Конструктор для десериализации.</summary>
@@ -82,6 +111,7 @@ public sealed class HealthState
             : Enumerable.Repeat(CellState.Empty, size).ToArray();
         NormalizeInvariant();
         RecomputePenalty();
+        TablePenalty = ComputeTablePenalty(_cells);
     }
 
     // ─── Публичные API ───────────────────────────────────────────────────
@@ -295,6 +325,43 @@ public sealed class HealthState
                 last = i;
         }
         Penalty = Math.Max(0, last);
+        TablePenalty = ComputeTablePenalty(_cells);
+        IsIncapacitated = last == _cells.Length - 1 && last >= 0;
+    }
+
+    /// <summary>
+    /// Штраф по таблице V20 (стр. 92) на основе количества заполненных ячеек.
+    /// Правило: индекс последней заполненной ячейки N → штраф по таблице.
+    /// Пустая шкала → null.
+    /// </summary>
+    public static int? ComputeTablePenalty(CellState[] cells)
+    {
+        if (cells is null || cells.Length == 0) return null;
+        int last = -1;
+        for (int i = 0; i < cells.Length; i++)
+        {
+            if (cells[i] == CellState.Lethal || cells[i] == CellState.Aggravated)
+                last = i;
+        }
+        if (last < 0) return 0; // без повреждений — без штрафа
+        // V20 стр. 92:
+        // 0  Помят       -0
+        // 1  Легко ранен -1
+        // 2  Ранен       -1
+        // 3  Серьёзно    -2
+        // 4  Тяжело      -2
+        // 5  Совсем плох -5
+        // 6  Небоеспос.  -0
+        return last switch
+        {
+            0 => 0,
+            1 => -1,
+            2 => -1,
+            3 => -2,
+            4 => -2,
+            5 => -5,
+            _ => 0, // 6+ — небоеспособен, без штрафа на броски
+        };
     }
 
     /// <summary>
