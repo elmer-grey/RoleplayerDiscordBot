@@ -71,10 +71,12 @@ namespace RPBot.VtM
                                         ? new Dictionary<string, VampireCharacter>(loaded, StringComparer.Ordinal)
                                         : new Dictionary<string, VampireCharacter>(StringComparer.Ordinal);
                                     var migrated = RebuildCharacterIds();
+                                    var freebieMigrated = VampireFreebieSplitMigration.Migrate(_characters);
                                     RebuildPlayerIdIndex();
-                                    if (migrated > 0)
+                                    if (migrated > 0 || freebieMigrated > 0)
                                     {
-                                        // Сохраняем, чтобы UUID'ы попали на диск, а жили только в RAM.
+                                        // Сохраняем, чтобы UUID'ы и/или freebie-разделение попали на диск,
+                                        // а жили только в RAM.
                                         var json = JsonSerializer.Serialize(_characters, _json);
                                         await SafeJsonIO.WriteAtomicAsync(_filePath, json, ct).ConfigureAwait(false);
                                     }
