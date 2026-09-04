@@ -17,6 +17,7 @@ namespace RPBot.VtM
         /// <summary>
         /// Собрать embed блока «Воля».
         /// </summary>
+#pragma warning disable CS0618 // Willpower/WillpowerPoints устарели для листа, но используются runtime-кнопкой «Воля» в DM.
         public static Embed Build(VampireCharacter c)
         {
             if (c == null) throw new ArgumentNullException(nameof(c));
@@ -84,5 +85,6 @@ namespace RPBot.VtM
             if (filled + empty == 0) return "—";
             return new string('●', filled) + new string('○', empty);
         }
+#pragma warning restore CS0618
     }
 }

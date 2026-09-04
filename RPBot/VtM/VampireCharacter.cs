@@ -108,6 +108,8 @@ public sealed class VampireCharacter
     /// Запас крови (Blood Pool) — максимум равен Стойкости (обычно 4..10).
     /// По умолчанию 10 (стандартное для вампира со Стойкостью 3-4).
     /// </summary>
+    [Obsolete("Не используется в листе после Шага 6: Кровь убрана, трекинг ведётся через Hunger. " +
+              "Оставлено для обратной совместимости с сохранёнными персонажами.")]
     [JsonPropertyName("bloodPool")]
     public int BloodPool { get; set; } = 10;
 
@@ -200,6 +202,8 @@ public sealed class VampireCharacter
         /// <summary>
         /// Атрибут «Воля» (1..10). Базовое значение обсуждается отдельно.
         /// </summary>
+        [Obsolete("Не используется в листе после Шага 6: значение берётся из VampireFinishingResolver.ComputeWillpower. " +
+                  "Оставлено для обратной совместимости с сохранёнными персонажами.")]
         [JsonPropertyName("willpower")]
         public int Willpower { get; set; } = 5;
 
@@ -207,6 +211,8 @@ public sealed class VampireCharacter
         /// Текущий запас пунктов воли (0..<see cref="Willpower"/>).
         /// Стартовое значение = <see cref="Willpower"/>. Восстанавливается по завершении истории.
         /// </summary>
+        [Obsolete("Не используется в листе после Шага 6: значение берётся из VampireFinishingResolver.ComputeWillpower. " +
+                  "Оставлено для обратной совместимости с сохранёнными персонажами.")]
         [JsonPropertyName("willpowerPoints")]
         public int WillpowerPoints { get; set; } = 5;
 
@@ -244,6 +250,8 @@ public sealed class VampireCharacter
         /// <remarks>
         /// Показывается в embed'е листа персонажа.
         /// </remarks>
+        [Obsolete("Не используется в листе после Шага 6: значение берётся из VampireFinishingResolver.ComputeHumanity. " +
+                  "Оставлено для обратной совместимости с сохранёнными персонажами.")]
         [JsonPropertyName("humanity")]
         public int Humanity { get; set; } = 7;
 
@@ -323,10 +331,12 @@ public sealed class VampireCharacter
         /// Подтянуть запас пунктов воли к потолку после повышения атрибута «Воля».
         /// Вызывать при изменении <see cref="Willpower"/> (создание персонажа, покупка за опыт).
         /// </summary>
+#pragma warning disable CS0618 // Willpower/WillpowerPoints устарели для листа, но используются runtime-кнопкой «Воля».
         public void EnsureWillpowerPointsValid()
         {
             if (Willpower < 0) Willpower = 0;
             if (WillpowerPoints < 0) WillpowerPoints = 0;
             if (WillpowerPoints > Willpower) WillpowerPoints = Willpower;
         }
+#pragma warning restore CS0618
 }
