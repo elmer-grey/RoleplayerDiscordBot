@@ -4660,7 +4660,11 @@ await Task.CompletedTask;
                             await HandleVampireWizardPriorityAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:attr_inc:"))
                                             await HandleVampireWizardAttrGroupSelectAsync(component);
-                    }
+                                        else if (cid.StartsWith("vtm_wiz:ability_priority:"))
+                                            await HandleVampireWizardAbilityPriorityAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:ability_inc:"))
+                                            await HandleVampireWizardAbilityGroupSelectAsync(component);
+                                    }
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Discord, $"[SelectMenuExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
@@ -4845,7 +4849,168 @@ await Task.CompletedTask;
                                     }
                                 }
 
-        private async Task ProcessButtonAsync(SocketMessageComponent component)
+                                                    /// <summary>
+                                                    /// Обработка выбора приоритета групп в SelectMenu (Шаг 3 «Способности»).
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardAbilityPriorityAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбран приоритет.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (!System.Enum.TryParse<VampireAbilityPriority>(selected.First(), out var priority))
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестный приоритет: {selected.First()}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var dec = VampireAbilitiesResolver.SetPriority(session.Draft, priority);
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                var msg = await dm.GetMessageAsync(session.DmMessageId ?? 0);
+                                                                if (msg is IUserMessage um)
+                                                                {
+                                                                    var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
+                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                                                                    await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
+                                                                }
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 3 после выбора приоритета: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ Приоритет способностей установлен: {priority.HumanName()}.", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardAbilityPriorityAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе приоритета способностей.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Обработка SelectMenu изменения способности в группе (Шаг 3).
+                                                    /// CustomId: <c>vtm_wiz:ability_inc:{cid}:{GroupName}</c>, value: <c>{sign}:{AbilityName}</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardAbilityGroupSelectAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            if (!VampireWizardComponents.TryParseWithArg(
+                                                                component.Data.CustomId, out _, out _, out var groupArg))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId группы способностей.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!System.Enum.TryParse<VampireAbilityGroup>(groupArg, out var group))
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестная группа: {groupArg}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрано значение.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var first = selected.First();
+                                                            var colonIdx = first.IndexOf(':');
+                                                            if (colonIdx <= 0 || colonIdx >= first.Length - 1)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Неверный формат value.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var sign = first.Substring(0, colonIdx);
+                                                            var abilityName = first.Substring(colonIdx + 1);
+
+                                                            if (sign != "+" && sign != "−")
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестный знак: {sign}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            VampireAbilitiesResolver.VampireAbilitiesDecision dec;
+                                                            if (sign == "+")
+                                                                dec = VampireAbilitiesResolver.Increment(session.Draft, group, abilityName);
+                                                            else
+                                                                dec = VampireAbilitiesResolver.Decrement(session.Draft, group, abilityName);
+
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                var msg = await dm.GetMessageAsync(session.DmMessageId ?? 0);
+                                                                if (msg is IUserMessage um)
+                                                                {
+                                                                    var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
+                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                                                                    await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
+                                                                }
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 3 после изменения: {ex.Message}");
+                                                            }
+
+                                                            var opLabel = (sign == "+") ? "+1" : "−1";
+                                                            await component.RespondAsync($"✅ {abilityName}: {opLabel} применено.", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardAbilityGroupSelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при изменении способности.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                            private async Task ProcessButtonAsync(SocketMessageComponent component)
         {
             var parts = component.Data.CustomId.Split(':');
             var buttonType = parts.Length > 0 ? parts[0] : component.Data.CustomId;

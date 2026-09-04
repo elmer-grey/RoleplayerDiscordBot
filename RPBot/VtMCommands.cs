@@ -631,21 +631,45 @@ public sealed class VampireCommands
 
             case VampireWizardAction.Next:
                             // Поведение «Далее» зависит от текущего шага.
-                            if (session.Step == VampireWizardStep.Attributes)
+                                        if (session.Step == VampireWizardStep.Abilities)
                             {
-                                if (!VampireAttributesResolver.IsAttributesComplete(session.Draft))
+                                            if (!VampireAbilitiesResolver.IsAbilitiesComplete(session.Draft))
                                 {
                                     await component.RespondAsync(
-                                        "❌ Шаг 2 ещё не завершён. Распределите все 15 пунктов по приоритету 7/5/3.",
+                                                    "❌ Шаг 3 ещё не завершён. Распределите все 27 пунктов по приоритету 13/9/5.",
                                         ephemeral: true);
                                     return;
                                 }
-                                await component.RespondAsync(
-                                    "✅ Шаг 2 (характеристики) сохранён. Шаг 3 (способности) появится в следующем обновлении.",
-                                    ephemeral: true);
-                                await CommitDraftAsync(component, session);
+                                            await CommitDraftAsync(component, session);
+                                            await component.RespondAsync(
+                                                "✅ Шаг 3 (способности) сохранён. Шаг 4 (преимущества) появится в следующем обновлении.",
+                                                ephemeral: true);
                                 return;
                             }
+                                        if (session.Step == VampireWizardStep.Attributes)
+                                        {
+                                            if (!VampireAttributesResolver.IsAttributesComplete(session.Draft))
+                                            {
+                                                await component.RespondAsync(
+                                                    "❌ Шаг 2 ещё не завершён. Распределите все 15 пунктов по приоритету 7/5/3.",
+                                                    ephemeral: true);
+                                                return;
+                                            }
+                                            await component.RespondAsync(
+                                                "✅ Шаг 2 (характеристики) сохранён. Переходим к Шагу 3 (способности).",
+                                                ephemeral: true);
+                                            await CommitDraftAsync(component, session);
+                                            try
+                                            {
+                                                var dm = await component.User.CreateDMChannelAsync();
+                                                await VampireWizardDmHandler.RenderAbilitiesStepAsync(dm, session);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 2→3: {ex.Message}");
+                                            }
+                                            return;
+                                        }
 
                             // По умолчанию — Шаг 1 «Концепция».
                             if (!VampireCreateResolver.IsConceptComplete(session.Draft))
@@ -687,6 +711,39 @@ public sealed class VampireCommands
                                 BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 2→1: {ex.Message}");
                             }
                             return;
+
+                                                case VampireWizardAction.BackToAttributes:
+                                                    await component.RespondAsync("⬅ Возврат на Шаг 2 (характеристики).", ephemeral: true);
+                                                    try
+                                                    {
+                                                        var dm = await component.User.CreateDMChannelAsync();
+                                                        await VampireWizardDmHandler.RenderAttributesStepAsync(dm, session);
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 3→2: {ex.Message}");
+                                                    }
+                                                    return;
+
+                                                case VampireWizardAction.ResetAbilityProgress:
+                                                    VampireAbilitiesResolver.ResetProgress(session.Draft);
+                                                    await RerenderWizardAsync(component, session);
+                                                    return;
+
+                                                case VampireWizardAction.ResetAbilityAll:
+                                                    VampireAbilitiesResolver.ResetAll(session.Draft);
+                                                    await RerenderWizardAsync(component, session);
+                                                    return;
+
+                                                case VampireWizardAction.AbilityPriority:
+                                                case VampireWizardAction.AbilityInc:
+                                                case VampireWizardAction.AbilityDec:
+                                                    {
+                                                        // Эти actions несут аргументы в customId-arg и обрабатываются
+                                                        // отдельным entry-point (HandleWizardSelectMenuWithArgAsync).
+                                                        await component.RespondAsync("⚠️ Внутренняя ошибка визарда (ability без аргумента).", ephemeral: true);
+                                                        return;
+                                                    }
 
                         case VampireWizardAction.ResetAttrProgress:
                             VampireAttributesResolver.ResetProgress(session.Draft);

@@ -64,6 +64,25 @@ public enum VampireWizardAction
                 ResetAttrAll,
                 /// <summary>Вернуться на Шаг 1 (Концепция).</summary>
                 BackToConcept,
+
+                // ── Шаг 3 «Способности 13/9/5» ─────────────────────────────────────
+
+                /// <summary>SelectMenu выбора приоритета 13/9/5 (Шаг 3).</summary>
+                AbilityPriority,
+                /// <summary>Увеличить способность на 1 (Шаг 3). Action-arg = имя способности.</summary>
+                AbilityInc,
+                /// <summary>Уменьшить способность на 1 (Шаг 3).</summary>
+                AbilityDec,
+                /// <summary>Задать специализацию (SelectMenu выбора подсказки или «Своя»). Action-arg = имя параметра.</summary>
+                SpecChoice,
+                /// <summary>Установить выбранную специализацию (SelectMenu). Action-arg = имя параметра.</summary>
+                SpecSet,
+                /// <summary>Сбросить прогресс Шага 3 (только способности; приоритет сохраняется).</summary>
+                ResetAbilityProgress,
+                /// <summary>Сбросить всё на Шаге 3 (приоритет и способности).</summary>
+                ResetAbilityAll,
+                /// <summary>Вернуться на Шаг 2 (Характеристики).</summary>
+                BackToAttributes,
     }
 
 /// <summary>
@@ -240,6 +259,190 @@ public static class VampireWizardComponents
                                 return !string.IsNullOrEmpty(d.AttributesPriority);
                             }
 
+                                // ── Шаг 3 «Способности 13/9/5» ─────────────────────────────────────
+
+                                /// <summary>
+                                /// UI Шага 3: 5 рядов.
+                                ///   1) SelectMenu выбора приоритета 13/9/5.
+                                ///   2-4) SelectMenu по группам (Таланты/Навыки/Знания) — ± по 10 способностей.
+                                ///   5) Назад / Сбросить / Сбросить всё / (Далее если завершено).
+                                /// </summary>
+                                public static MessageComponent BuildForAbilitiesStep(VampireCharacter draft)
+                                {
+                                    if (draft == null) throw new ArgumentNullException(nameof(draft));
+                                    if (draft.CharacterId == Guid.Empty)
+                                        throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                                    var cb = new ComponentBuilder();
+
+                                    // Ряд 1: SelectMenu с приоритетами 13/9/5.
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomId(VampireWizardAction.AbilityPriority, draft.CharacterId))
+                                        .WithPlaceholder(HasAbilityPriority(draft)
+                                            ? $"Приоритет: {draft.AbilitiesPriority}"
+                                            : "Выберите приоритет групп (13/9/5)…");
+                                    foreach (var p in VampireAbilityPriorityExtensions.All)
+                                    {
+                                        menu.AddOption(p.HumanName(), p.ToString());
+                                    }
+                                    cb.WithSelectMenu(menu);
+
+                                    // Ряды 2-4: SelectMenu по группам. В каждом — 20 опций (±10 способностей).
+                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Talents));
+                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Skills));
+                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Knowledges));
+
+                                    // Ряд 5: навигация.
+                                    cb.WithButton("⬅ Назад (Шаг 2)", BuildCustomId(VampireWizardAction.BackToAttributes, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAbilityProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAbilityAll, draft.CharacterId), ButtonStyle.Danger);
+
+                                    if (VampireAbilitiesResolver.IsAbilitiesComplete(draft))
+                                    {
+                                        cb.WithButton("Далее → Шаг 4 (преимущества)", BuildCustomId(VampireWizardAction.Next, draft.CharacterId), ButtonStyle.Success);
+                                    }
+
+                                    return cb.Build();
+                                }
+
+                                /// <summary>
+                                /// SelectMenu для изменения одной способности в группе.
+                                /// Опции: +Способность, −Способность для каждой из 10 в группе (20 опций).
+                                /// </summary>
+                                private static SelectMenuBuilder BuildAbilityGroupSelect(
+                                    VampireCharacter draft,
+                                    VampireAbilityGroup group)
+                                {
+                                    var groupLabel = group switch
+                                    {
+                                        VampireAbilityGroup.Talents => "Таланты",
+                                        VampireAbilityGroup.Skills => "Навыки",
+                                        VampireAbilityGroup.Knowledges => "Знания",
+                                        _ => group.ToString()
+                                    };
+
+                                    var remaining = VampireAbilitiesResolver.RemainingInGroup(draft, group);
+                                    var placeholder = $"{groupLabel} (±): ост. {remaining}";
+
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.AbilityInc, draft.CharacterId, group.ToString()))
+                                        .WithPlaceholder(placeholder);
+
+                                    foreach (var name in VampireAbilitiesCatalog.NamesInGroup(group))
+                                    {
+                                        var cur = GetAbilityValue(draft, name);
+
+                                        // Опция «+».
+                                        var incVal = $"+:{name}";
+                                        var incDesc = $"текущее: {cur}, макс шага 3 = 3";
+                                        if (cur >= 3) incDesc = "уже 3 (макс шага 3)";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"+ {Truncate(name, 18)} ({cur})")
+                                            .WithValue(incVal)
+                                            .WithDescription(incDesc));
+
+                                        // Опция «−».
+                                        var decVal = $"−:{name}";
+                                        var decDesc = $"текущее: {cur}, база = 0";
+                                        if (cur <= 0) decDesc = "уже на базе";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"− {Truncate(name, 18)} ({cur})")
+                                            .WithValue(decVal)
+                                            .WithDescription(decDesc));
+                                    }
+
+                                    return menu;
+                                }
+
+                                /// <summary>
+                                /// SelectMenu выбора специализации для конкретного параметра
+                                /// (характеристики или способности). Опции: 3 подсказки из каталога
+                                /// + «Своя…» (открывает текстовый ввод).
+                                /// </summary>
+                                /// <param name="paramName">Имя параметра (русское, как в каталоге).</param>
+                                /// <param name="actionPrefix">Какой action использовать (SpecSet).</param>
+                                public static SelectMenuBuilder BuildSpecChoiceSelect(
+                                    VampireCharacter draft,
+                                    string paramName)
+                                {
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.SpecChoice, draft.CharacterId, paramName))
+                                        .WithPlaceholder($"Специализация «{paramName}»");
+
+                                    var suggestions = VampireAbilitiesCatalog.GetSpecializationSuggestions(paramName);
+                                    if (suggestions.Count == 0)
+                                    {
+                                        // Для параметров без справочника подсказок (например, характеристик) — сразу «Своя».
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel("Своя…")
+                                            .WithValue("__custom__")
+                                            .WithDescription("ввести произвольный текст в ЛС"));
+                                    }
+                                    else
+                                    {
+                                        foreach (var s in suggestions)
+                                        {
+                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                .WithLabel(Truncate(s, 28))
+                                                .WithValue(s)
+                                                .WithDescription("выбрать готовый вариант"));
+                                        }
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel("Своя…")
+                                            .WithValue("__custom__")
+                                            .WithDescription("ввести произвольный текст в ЛС"));
+                                    }
+
+                                    return menu;
+                                }
+
+                                private static bool HasAbilityPriority(VampireCharacter d)
+                                {
+                                    return !string.IsNullOrEmpty(d.AbilitiesPriority);
+                                }
+
+                                private static int GetAbilityValue(VampireCharacter draft, string name) => name switch
+                                {
+                                    "Атлетика"                 => draft.AbilitiesStruct.Атлетика,
+                                    "Бдительность"             => draft.AbilitiesStruct.Бдительность,
+                                    "Драка"                    => draft.AbilitiesStruct.Драка,
+                                    "Запугивание"              => draft.AbilitiesStruct.Запугивание,
+                                    "Красноречие"              => draft.AbilitiesStruct.Красноречие,
+                                    "Лидерство"                => draft.AbilitiesStruct.Лидерство,
+                                    "Уличное чутьё"            => draft.AbilitiesStruct.УличноеЧутьё,
+                                    "Хитрость"                 => draft.AbilitiesStruct.Хитрость,
+                                    "Шестое чувство"           => draft.AbilitiesStruct.ШестоеЧувство,
+                                    "Эмпатия"                  => draft.AbilitiesStruct.Эмпатия,
+                                    "Вождение"                 => draft.AbilitiesStruct.Вождение,
+                                    "Воровство"                => draft.AbilitiesStruct.Воровство,
+                                    "Выживание"                => draft.AbilitiesStruct.Выживание,
+                                    "Исполнение"               => draft.AbilitiesStruct.Исполнение,
+                                    "Обращение с животными"    => draft.AbilitiesStruct.ОбращениеСЖивотными,
+                                    "Ремесло"                  => draft.AbilitiesStruct.Ремесло,
+                                    "Скрытность"               => draft.AbilitiesStruct.Скрытность,
+                                    "Стрельба"                 => draft.AbilitiesStruct.Стрельба,
+                                    "Фехтование"               => draft.AbilitiesStruct.Фехтование,
+                                    "Этикет"                   => draft.AbilitiesStruct.Этикет,
+                                    "Гуманитарные науки"       => draft.AbilitiesStruct.ГуманитарныеНауки,
+                                    "Естественные науки"       => draft.AbilitiesStruct.ЕстественныеНауки,
+                                    "Информатика"              => draft.AbilitiesStruct.Информатика,
+                                    "Медицина"                 => draft.AbilitiesStruct.Медицина,
+                                    "Оккультизм"               => draft.AbilitiesStruct.Оккультизм,
+                                    "Политика"                 => draft.AbilitiesStruct.Политика,
+                                    "Расследование"            => draft.AbilitiesStruct.Расследование,
+                                    "Финансы"                  => draft.AbilitiesStruct.Финансы,
+                                    "Электроника"              => draft.AbilitiesStruct.Электроника,
+                                    "Юриспруденция"            => draft.AbilitiesStruct.Юриспруденция,
+                                    _ => 0,
+                                };
+
+                                private static string Truncate(string s, int max)
+                                {
+                                    if (string.IsNullOrEmpty(s)) return "";
+                                    if (s.Length <= max) return s;
+                                    return s.Substring(0, max - 1) + "…";
+                                }
+
             private static int GetAttrValue(VampireCharacter draft, string name) => name switch
             {
                 "Сила"              => draft.AttributesStruct.Strength,
@@ -346,7 +549,15 @@ public static class VampireWizardComponents
                 VampireWizardAction.ResetAttrProgress => "reset_attr_progress",
                 VampireWizardAction.ResetAttrAll      => "reset_attr_all",
                 VampireWizardAction.BackToConcept     => "back_to_concept",
-        _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
+                        VampireWizardAction.AbilityPriority     => "ability_priority",
+                        VampireWizardAction.AbilityInc          => "ability_inc",
+                        VampireWizardAction.AbilityDec          => "ability_dec",
+                        VampireWizardAction.SpecChoice          => "spec_choice",
+                        VampireWizardAction.SpecSet             => "spec_set",
+                        VampireWizardAction.ResetAbilityProgress => "reset_ability_progress",
+                        VampireWizardAction.ResetAbilityAll      => "reset_ability_all",
+                        VampireWizardAction.BackToAttributes     => "back_to_attributes",
+                        _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
 
     private static bool TryParseAction(string s, out VampireWizardAction action)
@@ -376,7 +587,15 @@ public static class VampireWizardComponents
                         case "reset_attr_progress": action = VampireWizardAction.ResetAttrProgress; return true;
                         case "reset_attr_all": action = VampireWizardAction.ResetAttrAll;  return true;
                         case "back_to_concept": action = VampireWizardAction.BackToConcept; return true;
-            default:               action = default;                         return false;
+                                    case "ability_priority":    action = VampireWizardAction.AbilityPriority;    return true;
+                                    case "ability_inc":         action = VampireWizardAction.AbilityInc;         return true;
+                                    case "ability_dec":         action = VampireWizardAction.AbilityDec;         return true;
+                                    case "spec_choice":         action = VampireWizardAction.SpecChoice;         return true;
+                                    case "spec_set":            action = VampireWizardAction.SpecSet;            return true;
+                                    case "reset_ability_progress": action = VampireWizardAction.ResetAbilityProgress; return true;
+                                    case "reset_ability_all":   action = VampireWizardAction.ResetAbilityAll;    return true;
+                                    case "back_to_attributes":  action = VampireWizardAction.BackToAttributes;   return true;
+                                    default:               action = default;                         return false;
         }
     }
 }

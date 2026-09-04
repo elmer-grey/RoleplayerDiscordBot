@@ -116,8 +116,52 @@ public static class VampireWizardDmHandler
         }
 
         /// <summary>
-        /// Сообщение об отмене визарда.
-        /// </summary>
+                        /// Отобразить Шаг 3 «Способности 13/9/5» в DM.
+                        /// Перерисовывает то же сообщение визарда (или создаёт новое, если
+                        /// <see cref="VampireWizardSession.DmMessageId"/> ещё не задан).
+                        /// </summary>
+                        public static async Task RenderAbilitiesStepAsync(
+                            IMessageChannel dmChannel,
+                            VampireWizardSession session)
+                        {
+                            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+                            if (session == null) throw new ArgumentNullException(nameof(session));
+
+                            session.Step = VampireWizardStep.Abilities;
+                            session.DmChannelId = dmChannel.Id;
+
+                            var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
+                            var components = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+
+                            if (session.DmMessageId == null)
+                            {
+                                var sent = await dmChannel.SendMessageAsync(text, components: components);
+                                session.DmMessageId = sent.Id;
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    var msg = await dmChannel.GetMessageAsync(session.DmMessageId.Value);
+                                    if (msg is IUserMessage um)
+                                    {
+                                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                                        return;
+                                    }
+                                }
+                                catch
+                                {
+                                    // Сообщение недоступно — отправим заново.
+                                }
+
+                                var sent = await dmChannel.SendMessageAsync(text, components: components);
+                                session.DmMessageId = sent.Id;
+                            }
+                        }
+
+                        /// <summary>
+                        /// Сообщение об отмене визарда.
+                        /// </summary>
     public static string BuildCancelledMessage() =>
         "❌ Создание персонажа отменено. Все введённые данные сброшены. " +
         "Чтобы начать заново — вызовите `/vampire action:create` в канале.";

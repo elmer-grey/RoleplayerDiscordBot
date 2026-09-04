@@ -157,6 +157,20 @@ public sealed class VampireCharacter
         [JsonPropertyName("attributesPriority")]
         public string AttributesPriority { get; set; } = "";
 
+                /// <summary>
+                /// Структурированные 30 способностей VtM V20 (Таланты/Навыки/Знания).
+                /// Используется визардом создания персонажа (Шаг 3 «Способности 13/9/5»).
+                /// </summary>
+                [JsonPropertyName("abilitiesStruct")]
+                public VampireAbilities AbilitiesStruct { get; set; } = new();
+
+                /// <summary>
+                /// Приоритет групп способностей (Шаг 3): одна из 6 стандартных перестановок 13/9/5.
+                /// Хранится строкой имени enum (<see cref="VampireAbilityPriority"/>).
+                /// </summary>
+                [JsonPropertyName("abilitiesPriority")]
+                public string AbilitiesPriority { get; set; } = "";
+
         /// <summary>Способности (Disciplines, Способности).</summary>
         [JsonPropertyName("abilities")]
         public List<string> Abilities { get; set; } = new();
