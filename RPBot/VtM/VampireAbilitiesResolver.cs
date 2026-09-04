@@ -322,7 +322,8 @@ public static class VampireAbilitiesResolver
         return sum;
     }
 
-    private static int GetAbilityValue(VampireAbilities abs, string name) => name switch
+    /// <summary>Получить значение способности по русскому имени (например, «Атлетика» → Атлетика).</summary>
+    public static int GetAbilityValue(VampireAbilities abs, string name) => name switch
     {
         "Атлетика"                 => abs.Атлетика,
         "Бдительность"             => abs.Бдительность,

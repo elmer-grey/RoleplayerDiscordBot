@@ -283,7 +283,8 @@ public static class VampireAttributesResolver
         return 1;
     }
 
-    private static int GetAttributeValue(VampireAttributes attrs, string name) => name switch
+    /// <summary>Получить значение атрибута по русскому имени (например, «Обаяние» → Charisma).</summary>
+    public static int GetAttributeValue(VampireAttributes attrs, string name) => name switch
     {
         "Сила"              => attrs.Strength,
         "Ловкость"          => attrs.Dexterity,

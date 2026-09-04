@@ -208,7 +208,7 @@ public static class VampireSheetEmbed
         sb.Append("**").Append(title).AppendLine(":**");
         foreach (var name in names)
         {
-            int value = c.Attributes.TryGetValue(name, out var v) ? v : 0;
+            int value = c.GetAttributeValue(name);
             sb.Append("`").Append(PadRight(name, 13)).Append("` ");
             sb.AppendLine(DotsString(c.DisplayDots(name, isCharacteristic), 5));
         }
@@ -223,7 +223,7 @@ public static class VampireSheetEmbed
             sb.Append("**").Append(groupName).AppendLine(":**");
         foreach (var name in names)
         {
-            int value = c.Attributes.TryGetValue(name, out var v) ? v : 0;
+            int value = c.GetAbilityValue(name);
             sb.Append("`").Append(PadRight(name, 13)).Append("` ");
             int dots = Math.Min(value, 5);
             string dotsStr = DotsString(dots, 5);
@@ -248,14 +248,19 @@ public static class VampireSheetEmbed
     {
         var sb = new StringBuilder();
         sb.AppendLine("**Дисциплины:**");
-        if (c.Disciplines != null && c.Disciplines.Count > 0)
+        // Собираем объединённое множество имён: Шаг 4.1 + freebie.
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        if (c.Disciplines != null) foreach (var k in c.Disciplines.Keys) names.Add(k);
+        if (c.FreebieDisciplines != null) foreach (var k in c.FreebieDisciplines.Keys) names.Add(k);
+        if (names.Count > 0)
         {
             int shown = 0;
-            foreach (var kv in c.Disciplines)
+            foreach (var name in names)
             {
                 if (shown >= 5) break;
-                sb.Append("`").Append(PadRight(kv.Key, 13)).Append("` ");
-                sb.AppendLine(DotsString(Math.Clamp(kv.Value, 0, 5), 5));
+                int value = VampireAdvantagesResolver.GetDisciplineValue(c, name);
+                sb.Append("`").Append(PadRight(name, 13)).Append("` ");
+                sb.AppendLine(DotsString(Math.Clamp(value, 0, 5), 5));
                 shown++;
             }
         }
@@ -271,23 +276,27 @@ public static class VampireSheetEmbed
     {
         var sb = new StringBuilder();
         sb.AppendLine("**Факты биографии:**");
-        if (c.Backgrounds != null && c.Backgrounds.Count > 0)
+        // Собираем объединённое множество имён: Шаг 4.2 + freebie.
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        if (c.Backgrounds != null) foreach (var k in c.Backgrounds.Keys) names.Add(k);
+        if (c.FreebieBackgrounds != null) foreach (var k in c.FreebieBackgrounds.Keys) names.Add(k);
+        if (names.Count > 0)
         {
             int shown = 0;
-                foreach (var kv in c.Backgrounds)
+            foreach (var name in names)
             {
                 if (shown >= 5) break;
-                    int rank = Math.Clamp(kv.Value, 1, 5);
-                    sb.Append("• ").Append(kv.Key).Append(' ').Append(DotsString(rank, 5)).AppendLine();
-                    shown++;
-                }
+                int rank = Math.Clamp(VampireAdvantagesResolver.GetBackgroundRank(c, name), 1, 5);
+                sb.Append("• ").Append(name).Append(' ').Append(DotsString(rank, 5)).AppendLine();
+                shown++;
             }
-            else
-            {
-                sb.AppendLine("`—`");
-            }
-            return sb.ToString();
         }
+        else
+        {
+            sb.AppendLine("`—`");
+        }
+        return sb.ToString();
+    }
 
     /// <summary>Колонка «Добродетели»: Совесть/Решимость, Самоконтроль/Инстинкты, Смелость — по 5 ячеек.</summary>
     public static string BuildVirtuesColumn(VampireCharacter c)

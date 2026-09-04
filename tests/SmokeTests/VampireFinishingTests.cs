@@ -183,13 +183,14 @@ public class VampireFinishingTests
     }
 
     [Fact]
-    public void Allocate_OnDiscipline_AddsToPool()
+    public void Allocate_OnDiscipline_AddsToFreebiePool()
     {
         var d = NewDraft();
         SeedVirtues(d);
         var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _);
         Assert.True(r.IsSuccess, r.Message);
-        Assert.Equal(1, d.Disciplines["Доминирование"]);
+        // Freebie-вклад пишется в FreebieDisciplines (Шаг 4.1 использует draft.Disciplines).
+        Assert.Equal(1, d.FreebieDisciplines["Доминирование"]);
     }
 
     [Fact]
@@ -199,7 +200,8 @@ public class VampireFinishingTests
         SeedVirtues(d);
         var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Состояние", out _);
         Assert.True(r.IsSuccess, r.Message);
-        Assert.Equal(1, d.Backgrounds["Состояние"]);
+        // Freebie-вклад пишется в FreebieBackgrounds (Шаг 4.2 использует draft.Backgrounds).
+        Assert.Equal(1, d.FreebieBackgrounds["Состояние"]);
     }
 
     [Fact]

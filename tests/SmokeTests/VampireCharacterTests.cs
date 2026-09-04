@@ -8,50 +8,58 @@ public class VampireCharacterTests
     [Fact]
     public void SumAttributes_AddsExistingValues()
     {
+        // AttributesStruct хранит значения Шага 2 (по умолчанию базовые = 1).
+        // Attributes dict хранит freebie-дельту Шага 5.
+        // SumAttributes складывает оба источника.
         var c = new VampireCharacter
         {
             PlayerName = "tester",
             CharacterName = "Test",
             Attributes = new()
             {
-                ["Сила"] = 3,
-                ["Ловкость"] = 2,
-                ["Драка"] = 2,
+                // freebie: Сила +2 (над базой), Ловкость +1, Драка +1
+                ["Сила"] = 2,
+                ["Ловкость"] = 1,
+                ["Драка"] = 1,
             }
         };
+        // Сила = 1 (база) + 2 (freebie) = 3; Ловкость = 1 + 1 = 2 → sum = 5.
         Assert.Equal(5, c.SumAttributes("Сила", "Ловкость"));
-        Assert.Equal(2, c.SumAttributes("Драка"));
+        // Сила = 1 + 2 = 3.
+        Assert.Equal(3, c.SumAttributes("Сила"));
     }
 
     [Fact]
     public void SumAttributes_IgnoresMissing()
     {
         var c = new VampireCharacter();
-        Assert.Equal(0, c.SumAttributes("Сила"));
+        // Без freebie: Сила = 1 (база). Без аргументов — 0 (params пустой).
+        Assert.Equal(1, c.SumAttributes("Сила"));
         Assert.Equal(0, c.SumAttributes());
     }
 
     [Fact]
     public void DisplayDots_Characteristic_HasPlusOne()
     {
-        var c = new VampireCharacter { Attributes = new() { ["Сила"] = 3 } };
-        // Характеристика: 3+1 = 4
+        var c = new VampireCharacter { Attributes = new() { ["Сила"] = 2 } };
+        // Характеристика: (1 база + 2 freebie) + 1 бонус = 4.
         Assert.Equal(4, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
     [Fact]
     public void DisplayDots_Attribute_NoBonus()
     {
-        var c = new VampireCharacter { Attributes = new() { ["Драка"] = 3 } };
-        // Атрибут: 3 без бонуса
-        Assert.Equal(3, c.DisplayDots("Драка", isCharacteristic: false));
+        // «Драка» — это способность, не атрибут. Используем атрибут «Сила» с isCharacteristic=false.
+        var c = new VampireCharacter { Attributes = new() { ["Сила"] = 2 } };
+        // (1 база + 2 freebie) = 3 (без бонуса характеристики).
+        Assert.Equal(3, c.DisplayDots("Сила", isCharacteristic: false));
     }
 
     [Fact]
     public void DisplayDots_CappedAt5()
     {
         var c = new VampireCharacter { Attributes = new() { ["Сила"] = 5 } };
-        // 5+1=6 → cap at 5
+        // (1 база + 5 freebie) + 1 = 7 → cap at 5.
         Assert.Equal(5, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
@@ -59,7 +67,8 @@ public class VampireCharacterTests
     public void DisplayDots_MissingReturnsZero()
     {
         var c = new VampireCharacter();
-        Assert.Equal(0, c.DisplayDots("Сила", isCharacteristic: true));
+        // Без freebie базовый уровень Сила = 1; характеристика: 1 + 1 = 2.
+        Assert.Equal(2, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
     [Fact]

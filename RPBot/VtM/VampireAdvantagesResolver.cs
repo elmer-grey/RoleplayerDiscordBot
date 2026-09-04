@@ -80,8 +80,17 @@ public static class VampireAdvantagesResolver
         return combined;
     }
 
-    /// <summary>Получить значение дисциплины (0 если не задано).</summary>
+    /// <summary>Получить значение дисциплины (Step 4.1 + freebie; 0 если не задано).</summary>
     public static int GetDisciplineValue(VampireCharacter draft, string name)
+    {
+        if (draft == null || string.IsNullOrEmpty(name)) return 0;
+        int step = draft.Disciplines != null && draft.Disciplines.TryGetValue(name, out var v) ? Math.Max(0, v) : 0;
+        int free = draft.FreebieDisciplines != null && draft.FreebieDisciplines.TryGetValue(name, out var fv) ? Math.Max(0, fv) : 0;
+        return Math.Max(0, step + free);
+    }
+
+    /// <summary>Значение дисциплины только за Шаг 4.1 (без freebie).</summary>
+    public static int GetStepDisciplineValue(VampireCharacter draft, string name)
     {
         if (draft?.Disciplines == null || string.IsNullOrEmpty(name)) return 0;
         return draft.Disciplines.TryGetValue(name, out var v) ? Math.Max(0, v) : 0;
@@ -108,7 +117,7 @@ public static class VampireAdvantagesResolver
     public static bool IsDisciplinesComplete(VampireCharacter draft)
         => TotalDisciplineSpent(draft) == VampireAdvantagesCatalog.DisciplinePool;
 
-    /// <summary>Поднять дисциплину на 1.</summary>
+    /// <summary>Поднять дисциплину на 1 (только Шаг 4.1; freebie идёт в FreebieDisciplines).</summary>
     public static Decision IncrementDiscipline(VampireCharacter draft, string name)
     {
         if (draft == null) throw new ArgumentNullException(nameof(draft));
@@ -120,7 +129,7 @@ public static class VampireAdvantagesResolver
                 $"«{name}» нет среди клановых дисциплин «{draft.Clan}». " +
                 $"Доступные: {string.Join(", ", slots)}.");
 
-        var current = GetDisciplineValue(draft, name);
+        var current = GetStepDisciplineValue(draft, name);
         if (current + 1 > VampireAdvantagesCatalog.PerFieldCap)
             return Decision.Fail(Failure.AboveCap,
                 $"«{name}» уже на кэпе {VampireAdvantagesCatalog.PerFieldCap}.");
@@ -138,7 +147,7 @@ public static class VampireAdvantagesResolver
         if (draft == null) throw new ArgumentNullException(nameof(draft));
         if (string.IsNullOrWhiteSpace(name))
             return Decision.Fail(Failure.InvalidName, "Имя дисциплины не указано.");
-        var current = GetDisciplineValue(draft, name);
+        var current = GetStepDisciplineValue(draft, name);
         if (current <= VampireAdvantagesCatalog.MinDiscipline)
             return Decision.Fail(Failure.BelowMin,
                 $"«{name}» уже на минимуме {VampireAdvantagesCatalog.MinDiscipline}.");
@@ -220,8 +229,17 @@ public static class VampireAdvantagesResolver
 
     // ═══ Факты биографии ══════════════════════════════════════════════
 
-    /// <summary>Получить ранг факта (0 если не задан).</summary>
+    /// <summary>Получить ранг факта (Шаг 4.2 + freebie; 0 если не задан).</summary>
     public static int GetBackgroundRank(VampireCharacter draft, string name)
+    {
+        if (draft == null || string.IsNullOrEmpty(name)) return 0;
+        int step = draft.Backgrounds != null && draft.Backgrounds.TryGetValue(name, out var v) ? Math.Max(0, v) : 0;
+        int free = draft.FreebieBackgrounds != null && draft.FreebieBackgrounds.TryGetValue(name, out var fv) ? Math.Max(0, fv) : 0;
+        return Math.Max(0, step + free);
+    }
+
+    /// <summary>Значение факта только за Шаг 4.2 (без freebie).</summary>
+    public static int GetStepBackgroundRank(VampireCharacter draft, string name)
     {
         if (draft?.Backgrounds == null || string.IsNullOrEmpty(name)) return 0;
         return draft.Backgrounds.TryGetValue(name, out var v) ? Math.Max(0, v) : 0;

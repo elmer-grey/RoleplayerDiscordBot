@@ -191,6 +191,15 @@ public sealed class VampireCharacter
         [JsonConverter(typeof(VampireBackgroundsJsonConverter))]
         public Dictionary<string, int> Backgrounds { get; set; } = new();
 
+        /// <summary>
+        /// Факты, добавленные через freebie (Шаг 5).
+        /// Хранится отдельно, чтобы <see cref="VampireAdvantagesResolver.IsBackgroundsComplete"/>
+        /// считал только Шаг 4.2 пул (5/5), а не сумму с freebie.
+        /// В Embed'е факты рисуются как сумма рангов двух словарей.
+        /// </summary>
+        [JsonPropertyName("backgrounds_freebie")]
+        public Dictionary<string, int> FreebieBackgrounds { get; set; } = new();
+
     /// <summary>Добродетели (Совесть, Самоконтроль, Смелость).</summary>
     [JsonPropertyName("virtues")]
     public Dictionary<string, int> Virtues { get; set; } = new();
@@ -268,6 +277,15 @@ public sealed class VampireCharacter
         public Dictionary<string, int> Disciplines { get; set; } = new();
 
         /// <summary>
+        /// Дисциплины, добавленные через freebie (Шаг 5).
+        /// Хранится отдельно, чтобы <see cref="VampireAdvantagesResolver.IsDisciplinesComplete"/>
+        /// считал только Шаг 4.1 пул (3/3), а не сумму с freebie.
+        /// В Embed'е дисциплины рисуются как сумма двух словарей.
+        /// </summary>
+        [JsonPropertyName("disciplines_freebie")]
+        public Dictionary<string, int> FreebieDisciplines { get; set; } = new();
+
+        /// <summary>
         /// Текущий опыт (необязательно). Показывается в embed'е листа.
         /// </summary>
         [JsonPropertyName("experienceCurrent")]
@@ -309,21 +327,57 @@ public sealed class VampireCharacter
         if (names == null || names.Length == 0) return 0;
         int sum = 0;
         foreach (var n in names)
-        {
-            if (Attributes.TryGetValue(n, out var v)) sum += v;
-        }
+            sum += GetAttributeValue(n);
         return sum;
+    }
+
+    /// <summary>
+    /// Итоговое значение атрибута для листа/бросков: Шаг 2 + freebie-бонус Шага 5.
+    /// Игнорирует базовую +1 характеристики (это уже учтено в <see cref="AttributesStruct"/>).
+    /// </summary>
+    public int GetAttributeValue(string attributeName)
+    {
+        int baseValue = AttributesStruct != null
+            ? VampireAttributesResolver.GetAttributeValue(AttributesStruct, attributeName)
+            : 0;
+        int freebieBonus = 0;
+        if (Attributes != null && Attributes.TryGetValue(attributeName, out var fb))
+            freebieBonus = Math.Max(0, fb);
+        return baseValue + freebieBonus;
+    }
+
+    /// <summary>
+    /// Итоговое значение способности для листа: Шаг 3 + freebie-бонус Шага 5.
+    /// </summary>
+    public int GetAbilityValue(string abilityName)
+    {
+        int baseValue = AbilitiesStruct != null
+            ? VampireAbilitiesResolver.GetAbilityValue(AbilitiesStruct, abilityName)
+            : 0;
+        int freebieBonus = 0;
+        if (Attributes != null && Attributes.TryGetValue(abilityName, out var fb))
+            freebieBonus = Math.Max(0, fb);
+        return baseValue + freebieBonus;
     }
 
     /// <summary>Сколько «закрашенных точек» нужно показать в листе персонажа.</summary>
     /// <remarks>
     /// Характеристики (Физические/Социальные/Ментальные) имеют +1 «изначальную» точку,
     /// атрибуты — нет. Максимум — 5 точек.
+    /// Источник значения: <see cref="AttributesStruct"/> (Шаг 2) + freebie-бонус из
+    /// <see cref="Attributes"/> dict (Шаг 5). Лист **обязан** читать оба источника, иначе
+    /// данные Шага 2 или Шага 5 будут потеряны.
     /// </remarks>
     public int DisplayDots(string attributeName, bool isCharacteristic)
     {
-        if (!Attributes.TryGetValue(attributeName, out var v)) return 0;
-        int dots = isCharacteristic ? Math.Min(v + 1, 5) : Math.Min(v, 5);
+        int baseValue = AttributesStruct != null
+            ? VampireAttributesResolver.GetAttributeValue(AttributesStruct, attributeName)
+            : 0;
+        int freebieBonus = 0;
+        if (Attributes != null && Attributes.TryGetValue(attributeName, out var fb))
+            freebieBonus = Math.Max(0, fb);
+        int total = baseValue + freebieBonus;
+        int dots = isCharacteristic ? Math.Min(total + 1, 5) : Math.Min(total, 5);
         return Math.Max(dots, 0);
     }
 

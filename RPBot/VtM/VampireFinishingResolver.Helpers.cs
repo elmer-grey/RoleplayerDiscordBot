@@ -16,15 +16,44 @@ public static partial class VampireFinishingResolver
         if (draft == null || string.IsNullOrEmpty(field)) return 0;
         return target switch
         {
-            FreebieTarget.Attribute   => GetDictValue(draft.Attributes,  field),
-            FreebieTarget.Ability     => GetAbilityValue(draft,         field),
-            FreebieTarget.Discipline  => GetDictValue(draft.Disciplines, field),
-            FreebieTarget.Background  => GetDictValue(draft.Backgrounds, field),
-            FreebieTarget.Virtue      => GetDictValue(draft.Virtues,     field),
+            FreebieTarget.Attribute   => GetDictValue(draft.Attributes,         field),
+            // Ability: читаем ТОЛЬКО freebie dict (Attributes), без AbilitiesStruct —
+            // иначе AllocateFreebie будет перезаписывать struct-значение.
+            FreebieTarget.Ability     => GetDictValue(draft.Attributes,         field),
+            FreebieTarget.Discipline  => GetDictValue(draft.FreebieDisciplines, field),
+            FreebieTarget.Background  => GetDictValue(draft.FreebieBackgrounds, field),
+            FreebieTarget.Virtue      => GetDictValue(draft.Virtues,           field),
             FreebieTarget.Humanity    => Math.Max(0, draft.HumanityBonus),
             FreebieTarget.Willpower   => Math.Max(0, draft.WillpowerBonus),
             _ => 0,
         };
+    }
+
+    /// <summary>
+    /// Прочитать «итоговое» значение атрибута/способности (Шаг 2/3 + freebie-бонус),
+    /// если нужен актуальный потолок для проверки капа.
+    /// </summary>
+    public static int ReadAttributeValue(VampireCharacter draft, string field)
+    {
+        if (draft == null) return 0;
+        int baseValue = draft.AttributesStruct != null
+            ? VampireAttributesResolver.GetAttributeValue(draft.AttributesStruct, field)
+            : 0;
+        int fb = GetDictValue(draft.Attributes, field);
+        return baseValue + fb;
+    }
+
+    /// <summary>
+    /// Прочитать «итоговое» значение способности (Шаг 3 + freebie-бонус).
+    /// </summary>
+    public static int ReadAbilityValue(VampireCharacter draft, string field)
+    {
+        if (draft == null) return 0;
+        int baseValue = draft.AbilitiesStruct != null
+            ? VampireAbilitiesResolver.GetAbilityValue(draft.AbilitiesStruct, field)
+            : 0;
+        int fb = GetDictValue(draft.Attributes, field);
+        return baseValue + fb;
     }
 
     private static int GetDictValue(Dictionary<string, int> dict, string key)
@@ -66,23 +95,41 @@ public static partial class VampireFinishingResolver
         switch (target)
         {
             case FreebieTarget.Attribute:
-                if (newValue <= 0) draft.Attributes.Remove(field);
-                else draft.Attributes[field] = newValue;
-                return true;
-            case FreebieTarget.Ability:
-                if (!SetAbilityValue(draft, field, newValue))
                 {
-                    error = $"Неизвестная способность: {field}";
-                    return false;
+                    // Freebie-бонус пишется ТОЛЬКО в dict, не в AttributesStruct.
+                    // Иначе IsAttributesComplete (Шаг 2) сломается: он считает sum(AttributesStruct) - 9 == 15.
+                    var cur = ReadAttributeValue(draft, field);
+                    int next = Math.Max(0, newValue);
+                    if (next <= 0) draft.Attributes.Remove(field);
+                    else draft.Attributes[field] = next;
+                    return true;
                 }
-                return true;
+            case FreebieTarget.Ability:
+                {
+                    // Freebie-бонус пишется ТОЛЬКО в dict, не в AbilitiesStruct.
+                    // Иначе IsAbilitiesComplete (Шаг 3) сломается: он считает sum(AbilitiesStruct) == 27.
+                    if (VampireAbilitiesCatalog.FindGroup(field) == null)
+                    {
+                        error = $"Неизвестная способность: {field}";
+                        return false;
+                    }
+                    var cur = GetAbilityValue(draft, field);
+                    int next = Math.Max(0, newValue);
+                    if (next <= 0) draft.Attributes.Remove(field);
+                    else draft.Attributes[field] = next;
+                    return true;
+                }
             case FreebieTarget.Discipline:
-                if (newValue <= 0) draft.Disciplines.Remove(field);
-                else draft.Disciplines[field] = newValue;
+                // Freebie-бонус пишется ТОЛЬКО в FreebieDisciplines, не в Disciplines.
+                // Иначе IsDisciplinesComplete (Шаг 4.1) сломается: он считает sum(Disciplines) == 3.
+                if (newValue <= 0) draft.FreebieDisciplines.Remove(field);
+                else draft.FreebieDisciplines[field] = newValue;
                 return true;
             case FreebieTarget.Background:
-                if (newValue <= 0) draft.Backgrounds.Remove(field);
-                else draft.Backgrounds[field] = newValue;
+                // Freebie-бонус пишется ТОЛЬКО в FreebieBackgrounds, не в Backgrounds.
+                // Иначе IsBackgroundsComplete (Шаг 4.2) сломается: он считает sum(Backgrounds) == 5.
+                if (newValue <= 0) draft.FreebieBackgrounds.Remove(field);
+                else draft.FreebieBackgrounds[field] = newValue;
                 return true;
             case FreebieTarget.Virtue:
                 if (newValue <= 0) draft.Virtues.Remove(field);

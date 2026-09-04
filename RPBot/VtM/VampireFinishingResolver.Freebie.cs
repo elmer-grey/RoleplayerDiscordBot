@@ -138,12 +138,24 @@ public static partial class VampireFinishingResolver
                 $"Пул свободных пунктов ({FreebiePool}) уже исчерпан. Этот параметр стоит {cost}.");
 
         var (hardCap, _) = GetCaps(target, draft);
-        var cur = ReadFieldValue(draft, target, field);
-        if (cur + 1 > hardCap)
+        // curTotal — итоговое значение (Шаг 2/3/4 + freebie), нужно для проверки hardCap.
+        var curTotal = target switch
+        {
+            FreebieTarget.Attribute   => ReadAttributeValue(draft, field),
+            FreebieTarget.Ability     => ReadAbilityValue(draft, field),
+            FreebieTarget.Discipline  => VampireAdvantagesResolver.GetDisciplineValue(draft, field),
+            FreebieTarget.Background  => VampireAdvantagesResolver.GetBackgroundRank(draft, field),
+            _ => ReadFieldValue(draft, target, field),
+        };
+        if (curTotal + 1 > hardCap)
             return Decision.Fail(Failure.AboveCap,
                 $"«{field}» уже на кэпе {hardCap}.");
 
-        if (!WriteFieldValue(draft, target, field, cur + 1, out var err))
+        // В dict пишем ТОЛЬКО freebie-вклад, не итог. Для Attribute/Ability/Discipline/Background
+        // ReadFieldValue читает соответствующий *freebie* dict, поэтому WriteFieldValue
+        // запишет корректную дельту (+1).
+        var nextFreebie = ReadFieldValue(draft, target, field) + 1;
+        if (!WriteFieldValue(draft, target, field, nextFreebie, out var err))
             return Decision.Fail(Failure.UnknownField, err);
 
         var key = Key(target, field);
@@ -154,7 +166,7 @@ public static partial class VampireFinishingResolver
         if (target == FreebieTarget.Virtue)
             virtueAffectingHumanityOrWillpower = true;
 
-        return Decision.Ok($"«{field}» → {cur + 1} (-{cost} свободных).");
+        return Decision.Ok($"«{field}» → {curTotal + 1} (-{cost} свободных).");
     }
 
     /// <summary>Откатить freebie с указанного поля (если возможно).</summary>
@@ -169,12 +181,20 @@ public static partial class VampireFinishingResolver
             return Decision.Fail(Failure.NotApplicable,
                 $"На «{field}» нет потраченных свободных пунктов.");
 
-        var cur = ReadFieldValue(draft, target, field);
-        if (cur <= 0)
+        var curTotal = target switch
+        {
+            FreebieTarget.Attribute   => ReadAttributeValue(draft, field),
+            FreebieTarget.Ability     => ReadAbilityValue(draft, field),
+            FreebieTarget.Discipline  => VampireAdvantagesResolver.GetDisciplineValue(draft, field),
+            FreebieTarget.Background  => VampireAdvantagesResolver.GetBackgroundRank(draft, field),
+            _ => ReadFieldValue(draft, target, field),
+        };
+        if (curTotal <= 0)
             return Decision.Fail(Failure.NotApplicable,
                 $"«{field}» уже на 0.");
 
-        if (!WriteFieldValue(draft, target, field, cur - 1, out var err))
+        var nextFreebie = ReadFieldValue(draft, target, field) - 1;
+        if (!WriteFieldValue(draft, target, field, nextFreebie, out var err))
             return Decision.Fail(Failure.UnknownField, err);
 
         var newSpent = new Dictionary<string, int>(draft.FreebieSpent, StringComparer.Ordinal);
@@ -183,7 +203,7 @@ public static partial class VampireFinishingResolver
         draft.FreebieSpent = newSpent;
 
         var cost = CostOf(target);
-        return Decision.Ok($"«{field}» → {cur - 1} (+{cost} свободных).");
+        return Decision.Ok($"«{field}» → {curTotal - 1} (+{cost} свободных).");
     }
 
     /// <summary>Сбросить все freebie-траты (возвращает все потраченные пункты в пул).</summary>
