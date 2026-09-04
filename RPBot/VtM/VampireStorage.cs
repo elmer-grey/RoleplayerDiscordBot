@@ -30,7 +30,8 @@ namespace RPBot.VtM
             WriteIndented = true,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
                     Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-                };
+                            Converters = { new VampireBackgroundsJsonConverter() },
+                        };
 
         // PlayerName → VampireCharacter
         private Dictionary<string, VampireCharacter> _characters = new(StringComparer.Ordinal);

@@ -165,4 +165,95 @@ public static class VampireWizardDmHandler
     public static string BuildCancelledMessage() =>
         "❌ Создание персонажа отменено. Все введённые данные сброшены. " +
         "Чтобы начать заново — вызовите `/vampire action:create` в канале.";
+
+        /// <summary>
+        /// Шаг 4.1 «Дисциплины» — рендер/правка DM-сообщения.
+        /// </summary>
+        public static async Task RenderDisciplinesStepAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session)
+        {
+            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+            if (session == null) throw new ArgumentNullException(nameof(session));
+
+            session.Step = VampireWizardStep.Advantages;
+            session.AdvantagesSubStep = VampireWizardAdvantagesSubStep.Disciplines;
+            session.DmChannelId = dmChannel.Id;
+
+            var text = VampireAdvantagesResolver.BuildDisciplinesStatusMessage(session.Draft);
+            var components = VampireWizardComponents.BuildForDisciplinesStep(session.Draft);
+            await RenderIntoAsync(dmChannel, session, text, components);
+        }
+
+        /// <summary>
+        /// Шаг 4.2 «Факты биографии» — рендер/правка DM-сообщения.
+        /// </summary>
+        public static async Task RenderBackgroundsStepAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session)
+        {
+            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+            if (session == null) throw new ArgumentNullException(nameof(session));
+
+            session.Step = VampireWizardStep.Advantages;
+            session.AdvantagesSubStep = VampireWizardAdvantagesSubStep.Backgrounds;
+            session.DmChannelId = dmChannel.Id;
+
+            var text = VampireAdvantagesResolver.BuildBackgroundsStatusMessage(session.Draft);
+            var components = VampireWizardComponents.BuildForBackgroundsStep(session.Draft);
+            await RenderIntoAsync(dmChannel, session, text, components);
+        }
+
+        /// <summary>
+        /// Шаг 4.3 «Добродетели» — рендер/правка DM-сообщения.
+        /// </summary>
+        public static async Task RenderVirtuesStepAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session)
+        {
+            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+            if (session == null) throw new ArgumentNullException(nameof(session));
+
+            session.Step = VampireWizardStep.Advantages;
+            session.AdvantagesSubStep = VampireWizardAdvantagesSubStep.Virtues;
+            session.DmChannelId = dmChannel.Id;
+
+            var text = VampireAdvantagesResolver.BuildVirtuesStatusMessage(session.Draft);
+            var components = VampireWizardComponents.BuildForVirtuesStep(session.Draft);
+            await RenderIntoAsync(dmChannel, session, text, components);
+        }
+
+        /// <summary>
+        /// Универсальный helper: отправить или отредактировать DM-сообщение.
+        /// </summary>
+        private static async Task RenderIntoAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session,
+            string text,
+            MessageComponent components)
+        {
+            if (session.DmMessageId == null)
+            {
+                var sent = await dmChannel.SendMessageAsync(text, components: components);
+                session.DmMessageId = sent.Id;
+                return;
+            }
+
+            try
+            {
+                var msg = await dmChannel.GetMessageAsync(session.DmMessageId.Value);
+                if (msg is IUserMessage um)
+                {
+                    await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                    return;
+                }
+            }
+            catch
+            {
+                // Сообщение недоступно — отправим заново.
+            }
+
+            var sentNew = await dmChannel.SendMessageAsync(text, components: components);
+            session.DmMessageId = sentNew.Id;
+        }
 }

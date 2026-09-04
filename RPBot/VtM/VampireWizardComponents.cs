@@ -83,6 +83,41 @@ public enum VampireWizardAction
                 ResetAbilityAll,
                 /// <summary>Вернуться на Шаг 2 (Характеристики).</summary>
                 BackToAttributes,
+
+                // ── Шаг 4 «Преимущества» (дисциплины/факты/добродетели) ────────
+
+                /// <summary>Увеличить дисциплину на 1 (Шаг 4.1). Action-arg = имя дисциплины.</summary>
+                DisciplineInc,
+                /// <summary>Уменьшить дисциплину на 1 (Шаг 4.1).</summary>
+                DisciplineDec,
+                /// <summary>Переименовать дисциплину Каитифа (Шаг 4.1, открывает текстовый ввод). Action-arg = старое имя.</summary>
+                DisciplineRename,
+                /// <summary>Добавить факт биографии (Шаг 4.2, открывает текстовый ввод имени).</summary>
+                BackgroundAdd,
+                /// <summary>Удалить факт биографии (Шаг 4.2). Action-arg = имя факта.</summary>
+                BackgroundRemove,
+                /// <summary>Переименовать факт биографии (Шаг 4.2, открывает текстовый ввод). Action-arg = старое имя.</summary>
+                BackgroundRename,
+                /// <summary>Увеличить ранг факта на 1 (Шаг 4.2). Action-arg = имя факта.</summary>
+                BackgroundInc,
+                /// <summary>Уменьшить ранг факта на 1 (Шаг 4.2). Action-arg = имя факта.</summary>
+                BackgroundDec,
+                /// <summary>Увеличить добродетель на 1 (Шаг 4.3). Action-arg = имя добродетели.</summary>
+                VirtueInc,
+                /// <summary>Уменьшить добродетель на 1 (Шаг 4.3).</summary>
+                VirtueDec,
+                /// <summary>Сбросить прогресс всего Шага 4 (дисциплины/факты/добродетели).</summary>
+                ResetAdvProgress,
+                /// <summary>Сбросить всё на Шаге 4 (то же, что и <see cref="ResetAdvProgress"/>).</summary>
+                ResetAdvAll,
+                /// <summary>Вернуться на Шаг 3 (Способности).</summary>
+                BackToAbilities,
+                /// <summary>Перейти к Шагу 4.2 (Факты биографии).</summary>
+                NextAdvToBackgrounds,
+                /// <summary>Перейти к Шагу 4.3 (Добродетели).</summary>
+                NextAdvToVirtues,
+                /// <summary>Перейти к Шагу 5 (Последние штрихи).</summary>
+                NextAdvToFinishing,
     }
 
 /// <summary>
@@ -303,6 +338,225 @@ public static class VampireWizardComponents
                                     }
 
                                     return cb.Build();
+                                }
+
+                                // ── Шаг 4 «Преимущества» — 3 экрана ────────────────────────────────
+
+                                /// <summary>
+                                /// UI Шага 4.1 «Дисциплины»: 1 SelectMenu с 3 клановыми слотами (± по 1).
+                                /// Для Каитифа каждый слот можно переименовать.
+                                /// </summary>
+                                public static MessageComponent BuildForDisciplinesStep(VampireCharacter draft)
+                                {
+                                    if (draft == null) throw new ArgumentNullException(nameof(draft));
+                                    if (draft.CharacterId == Guid.Empty)
+                                        throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                                    var cb = new ComponentBuilder();
+                                    var slots = VampireAdvantagesResolver.EffectiveDisciplineSlots(draft);
+                                    var isCaitiff = VampireAdvantagesCatalog.IsCaitiff(draft.Clan);
+
+                                    if (slots.Count == 0)
+                                    {
+                                        // Клан ещё не выбран — даём подсказку.
+                                        cb.WithButton("⬅ Назад (Шаг 3)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary);
+                                    }
+                                    else
+                                    {
+                                        // Один SelectMenu с парами опций (± для каждой дисциплины).
+                                        cb.WithSelectMenu(BuildDisciplineSelect(draft));
+
+                                        // Для Каитифа — кнопки «Переименовать» на каждый слот.
+                                        if (isCaitiff)
+                                        {
+                                            foreach (var name in VampireAdvantagesCatalog.GetDisciplineSlots(draft.Clan))
+                                            {
+                                                cb.WithButton(
+                                                    $"✎ {Truncate(name, 16)}",
+                                                    BuildCustomIdWithArg(VampireWizardAction.DisciplineRename, draft.CharacterId, name),
+                                                    ButtonStyle.Secondary);
+                                            }
+                                        }
+                                    }
+
+                                    cb.WithButton("⬅ Назад (Шаг 3)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
+
+                                    if (VampireAdvantagesResolver.IsDisciplinesComplete(draft))
+                                    {
+                                        cb.WithButton("Далее → 4.2 (факты)", BuildCustomId(VampireWizardAction.NextAdvToBackgrounds, draft.CharacterId), ButtonStyle.Success);
+                                    }
+
+                                    return cb.Build();
+                                }
+
+                                /// <summary>
+                                /// UI Шага 4.2 «Факты биографии»: кнопка «Добавить факт» (открывает текстовый ввод)
+                                /// + ряд SelectMenu на каждый имеющийся факт (± по 1 ранг, удалить, переименовать).
+                                /// </summary>
+                                public static MessageComponent BuildForBackgroundsStep(VampireCharacter draft)
+                                {
+                                    if (draft == null) throw new ArgumentNullException(nameof(draft));
+                                    if (draft.CharacterId == Guid.Empty)
+                                        throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                                    var cb = new ComponentBuilder();
+
+                                    // Ряд 1: «Добавить факт» (открывает текстовый ввод).
+                                    cb.WithButton("Добавить факт", BuildCustomId(VampireWizardAction.BackgroundAdd, draft.CharacterId), ButtonStyle.Secondary);
+
+                                    // По ряду на каждый факт с опциями ±/Удалить/Переименовать.
+                                    if (draft.Backgrounds != null && draft.Backgrounds.Count > 0)
+                                    {
+                                        foreach (var kv in draft.Backgrounds)
+                                        {
+                                            cb.WithSelectMenu(BuildBackgroundSelect(draft, kv.Key, kv.Value));
+                                        }
+                                    }
+
+                                    cb.WithButton("⬅ Назад (4.1)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
+
+                                    if (VampireAdvantagesResolver.IsBackgroundsComplete(draft))
+                                    {
+                                        cb.WithButton("Далее → 4.3 (добродетели)", BuildCustomId(VampireWizardAction.NextAdvToVirtues, draft.CharacterId), ButtonStyle.Success);
+                                    }
+
+                                    return cb.Build();
+                                }
+
+                                /// <summary>
+                                /// UI Шага 4.3 «Добродетели»: 1 SelectMenu с 3 фиксированными добродетелями (± по 1).
+                                /// </summary>
+                                public static MessageComponent BuildForVirtuesStep(VampireCharacter draft)
+                                {
+                                    if (draft == null) throw new ArgumentNullException(nameof(draft));
+                                    if (draft.CharacterId == Guid.Empty)
+                                        throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                                    var cb = new ComponentBuilder();
+                                    cb.WithSelectMenu(BuildVirtueSelect(draft));
+
+                                    cb.WithButton("⬅ Назад (4.2)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
+
+                                    if (VampireAdvantagesResolver.IsVirtuesComplete(draft))
+                                    {
+                                        cb.WithButton("Далее → Шаг 5 (финал)", BuildCustomId(VampireWizardAction.NextAdvToFinishing, draft.CharacterId), ButtonStyle.Success);
+                                    }
+
+                                    return cb.Build();
+                                }
+
+                                /// <summary>
+                                /// SelectMenu Шага 4.1: пары опций (± для каждой дисциплины),
+                                /// включая переименованные Каитифом ключи.
+                                /// </summary>
+                                private static SelectMenuBuilder BuildDisciplineSelect(VampireCharacter draft)
+                                {
+                                    var slots = VampireAdvantagesResolver.EffectiveDisciplineSlots(draft);
+                                    var remaining = VampireAdvantagesResolver.RemainingDisciplinePool(draft);
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomId(VampireWizardAction.DisciplineInc, draft.CharacterId))
+                                        .WithPlaceholder($"Дисциплины (±): ост. {remaining}");
+
+                                    foreach (var name in slots)
+                                    {
+                                        var cur = VampireAdvantagesResolver.GetDisciplineValue(draft, name);
+
+                                        var incVal = $"+:{name}";
+                                        var incDesc = $"текущее: {cur}";
+                                        if (cur >= VampireAdvantagesCatalog.PerFieldCap) incDesc = $"уже на кэпе {VampireAdvantagesCatalog.PerFieldCap}";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"+ {Truncate(name, 18)} ({cur})")
+                                            .WithValue(incVal)
+                                            .WithDescription(incDesc));
+
+                                        var decVal = $"−:{name}";
+                                        var decDesc = $"текущее: {cur}";
+                                        if (cur <= 0) decDesc = "уже 0 (минимум)";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"− {Truncate(name, 18)} ({cur})")
+                                            .WithValue(decVal)
+                                            .WithDescription(decDesc));
+                                    }
+
+                                    return menu;
+                                }
+
+                                /// <summary>
+                                /// SelectMenu Шага 4.2: 5 опций на факт (+ранг / −ранг / Удалить / Переименовать / [Каитиф]).
+                                /// </summary>
+                                private static SelectMenuBuilder BuildBackgroundSelect(
+                                    VampireCharacter draft,
+                                    string name,
+                                    int rank)
+                                {
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.BackgroundInc, draft.CharacterId, name))
+                                        .WithPlaceholder($"«{Truncate(name, 22)}» (ранг {rank})");
+
+                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                        .WithLabel($"+ ранг ({rank})")
+                                        .WithValue("+:rank")
+                                        .WithDescription("поднять ранг на 1"));
+
+                                    if (rank > 1)
+                                    {
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"− ранг ({rank})")
+                                            .WithValue("−:rank")
+                                            .WithDescription("опустить ранг на 1"));
+                                    }
+
+                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                        .WithLabel("Переименовать")
+                                        .WithValue("rename")
+                                        .WithDescription("ввести новое имя в ЛС"));
+
+                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                        .WithLabel("Удалить")
+                                        .WithValue("remove")
+                                        .WithDescription("полностью убрать факт"));
+
+                                    return menu;
+                                }
+
+                                /// <summary>
+                                /// SelectMenu Шага 4.3: 6 опций (±3 добродетели).
+                                /// </summary>
+                                private static SelectMenuBuilder BuildVirtueSelect(VampireCharacter draft)
+                                {
+                                    var remaining = VampireAdvantagesResolver.RemainingVirtuePool(draft);
+                                    var menu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomId(VampireWizardAction.VirtueInc, draft.CharacterId))
+                                        .WithPlaceholder($"Добродетели (±): ост. {remaining}");
+
+                                    foreach (var name in VampireParameterCatalog.Virtues)
+                                    {
+                                        var cur = VampireAdvantagesResolver.GetVirtueValue(draft, name);
+
+                                        var incVal = $"+:{name}";
+                                        var incDesc = $"текущее: {cur}";
+                                        if (cur >= VampireAdvantagesCatalog.PerFieldCap) incDesc = $"уже на кэпе {VampireAdvantagesCatalog.PerFieldCap}";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"+ {Truncate(name, 18)} ({cur})")
+                                            .WithValue(incVal)
+                                            .WithDescription(incDesc));
+
+                                        var decVal = $"−:{name}";
+                                        var decDesc = $"текущее: {cur}";
+                                        if (cur <= VampireAdvantagesCatalog.MinVirtue) decDesc = $"уже на базе {VampireAdvantagesCatalog.MinVirtue}";
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"− {Truncate(name, 18)} ({cur})")
+                                            .WithValue(decVal)
+                                            .WithDescription(decDesc));
+                                    }
+
+                                    return menu;
                                 }
 
                                 /// <summary>
@@ -557,6 +811,22 @@ public static class VampireWizardComponents
                         VampireWizardAction.ResetAbilityProgress => "reset_ability_progress",
                         VampireWizardAction.ResetAbilityAll      => "reset_ability_all",
                         VampireWizardAction.BackToAttributes     => "back_to_attributes",
+                        VampireWizardAction.DisciplineInc        => "discipline_inc",
+                        VampireWizardAction.DisciplineDec        => "discipline_dec",
+                        VampireWizardAction.DisciplineRename     => "discipline_rename",
+                        VampireWizardAction.BackgroundAdd        => "background_add",
+                        VampireWizardAction.BackgroundRemove     => "background_remove",
+                        VampireWizardAction.BackgroundRename     => "background_rename",
+                        VampireWizardAction.BackgroundInc        => "background_inc",
+                        VampireWizardAction.BackgroundDec        => "background_dec",
+                        VampireWizardAction.VirtueInc            => "virtue_inc",
+                        VampireWizardAction.VirtueDec            => "virtue_dec",
+                        VampireWizardAction.ResetAdvProgress     => "reset_adv_progress",
+                        VampireWizardAction.ResetAdvAll          => "reset_adv_all",
+                        VampireWizardAction.BackToAbilities      => "back_to_abilities",
+                        VampireWizardAction.NextAdvToBackgrounds => "next_adv_to_backgrounds",
+                        VampireWizardAction.NextAdvToVirtues     => "next_adv_to_virtues",
+                        VampireWizardAction.NextAdvToFinishing   => "next_adv_to_finishing",
                         _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
 
@@ -595,7 +865,23 @@ public static class VampireWizardComponents
                                     case "reset_ability_progress": action = VampireWizardAction.ResetAbilityProgress; return true;
                                     case "reset_ability_all":   action = VampireWizardAction.ResetAbilityAll;    return true;
                                     case "back_to_attributes":  action = VampireWizardAction.BackToAttributes;   return true;
-                                    default:               action = default;                         return false;
+                                    case "discipline_inc":      action = VampireWizardAction.DisciplineInc;      return true;
+                                    case "discipline_dec":      action = VampireWizardAction.DisciplineDec;      return true;
+                                    case "discipline_rename":   action = VampireWizardAction.DisciplineRename;   return true;
+                                    case "background_add":      action = VampireWizardAction.BackgroundAdd;      return true;
+                                    case "background_remove":   action = VampireWizardAction.BackgroundRemove;   return true;
+                                    case "background_rename":   action = VampireWizardAction.BackgroundRename;   return true;
+                                    case "background_inc":      action = VampireWizardAction.BackgroundInc;      return true;
+                                    case "background_dec":      action = VampireWizardAction.BackgroundDec;      return true;
+                                    case "virtue_inc":          action = VampireWizardAction.VirtueInc;          return true;
+                                    case "virtue_dec":          action = VampireWizardAction.VirtueDec;          return true;
+                                    case "reset_adv_progress":  action = VampireWizardAction.ResetAdvProgress;  return true;
+                                    case "reset_adv_all":       action = VampireWizardAction.ResetAdvAll;       return true;
+                                    case "back_to_abilities":   action = VampireWizardAction.BackToAbilities;   return true;
+                                    case "next_adv_to_backgrounds": action = VampireWizardAction.NextAdvToBackgrounds; return true;
+                                    case "next_adv_to_virtues":     action = VampireWizardAction.NextAdvToVirtues;     return true;
+                                    case "next_adv_to_finishing":   action = VampireWizardAction.NextAdvToFinishing;   return true;
+                                                default:               action = default;                         return false;
         }
     }
 }

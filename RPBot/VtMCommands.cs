@@ -348,6 +348,18 @@ public sealed class VampireCommands
         return g.GuildPermissions.ManageRoles;
     }
 
+    /// <summary>
+    /// Извлечь аргумент (часть после третьего «:») из CustomId формата
+    /// <c>vtm_wiz:{action}:{guid}:{arg}</c>. Используется для кнопок
+    /// с аргументом, обрабатываемых в общем case (например, DisciplineRename).
+    /// </summary>
+    private static string? ExtractCustomIdArg(string? customId)
+    {
+        if (string.IsNullOrEmpty(customId)) return null;
+        var parts = customId.Split(new[] { ':' }, 4);
+        return parts.Length >= 4 ? parts[3] : null;
+    }
+
     private static string? GetString(SocketSlashCommand command, string key)
     {
         var opt = command.Data.Options.FirstOrDefault(o => o.Name == key);
@@ -642,8 +654,17 @@ public sealed class VampireCommands
                                 }
                                             await CommitDraftAsync(component, session);
                                             await component.RespondAsync(
-                                                "✅ Шаг 3 (способности) сохранён. Шаг 4 (преимущества) появится в следующем обновлении.",
+                                                "✅ Шаг 3 (способности) сохранён. Переходим к Шагу 4 (преимущества).",
                                                 ephemeral: true);
+                                            try
+                                            {
+                                                var dm = await component.User.CreateDMChannelAsync();
+                                                await VampireWizardDmHandler.RenderDisciplinesStepAsync(dm, session);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 3→4: {ex.Message}");
+                                            }
                                 return;
                             }
                                         if (session.Step == VampireWizardStep.Attributes)
@@ -742,6 +763,165 @@ public sealed class VampireCommands
                                                         // Эти actions несут аргументы в customId-arg и обрабатываются
                                                         // отдельным entry-point (HandleWizardSelectMenuWithArgAsync).
                                                         await component.RespondAsync("⚠️ Внутренняя ошибка визарда (ability без аргумента).", ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                // ── Шаг 4 «Преимущества»: кнопки (часть — обрабатывается через selectmenu) ──
+
+                                                case VampireWizardAction.DisciplineInc:
+                                                case VampireWizardAction.DisciplineDec:
+                                                case VampireWizardAction.BackgroundInc:
+                                                case VampireWizardAction.BackgroundDec:
+                                                case VampireWizardAction.BackgroundRemove:
+                                                case VampireWizardAction.BackgroundRename:
+                                                case VampireWizardAction.VirtueInc:
+                                                case VampireWizardAction.VirtueDec:
+                                                    {
+                                                        // Эти actions несут аргументы и обрабатываются отдельным selectmenu-entry-point.
+                                                        await component.RespondAsync("⚠️ Внутренняя ошибка визарда (adv без аргумента).", ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.BackgroundAdd:
+                                                    {
+                                                        // Открываем текстовый ввод для имени нового факта.
+                                                        session.PendingBackgroundOp = "add";
+                                                        await component.RespondAsync(
+                                                            "✏️ Введите имя нового факта биографии (например, `Стая`, `Ресурсы`, `Союзники 3`).",
+                                                            ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.DisciplineRename:
+                                                    {
+                                                        // Открываем текстовый ввод для нового имени дисциплины Каитифа.
+                                                        if (!VampireAdvantagesCatalog.IsCaitiff(session.Draft.Clan))
+                                                        {
+                                                            await component.RespondAsync(
+                                                                "⚠️ Переименовывать можно только дисциплины Каитифа.",
+                                                                ephemeral: true);
+                                                            return;
+                                                        }
+                                                        var disciplineName = ExtractCustomIdArg(component.Data.CustomId);
+                                                        if (string.IsNullOrWhiteSpace(disciplineName))
+                                                        {
+                                                            await component.RespondAsync(
+                                                                "⚠️ Не указано имя переименовываемой дисциплины.",
+                                                                ephemeral: true);
+                                                            return;
+                                                        }
+                                                        session.PendingDisciplineRename = disciplineName;
+                                                        await component.RespondAsync(
+                                                            $"✏️ Введите новое имя для «{disciplineName}» (например, `Анимализм`, `Прорицание`, `Воздействие`).",
+                                                            ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.ResetAdvProgress:
+                                                case VampireWizardAction.ResetAdvAll:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Сброс доступен только на Шаге 4.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        VampireAdvantagesResolver.ResetProgress(session.Draft);
+                                                        await RerenderAdvantagesAsync(component, session);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.BackToAbilities:
+                                                    {
+                                                        await component.RespondAsync("⬅ Возврат на Шаг 3 (способности).", ephemeral: true);
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderAbilitiesStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 4→3: {ex.Message}");
+                                                        }
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.NextAdvToBackgrounds:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages
+                                                            || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Disciplines)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.1.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        if (!VampireAdvantagesResolver.IsDisciplinesComplete(session.Draft))
+                                                        {
+                                                            await component.RespondAsync(
+                                                                $"❌ Шаг 4.1 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingDisciplinePool(session.Draft)} очков дисциплин.",
+                                                                ephemeral: true);
+                                                            return;
+                                                        }
+                                                        await CommitDraftAsync(component, session);
+                                                        await component.RespondAsync("✅ Шаг 4.1 (дисциплины) сохранён. Переходим к Шагу 4.2 (факты).", ephemeral: true);
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderBackgroundsStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 4.1→4.2: {ex.Message}");
+                                                        }
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.NextAdvToVirtues:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages
+                                                            || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Backgrounds)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.2.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        if (!VampireAdvantagesResolver.IsBackgroundsComplete(session.Draft))
+                                                        {
+                                                            await component.RespondAsync(
+                                                                $"❌ Шаг 4.2 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingBackgroundPool(session.Draft)} очков фактов.",
+                                                                ephemeral: true);
+                                                            return;
+                                                        }
+                                                        await CommitDraftAsync(component, session);
+                                                        await component.RespondAsync("✅ Шаг 4.2 (факты) сохранён. Переходим к Шагу 4.3 (добродетели).", ephemeral: true);
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderVirtuesStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 4.2→4.3: {ex.Message}");
+                                                        }
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.NextAdvToFinishing:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages
+                                                            || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Virtues)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.3.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        if (!VampireAdvantagesResolver.IsVirtuesComplete(session.Draft))
+                                                        {
+                                                            await component.RespondAsync(
+                                                                $"❌ Шаг 4.3 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingVirtuePool(session.Draft)} очков добродетелей.",
+                                                                ephemeral: true);
+                                                            return;
+                                                        }
+                                                        await CommitDraftAsync(component, session);
+                                                        await component.RespondAsync(
+                                                            "✅ Шаг 4 (преимущества) сохранён. Шаг 5 (последние штрихи) появится в следующем обновлении.",
+                                                            ephemeral: true);
                                                         return;
                                                     }
 
@@ -875,6 +1055,16 @@ public sealed class VampireCommands
                         var components = VampireWizardComponents.BuildForAttributesStep(session.Draft);
                         await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
                     }
+                    else if (session.Step == VampireWizardStep.Abilities)
+                    {
+                        var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                    }
+                    else if (session.Step == VampireWizardStep.Advantages)
+                    {
+                        await RerenderAdvantagesInternal(um, session);
+                    }
                     else
                     {
                         var text = VampireCreateResolver.BuildConceptStatusMessage(session.Draft);
@@ -885,6 +1075,55 @@ public sealed class VampireCommands
             }
             catch { /* не критично */ }
             await component.RespondAsync("✅ Обновлено.", ephemeral: true);
+        }
+
+        /// <summary>
+        /// Перерисовать текущий под-шаг Шага 4 в DM.
+        /// </summary>
+        private static async Task RerenderAdvantagesAsync(
+            SocketMessageComponent component,
+            VampireWizardSession session)
+        {
+            if (session.DmMessageId == null) return;
+            try
+            {
+                var dm = await component.User.CreateDMChannelAsync();
+                var msg = await dm.GetMessageAsync(session.DmMessageId.Value);
+                if (msg is IUserMessage um)
+                {
+                    await RerenderAdvantagesInternal(um, session);
+                }
+            }
+            catch { /* не критично */ }
+            await component.RespondAsync("✅ Обновлено.", ephemeral: true);
+        }
+
+        private static async Task RerenderAdvantagesInternal(IUserMessage um, VampireWizardSession session)
+        {
+            switch (session.AdvantagesSubStep)
+            {
+                case VampireWizardAdvantagesSubStep.Disciplines:
+                    {
+                        var text = VampireAdvantagesResolver.BuildDisciplinesStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForDisciplinesStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                        return;
+                    }
+                case VampireWizardAdvantagesSubStep.Backgrounds:
+                    {
+                        var text = VampireAdvantagesResolver.BuildBackgroundsStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForBackgroundsStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                        return;
+                    }
+                case VampireWizardAdvantagesSubStep.Virtues:
+                    {
+                        var text = VampireAdvantagesResolver.BuildVirtuesStatusMessage(session.Draft);
+                        var components = VampireWizardComponents.BuildForVirtuesStep(session.Draft);
+                        await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
+                        return;
+                    }
+            }
         }
 
     private async Task CommitDraftAsync(SocketMessageComponent component, VampireWizardSession session)

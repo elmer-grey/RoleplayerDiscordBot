@@ -4661,9 +4661,15 @@ await Task.CompletedTask;
                                         else if (cid.StartsWith("vtm_wiz:attr_inc:"))
                                             await HandleVampireWizardAttrGroupSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:ability_priority:"))
-                                            await HandleVampireWizardAbilityPriorityAsync(component);
+                            await HandleVampireWizardAbilityPriorityAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:ability_inc:"))
                                             await HandleVampireWizardAbilityGroupSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:discipline_inc:"))
+                                            await HandleVampireWizardDisciplineSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:background_inc:"))
+                                            await HandleVampireWizardBackgroundSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:virtue_inc:"))
+                                            await HandleVampireWizardVirtueSelectAsync(component);
                                     }
             catch (Exception ex)
             {
@@ -5010,6 +5016,262 @@ await Task.CompletedTask;
                                                         }
                                                     }
 
+                                                    /// <summary>
+                                                    /// Обработка SelectMenu Шага 4.1 (Дисциплины).
+                                                    /// CustomId: <c>vtm_wiz:discipline_inc:{cid}</c>, value: <c>{sign}:{DisciplineName}</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardDisciplineSelectAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.Advantages
+                                                                || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Disciplines)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 4.1 (дисциплины).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрано значение.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var raw = selected.First();
+                                                            if (raw.Length < 2 || raw[1] != ':')
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректный формат: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var sign = raw[0];
+                                                            var disciplineName = raw.Substring(2);
+
+                                                            VampireAdvantagesResolver.Decision dec = sign switch
+                                                            {
+                                                                '+' => VampireAdvantagesResolver.IncrementDiscipline(session.Draft, disciplineName),
+                                                                '−' or '-' => VampireAdvantagesResolver.DecrementDiscipline(session.Draft, disciplineName),
+                                                                _ => VampireAdvantagesResolver.Decision.Fail(
+                                                                    VampireAdvantagesResolver.Failure.InvalidName,
+                                                                    $"Неизвестный знак: {sign}"),
+                                                            };
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderDisciplinesStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.1 после select: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ {disciplineName}: {dec.Message}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardDisciplineSelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при изменении дисциплины.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Обработка SelectMenu Шага 4.2 (Факты биографии).
+                                                    /// CustomId: <c>vtm_wiz:background_inc:{cid}:{BackgroundName}</c>, value:
+                                                    /// <c>+:rank</c> / <c>−:rank</c> / <c>remove</c> / <c>rename</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardBackgroundSelectAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.Advantages
+                                                                || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Backgrounds)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 4.2 (факты).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!VampireWizardComponents.TryParseWithArg(
+                                                                component.Data.CustomId, out _, out _, out var bgName))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId факта.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрано действие.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var raw = selected.First();
+
+                                                            VampireAdvantagesResolver.Decision dec;
+                                                            string okLabel;
+                                                            if (raw == "+:rank")
+                                                            {
+                                                                dec = VampireAdvantagesResolver.IncrementBackground(session.Draft, bgName);
+                                                                okLabel = $"+ ранг «{bgName}»";
+                                                            }
+                                                            else if (raw == "−:rank" || raw == "-:rank")
+                                                            {
+                                                                dec = VampireAdvantagesResolver.DecrementBackground(session.Draft, bgName);
+                                                                okLabel = $"− ранг «{bgName}»";
+                                                            }
+                                                            else if (raw == "remove")
+                                                            {
+                                                                dec = VampireAdvantagesResolver.RemoveBackground(session.Draft, bgName);
+                                                                okLabel = $"удалён «{bgName}»";
+                                                            }
+                                                            else if (raw == "rename")
+                                                            {
+                                                                // Открываем текстовый ввод для нового имени.
+                                                                session.PendingBackgroundOp = bgName;
+                                                                await component.RespondAsync(
+                                                                    $"✏️ Введите новое имя для факта «{bgName}» (текстом в этом ЛС).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            else
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестное действие: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderBackgroundsStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.2 после select: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ {okLabel}: {dec.Message}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardBackgroundSelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при изменении факта.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Обработка SelectMenu Шага 4.3 (Добродетели).
+                                                    /// CustomId: <c>vtm_wiz:virtue_inc:{cid}</c>, value: <c>{sign}:{VirtueName}</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardVirtueSelectAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.Advantages
+                                                                || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Virtues)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 4.3 (добродетели).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрано значение.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var raw = selected.First();
+                                                            if (raw.Length < 2 || raw[1] != ':')
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректный формат: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var sign = raw[0];
+                                                            var virtueName = raw.Substring(2);
+
+                                                            VampireAdvantagesResolver.Decision dec = sign switch
+                                                            {
+                                                                '+' => VampireAdvantagesResolver.IncrementVirtue(session.Draft, virtueName),
+                                                                '−' or '-' => VampireAdvantagesResolver.DecrementVirtue(session.Draft, virtueName),
+                                                                _ => VampireAdvantagesResolver.Decision.Fail(
+                                                                    VampireAdvantagesResolver.Failure.InvalidName,
+                                                                    $"Неизвестный знак: {sign}"),
+                                                            };
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderVirtuesStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.3 после select: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ {virtueName}: {dec.Message}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardVirtueSelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при изменении добродетели.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
                                             private async Task ProcessButtonAsync(SocketMessageComponent component)
         {
             var parts = component.Data.CustomId.Split(':');
@@ -5110,6 +5372,60 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
 
     var text = (message.Content ?? string.Empty).Trim();
     if (text.Length == 0) return false;
+
+    // ── Шаг 4.1: переименование дисциплины Каитифа.
+    if (!string.IsNullOrEmpty(session.PendingDisciplineRename))
+    {
+        var oldName = session.PendingDisciplineRename;
+        session.PendingDisciplineRename = null;
+
+        var dec = VampireAdvantagesResolver.RenameCaitiffDiscipline(session.Draft, oldName, text);
+        if (!dec.IsSuccess)
+        {
+            await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            session.PendingDisciplineRename = oldName; // повторить попытку
+            return true;
+        }
+        try
+        {
+            var dm = (IDMChannel)message.Channel;
+            await VampireWizardDmHandler.RenderDisciplinesStepAsync(dm, session);
+        }
+        catch (Exception ex)
+        {
+            BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.1 после rename: {ex.Message}");
+        }
+        await message.AddReactionAsync(new Emoji("✅"));
+        return true;
+    }
+
+    // ── Шаг 4.2: добавление или переименование факта.
+    if (!string.IsNullOrEmpty(session.PendingBackgroundOp))
+    {
+        var op = session.PendingBackgroundOp;
+        session.PendingBackgroundOp = null;
+
+        var dec = op == "add"
+            ? VampireAdvantagesResolver.AddBackground(session.Draft, text)
+            : VampireAdvantagesResolver.RenameBackground(session.Draft, op, text);
+        if (!dec.IsSuccess)
+        {
+            await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            session.PendingBackgroundOp = op; // повторить попытку
+            return true;
+        }
+        try
+        {
+            var dm = (IDMChannel)message.Channel;
+            await VampireWizardDmHandler.RenderBackgroundsStepAsync(dm, session);
+        }
+        catch (Exception ex)
+        {
+            BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.2 после text-input: {ex.Message}");
+        }
+        await message.AddReactionAsync(new Emoji("✅"));
+        return true;
+    }
 
     // Если сейчас бот ждёт значение поля.
     if (string.IsNullOrEmpty(session.PendingField))

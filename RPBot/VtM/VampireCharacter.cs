@@ -175,9 +175,19 @@ public sealed class VampireCharacter
         [JsonPropertyName("abilities")]
         public List<string> Abilities { get; set; } = new();
 
-    /// <summary>Факты биографии.</summary>
-    [JsonPropertyName("backgrounds")]
-    public List<string> Backgrounds { get; set; } = new();
+    /// <summary>
+        /// Факты биографии: имя → ранг (1..5).
+        /// </summary>
+        /// <remarks>
+        /// <para>V20 стр. 99: 5 пунктов на факты биографии. Ранг не может
+        /// превышать 5. Пусто = факты не выбраны.</para>
+        /// <para>Сериализуется как объект JSON (раньше был список строк,
+        /// миграция делается автоматически при чтении устаревших файлов через
+        /// <see cref="VampireBackgroundsJsonConverter"/>).</para>
+        /// </remarks>
+        [JsonPropertyName("backgrounds")]
+        [JsonConverter(typeof(VampireBackgroundsJsonConverter))]
+        public Dictionary<string, int> Backgrounds { get; set; } = new();
 
     /// <summary>Добродетели (Совесть, Самоконтроль, Смелость).</summary>
     [JsonPropertyName("virtues")]

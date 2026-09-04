@@ -34,6 +34,19 @@ public enum VampireWizardStep
 }
 
 /// <summary>
+/// Под-шаги Шага 4 «Преимущества» (3 экрана).
+/// </summary>
+public enum VampireWizardAdvantagesSubStep
+{
+    /// <summary>4.1 — Дисциплины.</summary>
+    Disciplines = 1,
+    /// <summary>4.2 — Факты биографии.</summary>
+    Backgrounds = 2,
+    /// <summary>4.3 — Добродетели.</summary>
+    Virtues = 3,
+}
+
+/// <summary>
 /// Состояние визарда создания персонажа в памяти.
 ///
 /// <para>Сессия живёт, пока игрок проходит визард; при выходе из бота
@@ -59,6 +72,12 @@ public sealed class VampireWizardSession
     /// <summary>Текущий шаг визарда.</summary>
     public VampireWizardStep Step { get; set; } = VampireWizardStep.Concept;
 
+    /// <summary>
+    /// Под-шаг внутри Шага 4 «Преимущества». Дисциплины / Факты / Добродетели.
+    /// Игнорируется на других шагах.
+    /// </summary>
+    public VampireWizardAdvantagesSubStep AdvantagesSubStep { get; set; } = VampireWizardAdvantagesSubStep.Disciplines;
+
     /// <summary>Черновик персонажа — обновляется по мере прохождения шагов.</summary>
     public VampireCharacter Draft { get; set; } = new VampireCharacter();
 
@@ -73,6 +92,17 @@ public sealed class VampireWizardSession
     /// null — никакое поле не запрошено.
     /// </summary>
     public string? PendingField { get; set; }
+
+    /// <summary>
+    /// Шаг 4.1: если задано — бот ждёт новое имя для дисциплины Каитифа.
+    /// Хранит старое имя.
+    /// </summary>
+    public string? PendingDisciplineRename { get; set; }
+
+    /// <summary>
+    /// Шаг 4.2: «add» — ждём имя нового факта; иначе — старое имя факта для переименования.
+    /// </summary>
+    public string? PendingBackgroundOp { get; set; }
 
     /// <summary>Ключ сессии (GuildId, PlayerId).</summary>
     public (ulong Guild, ulong Player) Key => (GuildId, PlayerId);

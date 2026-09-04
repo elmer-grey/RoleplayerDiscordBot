@@ -274,19 +274,20 @@ public static class VampireSheetEmbed
         if (c.Backgrounds != null && c.Backgrounds.Count > 0)
         {
             int shown = 0;
-            foreach (var b in c.Backgrounds)
+                foreach (var kv in c.Backgrounds)
             {
                 if (shown >= 5) break;
-                sb.Append("• ").AppendLine(b);
-                shown++;
+                    int rank = Math.Clamp(kv.Value, 1, 5);
+                    sb.Append("• ").Append(kv.Key).Append(' ').Append(DotsString(rank, 5)).AppendLine();
+                    shown++;
+                }
             }
+            else
+            {
+                sb.AppendLine("`—`");
+            }
+            return sb.ToString();
         }
-        else
-        {
-            sb.AppendLine("`—`");
-        }
-        return sb.ToString();
-    }
 
     /// <summary>Колонка «Добродетели»: Совесть/Решимость, Самоконтроль/Инстинкты, Смелость — по 5 ячеек.</summary>
     public static string BuildVirtuesColumn(VampireCharacter c)

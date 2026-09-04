@@ -72,12 +72,12 @@ public class VampireCharacterTests
             Hunger = 3,
             Attributes = new() { ["Сила"] = 3, ["Драка"] = 2 },
             Abilities = new() { "Стремительность", "Запугивание" },
-            Backgrounds = new() { "Стая" },
+            Backgrounds = new() { ["Стая"] = 1 },
             Virtues = new() { ["Совесть"] = 3 }
         };
 
-        var json = System.Text.Json.JsonSerializer.Serialize(c);
-        var restored = System.Text.Json.JsonSerializer.Deserialize<VampireCharacter>(json);
+                    var json = System.Text.Json.JsonSerializer.Serialize(c);
+                    var restored = System.Text.Json.JsonSerializer.Deserialize<VampireCharacter>(json);
 
         Assert.NotNull(restored);
         Assert.Equal("domen_", restored!.PlayerName);
@@ -87,7 +87,8 @@ public class VampireCharacterTests
         Assert.Equal(2, restored.Attributes["Драка"]);
         Assert.Equal(2, restored.Abilities.Count);
         Assert.Single(restored.Backgrounds);
-        Assert.Equal(3, restored.Virtues["Совесть"]);
+                    Assert.Equal(1, restored.Backgrounds["Стая"]);
+                    Assert.Equal(3, restored.Virtues["Совесть"]);
     }
 
     // ─── V20-поля (стр. 92) — round-trip и обратная совместимость ────────
