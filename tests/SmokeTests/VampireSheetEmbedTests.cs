@@ -335,15 +335,16 @@ public class VampireSheetEmbedTests
     }
 
     [Fact]
-    public void Build_Essence_ShowsHumanityWillpowerHungerBlood()
+    public void Build_Essence_ShowsHumanityWillpowerHunger()
     {
+        // Кровь (BloodPool) больше не показывается: в V20 её роль играет Голод.
         var embed = VampireSheetEmbed.Build(NewCharacter());
         var e = embed.Fields.First(f => f.Name.Contains("Суть"));
         var body = e.Value.ToString()!;
         Assert.Contains("Человечность", body);
         Assert.Contains("Воля", body);
         Assert.Contains("Голод", body);
-        Assert.Contains("Кровь", body);
+        Assert.DoesNotContain("Кровь", body);
     }
 
     [Fact]
@@ -441,5 +442,43 @@ public class VampireSheetEmbedTests
         Assert.Contains(embed.Fields, f => f.Name.Contains("Достоинства и недостатки"));
         Assert.Contains(embed.Fields, f => f.Name.Contains("Суть"));
         Assert.Contains(embed.Fields, f => f.Name.Contains("Здоровье и опыт"));
+    }
+
+    // ── Шаг 6: финальный лист = формулы Шага 5 ─────────────────────
+
+    [Fact]
+    public void Build_Essence_UsesComputeHumanity_FromVirtues()
+    {
+        // Человечность = Совесть + Самоконтроль = 3 + 2 = 5 (из NewCharacter).
+        // Legacy-поле Humanity=7 игнорируется.
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        var body = e.Value.ToString()!;
+        Assert.Contains("Человечность", body);
+        Assert.Contains("●●●●●○○○○○", body); // 5 закрашенных из 10
+    }
+
+    [Fact]
+    public void Build_Essence_UsesComputeWillpower_FromCourage()
+    {
+        // Воля = Смелость = 4 (из NewCharacter). Legacy Willpower=5 игнорируется.
+        var embed = VampireSheetEmbed.Build(NewCharacter());
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        var body = e.Value.ToString()!;
+        Assert.Contains("Воля", body);
+        Assert.Contains("●●●●○○○○○○", body); // 4 из 10
+    }
+
+    [Fact]
+    public void Build_Essence_ReflectsHumanityBonusFromStep5()
+    {
+        // Если игрок потратил freebie на Чел на Шаге 5 — финальный лист должен это показать.
+        var c = NewCharacter();
+        c.HumanityBonus = 2; // +2 за свободные пункты
+        var embed = VampireSheetEmbed.Build(c);
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        var body = e.Value.ToString()!;
+        // 3 (Совесть) + 2 (СК) + 2 (бонус) = 7
+        Assert.Contains("●●●●●●●○○○", body);
     }
 }

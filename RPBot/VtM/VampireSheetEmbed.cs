@@ -342,22 +342,16 @@ public static class VampireSheetEmbed
         return sb.ToString();
     }
 
-    /// <summary>Колонка «Суть»: Человечность / Воля / Голод / Кровь.</summary>
+    /// <summary>Колонка «Суть»: Человечность / Воля / Голод. Кровь не показывается — в V20 её роль играет Голод.</summary>
     public static string BuildEssenceBlock(VampireCharacter c)
     {
         var sb = new StringBuilder();
         sb.Append("`").Append(PadRight("Человечность", 13)).Append("` ");
-        sb.AppendLine(DotsString(Math.Clamp(c.Humanity, 0, 10), 10));
+        sb.AppendLine(DotsString(VampireFinishingResolver.ComputeHumanity(c), 10));
         sb.Append("`").Append(PadRight("Воля", 13)).Append("` ");
-        sb.AppendLine(DotsString(c.WillpowerPoints, Math.Max(c.Willpower, c.WillpowerPoints)));
+        sb.AppendLine(DotsString(VampireFinishingResolver.ComputeWillpower(c), 10));
         sb.Append("`").Append(PadRight("Голод", 13)).Append("` ");
         sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
-        if (c.BloodPool > 0)
-        {
-            sb.Append("`").Append(PadRight("Кровь", 13)).Append("` ");
-            int max = Math.Max(c.BloodPool, 20);
-            sb.AppendLine(DotsString(c.BloodPool, max));
-        }
         return sb.ToString();
     }
 
