@@ -1,0 +1,216 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace RPBot.VtM;
+
+/// <summary>
+/// Логика freebie-пула Шага 5: цены, цели, реестр, allocate/deallocate/reset.
+/// </summary>
+public static partial class VampireFinishingResolver
+{
+    /// <summary>Канонический freebie-курс V20 стр. 86.</summary>
+    public const int FreebiePool = 15;
+
+    /// <summary>Стоимость за +1 для каждой из целей.</summary>
+    public static int CostOf(FreebieTarget t) => t switch
+    {
+        FreebieTarget.Attribute   => 5,
+        FreebieTarget.Ability     => 2,
+        FreebieTarget.Discipline  => 7,
+        FreebieTarget.Background  => 1,
+        FreebieTarget.Virtue      => 2,
+        FreebieTarget.Humanity    => 2,
+        FreebieTarget.Willpower   => 1,
+        _ => int.MaxValue,
+    };
+
+    /// <summary>Список дружелюбных названий целей (для UI).</summary>
+    public static readonly IReadOnlyList<FreebieTarget> FreebieTargets = new[]
+    {
+        FreebieTarget.Attribute,
+        FreebieTarget.Ability,
+        FreebieTarget.Discipline,
+        FreebieTarget.Background,
+        FreebieTarget.Virtue,
+        FreebieTarget.Humanity,
+        FreebieTarget.Willpower,
+    };
+
+    /// <summary>Имя цели на русском (для UI).</summary>
+    public static string TargetName(FreebieTarget t, VampireCharacter draft) => t switch
+    {
+        FreebieTarget.Attribute   => "Характеристика",
+        FreebieTarget.Ability     => "Способность",
+        FreebieTarget.Discipline  => "Дисциплина",
+        FreebieTarget.Background  => "Факт биографии",
+        FreebieTarget.Virtue      => "Добродетель",
+        FreebieTarget.Humanity    => "Человечность",
+        FreebieTarget.Willpower   => "Воля",
+        _ => t.ToString(),
+    };
+
+    /// <summary>Кэпы по целям: (hardCap, min). Для Humanity/Willpower hardCap = 10 − формула.</summary>
+    public static (int hardCap, int min) GetCaps(FreebieTarget t, VampireCharacter draft) => t switch
+    {
+        FreebieTarget.Attribute   => (5, 1),
+        FreebieTarget.Ability     => (5, 0),
+        FreebieTarget.Discipline  => (5, 0),
+        FreebieTarget.Background  => (5, 1),
+        FreebieTarget.Virtue      => (5, 1),
+        FreebieTarget.Humanity    => (Math.Max(0, 10 - FormulaHumanity(draft)), 0),
+        FreebieTarget.Willpower   => (Math.Max(0, 10 - FormulaWillpower(draft)), 0),
+        _ => (5, 0),
+    };
+
+    /// <summary>«Голая» формула Чел без бонуса (Совесть + Самоконтроль, кэп 10).</summary>
+    private static int FormulaHumanity(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
+        var scl = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueSelfControl);
+        return Math.Min(10, Math.Max(1, con + scl));
+    }
+
+    /// <summary>«Голая» формула Воли без бонуса (Смелость, кэп 10).</summary>
+    private static int FormulaWillpower(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
+        return Math.Min(10, Math.Max(1, cou));
+    }
+
+    // ─── Freebie-реестр по черновику ─────────────────────────────────
+
+    private static string Key(FreebieTarget t, string field)
+        => $"{(int)t}:{field}";
+
+    /// <summary>Потрачено на конкретную клетку (0 если нет).</summary>
+    public static int FreebieSpentOn(VampireCharacter draft, FreebieTarget target, string field)
+    {
+        if (draft == null) return 0;
+        var key = Key(target, field);
+        return draft.FreebieSpent.TryGetValue(key, out var v) ? v : 0;
+    }
+
+    /// <summary>Суммарно потрачено пунктов из пула 15.</summary>
+    public static int ConsumedFreebies(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var sum = 0;
+        foreach (var (k, count) in draft.FreebieSpent)
+        {
+            if (count <= 0) continue;
+            var colon = k.IndexOf(':');
+            if (colon <= 0) continue;
+            if (!int.TryParse(k.Substring(0, colon), out var targetNum)) continue;
+            var t = (FreebieTarget)targetNum;
+            sum += CostOf(t) * count;
+        }
+        return sum;
+    }
+
+    /// <summary>Сколько свободных пунктов осталось.</summary>
+    public static int RemainingFreebies(VampireCharacter draft)
+        => Math.Max(0, FreebiePool - ConsumedFreebies(draft));
+
+    // ─── Allocate / Deallocate / Reset ──────────────────────────────
+
+    /// <summary>
+    /// Потратить freebie на +1 к указанному полю.
+    /// <paramref name="virtueAffectingHumanityOrWillpower"/> = true, если трата трогает добродетель
+    /// (Humanity/Willpower в резолвере пересчитываются автоматически).
+    /// </summary>
+    public static Decision AllocateFreebie(
+        VampireCharacter draft,
+        FreebieTarget target,
+        string field,
+        out bool virtueAffectingHumanityOrWillpower)
+    {
+        virtueAffectingHumanityOrWillpower = false;
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        if (string.IsNullOrWhiteSpace(field))
+            return Decision.Fail(Failure.InvalidName, "Имя поля не указано.");
+
+        var cost = CostOf(target);
+        if (ConsumedFreebies(draft) + cost > FreebiePool)
+            return Decision.Fail(Failure.PoolExhausted,
+                $"Пул свободных пунктов ({FreebiePool}) уже исчерпан. Этот параметр стоит {cost}.");
+
+        var (hardCap, _) = GetCaps(target, draft);
+        var cur = ReadFieldValue(draft, target, field);
+        if (cur + 1 > hardCap)
+            return Decision.Fail(Failure.AboveCap,
+                $"«{field}» уже на кэпе {hardCap}.");
+
+        if (!WriteFieldValue(draft, target, field, cur + 1, out var err))
+            return Decision.Fail(Failure.UnknownField, err);
+
+        var key = Key(target, field);
+        var newSpent = new Dictionary<string, int>(draft.FreebieSpent, StringComparer.Ordinal);
+        newSpent[key] = (newSpent.TryGetValue(key, out var v) ? v : 0) + 1;
+        draft.FreebieSpent = newSpent;
+
+        if (target == FreebieTarget.Virtue)
+            virtueAffectingHumanityOrWillpower = true;
+
+        return Decision.Ok($"«{field}» → {cur + 1} (-{cost} свободных).");
+    }
+
+    /// <summary>Откатить freebie с указанного поля (если возможно).</summary>
+    public static Decision DeallocateFreebie(VampireCharacter draft, FreebieTarget target, string field)
+    {
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        if (string.IsNullOrWhiteSpace(field))
+            return Decision.Fail(Failure.InvalidName, "Имя поля не указано.");
+
+        var key = Key(target, field);
+        if (!draft.FreebieSpent.TryGetValue(key, out var v) || v <= 0)
+            return Decision.Fail(Failure.NotApplicable,
+                $"На «{field}» нет потраченных свободных пунктов.");
+
+        var cur = ReadFieldValue(draft, target, field);
+        if (cur <= 0)
+            return Decision.Fail(Failure.NotApplicable,
+                $"«{field}» уже на 0.");
+
+        if (!WriteFieldValue(draft, target, field, cur - 1, out var err))
+            return Decision.Fail(Failure.UnknownField, err);
+
+        var newSpent = new Dictionary<string, int>(draft.FreebieSpent, StringComparer.Ordinal);
+        newSpent[key] = v - 1;
+        if (newSpent[key] <= 0) newSpent.Remove(key);
+        draft.FreebieSpent = newSpent;
+
+        var cost = CostOf(target);
+        return Decision.Ok($"«{field}» → {cur - 1} (+{cost} свободных).");
+    }
+
+    /// <summary>Сбросить все freebie-траты (возвращает все потраченные пункты в пул).</summary>
+    public static Decision ResetFreebies(VampireCharacter draft)
+    {
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        if (draft.FreebieSpent.Count == 0)
+            return Decision.Ok("Свободные пункты уже сброшены.");
+
+        var keysToClear = draft.FreebieSpent.Keys.ToArray();
+        foreach (var k in keysToClear)
+        {
+            var colon = k.IndexOf(':');
+            if (colon <= 0) continue;
+            if (!int.TryParse(k.Substring(0, colon), out var targetNum)) continue;
+            var field = k.Substring(colon + 1);
+            var target = (FreebieTarget)targetNum;
+
+            var currentSpent = draft.FreebieSpent.TryGetValue(k, out var cv) ? cv : 0;
+            for (int i = 0; i < currentSpent; i++)
+            {
+                var cur = ReadFieldValue(draft, target, field);
+                if (cur <= 0) break;
+                if (!WriteFieldValue(draft, target, field, cur - 1, out _)) break;
+            }
+        }
+        draft.FreebieSpent = new Dictionary<string, int>(StringComparer.Ordinal);
+        return Decision.Ok("Свободные пункты сброшены.");
+    }
+}

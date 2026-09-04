@@ -514,5 +514,86 @@ public class VampireFinishingTests
         Assert.Equal(5, VampireFinishingResolver.ComputeHumanity(d));
         Assert.Equal(1, VampireFinishingResolver.ComputeWillpower(d));
     }
+
+    // ── Здоровье (V20: фиксировано 7 ячеек) ─────────────────────────
+
+    [Fact]
+    public void HealthTrackSize_IsSeven_ByV20()
+    {
+        // V20 стр. 263: шкала фиксирована для всех персонажей.
+        Assert.Equal(7, VampireFinishingResolver.HealthTrackSize);
+    }
+
+    [Fact]
+    public void EnsureHealth_FromNull_CreatesV20Scale()
+    {
+        var d = NewDraft();
+        Assert.Null(d.Health);
+        VampireFinishingResolver.EnsureHealth(d);
+        Assert.NotNull(d.Health);
+        Assert.Equal(7, d.Health!.Size);
+        Assert.Equal("SSSSSSS", d.Health!.Render());
+        Assert.Equal(0, d.Health!.Penalty);
+    }
+
+    [Fact]
+    public void EnsureHealth_Idempotent_DoesNotOverwrite()
+    {
+        var d = NewDraft();
+        d.Health = new HealthState(7);
+        d.Health.ApplyLethal(1); // //SSSSSS
+        VampireFinishingResolver.EnsureHealth(d);
+        Assert.Equal("//SSSSS", d.Health!.Render());
+    }
+
+    [Fact]
+    public void BuildStatusMessage_NullHealth_AutoCreatesV20Scale()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        Assert.Null(d.Health);
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("Здоровье:", msg);
+        Assert.Contains("SSSSSSS", msg);
+        Assert.Contains("7 ячеек", msg);
+        Assert.DoesNotContain("не настроено", msg);
+    }
+
+    [Fact]
+    public void BuildStatusMessage_DamagedHealth_ShowsV20Penalty()
+    {
+        // Аграва на 0..2 → "AASS" на шкале 7 ячеек.
+        var d = NewDraft();
+        SeedVirtues(d);
+        d.Health = new HealthState(7);
+        d.Health.ApplyAggravated(2);
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("AASS", msg);
+        Assert.Contains("штраф:", msg);
+    }
+
+    // ── Голод (read-only) ────────────────────────────────────────────
+
+    [Fact]
+    public void BuildStatusMessage_ShowsCurrentHunger()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        d.Hunger = 1; // канон V20
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("Голод:        1", msg);
+    }
+
+    [Fact]
+    public void BuildStatusMessage_HungerNotHardcoded()
+    {
+        // Если голод повысился в ходе сцены — UI должен показать реальное значение,
+        // а не захардкоженную 1.
+        var d = NewDraft();
+        SeedVirtues(d);
+        d.Hunger = 4;
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("Голод:        4", msg);
+    }
 }
 
