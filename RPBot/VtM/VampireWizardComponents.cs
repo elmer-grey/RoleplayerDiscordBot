@@ -118,7 +118,18 @@ public enum VampireWizardAction
                 NextAdvToVirtues,
                 /// <summary>Перейти к Шагу 5 (Последние штрихи).</summary>
                 NextAdvToFinishing,
-    }
+
+                                // ── Шаг 5 «Последние штрихи» ────────────────────────────────
+
+                                /// <summary>SelectMenu свободных пунктов: target+field+sign. Action-arg = "{sign}:{target}:{field}".</summary>
+                                FinishingInc,
+                                /// <summary>Кнопка «Сбросить всё» на Шаге 5 (откатить все траты).</summary>
+                                FinishingReset,
+                                /// <summary>Завершить Шаг 5 и перейти к Шагу 6 (или показать лист).</summary>
+                                FinishingDone,
+                                /// <summary>Вернуться на Шаг 4.3 (Добродетели).</summary>
+                                BackToAdvantages,
+                    }
 
 /// <summary>
 /// Кнопки визарда создания персонажа для DM-сообщения.
@@ -450,6 +461,146 @@ public static class VampireWizardComponents
 
                                     return cb.Build();
                                 }
+
+                                                                    /// <summary>
+                                                                    /// UI Шага 5 «Последние штрихи»: производные (read-only) +
+                                                                    /// SelectMenu для свободных пунктов 15 (target×field×sign).
+                                                                    /// </summary>
+                                                                    public static MessageComponent BuildForFinishingStep(VampireCharacter draft)
+                                                                    {
+                                                                        if (draft == null) throw new ArgumentNullException(nameof(draft));
+                                                                        if (draft.CharacterId == Guid.Empty)
+                                                                            throw new ArgumentException("CharacterId обязателен", nameof(draft));
+
+                                                                        var cb = new ComponentBuilder();
+                                                                        cb.WithSelectMenu(BuildFinishingSelect(draft));
+
+                                                                        cb.WithButton("⬅ Назад (4.3)", BuildCustomId(VampireWizardAction.BackToAdvantages, draft.CharacterId), ButtonStyle.Secondary)
+                                                                          .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.FinishingReset, draft.CharacterId), ButtonStyle.Danger);
+
+                                                                        cb.WithButton("Готово → лист", BuildCustomId(VampireWizardAction.FinishingDone, draft.CharacterId), ButtonStyle.Success);
+
+                                                                        return cb.Build();
+                                                                    }
+
+                                                                    /// <summary>
+                                                                    /// SelectMenu Шага 5: каждая опция соответствует одной ячейке и знаку.
+                                                                    /// Формат value: "{sign}:{target}:{field}".
+                                                                    /// </summary>
+                                                                    private static SelectMenuBuilder BuildFinishingSelect(VampireCharacter draft)
+                                                                    {
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var menu = new SelectMenuBuilder()
+                                                                            .WithCustomId(BuildCustomId(VampireWizardAction.FinishingInc, draft.CharacterId))
+                                                                            .WithPlaceholder($"Свободные пункты (+): ост. {remaining}");
+
+                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Attribute,  draft.Attributes,   null);
+                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Ability,    null,                draft.AbilitiesStruct);
+                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Discipline, draft.Disciplines,   null);
+                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Background, draft.Backgrounds,   null);
+                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Virtue,      draft.Virtues,       null);
+
+                                                                        return menu;
+                                                                    }
+
+                                                                    /// <summary>
+                                                                    /// Добавить опции SelectMenu: для каждого имени в категории — одну опцию «+».
+                                                                    /// </summary>
+                                                                    private static void AddOptionsFor(
+                                                                        SelectMenuBuilder menu,
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        Dictionary<string, int>? dict,
+                                                                        object? abilityStruct)
+                                                                    {
+                                                                        var targetName = VampireFinishingResolver.TargetName(target, draft);
+                                                                        var cost = VampireFinishingResolver.CostOf(target);
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var cap = 5;
+
+                                                                        if (abilityStruct != null)
+                                                                        {
+                                                                            foreach (var name in AbilityFieldNames())
+                                                                            {
+                                                                                var cur = VampireFinishingResolver.ReadFieldValue(draft, target, name);
+                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
+                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
+                                                                            }
+                                                                            return;
+                                                                        }
+
+                                                                        if (dict != null && dict.Count > 0)
+                                                                        {
+                                                                            foreach (var (name, val) in dict)
+                                                                            {
+                                                                                var cur = val;
+                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
+                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
+                                                                            }
+                                                                            return;
+                                                                        }
+
+                                                                        // Словарь пуст — отрисовать все имена для атрибутов и способностей,
+                                                                        // и три стандартные добродетели для Virtue.
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Attribute)
+                                                                        {
+                                                                            foreach (var name in AttributeFieldNames())
+                                                                            {
+                                                                                var cur = VampireFinishingResolver.ReadFieldValue(draft, target, name);
+                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
+                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
+                                                                            }
+                                                                            return;
+                                                                        }
+
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Virtue)
+                                                                        {
+                                                                            foreach (var name in VampireParameterCatalog.Virtues)
+                                                                            {
+                                                                                var cur = VampireAdvantagesResolver.GetVirtueValue(draft, name);
+                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
+                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    private static void AppendOneOption(
+                                                                        SelectMenuBuilder menu,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        string field,
+                                                                        int current,
+                                                                        int cost,
+                                                                        bool enabled,
+                                                                        string targetName)
+                                                                    {
+                                                                        var value = $"+:{target}:{field}";
+                                                                        var desc = $"сейчас {current}, -{cost}";
+                                                                        if (!enabled)
+                                                                        {
+                                                                            desc = current >= 5 ? "уже на кэпе 5" : $"нужно {cost} свободных";
+                                                                        }
+                                                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                                                            .WithLabel($"+ {Truncate(targetName + ": " + field, 28)} ({current})")
+                                                                            .WithValue(value)
+                                                                            .WithDescription(desc));
+                                                                    }
+
+                                                                    private static IEnumerable<string> AttributeFieldNames() => new[]
+                                                                    {
+                                                                        "Сила", "Ловкость", "Выносливость",
+                                                                        "Обаяние", "Манипуляция", "Привлекательность",
+                                                                        "Восприятие", "Интеллект", "Смекалка",
+                                                                    };
+
+                                                                    private static IEnumerable<string> AbilityFieldNames() => new[]
+                                                                    {
+                                                                        "Атлетика", "Бдительность", "Драка", "Запугивание", "Красноречие",
+                                                                        "Лидерство", "Уличное чутьё", "Хитрость", "Шестое чувство", "Эмпатия",
+                                                                        "Вождение", "Воровство", "Выживание", "Исполнение", "Обращение с животными",
+                                                                        "Ремесло", "Скрытность", "Стрельба", "Фехтование", "Этикет",
+                                                                        "Гуманитарные науки", "Естественные науки", "Информатика", "Медицина", "Оккультизм",
+                                                                        "Политика", "Расследование", "Финансы", "Электроника", "Юриспруденция",
+                                                                    };
 
                                 /// <summary>
                                 /// SelectMenu Шага 4.1: пары опций (± для каждой дисциплины),
@@ -827,7 +978,11 @@ public static class VampireWizardComponents
                         VampireWizardAction.NextAdvToBackgrounds => "next_adv_to_backgrounds",
                         VampireWizardAction.NextAdvToVirtues     => "next_adv_to_virtues",
                         VampireWizardAction.NextAdvToFinishing   => "next_adv_to_finishing",
-                        _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
+                                                VampireWizardAction.FinishingInc        => "finishing_inc",
+                                                VampireWizardAction.FinishingReset      => "finishing_reset",
+                                                VampireWizardAction.FinishingDone       => "finishing_done",
+                                                VampireWizardAction.BackToAdvantages    => "back_to_advantages",
+                                                _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
 
     private static bool TryParseAction(string s, out VampireWizardAction action)
@@ -881,6 +1036,10 @@ public static class VampireWizardComponents
                                     case "next_adv_to_backgrounds": action = VampireWizardAction.NextAdvToBackgrounds; return true;
                                     case "next_adv_to_virtues":     action = VampireWizardAction.NextAdvToVirtues;     return true;
                                     case "next_adv_to_finishing":   action = VampireWizardAction.NextAdvToFinishing;   return true;
+                                    case "finishing_inc":          action = VampireWizardAction.FinishingInc;          return true;
+                                    case "finishing_reset":        action = VampireWizardAction.FinishingReset;        return true;
+                                    case "finishing_done":         action = VampireWizardAction.FinishingDone;         return true;
+                                    case "back_to_advantages":     action = VampireWizardAction.BackToAdvantages;     return true;
                                                 default:               action = default;                         return false;
         }
     }

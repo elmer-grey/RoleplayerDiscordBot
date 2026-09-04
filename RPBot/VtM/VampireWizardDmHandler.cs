@@ -224,6 +224,27 @@ public static class VampireWizardDmHandler
         }
 
         /// <summary>
+        /// Шаг 5 «Последние штрихи» — рендер/правка DM-сообщения.
+        /// Пул freebie = 15, цены по V20 стр. 86 (хар 5 / спос 2 / диск 7 / факт 1 / доброд 2).
+        /// Чел и Воля рассчитываются автоматически из добродетелей — не редактируются свободно.
+        /// </summary>
+        public static async Task RenderFinishingStepAsync(
+            IMessageChannel dmChannel,
+            VampireWizardSession session)
+        {
+            if (dmChannel == null) throw new ArgumentNullException(nameof(dmChannel));
+            if (session == null) throw new ArgumentNullException(nameof(session));
+
+            session.Step = VampireWizardStep.FinishingTouches;
+            // Шаг 5 не относится к Advantages: оставляем AdvantagesSubStep без изменений.
+            session.DmChannelId = dmChannel.Id;
+
+            var text = VampireFinishingResolver.BuildStatusMessage(session.Draft);
+            var components = VampireWizardComponents.BuildForFinishingStep(session.Draft);
+            await RenderIntoAsync(dmChannel, session, text, components);
+        }
+
+        /// <summary>
         /// Универсальный helper: отправить или отредактировать DM-сообщение.
         /// </summary>
         private static async Task RenderIntoAsync(

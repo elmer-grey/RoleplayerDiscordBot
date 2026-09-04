@@ -919,9 +919,85 @@ public sealed class VampireCommands
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
+
+                                                        try
+                                                        {
+                                                            await component.DeferAsync(ephemeral: true);
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                            await component.FollowupAsync("✅ Шаг 4 сохранён. Открыт Шаг 5 «Последние штрихи».", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 4.3→5: {ex.Message}");
+                                                            await component.FollowupAsync("❌ Не удалось открыть Шаг 5.", ephemeral: true);
+                                                        }
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.FinishingReset:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Сброс Шага 5 доступен только из Шага 5.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        VampireFinishingResolver.ResetFreebies(session.Draft);
+                                                        await CommitDraftAsync(component, session);
+
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при сбросе Шага 5: {ex.Message}");
+                                                        }
+                                                        await component.RespondAsync("🧹 Свободные пункты возвращены в пул (15/15).", ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.FinishingDone:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Завершение Шага 5 доступно только из Шага 5.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        await CommitDraftAsync(component, session);
                                                         await component.RespondAsync(
-                                                            "✅ Шаг 4 (преимущества) сохранён. Шаг 5 (последние штрихи) появится в следующем обновлении.",
+                                                            "✅ Шаг 5 сохранён. Финальный лист персонажа появится в Шаге 6 (следующее обновление).",
                                                             ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.BackToAdvantages:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Возврат к 4.3 доступен только из Шага 5.", ephemeral: true);
+                                                            return;
+                                                        }
+                                                        await CommitDraftAsync(component, session);
+
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderVirtuesStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 5→4.3: {ex.Message}");
+                                                        }
+                                                        await component.RespondAsync("↩️ Возврат к Шагу 4.3 (добродетели).", ephemeral: true);
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.FinishingInc:
+                                                    {
+                                                        // Шаг 5 — SelectMenu; основная обработка идёт в HandleWizardSelectAsync.
+                                                        await component.RespondAsync("⚠️ Шаг 5 работает через меню выбора, а не через кнопки.", ephemeral: true);
                                                         return;
                                                     }
 

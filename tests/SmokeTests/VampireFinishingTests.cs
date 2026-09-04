@@ -1,0 +1,364 @@
+using System;
+using System.Linq;
+using RPBot.VtM;
+using Xunit;
+
+namespace SmokeTests;
+
+/// <summary>
+/// Тесты Шага 5 «Последние штрихи» визарда VtM V20.
+/// Покрывает: формулы Чел/Воли (read-only), канонический freebie-курс
+/// 5/2/7/1/2 на пять параметров, пул 15, кэпы, undo/reset.
+/// </summary>
+public class VampireFinishingTests
+{
+    private static VampireCharacter NewDraft(string clan = "Вентру") => new()
+    {
+        CharacterId = Guid.NewGuid(),
+        PlayerId = 42,
+        PlayerName = "TestUser",
+        Generation = 13,
+        Hunger = 1,
+        Clan = clan,
+    };
+
+    /// <summary>Распределить базово добродетели (как сделал бы Шаг 4.3) — 1/1/1 + N пунктов сверху.</summary>
+    private static void SeedVirtues(VampireCharacter draft, int conscience = 1, int selfControl = 1, int courage = 1)
+    {
+        draft.Virtues[VampireParameterCatalog.VirtueConscience] = conscience;
+        draft.Virtues[VampireParameterCatalog.VirtueSelfControl] = selfControl;
+        draft.Virtues[VampireParameterCatalog.VirtueCourage] = courage;
+    }
+
+    // ── Каталог: курс и пул freebie ───────────────────────────────────
+
+    [Fact]
+    public void Catalog_FreebiePoolIs15()
+    {
+        Assert.Equal(15, VampireFinishingResolver.FreebiePool);
+    }
+
+    [Fact]
+    public void Catalog_CostPerTarget_MatchesV20p86()
+    {
+        Assert.Equal(5, VampireFinishingResolver.CostOf(VampireFinishingResolver.FreebieTarget.Attribute));
+        Assert.Equal(2, VampireFinishingResolver.CostOf(VampireFinishingResolver.FreebieTarget.Ability));
+        Assert.Equal(7, VampireFinishingResolver.CostOf(VampireFinishingResolver.FreebieTarget.Discipline));
+        Assert.Equal(1, VampireFinishingResolver.CostOf(VampireFinishingResolver.FreebieTarget.Background));
+        Assert.Equal(2, VampireFinishingResolver.CostOf(VampireFinishingResolver.FreebieTarget.Virtue));
+    }
+
+    [Fact]
+    public void Catalog_TargetName_IsReadable()
+    {
+        var d = NewDraft();
+        Assert.Equal("Характеристика",  VampireFinishingResolver.TargetName(VampireFinishingResolver.FreebieTarget.Attribute, d));
+        Assert.Equal("Способность",     VampireFinishingResolver.TargetName(VampireFinishingResolver.FreebieTarget.Ability, d));
+        Assert.Equal("Дисциплина",      VampireFinishingResolver.TargetName(VampireFinishingResolver.FreebieTarget.Discipline, d));
+        Assert.Equal("Факт биографии",  VampireFinishingResolver.TargetName(VampireFinishingResolver.FreebieTarget.Background, d));
+        Assert.Equal("Добродетель",     VampireFinishingResolver.TargetName(VampireFinishingResolver.FreebieTarget.Virtue, d));
+    }
+
+    [Fact]
+    public void Catalog_FreebieTargets_ContainsExactlyFive()
+    {
+        Assert.Equal(5, VampireFinishingResolver.FreebieTargets.Count);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Attribute, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Ability, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Discipline, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Background, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Virtue, VampireFinishingResolver.FreebieTargets);
+    }
+
+    // ── Формулы производных ────────────────────────────────────────────
+
+    [Fact]
+    public void Humanity_DefaultBase_Is2()
+    {
+        // База 1/1/1 — Чел = 2
+        var d = NewDraft();
+        SeedVirtues(d);
+        Assert.Equal(2, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(1, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void Humanity_MatchesConsciencePlusSelfControl()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 3, selfControl: 4, courage: 3);
+        Assert.Equal(7, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(3, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void Humanity_IsCappedAt10()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 6, selfControl: 6, courage: 8);
+        Assert.Equal(10, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(8,  VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void DescribeHumanity_ShowsBreakdown()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 4, selfControl: 3, courage: 3);
+        Assert.Contains("7",  VampireFinishingResolver.DescribeHumanity(d));
+        Assert.Contains("Совесть 4",     VampireFinishingResolver.DescribeHumanity(d));
+        Assert.Contains("Самоконтроль 3", VampireFinishingResolver.DescribeHumanity(d));
+    }
+
+    [Fact]
+    public void DescribeWillpower_EqualsCourage()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, courage: 4);
+        Assert.Equal("4 (Смелость 4)", VampireFinishingResolver.DescribeWillpower(d));
+    }
+
+    // ── Freebie pool tracking ──────────────────────────────────────────
+
+    [Fact]
+    public void RemainingFreebies_FullOnEmptyDraft()
+    {
+        var d = NewDraft();
+        Assert.Equal(15, VampireFinishingResolver.RemainingFreebies(d));
+        Assert.Equal(0,  VampireFinishingResolver.ConsumedFreebies(d));
+    }
+
+    [Fact]
+    public void Allocations_DecreaseRemainingPool()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        // 7 freebie: −1 +1 к способности (cost 2), и −1 +1 к факту (cost 1).
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Состояние", out _).IsSuccess);
+        Assert.Equal(14, VampireFinishingResolver.RemainingFreebies(d));
+        Assert.Equal(1, VampireFinishingResolver.ConsumedFreebies(d));
+    }
+
+    [Fact]
+    public void PoolExhausted_RejectsFurther()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, courage: 4);
+        // 15 = 1 × 7 + 1 × 5 + 1 × 2 + 1 × 1 — все заняты.
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _).IsSuccess); // -7
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute,  "Сила", out _).IsSuccess);              // -5
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability,    "Атлетика", out _).IsSuccess);          // -2
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Состояние", out _).IsSuccess);          // -1
+        Assert.Equal(0, VampireFinishingResolver.RemainingFreebies(d));
+
+        var rej = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue, VampireParameterCatalog.VirtueCourage, out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.PoolExhausted, rej.Failure);
+    }
+
+    // ── Spend / Undo на полях ─────────────────────────────────────────
+
+    [Fact]
+    public void Allocate_OnAttribute_WritesAndRecords()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);
+        Assert.True(r.IsSuccess, r.Message);
+        Assert.Equal(1, d.Attributes["Сила"]);
+        Assert.Equal(1, VampireFinishingResolver.FreebieSpentOn(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила"));
+    }
+
+    [Fact]
+    public void Allocate_OnAbility_WritesAndRecords_ThroughReflection()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика", out _);
+        Assert.True(r.IsSuccess, r.Message);
+        Assert.Equal(1, VampireFinishingResolver.ReadFieldValue(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика"));
+        Assert.Equal(1, VampireFinishingResolver.FreebieSpentOn(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика"));
+    }
+
+    [Fact]
+    public void Allocate_OnDiscipline_AddsToPool()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _);
+        Assert.True(r.IsSuccess, r.Message);
+        Assert.Equal(1, d.Disciplines["Доминирование"]);
+    }
+
+    [Fact]
+    public void Allocate_OnBackground_CreatesKey()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Состояние", out _);
+        Assert.True(r.IsSuccess, r.Message);
+        Assert.Equal(1, d.Backgrounds["Состояние"]);
+    }
+
+    [Fact]
+    public void Allocate_OnVirtue_GrowsHumanityAndWillpower()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 3, courage: 3);
+        Assert.Equal(5, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(3, VampireFinishingResolver.ComputeWillpower(d));
+
+        var r1 = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue, VampireParameterCatalog.VirtueConscience, out _);
+        Assert.True(r1.IsSuccess);
+        var r2 = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue, VampireParameterCatalog.VirtueCourage, out _);
+        Assert.True(r2.IsSuccess);
+
+            // Чел = (2+1) + 3 = 6; Воля = (3+1) = 4.
+            Assert.Equal(6, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(4, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void Deallocate_ReturnsPointToPool()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _); // -7
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Состояние", out _); // -1
+            // Всего потрачено 7 (дисциплина) + 1 (фон) = 8.
+            Assert.Equal(8, VampireFinishingResolver.ConsumedFreebies(d));
+            Assert.Equal(7, VampireFinishingResolver.RemainingFreebies(d));
+
+            var undo = VampireFinishingResolver.DeallocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование");
+            Assert.True(undo.IsSuccess);
+            Assert.False(d.Disciplines.ContainsKey("Доминирование"));
+            Assert.Equal(1, VampireFinishingResolver.ConsumedFreebies(d));
+            Assert.Equal(14, VampireFinishingResolver.RemainingFreebies(d));
+        }
+
+    [Fact]
+    public void Deallocate_OnUnknownFails()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var rej = VampireFinishingResolver.DeallocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование");
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.NotApplicable, rej.Failure);
+    }
+
+    [Fact]
+    public void Allocate_BeyondHardCap_Fails()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 5, selfControl: 5, courage: 5);
+        // Совесть уже 5, попытка поднять — кэп.
+        var rej = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue, VampireParameterCatalog.VirtueConscience, out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.AboveCap, rej.Failure);
+    }
+
+    [Fact]
+    public void Allocate_InvalidName_Fails()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var rej = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "", out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.InvalidName, rej.Failure);
+    }
+
+    [Fact]
+    public void Allocate_OnUnknownAbilityFails()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var rej = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability, "NotARealAbility", out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.UnknownField, rej.Failure);
+    }
+
+    // ── Reset ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ResetFreebies_RestoresAllSpentPoints()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 3, courage: 4);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _); // -7
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);              // -5
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика", out _);            // -2
+        Assert.Equal(14, VampireFinishingResolver.ConsumedFreebies(d));
+
+        var r = VampireFinishingResolver.ResetFreebies(d);
+        Assert.True(r.IsSuccess);
+
+        Assert.Equal(0,  VampireFinishingResolver.ConsumedFreebies(d));
+        Assert.Equal(15, VampireFinishingResolver.RemainingFreebies(d));
+        Assert.Empty(d.FreebieSpent);
+        Assert.False(d.Disciplines.ContainsKey("Доминирование"));
+        Assert.False(d.Attributes.ContainsKey("Сила"));
+        Assert.Equal(0, VampireFinishingResolver.ReadFieldValue(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика"));
+    }
+
+    [Fact]
+    public void ResetFreebies_OnEmpty_IsOk()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        var r = VampireFinishingResolver.ResetFreebies(d);
+        Assert.True(r.IsSuccess);
+    }
+
+    // ── Status message ────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildStatusMessage_IncludesAllSections()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 3, selfControl: 4, courage: 4);
+        d.Weakness = "Проклятие Бруха";
+        d.Health = new HealthState(7);
+
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("Шаг 5", msg);
+        Assert.Contains("Человечность", msg);
+        Assert.Contains("Воля", msg);
+        Assert.Contains("Голод", msg);
+        Assert.Contains("Слабость", msg);
+        Assert.Contains("Проклятие Бруха", msg);
+        Assert.Contains("Свободные пункты", msg);
+        Assert.Contains("осталось 15", msg);
+        Assert.Contains("потрачено 0", msg);
+    }
+
+    [Fact]
+    public void BuildStatusMessage_AfterSpend_ShowsRemainingAndConsumed()
+    {
+        var d = NewDraft();
+        SeedVirtues(d);
+        // -5 + -2 = 7 потрачено, 8 осталось.
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика", out _);
+
+        var msg = VampireFinishingResolver.BuildStatusMessage(d);
+        Assert.Contains("осталось 8", msg);
+        Assert.Contains("потрачено 7", msg);
+        Assert.Contains("Характеристика", msg);
+        Assert.Contains("Способность", msg);
+    }
+
+    [Fact]
+    public void DescribeSpent_ListsEachEntry()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, courage: 3);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Доминирование", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);
+
+        var list = VampireFinishingResolver.DescribeSpent(d);
+        Assert.Equal(2, list.Count);
+        Assert.Contains(list, x => x.Contains("Дисциплина") && x.Contains("Доминирование") && x.Contains("-7"));
+        Assert.Contains(list, x => x.Contains("Характеристика") && x.Contains("Сила") && x.Contains("-5"));
+    }
+}
+

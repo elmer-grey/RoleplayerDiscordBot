@@ -271,6 +271,14 @@ public sealed class VampireCharacter
         [JsonPropertyName("experienceTotal")]
         public int ExperienceTotal { get; set; }
 
+                /// <summary>
+                /// Сколько раз тратился свободный пункт на конкретную клетку Шага 5.
+                /// Ключ — "{TargetNum}:{Field}", значение — число применённых +N.
+                /// Записывается, чтобы можно было откатить или сбросить все траты.
+                /// </summary>
+                [JsonPropertyName("freebieSpent")]
+                public Dictionary<string, int> FreebieSpent { get; set; } = new();
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>
