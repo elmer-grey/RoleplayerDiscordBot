@@ -173,6 +173,42 @@ public class VampireFinishingDemoTest : IDisposable
         Say(VampireFinishingResolver.BuildStatusMessage(draft));
         Say("");
 
+        // 11a) Трата на Чел/Волю свободными пунктами (V20 стр. 86).
+        VampireFinishingResolver.ResetFreebies(draft);
+        Say("=== Сброс и траты на Чел (-2) + Воля (-1×3) ===");
+        VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Say($"  потрачено: -2 (Чел) + -1×3 (Воля) = -5");
+        Say($"  остаток пула: {VampireFinishingResolver.RemainingFreebies(draft)}");
+        Say($"  HumanityBonus={draft.HumanityBonus}, WillpowerBonus={draft.WillpowerBonus}");
+        Say(VampireFinishingResolver.BuildStatusMessage(draft));
+        Say("");
+
+        // 11b) Кэп Чел/Воли (нельзя вкатить выше 10).
+        var rejH = VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        Say($"=== Попытка ещё +1 на Чел: IsSuccess={rejH.IsSuccess}, Failure={rejH.Failure} ===");
+        var rejW = VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Say($"=== Попытка ещё +1 на Волю: IsSuccess={rejW.IsSuccess}, Failure={rejW.Failure} ===");
+        Say("");
+
+        // 11c) Доводим до кэпа и пробуем пробить.
+        VampireFinishingResolver.ResetFreebies(draft);
+        // Базовые добродетели = 3, формула Чел=6, Воля=3.
+        // Вкатываем +4 на Чел и +7 на Волю (всё что влезает).
+        for (int i = 0; i < 4; i++)
+            VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        for (int i = 0; i < 7; i++)
+            VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Say($"=== После бонусов: Чел={VampireFinishingResolver.ComputeHumanity(draft)}, Воля={VampireFinishingResolver.ComputeWillpower(draft)} ===");
+        var rejH2 = VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        Say($"=== Кэп Чел: IsSuccess={rejH2.IsSuccess}, Failure={rejH2.Failure}, msg={rejH2.Message} ===");
+        var rejW2 = VampireFinishingResolver.AllocateFreebie(draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Say($"=== Кэп Воли: IsSuccess={rejW2.IsSuccess}, Failure={rejW2.Failure}, msg={rejW2.Message} ===");
+        Say(VampireFinishingResolver.BuildStatusMessage(draft));
+        Say("");
+
         // 12) Пересчёт после сброса.
         VampireFinishingResolver.ResetFreebies(draft);
         Say("=== Сброс перед переходом на Шаг 6 ===");

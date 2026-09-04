@@ -279,6 +279,20 @@ public sealed class VampireCharacter
                 [JsonPropertyName("freebieSpent")]
                 public Dictionary<string, int> FreebieSpent { get; set; } = new();
 
+                /// <summary>
+                /// Бонус Человечности сверх формулы (Совесть + Самоконтроль), потраченный
+                /// свободными пунктами на Шаге 5. Кэп — 10 за вычетом формулы.
+                /// </summary>
+                [JsonPropertyName("humanityBonus")]
+                public int HumanityBonus { get; set; } = 0;
+
+                /// <summary>
+                /// Бонус Воли сверх формулы (Смелость), потраченный свободными пунктами
+                /// на Шаге 5. Кэп — 10 за вычетом формулы.
+                /// </summary>
+                [JsonPropertyName("willpowerBonus")]
+                public int WillpowerBonus { get; set; } = 0;
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>

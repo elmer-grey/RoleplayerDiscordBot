@@ -60,14 +60,16 @@ public class VampireFinishingTests
     }
 
     [Fact]
-    public void Catalog_FreebieTargets_ContainsExactlyFive()
+    public void Catalog_FreebieTargets_ContainsSeven()
     {
-        Assert.Equal(5, VampireFinishingResolver.FreebieTargets.Count);
+        Assert.Equal(7, VampireFinishingResolver.FreebieTargets.Count);
         Assert.Contains(VampireFinishingResolver.FreebieTarget.Attribute, VampireFinishingResolver.FreebieTargets);
         Assert.Contains(VampireFinishingResolver.FreebieTarget.Ability, VampireFinishingResolver.FreebieTargets);
         Assert.Contains(VampireFinishingResolver.FreebieTarget.Discipline, VampireFinishingResolver.FreebieTargets);
         Assert.Contains(VampireFinishingResolver.FreebieTarget.Background, VampireFinishingResolver.FreebieTargets);
         Assert.Contains(VampireFinishingResolver.FreebieTarget.Virtue, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Humanity, VampireFinishingResolver.FreebieTargets);
+        Assert.Contains(VampireFinishingResolver.FreebieTarget.Willpower, VampireFinishingResolver.FreebieTargets);
     }
 
     // ── Формулы производных ────────────────────────────────────────────
@@ -359,6 +361,158 @@ public class VampireFinishingTests
         Assert.Equal(2, list.Count);
         Assert.Contains(list, x => x.Contains("Дисциплина") && x.Contains("Доминирование") && x.Contains("-7"));
         Assert.Contains(list, x => x.Contains("Характеристика") && x.Contains("Сила") && x.Contains("-5"));
+    }
+
+    // ── Humanity / Willpower как цели freebie ────────────────────────
+
+    [Fact]
+    public void AllocateHumanity_GrowsBonus_AndRaisesCompute()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        // Базовая формула: Чел = 4, Воля = 2.
+        Assert.Equal(4, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(2, VampireFinishingResolver.ComputeWillpower(d));
+
+        // -2 на Чел → бонус +1, итог 5.
+        var r = VampireFinishingResolver.AllocateFreebie(
+            d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        Assert.True(r.IsSuccess);
+        Assert.Equal(1, d.HumanityBonus);
+        Assert.Equal(5, VampireFinishingResolver.ComputeHumanity(d));
+        // Воля не должна меняться.
+        Assert.Equal(2, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void AllocateWillpower_GrowsBonus_AndRaisesCompute()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        // -1 на Волю → бонус +1, итог 3.
+        var r = VampireFinishingResolver.AllocateFreebie(
+            d, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Assert.True(r.IsSuccess);
+        Assert.Equal(1, d.WillpowerBonus);
+        Assert.Equal(3, VampireFinishingResolver.ComputeWillpower(d));
+        Assert.Equal(4, VampireFinishingResolver.ComputeHumanity(d));
+    }
+
+    [Fact]
+    public void AllocateHumanity_AfterVirtueSpend_BothCount()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 3, selfControl: 3, courage: 3);
+        // Формула: Чел 6, Воля 3.
+        Assert.Equal(6, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(3, VampireFinishingResolver.ComputeWillpower(d));
+
+        // +2 в Смелость → Воля 5, Чел не меняется.
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue,
+            VampireParameterCatalog.VirtueCourage, out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue,
+            VampireParameterCatalog.VirtueCourage, out _);
+        Assert.Equal(6, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(5, VampireFinishingResolver.ComputeWillpower(d));
+
+        // +1 на Чел freebie → итог 7.
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity,
+            "Человечность", out _);
+        Assert.Equal(1, d.HumanityBonus);
+        Assert.Equal(7, VampireFinishingResolver.ComputeHumanity(d));
+        // Воля по-прежнему 5.
+        Assert.Equal(5, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void HumanityCap_RespectsFormulaLimit()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 4, selfControl: 4, courage: 1);
+        // Формула Чел = 8, бонус можно докинуть только 2 (кэп 10).
+        var (cap, _) = VampireFinishingResolver.GetCaps(
+            VampireFinishingResolver.FreebieTarget.Humanity, d);
+        Assert.Equal(2, cap);
+
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        // Третья попытка должна быть отвергнута — кэп.
+        var rej = VampireFinishingResolver.AllocateFreebie(
+            d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(VampireFinishingResolver.Failure.AboveCap, rej.Failure);
+        Assert.Equal(10, VampireFinishingResolver.ComputeHumanity(d));
+    }
+
+    [Fact]
+    public void WillpowerCap_RespectsFormulaLimit()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, courage: 3);
+        // Формула Воля = 3, бонус можно докинуть 7.
+        var (cap, _) = VampireFinishingResolver.GetCaps(
+            VampireFinishingResolver.FreebieTarget.Willpower, d);
+        Assert.Equal(7, cap);
+        // -1×7 = 7 пунктов.
+        for (int i = 0; i < 7; i++)
+            VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        // 8-я попытка — кэп.
+        var rej = VampireFinishingResolver.AllocateFreebie(
+            d, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Assert.False(rej.IsSuccess);
+        Assert.Equal(10, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void DeallocateHumanity_ReturnsPointToPool()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        // Потрачено: 2 + 1 = 3, осталось 12.
+        Assert.Equal(12, VampireFinishingResolver.RemainingFreebies(d));
+
+        var r = VampireFinishingResolver.DeallocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность");
+        Assert.True(r.IsSuccess);
+        Assert.Equal(0, d.HumanityBonus);
+        Assert.Equal(14, VampireFinishingResolver.RemainingFreebies(d));
+    }
+
+    [Fact]
+    public void ResetFreebies_AlsoClearsHumanityAndWillpowerBonuses()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity, "Человечность", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Willpower, "Воля", out _);
+        Assert.Equal(1, d.HumanityBonus);
+        Assert.Equal(1, d.WillpowerBonus);
+
+        VampireFinishingResolver.ResetFreebies(d);
+        Assert.Equal(0, d.HumanityBonus);
+        Assert.Equal(0, d.WillpowerBonus);
+        Assert.Equal(15, VampireFinishingResolver.RemainingFreebies(d));
+        // Формула возвращается к чистой.
+        Assert.Equal(4, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(2, VampireFinishingResolver.ComputeWillpower(d));
+    }
+
+    [Fact]
+    public void HumanityFreebie_PlusVirtue_StacksInCompute()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 1, selfControl: 1, courage: 1);
+        // Старт: Чел=2, Воля=1.
+        // +2 в Совесть (Шаг 4.3 → формула Чел=4), +1 в Чел freebie → итого 5.
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue,
+            VampireParameterCatalog.VirtueConscience, out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Virtue,
+            VampireParameterCatalog.VirtueConscience, out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Humanity,
+            "Человечность", out _);
+        Assert.Equal(5, VampireFinishingResolver.ComputeHumanity(d));
+        Assert.Equal(1, VampireFinishingResolver.ComputeWillpower(d));
     }
 }
 

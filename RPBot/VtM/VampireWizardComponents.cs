@@ -499,8 +499,47 @@ public static class VampireWizardComponents
                                                                         AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Discipline, draft.Disciplines,   null);
                                                                         AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Background, draft.Backgrounds,   null);
                                                                         AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Virtue,      draft.Virtues,       null);
+                                                                        AddHumanityWillpowerOptions(menu, draft);
 
                                                                         return menu;
+                                                                    }
+
+                                                                    /// <summary>
+                                                                    /// Добавить две одиночные опции: «+ Человечность» и «+ Воля».
+                                                                    /// Для этих целей нет словаря/структуры — каждая цель представлена ровно одной опцией.
+                                                                    /// </summary>
+                                                                    private static void AddHumanityWillpowerOptions(
+                                                                        SelectMenuBuilder menu,
+                                                                        VampireCharacter draft)
+                                                                    {
+                                                                        AddHumanityWillpowerOne(menu, draft, VampireFinishingResolver.FreebieTarget.Humanity,  "Человечность");
+                                                                        AddHumanityWillpowerOne(menu, draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля");
+                                                                    }
+
+                                                                    private static void AddHumanityWillpowerOne(
+                                                                        SelectMenuBuilder menu,
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        string label)
+                                                                    {
+                                                                        var cost = VampireFinishingResolver.CostOf(target);
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var cur = VampireFinishingResolver.ReadFieldValue(draft, target, label);
+                                                                        var (hardCap, _) = VampireFinishingResolver.GetCaps(target, draft);
+                                                                        var canAdd = remaining >= cost && cur + 1 <= hardCap;
+
+                                                                        var value = $"+:{target}:{label}";
+                                                                        var desc = $"+1 → {cur + 1}, -{cost}";
+                                                                        if (!canAdd)
+                                                                        {
+                                                                            desc = cur >= hardCap
+                                                                                ? $"уже на кэпе {hardCap}"
+                                                                                : $"нужно {cost} свободных";
+                                                                        }
+                                                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                                                            .WithLabel($"+ {Truncate(label, 28)} ({cur}→{cur + 1})")
+                                                                            .WithValue(value)
+                                                                            .WithDescription(desc));
                                                                     }
 
                                                                     /// <summary>

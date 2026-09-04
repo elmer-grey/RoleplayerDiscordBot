@@ -60,28 +60,32 @@ public static class VampireFinishingResolver
         Discipline = 3,
         Background = 4,
         Virtue = 5,
+        /// <summary>Человечность (V20 стр. 86): +1 стоит 2 свободных пункта.</summary>
+        Humanity = 6,
+        /// <summary>Воля (V20 стр. 86): +1 стоит 1 свободный пункт.</summary>
+        Willpower = 7,
     }
 
     // ═══ Формулы производных ═══════════════════════════════════════
 
-    /// <summary>Человечность = Совесть + Самоконтроль, кэп 10.</summary>
+    /// <summary>Человечность = Совесть + Самоконтроль + бонус freebie, кэп 10.</summary>
     public static int ComputeHumanity(VampireCharacter draft)
     {
         if (draft == null) return 0;
         var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
         var scl = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueSelfControl);
-        return Math.Min(10, Math.Max(1, con + scl));
+        return Math.Min(10, Math.Max(1, con + scl + draft.HumanityBonus));
     }
 
-    /// <summary>Воля = Смелость, кэп 10.</summary>
+    /// <summary>Воля = Смелость + бонус freebie, кэп 10.</summary>
     public static int ComputeWillpower(VampireCharacter draft)
     {
         if (draft == null) return 0;
         var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
-        return Math.Min(10, Math.Max(1, cou));
+        return Math.Min(10, Math.Max(1, cou + draft.WillpowerBonus));
     }
 
-    /// <summary>Подробная строка расчёта — для UI.</summary>
+    /// <summary>Подробная строка расчёта — для UI (только формула, без бонуса).</summary>
     public static string DescribeHumanity(VampireCharacter draft)
     {
         var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
@@ -89,7 +93,7 @@ public static class VampireFinishingResolver
         return $"{con + scl} (Совесть {con} + Самоконтроль {scl})";
     }
 
-    /// <summary>Подробная строка расчёта для Воли.</summary>
+    /// <summary>Подробная строка расчёта для Воли (только формула, без бонуса).</summary>
     public static string DescribeWillpower(VampireCharacter draft)
     {
         var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
@@ -101,7 +105,7 @@ public static class VampireFinishingResolver
     /// <summary>Канонический freebie-курс V20 стр. 86.</summary>
     public const int FreebiePool = 15;
 
-    /// <summary>Стоимость за +1 для каждой из пяти целей.</summary>
+    /// <summary>Стоимость за +1 для каждой из целей.</summary>
     public static int CostOf(FreebieTarget t) => t switch
     {
         FreebieTarget.Attribute   => 5,
@@ -109,6 +113,8 @@ public static class VampireFinishingResolver
         FreebieTarget.Discipline  => 7,
         FreebieTarget.Background  => 1,
         FreebieTarget.Virtue      => 2,
+        FreebieTarget.Humanity    => 2,
+        FreebieTarget.Willpower   => 1,
         _ => int.MaxValue,
     };
 
@@ -120,6 +126,8 @@ public static class VampireFinishingResolver
         FreebieTarget.Discipline,
         FreebieTarget.Background,
         FreebieTarget.Virtue,
+        FreebieTarget.Humanity,
+        FreebieTarget.Willpower,
     };
 
     public static string TargetName(FreebieTarget t, VampireCharacter draft) => t switch
@@ -129,6 +137,8 @@ public static class VampireFinishingResolver
         FreebieTarget.Discipline  => "Дисциплина",
         FreebieTarget.Background  => "Факт биографии",
         FreebieTarget.Virtue      => "Добродетель",
+        FreebieTarget.Humanity    => "Человечность",
+        FreebieTarget.Willpower   => "Воля",
         _ => t.ToString(),
     };
 
@@ -189,7 +199,7 @@ public static class VampireFinishingResolver
             return Decision.Fail(Failure.PoolExhausted,
                 $"Пул свободных пунктов ({FreebiePool}) уже исчерпан. Этот параметр стоит {cost}.");
 
-        var (hardCap, _) = GetCaps(target);
+        var (hardCap, _) = GetCaps(target, draft);
         var cur = ReadFieldValue(draft, target, field);
         if (cur + 1 > hardCap)
             return Decision.Fail(Failure.AboveCap,
@@ -270,15 +280,35 @@ public static class VampireFinishingResolver
 
     // ═══ Хелперы: чтение/запись в любую из пяти моделей ═══════════════
 
-    private static (int hardCap, int min) GetCaps(FreebieTarget t) => t switch
+    /// <summary>Кэпы по целям: (hardCap, min). Для Humanity/Willpower hardCap = 10 − формула.</summary>
+    public static (int hardCap, int min) GetCaps(FreebieTarget t, VampireCharacter draft) => t switch
     {
         FreebieTarget.Attribute   => (5, 1),
         FreebieTarget.Ability     => (5, 0),
         FreebieTarget.Discipline  => (5, 0),
         FreebieTarget.Background  => (5, 1),
         FreebieTarget.Virtue      => (5, 1),
+        FreebieTarget.Humanity    => (Math.Max(0, 10 - FormulaHumanity(draft)), 0),
+        FreebieTarget.Willpower   => (Math.Max(0, 10 - FormulaWillpower(draft)), 0),
         _ => (5, 0),
     };
+
+    /// <summary>«Голая» формула Чел без бонуса (Совесть + Самоконтроль, кэп 10).</summary>
+    private static int FormulaHumanity(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
+        var scl = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueSelfControl);
+        return Math.Min(10, Math.Max(1, con + scl));
+    }
+
+    /// <summary>«Голая» формула Воли без бонуса (Смелость, кэп 10).</summary>
+    private static int FormulaWillpower(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
+        return Math.Min(10, Math.Max(1, cou));
+    }
 
     /// <summary>Текущее значение поля по цели.</summary>
     public static int ReadFieldValue(VampireCharacter draft, FreebieTarget target, string field)
@@ -291,6 +321,8 @@ public static class VampireFinishingResolver
             FreebieTarget.Discipline  => GetDictValue(draft.Disciplines, field),
             FreebieTarget.Background  => GetDictValue(draft.Backgrounds, field),
             FreebieTarget.Virtue      => GetDictValue(draft.Virtues,     field),
+            FreebieTarget.Humanity    => Math.Max(0, draft.HumanityBonus),
+            FreebieTarget.Willpower   => Math.Max(0, draft.WillpowerBonus),
             _ => 0,
         };
     }
@@ -356,6 +388,12 @@ public static class VampireFinishingResolver
                 if (newValue <= 0) draft.Virtues.Remove(field);
                 else draft.Virtues[field] = newValue;
                 return true;
+            case FreebieTarget.Humanity:
+                draft.HumanityBonus = newValue;
+                return true;
+            case FreebieTarget.Willpower:
+                draft.WillpowerBonus = newValue;
+                return true;
         }
         error = $"Неизвестная цель: {target}";
         return false;
@@ -386,10 +424,10 @@ public static class VampireFinishingResolver
         if (draft == null) draft = new VampireCharacter();
         var sb = new StringBuilder();
         sb.AppendLine("**Шаг 5 — последние штрихи**");
-        sb.AppendLine("Формулы рассчитывают Человечность и Волю автоматически из добродетелей (Шаг 4.3).");
+        sb.AppendLine("Пул 15 свободных пунктов по ценам V20 (хар 5 / спос 2 / диск 7 / факт 1 / доброд 2 / Чел 2 / Воля 1).");
         sb.AppendLine();
-        sb.Append("Человечность: **").Append(DescribeHumanity(draft)).AppendLine("**");
-        sb.Append("Воля:         **").Append(DescribeWillpower(draft)).AppendLine("**");
+        sb.Append("Человечность: **").Append(ComputeHumanity(draft)).AppendLine("**");
+        sb.Append("Воля:         **").Append(ComputeWillpower(draft)).AppendLine("**");
         sb.AppendLine("Голод:        1 (стартовое значение, в Шаге 5 не редактируется)");
         sb.Append("Слабость:     ").AppendLine(
             string.IsNullOrEmpty(draft.Weakness)
