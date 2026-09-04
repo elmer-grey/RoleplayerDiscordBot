@@ -200,9 +200,14 @@ public sealed class VampireCharacter
         [JsonPropertyName("backgrounds_freebie")]
         public Dictionary<string, int> FreebieBackgrounds { get; set; } = new();
 
-    /// <summary>Добродетели (Совесть, Самоконтроль, Смелость).</summary>
+    /// <summary>Добродетели (Совесть, Самоконтроль, Смелость). База 1/1/1 проставляется в конструкторе.</summary>
     [JsonPropertyName("virtues")]
-    public Dictionary<string, int> Virtues { get; set; } = new();
+    public Dictionary<string, int> Virtues { get; set; } = new()
+    {
+        [VampireParameterCatalog.VirtueConscience] = VampireAdvantagesCatalog.VirtueBaseConscience,
+        [VampireParameterCatalog.VirtueSelfControl] = VampireAdvantagesCatalog.VirtueBaseSelfControl,
+        [VampireParameterCatalog.VirtueCourage] = VampireAdvantagesCatalog.VirtueBaseCourage,
+    };
 
     /// <summary>Текущий Голод (1..5). По умолчанию 1.</summary>
     [JsonPropertyName("hunger")]
