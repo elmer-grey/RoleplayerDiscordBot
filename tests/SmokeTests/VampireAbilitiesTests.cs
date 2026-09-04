@@ -365,7 +365,12 @@ public class VampireAbilitiesTests
     public void SetSpecialization_GetSpecialization_RoundTrip()
     {
         var d = NewDraft();
-        VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        // По V20 стр. 101 специализация доступна при значении ≥ 4. На Шаге 3
+        // максимум = 3, поэтому имитируем пост-Шаг-5 через прямую запись struct.
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        d.AbilitiesStruct.Атлетика = 4;
+        var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        Assert.True(result.IsSuccess, result.Message);
         Assert.Equal("бег", VampireAbilitiesResolver.GetSpecialization(d, "Атлетика"));
         Assert.True(d.Specializations.ContainsKey("Атлетика"));
     }
@@ -374,9 +379,48 @@ public class VampireAbilitiesTests
     public void SetSpecialization_OverwritesPrevious()
     {
         var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        d.AbilitiesStruct.Драка = 4;
         VampireAbilitiesResolver.SetSpecialization(d, "Драка", "мечи");
         VampireAbilitiesResolver.SetSpecialization(d, "Драка", "клинки");
         Assert.Equal("клинки", VampireAbilitiesResolver.GetSpecialization(d, "Драка"));
+    }
+
+    [Fact]
+    public void SetSpecialization_Rejects_WhenBelowFour()
+    {
+        var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        // Атлетика = 0 — специализация должна быть отвергнута.
+        var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        Assert.False(result.IsSuccess);
+        Assert.Equal(VampireAbilitiesResolver.VampireAbilitiesFailure.SpecializationRequired, result.Failure);
+        Assert.False(d.Specializations.ContainsKey("Атлетика"));
+    }
+
+    [Fact]
+    public void SetSpecialization_AcceptsAtExactlyFour()
+    {
+        var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        // На Шаге 3 максимум = 3, но Шаг 5 поднимает способности свободными
+        // пунктами до 5. Имитируем пост-Шаг-5: прямая запись через struct.
+        d.AbilitiesStruct.Атлетика = 4;
+        var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        Assert.True(result.IsSuccess, result.Message);
+    }
+
+    [Fact]
+    public void ClearSpecialization_WorksAtAnyValue()
+    {
+        var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        d.AbilitiesStruct.Атлетика = 4;
+        VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        // Очистка разрешена в любой момент.
+        var clear = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "");
+        Assert.True(clear.IsSuccess);
+        Assert.False(d.Specializations.ContainsKey("Атлетика"));
     }
 
     [Fact]
@@ -411,6 +455,7 @@ public class VampireAbilitiesTests
     {
         var d = NewDraft();
         VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
+        d.AbilitiesStruct.Атлетика = 4;
         VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
         var msg = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(d);
         Assert.Contains("*Спец:", msg);

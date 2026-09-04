@@ -154,18 +154,35 @@ public static class VampireAbilitiesResolver
 
     /// <summary>
     /// Установить специализацию для способности (вызывается из UI или текстового ввода).
+    /// Специализация требуется при значении ≥ 4 (V20 стр. 101).
     /// </summary>
-    public static void SetSpecialization(VampireCharacter draft, string abilityName, string specialization)
+    public static VampireAbilitiesDecision SetSpecialization(
+        VampireCharacter draft, string abilityName, string specialization)
     {
         if (draft == null) throw new System.ArgumentNullException(nameof(draft));
+        if (string.IsNullOrWhiteSpace(abilityName))
+            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
+                "Не указана способность для специализации.");
+
         if (string.IsNullOrWhiteSpace(specialization))
         {
+            // Свободный ввод специализации можно очистить всегда.
             draft.Specializations.Remove(abilityName);
+            return VampireAbilitiesDecision.Ok("Специализация очищена.");
         }
-        else
-        {
-            draft.Specializations[abilityName] = specialization.Trim();
-        }
+
+        var group = VampireAbilitiesCatalog.FindGroup(abilityName);
+        if (!group.HasValue)
+            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
+                $"«{abilityName}» не является валидной способностью.");
+
+        var value = GetAbilityValue(draft.AbilitiesStruct, abilityName);
+        if (value < 4)
+            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
+                $"Специализация доступна при значении ≥ 4. У «{abilityName}» сейчас {value}.");
+
+        draft.Specializations[abilityName] = specialization.Trim();
+        return VampireAbilitiesDecision.Ok($"Специализация «{abilityName}» → «{specialization.Trim()}».");
     }
 
     /// <summary>
