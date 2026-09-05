@@ -478,6 +478,15 @@ public static class VampireWizardComponents
                                                                         var cb = new ComponentBuilder();
                                                                         cb.WithSelectMenu(BuildFinishingSelect(draft));
 
+                                                                        // Специализации доступны только после полного распределения freebie-пула.
+                                                                        // (V20 стр. 101: специализация требуется при значении ≥ 4; Шаг 2/3 дают
+                                                                        // максимум 3, поэтому ждём Шаг 5.)
+                                                                        if (VampireFinishingResolver.FreebiesExhausted(draft))
+                                                                        {
+                                                                            var specMenu = BuildSpecializationSelect(draft);
+                                                                            if (specMenu != null) cb.WithSelectMenu(specMenu);
+                                                                        }
+
                                                                         cb.WithButton("⬅ Назад (4.3)", BuildCustomId(VampireWizardAction.BackToAdvantages, draft.CharacterId), ButtonStyle.Secondary)
                                                                           .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.FinishingReset, draft.CharacterId), ButtonStyle.Danger);
 
@@ -504,6 +513,61 @@ public static class VampireWizardComponents
                                                                         AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Virtue,      draft.Virtues,       null);
                                                                         AddHumanityWillpowerOptions(menu, draft);
 
+                                                                        return menu;
+                                                                    }
+
+                                                                    /// <summary>
+                                                                    /// SelectMenu специализаций Шага 5: показывает характеристики и способности
+                                                                    /// с итоговым значением ≥ 4. Возвращает null, если ни одна не подходит
+                                                                    /// (тогда ряд не добавляется в UI).
+                                                                    /// </summary>
+                                                                    internal static SelectMenuBuilder? BuildSpecializationSelect(VampireCharacter draft)
+                                                                    {
+                                                                        var eligible = new List<(string Name, int Cur, string Spec)>();
+
+                                                                        // Характеристики.
+                                                                        foreach (var name in new[] {
+                                                                            VampireAttributeCatalog.Physical, VampireAttributeCatalog.Social, VampireAttributeCatalog.Mental
+                                                                        }.SelectMany(g => g))
+                                                                        {
+                                                                            // Skip база = 0 (Носферату/Последователь Сета — Привлекательность).
+                                                                            if (GetBaseValue(draft, name) == 0 && GetAttrValue(draft, name) == 0) continue;
+                                                                            var cur = draft.GetAttributeValue(name);
+                                                                            if (cur < 4) continue;
+                                                                            var spec = VampireAbilitiesResolver.GetSpecialization(draft, name);
+                                                                            eligible.Add((name, cur, spec));
+                                                                        }
+
+                                                                        // Способности.
+                                                                        foreach (var group in new[] { VampireAbilityGroup.Talents, VampireAbilityGroup.Skills, VampireAbilityGroup.Knowledges })
+                                                                        {
+                                                                            foreach (var name in VampireAbilitiesCatalog.NamesInGroup(group))
+                                                                            {
+                                                                                var cur = draft.GetAbilityValue(name);
+                                                                                if (cur < 4) continue;
+                                                                                var spec = VampireAbilitiesResolver.GetSpecialization(draft, name);
+                                                                                eligible.Add((name, cur, spec));
+                                                                            }
+                                                                        }
+
+                                                                        if (eligible.Count == 0) return null;
+
+                                                                        var menu = new SelectMenuBuilder()
+                                                                            .WithCustomId(BuildCustomId(VampireWizardAction.SpecChoice, draft.CharacterId))
+                                                                            .WithPlaceholder($"Специализация ({eligible.Count} пригодны, ≥4)");
+
+                                                                        foreach (var (name, cur, spec) in eligible)
+                                                                        {
+                                                                            var hasSpec = !string.IsNullOrEmpty(spec);
+                                                                            var label = hasSpec ? $"{Truncate(name, 20)} ★" : name;
+                                                                            var desc = hasSpec
+                                                                                ? $"сейчас: {spec} — задать новую"
+                                                                                : $"значение {cur} — задать";
+                                                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                .WithLabel(TruncateLabel(label, 25))
+                                                                                .WithValue(name)
+                                                                                .WithDescription(TruncateLabel(desc, 50)));
+                                                                        }
                                                                         return menu;
                                                                     }
 

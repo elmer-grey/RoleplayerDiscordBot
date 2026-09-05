@@ -4672,6 +4672,8 @@ await Task.CompletedTask;
                                             await HandleVampireWizardVirtueSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:finishing_inc:"))
                                             await HandleVampireWizardFinishingSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:spec_choice:"))
+                                            await HandleVampireWizardSpecializationChoiceAsync(component);
                                     }
             catch (Exception ex)
             {
@@ -5379,6 +5381,91 @@ await Task.CompletedTask;
                                                         }
                                                     }
 
+                                                    /// <summary>
+                                                    /// Обработка выбора параметра (характеристики/способности) для задания
+                                                    /// специализации на Шаге 5. Сохраняет выбор в <c>session.PendingField</c>
+                                                    /// в формате <c>spec:{paramName}</c> и просит игрока ввести текст в ЛС.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardSpecializationChoiceAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            if (!VampireWizardComponents.TryParse(
+                                                                    component.Data.CustomId, out var action, out var characterId))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (action != VampireWizardAction.SpecChoice)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Неожиданное действие.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Draft.CharacterId != characterId)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Сессия относится к другому персонажу.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.FinishingTouches)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Специализации доступны только на Шаге 5.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (!VampireFinishingResolver.FreebiesExhausted(session.Draft))
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Сначала распределите все свободные пункты.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбран параметр.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var paramName = selected.First();
+                                                            if (string.IsNullOrWhiteSpace(paramName))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Пустое имя параметра.", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var currentSpec = VampireAbilitiesResolver.GetSpecialization(session.Draft, paramName);
+                                                            var prompt = currentSpec.Length > 0
+                                                                ? $"Текущая специализация «{paramName}»: «{currentSpec}».\n" +
+                                                                  "Введите **новую** специализацию (или `!clear` чтобы очистить)."
+                                                                : $"Введите **специализацию** для «{paramName}» (например: «бег», «клинки», «Тёмные ритуалы»).";
+
+                                                            session.PendingField = $"spec:{paramName}";
+                                                            await component.RespondAsync(prompt + "\n\n_(Ответьте текстом в этом же ЛС — я подставлю значение в draft.)_", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardSpecializationChoiceAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе параметра.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
                                             private async Task ProcessButtonAsync(SocketMessageComponent component)
         {
             var parts = component.Data.CustomId.Split(':');
@@ -5547,11 +5634,44 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
     var field = session.PendingField;
     session.PendingField = null;
 
+        // Специализации (Шаг 5): формат PendingField = "spec:{paramName}".
+        if (field.StartsWith("spec:", StringComparison.Ordinal))
+    {
+            var paramName = field.Substring("spec:".Length);
+            if (string.IsNullOrWhiteSpace(paramName))
+            {
+                await message.Channel.SendMessageAsync("⚠️ Не указано имя параметра для специализации.");
+                return true;
+            }
+
+            // Очистка по команде `!clear` или пустому тексту.
+            var newSpec = text == "!clear" ? "" : text;
+            var dec = VampireAbilitiesResolver.SetSpecialization(session.Draft, paramName, newSpec);
+            if (!dec.IsSuccess)
+            {
+                await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+                session.PendingField = field; // повторить попытку
+                return true;
+            }
+
+            try
+            {
+                var dm = (IDMChannel)message.Channel;
+                await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 5 после spec_set: {ex.Message}");
+            }
+            await message.AddReactionAsync(new Emoji("✅"));
+            return true;
+        }
+
         // Пустое значение для generation = «сбросить к дефолту 13».
         if (field == "generation" && string.IsNullOrEmpty(text))
-    {
+        {
             text = "13";
-    }
+        }
 
         VampireCreateConceptDecision decision;
         try
