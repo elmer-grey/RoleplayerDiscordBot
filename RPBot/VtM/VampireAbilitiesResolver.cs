@@ -153,37 +153,57 @@ public static class VampireAbilitiesResolver
     }
 
     /// <summary>
-    /// Установить специализацию для способности (вызывается из UI или текстового ввода).
-    /// Специализация требуется при значении ≥ 4 (V20 стр. 101).
-    /// </summary>
-    public static VampireAbilitiesDecision SetSpecialization(
-        VampireCharacter draft, string abilityName, string specialization)
-    {
-        if (draft == null) throw new System.ArgumentNullException(nameof(draft));
-        if (string.IsNullOrWhiteSpace(abilityName))
-            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
-                "Не указана способность для специализации.");
-
-        if (string.IsNullOrWhiteSpace(specialization))
+        /// Установить специализацию для способности или характеристики (вызывается из UI
+        /// или текстового ввода). Специализация требуется при итоговом значении ≥ 4
+        /// (V20 стр. 101).
+        /// </summary>
+        /// <remarks>
+        /// Универсальный метод: имя параметра может быть как именем способности
+        /// (<see cref="VampireAbilitiesCatalog"/>), так и именем характеристики
+        /// (<see cref="VampireAttributeCatalog"/>). Хранится в общем словаре
+        /// <see cref="VampireCharacter.Specializations"/>.
+        /// </remarks>
+            public static VampireAbilitiesDecision SetSpecialization(
+            VampireCharacter draft, string paramName, string specialization)
         {
-            // Свободный ввод специализации можно очистить всегда.
-            draft.Specializations.Remove(abilityName);
-            return VampireAbilitiesDecision.Ok("Специализация очищена.");
-        }
+            if (draft == null) throw new System.ArgumentNullException(nameof(draft));
+            if (string.IsNullOrWhiteSpace(paramName))
+                return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
+                    "Не указано имя параметра для специализации.");
 
-        var group = VampireAbilitiesCatalog.FindGroup(abilityName);
-        if (!group.HasValue)
-            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
-                $"«{abilityName}» не является валидной способностью.");
+            if (string.IsNullOrWhiteSpace(specialization))
+            {
+                        // Очистка специализации разрешена в любой момент (даже до Шага 5).
+                draft.Specializations.Remove(paramName);
+                return VampireAbilitiesDecision.Ok("Специализация очищена.");
+            }
 
-        var value = GetAbilityValue(draft.AbilitiesStruct, abilityName);
-        if (value < 4)
-            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
-                $"Специализация доступна при значении ≥ 4. У «{abilityName}» сейчас {value}.");
+            var abilityGroup = VampireAbilitiesCatalog.FindGroup(paramName);
+            var attributeGroup = abilityGroup.HasValue
+                ? null
+                : VampireAttributeCatalog.FindGroup(paramName);
 
-        draft.Specializations[abilityName] = specialization.Trim();
-        return VampireAbilitiesDecision.Ok($"Специализация «{abilityName}» → «{specialization.Trim()}».");
-    }
+            if (!abilityGroup.HasValue && !attributeGroup.HasValue)
+                return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
+                    "Не является ни валидной способностью, ни валидной характеристикой.");
+
+            // Специализация опирается на итоговое значение (Шаг + freebie-бонус).
+            var value = abilityGroup.HasValue
+                ? draft.GetAbilityValue(paramName)
+                : draft.GetAttributeValue(paramName);
+            if (value < 4)
+                return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
+                    $"Специализация доступна при значении 4 и более. У «{paramName}» сейчас {value}.");
+
+                    // Запрет: Шаги 2 и 3 ещё не учитывают freebie; разрешаем специализацию
+                    // только после полного распределения freebie-пула (Шаг 5).
+                    if (!VampireFinishingResolver.FreebiesExhausted(draft))
+                        return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
+                            "Специализации доступны только после полного распределения свободных пунктов (Шаг 5).");
+
+                    draft.Specializations[paramName] = specialization.Trim();
+                    return VampireAbilitiesDecision.Ok($"Специализация «{paramName}» → «{specialization.Trim()}».");
+                }
 
     /// <summary>
     /// Получить специализацию (или пустую строку).

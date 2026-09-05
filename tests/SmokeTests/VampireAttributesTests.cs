@@ -400,4 +400,116 @@ public class VampireAttributesTests
             // В тексте статус-сообщения Привлекательность идёт со значением 0.
             Assert.Contains("Привлекательность: **0**", msg);
         }
+
+        // ── Специализации характеристик (V20 стр. 101) ────────────────────
+
+        private static VampireCharacter BuildAttrAt4PlusDraft(string clan = "")
+        {
+            var draft = NewDraft(clan);
+            // Значение 1 (база) + 3 шага = 4 — минимальный порог.
+            VampireAttributesResolver.SetPriority(draft, VampireAttributePriority.PhysicalPrimary);
+            VampireAttributesResolver.Increment(draft, "Сила");
+            VampireAttributesResolver.Increment(draft, "Сила");
+            VampireAttributesResolver.Increment(draft, "Сила");
+            // Имитация «Шаг 5 завершён, все freebie распределены» — специализации
+            // доступны только после этого.
+            VampireFinishingResolver.MarkFreebiesExhausted(draft);
+            return draft;
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_AcceptsAtFour()
+        {
+            var draft = BuildAttrAt4PlusDraft();
+            Assert.Equal(4, draft.GetAttributeValue("Сила"));
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "поднятие тяжестей");
+            Assert.True(r.IsSuccess, r.Message);
+            Assert.Equal("поднятие тяжестей", VampireAttributesResolver.GetAttributeSpecialization(draft, "Сила"));
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_RejectsBelowFour()
+        {
+            var draft = NewDraft();
+            VampireAttributesResolver.SetPriority(draft, VampireAttributePriority.PhysicalPrimary);
+            // Сила = 1 (база), без инкрементов → специализация отвергается.
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "бег");
+            Assert.False(r.IsSuccess);
+            Assert.Equal(VampireAttributesFailure.BelowBase, r.Failure);
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_RejectsUnknownAttribute()
+        {
+            var draft = NewDraft();
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Убеждение", "риторика");
+            Assert.False(r.IsSuccess);
+            Assert.Equal(VampireAttributesFailure.UnknownAttribute, r.Failure);
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_NosferatuAppearanceAlwaysRejected()
+        {
+            var draft = NewDraft(clan: "Носферату");
+            VampireAttributesResolver.ApplyClanRules(draft);
+            VampireAttributesResolver.SetPriority(draft, VampireAttributePriority.PhysicalPrimary);
+            // Привлекательность = 0 у Носферату даже с приоритетом SocialPrimary и попытками инкремента.
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Привлекательность", "обаяние");
+            Assert.False(r.IsSuccess);
+            Assert.Equal(VampireAttributesFailure.BelowBase, r.Failure);
+            Assert.Contains("0", r.Message);
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_OverwritesPrevious()
+        {
+            var draft = BuildAttrAt4PlusDraft();
+            VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "поднятие тяжестей");
+            VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "единоборства");
+            Assert.Equal("единоборства", VampireAttributesResolver.GetAttributeSpecialization(draft, "Сила"));
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_EmptyClearsSpec()
+        {
+            var draft = BuildAttrAt4PlusDraft();
+            VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "поднятие тяжестей");
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "");
+            Assert.True(r.IsSuccess);
+            Assert.Equal("", VampireAttributesResolver.GetAttributeSpecialization(draft, "Сила"));
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_AppearsInStatusMessage()
+        {
+            var draft = BuildAttrAt4PlusDraft();
+            VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "поднятие тяжестей");
+            var msg = VampireAttributesResolver.BuildAttributesStatusMessage(draft);
+            Assert.Contains("поднятие тяжестей", msg);
+        }
+
+        [Fact]
+        public void SetAttributeSpecialization_RejectsWhenFreebiesRemain()
+        {
+            var draft = NewDraft();
+            VampireAttributesResolver.SetPriority(draft, VampireAttributePriority.PhysicalPrimary);
+            VampireAttributesResolver.Increment(draft, "Сила");
+            VampireAttributesResolver.Increment(draft, "Сила");
+            VampireAttributesResolver.Increment(draft, "Сила");
+            // Сила = 4, но freebie не распределены.
+            var r = VampireAttributesResolver.SetAttributeSpecialization(draft, "Сила", "поднятие тяжестей");
+            Assert.False(r.IsSuccess);
+            Assert.Equal(VampireAttributesFailure.BelowBase, r.Failure);
+            Assert.False(draft.Specializations.ContainsKey("Сила"));
+        }
+
+        [Fact]
+        public void UniversalSetSpecialization_AcceptsAttributesAndAbilities()
+        {
+            // Тот же метод SetSpecialization теперь работает и для характеристик.
+            var draft = BuildAttrAt4PlusDraft();
+            var attrRes = VampireAbilitiesResolver.SetSpecialization(draft, "Сила", "поднятие тяжестей");
+            Assert.True(attrRes.IsSuccess, attrRes.Message);
+            Assert.Equal("поднятие тяжестей", VampireAbilitiesResolver.GetSpecialization(draft, "Сила"));
+        }
     }

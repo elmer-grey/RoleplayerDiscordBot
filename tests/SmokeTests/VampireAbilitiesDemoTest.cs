@@ -155,7 +155,8 @@ public class VampireAbilitiesDemoTest : IDisposable
         // Специализация способностей по V20 стр. 101 формально применяется
         // уже после Шага 5, где свободными пунктами поднимают способности
         // выше 3. На Шаге 3 максимум = 3, поэтому имитируем пост-Шаг-5
-        // прямой записью в struct.
+        // прямой записью в struct и пометкой «все freebie распределены».
+        VampireFinishingResolver.MarkFreebiesExhausted(draft);
         draft.AbilitiesStruct.Бдительность = 4;
         var setSpec = VampireAbilitiesResolver.SetSpecialization(draft, "Бдительность", "эмпатия");
         Assert.True(setSpec.IsSuccess, setSpec.Message);

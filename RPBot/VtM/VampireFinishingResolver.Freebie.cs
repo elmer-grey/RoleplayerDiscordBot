@@ -114,6 +114,27 @@ public static partial class VampireFinishingResolver
     public static int RemainingFreebies(VampireCharacter draft)
         => Math.Max(0, FreebiePool - ConsumedFreebies(draft));
 
+        /// <summary>Все freebie потрачены?</summary>
+        public static bool FreebiesExhausted(VampireCharacter draft)
+            => RemainingFreebies(draft) == 0;
+
+        /// <summary>
+        /// Пометить все freebie как потраченные (без фактической траты на параметры).
+        /// Используется юнит-тестами для перевода черновика в состояние «пост-Шаг-5»,
+        /// когда специализации уже разрешены. В production не вызывается.
+        /// </summary>
+        public static void MarkFreebiesExhausted(VampireCharacter draft)
+        {
+            if (draft == null) throw new ArgumentNullException(nameof(draft));
+            // Записываем «+1 Background Факт» столько раз, сколько нужно, чтобы добить до 15.
+            var cost = CostOf(FreebieTarget.Background); // = 1
+            var need = (FreebiePool - ConsumedFreebies(draft)) / cost;
+            for (int i = 0; i < need; i++)
+            {
+                draft.FreebieSpent[Key(FreebieTarget.Background, $"_sentinel_{i}")] = 1;
+            }
+        }
+
     // ─── Allocate / Deallocate / Reset ──────────────────────────────
 
     /// <summary>

@@ -366,9 +366,11 @@ public class VampireAbilitiesTests
     {
         var d = NewDraft();
         // По V20 стр. 101 специализация доступна при значении ≥ 4. На Шаге 3
-        // максимум = 3, поэтому имитируем пост-Шаг-5 через прямую запись struct.
+        // максимум = 3, поэтому имитируем пост-Шаг-5 через прямую запись struct
+        // и пометку «все freebie распределены».
         d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
         d.AbilitiesStruct.Атлетика = 4;
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
         var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
         Assert.True(result.IsSuccess, result.Message);
         Assert.Equal("бег", VampireAbilitiesResolver.GetSpecialization(d, "Атлетика"));
@@ -381,6 +383,7 @@ public class VampireAbilitiesTests
         var d = NewDraft();
         d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
         d.AbilitiesStruct.Драка = 4;
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
         VampireAbilitiesResolver.SetSpecialization(d, "Драка", "мечи");
         VampireAbilitiesResolver.SetSpecialization(d, "Драка", "клинки");
         Assert.Equal("клинки", VampireAbilitiesResolver.GetSpecialization(d, "Драка"));
@@ -404,8 +407,10 @@ public class VampireAbilitiesTests
         var d = NewDraft();
         d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
         // На Шаге 3 максимум = 3, но Шаг 5 поднимает способности свободными
-        // пунктами до 5. Имитируем пост-Шаг-5: прямая запись через struct.
+        // пунктами до 5. Имитируем пост-Шаг-5: прямая запись через struct
+        // и пометку «все freebie распределены».
         d.AbilitiesStruct.Атлетика = 4;
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
         var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
         Assert.True(result.IsSuccess, result.Message);
     }
@@ -416,10 +421,24 @@ public class VampireAbilitiesTests
         var d = NewDraft();
         d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
         d.AbilitiesStruct.Атлетика = 4;
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
         VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
-        // Очистка разрешена в любой момент.
+        // Очистка разрешена в любой момент (даже без freebie).
         var clear = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "");
         Assert.True(clear.IsSuccess);
+        Assert.False(d.Specializations.ContainsKey("Атлетика"));
+    }
+
+    [Fact]
+    public void SetSpecialization_Rejects_WhenFreebiesRemain()
+    {
+        var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        d.AbilitiesStruct.Атлетика = 4;
+        // Freebie-пул не распределён — специализация должна быть отвергнута.
+        var result = VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        Assert.False(result.IsSuccess);
+        Assert.Equal(VampireAbilitiesResolver.VampireAbilitiesFailure.SpecializationRequired, result.Failure);
         Assert.False(d.Specializations.ContainsKey("Атлетика"));
     }
 
@@ -456,6 +475,9 @@ public class VampireAbilitiesTests
         var d = NewDraft();
         VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
         d.AbilitiesStruct.Атлетика = 4;
+        // Имитация «Шаг 5 завершён, все freebie распределены» — специализации
+        // доступны только после этого.
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
         VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
         var msg = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(d);
         Assert.Contains("*Спец:", msg);

@@ -210,9 +210,31 @@ public static class VampireSheetEmbed
         {
             int value = c.GetAttributeValue(name);
             sb.Append("`").Append(PadRight(name, 13)).Append("` ");
-            sb.AppendLine(DotsString(c.DisplayDots(name, isCharacteristic), 5));
+            // Привлекательность у Носферату/Самеди зачёркнута изъяном клана (всегда 0).
+            if (name == "Привлекательность"
+                && (c.Clan == "Носферату" || c.Clan == "Последователь Сета"))
+            {
+                    sb.Append("̶○̶○̶○̶○̶○̶ (зачёркнуто изъяном)");
+            }
+            else
+            {
+                    int dots = Math.Min(value, 5);
+                    string dotsStr = DotsString(dots, 5);
+                    if (dots >= 4
+                        && c.Specializations != null
+                        && c.Specializations.TryGetValue(name, out var spec)
+                        && !string.IsNullOrWhiteSpace(spec))
+                    {
+                        sb.Append(dotsStr).Append(" (").Append(spec).Append(')');
+                    }
+                    else
+                    {
+                        sb.Append(dotsStr);
+                    }
+                }
+                sb.AppendLine();
+            }
         }
-    }
 
     /// <summary>Столбец способностей (Таланты / Навыки / Знания) со специализациями при value ≥ 4.</summary>
     public static string BuildAbilityColumn(VampireCharacter c, IReadOnlyList<string> names)

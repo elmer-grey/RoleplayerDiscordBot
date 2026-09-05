@@ -32,6 +32,10 @@ public sealed record VampireAttributesDecision(
     bool StepComplete)
 {
     public bool IsSuccess => Failure == VampireAttributesFailure.None;
+
+    /// <summary>Создать копию с другим Message (для обновления статуса без потери Draft/StepComplete).</summary>
+    public VampireAttributesDecision WithMessage(string message)
+        => new VampireAttributesDecision(Failure, message, Draft, StepComplete);
 }
 
 /// <summary>
@@ -143,14 +147,14 @@ public static class VampireAttributesResolver
         if (!TryParsePriority(draft.AttributesPriority, out var priority))
             return false;
 
-        var totalSpent = GetTotalSpent(draft.AttributesStruct);
+        var totalSpent = GetTotalSpent(draft);
         if (totalSpent != 15) return false;
 
         // Все очки каждой группы должны быть истрачены полностью.
         foreach (var group in new[] { VampireAttributeGroup.Physical, VampireAttributeGroup.Social, VampireAttributeGroup.Mental })
         {
             var budget = priority.PointsFor(group);
-            var spent = GetGroupSpent(draft.AttributesStruct, group);
+            var spent = GetGroupSpent(draft.AttributesStruct, group, draft.Clan);
             if (spent != budget) return false;
         }
         return true;
@@ -163,8 +167,64 @@ public static class VampireAttributesResolver
     {
         if (draft == null) return 0;
         if (!TryParsePriority(draft.AttributesPriority, out var priority)) return 0;
-        return priority.PointsFor(group) - GetGroupSpent(draft.AttributesStruct, group);
+        return priority.PointsFor(group) - GetGroupSpent(draft.AttributesStruct, group, draft.Clan);
     }
+
+        /// <summary>
+        /// Установить специализацию для характеристики (вызывается из UI или текстового ввода).
+        /// Специализация требуется при итоговом значении 4 и более (V20 стр. 101).
+        /// </summary>
+        /// <remarks>
+        /// Хранится в общем словаре VampireCharacter.Specializations вместе со
+        /// специализациями способностей (по имени параметра).
+        /// </remarks>
+        public static VampireAttributesDecision SetAttributeSpecialization(
+            VampireCharacter draft, string attributeName, string specialization)
+        {
+            if (draft == null) throw new System.ArgumentNullException(nameof(draft));
+            if (string.IsNullOrWhiteSpace(attributeName))
+                return Fail(draft, VampireAttributesFailure.UnknownAttribute,
+                    "Не указана характеристика для специализации.");
+
+            if (string.IsNullOrWhiteSpace(specialization))
+            {
+                draft.Specializations.Remove(attributeName);
+                return CompleteCheck(draft).WithMessage("Специализация очищена.");
+            }
+
+            var group = VampireAttributeCatalog.FindGroup(attributeName);
+            if (!group.HasValue)
+                return Fail(draft, VampireAttributesFailure.UnknownAttribute,
+                    "Не является валидной характеристикой.");
+
+            // Итоговое значение = AttributesStruct + freebie-бонус из Attributes.
+            var value = draft.GetAttributeValue(attributeName);
+            if (value < 4)
+            {
+                var msg = attributeName == "Привлекательность" && IsAppearanceClanZero(draft.Clan)
+                    ? "Специализация недоступна: «Привлекательность» изъято кланом (значение = 0)."
+                    : "Специализация доступна при значении 4 и более. Сейчас " + value + ".";
+                return Fail(draft, VampireAttributesFailure.BelowBase, msg);
+            }
+
+            // Запрет: разрешаем специализацию только после полного распределения freebie-пула (Шаг 5).
+            if (!VampireFinishingResolver.FreebiesExhausted(draft))
+                return Fail(draft, VampireAttributesFailure.BelowBase,
+                    "Специализации доступны только после полного распределения свободных пунктов (Шаг 5).");
+
+            draft.Specializations[attributeName] = specialization.Trim();
+            return CompleteCheck(draft).WithMessage(
+                "Специализация записана.");
+        }
+
+        /// <summary>
+        /// Получить специализацию характеристики (или пустую строку).
+        /// </summary>
+        public static string GetAttributeSpecialization(VampireCharacter draft, string attributeName)
+        {
+            if (draft == null) throw new System.ArgumentNullException(nameof(draft));
+            return draft.Specializations.TryGetValue(attributeName, out var s) ? s : "";
+        }
 
     /// <summary>
     /// Текст текущего состояния Шага 2 для DM.
@@ -201,7 +261,7 @@ public static class VampireAttributesResolver
             };
 
             var budget = TryParsePriority(draft.AttributesPriority, out var p) ? p.PointsFor(group) : 0;
-            var spent = GetGroupSpent(draft.AttributesStruct, group);
+            var spent = GetGroupSpent(draft.AttributesStruct, group, draft.Clan);
             sb.AppendLine($"**{groupNames}** (потрачено {spent}/{budget}):");
 
             foreach (var name in VampireAttributeCatalog.NamesInGroup(group))
@@ -210,12 +270,14 @@ public static class VampireAttributesResolver
                 var baseVal = GetBaseValue(draft, name);
                 var added = value - baseVal;
                 var addStr = added > 0 ? $" (+{added})" : "";
-                sb.AppendLine($"  • {name}: **{value}**{addStr}");
-            }
-            sb.AppendLine();
+                            var spec = GetAttributeSpecialization(draft, name);
+                            var specStr = string.IsNullOrEmpty(spec) ? "" : $", спец: {spec}";
+                            sb.AppendLine($"  - {name}: **{value}**{addStr}{specStr}");
+                        }
+                        sb.AppendLine();
         }
 
-        var totalSpent = GetTotalSpent(draft.AttributesStruct);
+        var totalSpent = GetTotalSpent(draft);
         sb.AppendLine($"**Итого потрачено:** {totalSpent}/15");
         sb.AppendLine();
 
@@ -247,13 +309,19 @@ public static class VampireAttributesResolver
         var current = GetAttributeValue(draft.AttributesStruct, attributeName);
         var newValue = current + delta;
 
+        // Если база = 0 (Привлекательность Носферату/Самеди) — атрибут всегда 0,
+        // никакие операции изменения недопустимы (V20 стр. 91 + изъян клана).
+        if (baseVal == 0 && current == 0)
+            return Fail(draft, VampireAttributesFailure.BelowBase,
+                $"«{attributeName}» зачёркнута изъяном клана «{draft.Clan}» и всегда равна 0.");
+
         if (newValue < baseVal)
             return Fail(draft, VampireAttributesFailure.BelowBase,
                 $"Нельзя уменьшить «{attributeName}» ниже базового значения {baseVal}.");
 
             var g = group.Value;
             var budget = priority.PointsFor(g);
-            var spent = GetGroupSpent(draft.AttributesStruct, g);
+            var spent = GetGroupSpent(draft.AttributesStruct, g, draft.Clan);
             var newSpent = spent + delta;
             if (newSpent > budget)
                 return Fail(draft, VampireAttributesFailure.GroupBudgetExceeded,
@@ -315,24 +383,37 @@ public static class VampireAttributesResolver
         }
     }
 
-    private static int GetGroupSpent(VampireAttributes attrs, VampireAttributeGroup group) => group switch
-    {
-        VampireAttributeGroup.Physical => attrs.Strength + attrs.Dexterity + attrs.Stamina - 3,
-        VampireAttributeGroup.Social   => attrs.Charisma + attrs.Manipulation + attrs.Appearance - 3,
-        VampireAttributeGroup.Mental   => attrs.Perception + attrs.Intelligence + attrs.Wits - 3,
-        _ => 0,
-    };
+    private static int GetGroupSpent(VampireAttributes attrs, VampireAttributeGroup group) => GetGroupSpent(attrs, group, clan: null);
 
-    private static int GetTotalSpent(VampireAttributes attrs)
+    /// <summary>
+    /// Потрачено очков в группе. Для Социальных у Носферату/Самеди база Привлекательности = 0,
+    /// значит «− 3» нужно заменить на «− 2» (базы двух нетривиальных характеристик).
+    /// </summary>
+    private static int GetGroupSpent(VampireAttributes attrs, VampireAttributeGroup group, string clan)
     {
-        // На каждой характеристике база 1, значит «потрачено» — это сумма −9.
-        // Для Носферату/Самеди база Привлекательности 0, но мы не учитываем это здесь —
-        // потраченное считаем как сумма − 8 (используется только когда нужно сравнить с 15).
-        // Корректнее: вернуть (сумма_без_учёта_привлекательности_носуф) + Appearance
-        // … Для простоты сравнения с 15 используем:
-        return attrs.Strength + attrs.Dexterity + attrs.Stamina
-             + attrs.Charisma + attrs.Manipulation + attrs.Appearance
-             + attrs.Perception + attrs.Intelligence + attrs.Wits - 9;
+        return group switch
+        {
+            VampireAttributeGroup.Physical => attrs.Strength + attrs.Dexterity + attrs.Stamina - 3,
+            VampireAttributeGroup.Mental   => attrs.Perception + attrs.Intelligence + attrs.Wits - 3,
+            VampireAttributeGroup.Social   => IsAppearanceClanZero(clan)
+                ? attrs.Charisma + attrs.Manipulation + attrs.Appearance - 2
+                : attrs.Charisma + attrs.Manipulation + attrs.Appearance - 3,
+            _ => 0,
+        };
+    }
+
+    private static bool IsAppearanceClanZero(string clan)
+        => clan == "Носферату" || clan == "Последователь Сета";
+
+    private static int GetTotalSpent(VampireCharacter draft)
+    {
+        var attrs = draft.AttributesStruct;
+        var sum = attrs.Strength + attrs.Dexterity + attrs.Stamina
+                + attrs.Charisma + attrs.Manipulation + attrs.Appearance
+                + attrs.Perception + attrs.Intelligence + attrs.Wits;
+        // База: 9 характеристик по 1. У Носферату/Самеди Привлекательность = 0 → база 8.
+        var baseSum = IsAppearanceClanZero(draft.Clan) ? 8 : 9;
+        return sum - baseSum;
     }
 
     private static bool TryParsePriority(string s, out VampireAttributePriority priority)

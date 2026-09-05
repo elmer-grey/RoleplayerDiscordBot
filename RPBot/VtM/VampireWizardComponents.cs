@@ -236,7 +236,7 @@ public static class VampireWizardComponents
                                 cb.WithSelectMenu(BuildAttrGroupSelect(draft, VampireAttributeGroup.Social));
                                 cb.WithSelectMenu(BuildAttrGroupSelect(draft, VampireAttributeGroup.Mental));
 
-                // Ряд 5: вспомогательные действия.
+                                                // Ряд 5: вспомогательные действия.
                 cb.WithButton("⬅ Назад (Шаг 1)", BuildCustomId(VampireWizardAction.BackToConcept, draft.CharacterId), ButtonStyle.Secondary)
                   .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAttrProgress, draft.CharacterId), ButtonStyle.Secondary)
                   .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAttrAll, draft.CharacterId), ButtonStyle.Danger);
@@ -282,6 +282,9 @@ public static class VampireWizardComponents
                                     var incVal = $"+:{name}";
                                     var incDesc = $"текущее: {cur}, макс шага 2 = 7";
                                     if (cur >= 7) incDesc = "уже 7 (макс шага 2)";
+                                    // Для Привлекательности Носферату/Самеди база = 0 → + невозможен.
+                                    if (baseVal == 0 && cur == 0)
+                                        incDesc = "зачёркнуто изъяном клана (всегда 0)";
                                     menu.AddOption(new SelectMenuOptionBuilder()
                                         .WithLabel($"+ {name} ({cur})")
                                         .WithValue(incVal)
