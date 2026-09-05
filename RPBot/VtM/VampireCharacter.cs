@@ -382,7 +382,7 @@ public sealed class VampireCharacter
         if (Attributes != null && Attributes.TryGetValue(attributeName, out var fb))
             freebieBonus = Math.Max(0, fb);
         int total = baseValue + freebieBonus;
-        int dots = isCharacteristic ? Math.Min(total + 1, 5) : Math.Min(total, 5);
+        int dots = Math.Min(total, 5);
         return Math.Max(dots, 0);
     }
 

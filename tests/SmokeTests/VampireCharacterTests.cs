@@ -39,11 +39,11 @@ public class VampireCharacterTests
     }
 
     [Fact]
-    public void DisplayDots_Characteristic_HasPlusOne()
+    public void DisplayDots_Characteristic_NoPlusOneBonus()
     {
         var c = new VampireCharacter { Attributes = new() { ["Сила"] = 2 } };
-        // Характеристика: (1 база + 2 freebie) + 1 бонус = 4.
-        Assert.Equal(4, c.DisplayDots("Сила", isCharacteristic: true));
+        // Характеристика: 1 база + 2 freebie = 3 dots. Раньше ошибочно добавлялся +1.
+        Assert.Equal(3, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
     [Fact]
@@ -59,16 +59,16 @@ public class VampireCharacterTests
     public void DisplayDots_CappedAt5()
     {
         var c = new VampireCharacter { Attributes = new() { ["Сила"] = 5 } };
-        // (1 база + 5 freebie) + 1 = 7 → cap at 5.
+        // (1 база + 5 freebie) = 6 → cap at 5.
         Assert.Equal(5, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
     [Fact]
-    public void DisplayDots_MissingReturnsZero()
+    public void DisplayDots_MissingBaseStillOne()
     {
         var c = new VampireCharacter();
-        // Без freebie базовый уровень Сила = 1; характеристика: 1 + 1 = 2.
-        Assert.Equal(2, c.DisplayDots("Сила", isCharacteristic: true));
+        // Без freebie базовый уровень Сила = 1; dots = 1.
+        Assert.Equal(1, c.DisplayDots("Сила", isCharacteristic: true));
     }
 
     [Fact]
