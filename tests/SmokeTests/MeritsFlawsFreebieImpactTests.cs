@@ -71,17 +71,75 @@ public class MeritsFlawsFreebieImpactTests
     }
 
     [Fact]
-    public void MaxTwoFlaws_LimitEnforced()
+    public void MaxFlawsBonus_LimitIsSeven_NotTwo()
     {
+        // V20 стр. 86: «количество недостатков ограничено семью свободными пунктами».
+        // Это лимит на сумму (≤ 7), а не на количество. Можно взять 7 Flaw по 1
+        // или 1 Flaw за 7.
         var d = new VampireCharacter { Clan = "Носферату" };
 
-        Assert.True(VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Некрасивый").IsSuccess);
-        Assert.True(VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Забывчивость").IsSuccess);
+        // Берём 5 Flaw по 1 + 1 Flaw за 2 = 7 пунктов ровно (правило V20 стр. 86).
+        // Каталог содержит только 6 Flaw с ценой 1, поэтому «Хромота» (2) добивает до 7.
+        string[] oneDotFlaws =
+        {
+            "Некрасивый",
+            "Забывчивость",
+            "Глухота на одно ухо",
+            "Дальтонизм",
+            "Медленный рефлекс",
+        };
+        foreach (var f in oneDotFlaws)
+        {
+            var r = VampireMeritsFlawsResolver.AddFlawFromCatalog(d, f);
+            Assert.True(r.IsSuccess, $"Flaw «{f}» не прошёл: {r.Message}");
+        }
+        // 5 + 2 = 7 ровно.
+        Assert.True(VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Хромота").IsSuccess);
+        Assert.Equal(7, VampireMeritsFlawsResolver.FlawsCost(d));
+        Assert.Equal(6, VampireMeritsFlawsResolver.FlawsCount(d));
+        Assert.Equal(22, VampireFinishingResolver.EffectiveFreebiePool(d)); // 15 + 7
 
-        var r = VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Дальтонизм");
-        Assert.False(r.IsSuccess);
-        Assert.Equal(VampireMeritsFlawsResolver.Failure.MaxFlawsReached, r.Failure);
-        _out.WriteLine($"Третий Flaw отклонён: {r.Message}");
+        // Любой следующий Flaw — отказ.
+        var over = VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Мягкий ум");
+        Assert.False(over.IsSuccess);
+        Assert.Equal(VampireMeritsFlawsResolver.Failure.MaxFlawsReached, over.Failure);
+        _out.WriteLine($"После отказа 7-го Flaw (дополнительного): {over.Message}");
+    }
+
+    [Fact]
+    public void MaxFlawsBonus_OneFlawOfSeven()
+    {
+        // Один Flaw с ценой 7 — должен пройти.
+        var d = new VampireCharacter { Clan = "Носферату" };
+        var r = VampireMeritsFlawsResolver.AddFlaw(d, "Одноногий", cost: 3);
+        Assert.True(r.IsSuccess);
+
+        var r2 = VampireMeritsFlawsResolver.AddFlaw(d, "Немой", cost: 4);
+        Assert.True(r2.IsSuccess);
+        Assert.Equal(7, VampireMeritsFlawsResolver.FlawsCost(d));
+
+        // Третий на 1 — перебор (7 + 1 > 7).
+        var over = VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Некрасивый");
+        Assert.False(over.IsSuccess);
+        Assert.Equal(VampireMeritsFlawsResolver.Failure.MaxFlawsReached, over.Failure);
+    }
+
+    [Fact]
+    public void MaxFlawsBonus_MaxPoolIs22()
+    {
+        // V20: «при желании можно увеличить до 22».
+        var d = new VampireCharacter { Clan = "Носферату" };
+        string[] oneDotFlaws =
+        {
+            "Некрасивый", "Забывчивость", "Глухота на одно ухо", "Дальтонизм", "Медленный рефлекс",
+        };
+        foreach (var f in oneDotFlaws)
+            VampireMeritsFlawsResolver.AddFlawFromCatalog(d, f);
+        VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Хромота"); // cost 2
+
+        Assert.Equal(7, VampireMeritsFlawsResolver.FlawsCost(d));
+        Assert.Equal(22, VampireFinishingResolver.EffectiveFreebiePool(d));
+        _out.WriteLine($"Максимальный эффективный пул: {VampireFinishingResolver.EffectiveFreebiePool(d)}");
     }
 
     [Fact]

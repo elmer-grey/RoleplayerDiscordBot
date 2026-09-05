@@ -73,8 +73,13 @@ public static class VampireMeritsFlawsResolver
     public static int FlawsCount(VampireCharacter draft)
         => draft?.Flaws?.Count ?? 0;
 
-    /// <summary>Максимум Flaw, которые можно взять при создании (V20 стр. 92).</summary>
-    public const int MaxFlawsAtCreation = 2;
+    /// <summary>Максимум freebie-пунктов, которые можно получить за Flaw (V20 стр. 86).</summary>
+    /// <remarks>
+    /// V20 (точная цитата): «количество недостатков ограничено семью свободными пунктами
+    /// (что означает, что общий запас свободных пунктов персонажа при желании можно
+    /// увеличить до 22)». То есть лимит на сумму цен Flaws, а не на их количество.
+    /// </remarks>
+    public const int MaxFlawsBonus = 7;
 
     // ─── Add / Remove ──────────────────────────────────────────────
 
@@ -136,7 +141,7 @@ public static class VampireMeritsFlawsResolver
 
     /// <summary>
     /// Добавить Flaw персонажу. Цена обязательно в диапазоне 1..7.
-    /// По V20 стр. 92 — не более 2 Flaw при создании.
+    /// По V20 стр. 86 — общая сумма цен Flaws не должна превышать 7.
     /// </summary>
     public static Decision AddFlaw(VampireCharacter draft, string name, int cost)
     {
@@ -144,9 +149,10 @@ public static class VampireMeritsFlawsResolver
         if (string.IsNullOrWhiteSpace(name))
             return Decision.Fail(Failure.InvalidName, "Имя недостатка не указано.");
 
-        if (draft.Flaws != null && draft.Flaws.Count >= MaxFlawsAtCreation)
+        if (FlawsCost(draft) + cost > MaxFlawsBonus)
             return Decision.Fail(Failure.MaxFlawsReached,
-                $"Уже взято {draft.Flaws.Count} Flaw из {MaxFlawsAtCreation} разрешённых (V20 стр. 92).");
+                $"Сумма Flaws не должна превышать {MaxFlawsBonus} пунктов (V20 стр. 86). " +
+                $"Сейчас {FlawsCost(draft)}, пытаемся добавить ещё {cost}.");
 
         var canonical = FindCanonical(name, isMerit: false);
         if (canonical == null)
