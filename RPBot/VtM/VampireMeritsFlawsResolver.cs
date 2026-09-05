@@ -28,6 +28,10 @@ public static class VampireMeritsFlawsResolver
         DuplicateMerit,
         DuplicateFlaw,
         NotFound,
+        /// <summary>Превышен лимит Flaw на Шаге 5 (V20 стр. 92: не более 2).</summary>
+        MaxFlawsReached,
+        /// <summary>Не хватает свободных пунктов на покупку Merit (V20 стр. 86).</summary>
+        InsufficientFreebies,
     }
 
     public readonly struct Decision
@@ -69,15 +73,17 @@ public static class VampireMeritsFlawsResolver
     public static int FlawsCount(VampireCharacter draft)
         => draft?.Flaws?.Count ?? 0;
 
+    /// <summary>Максимум Flaw, которые можно взять при создании (V20 стр. 92).</summary>
+    public const int MaxFlawsAtCreation = 2;
+
     // ─── Add / Remove ──────────────────────────────────────────────
 
     /// <summary>
     /// Добавить Merit персонажу. Цена обязательно в диапазоне 1..7.
+    /// По V20 стр. 86 — покупка идёт из freebie-пула, и без учёта уже
+    /// выбранных Merits/Flaws пул может уйти в минус. Здесь проверяется
+    /// «эффективный» пул: 15 + FlawsCost − MeritsCost − ConsumedFreebies.
     /// </summary>
-    /// <remarks>
-    /// Каталог (<see cref="VampireMeritsFlawsCatalog"/>) задаёт рекомендованную цену;
-    /// если она нужна — позовите <see cref="VampireMeritsFlawsCatalog.FindMerit"/>(name)!.Cost.
-    /// </remarks>
     public static Decision AddMerit(VampireCharacter draft, string name, int cost)
     {
         if (draft == null) throw new ArgumentNullException(nameof(draft));
@@ -96,6 +102,16 @@ public static class VampireMeritsFlawsResolver
         if (!VampireMeritsFlawsCatalog.IsValidCost(cost))
             return Decision.Fail(Failure.InvalidCost,
                 $"Цена {cost} вне диапазона 1..7.");
+
+        // ВАЖНО: для проверки хватает ли freebie учитываем сумму ВСЕХ Merits
+        // (включая текущий), как если бы новый уже был в реестре.
+        var futureMeritsCost = MeritsCost(draft) + cost;
+        var futureFlawsCost = FlawsCost(draft);
+        var consumed = VampireFinishingResolver.ConsumedFreebies(draft);
+        var effective = VampireFinishingResolver.BaseFreebiePool + futureFlawsCost - futureMeritsCost;
+        if (consumed + cost > effective)
+            return Decision.Fail(Failure.InsufficientFreebies,
+                $"Не хватает freebie: нужно {cost}, осталось {Math.Max(0, effective - consumed)}.");
 
         var newMerits = new System.Collections.Generic.Dictionary<string, int>(
             draft.Merits ?? new System.Collections.Generic.Dictionary<string, int>(),
@@ -120,12 +136,17 @@ public static class VampireMeritsFlawsResolver
 
     /// <summary>
     /// Добавить Flaw персонажу. Цена обязательно в диапазоне 1..7.
+    /// По V20 стр. 92 — не более 2 Flaw при создании.
     /// </summary>
     public static Decision AddFlaw(VampireCharacter draft, string name, int cost)
     {
         if (draft == null) throw new ArgumentNullException(nameof(draft));
         if (string.IsNullOrWhiteSpace(name))
             return Decision.Fail(Failure.InvalidName, "Имя недостатка не указано.");
+
+        if (draft.Flaws != null && draft.Flaws.Count >= MaxFlawsAtCreation)
+            return Decision.Fail(Failure.MaxFlawsReached,
+                $"Уже взято {draft.Flaws.Count} Flaw из {MaxFlawsAtCreation} разрешённых (V20 стр. 92).");
 
         var canonical = FindCanonical(name, isMerit: false);
         if (canonical == null)

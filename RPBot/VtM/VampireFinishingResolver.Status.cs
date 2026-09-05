@@ -38,10 +38,21 @@ public static partial class VampireFinishingResolver
 
         sb.AppendLine();
         var consumed = ConsumedFreebies(draft);
-        var remaining = FreebiePool - consumed;
+        var effective = EffectiveFreebiePool(draft);
+        var remaining = Math.Max(0, effective - consumed);
+        var flawsCost = VampireMeritsFlawsResolver.FlawsCost(draft);
+        var meritsCost = VampireMeritsFlawsResolver.MeritsCost(draft);
         sb.Append("**Свободные пункты: осталось ").Append(remaining)
-          .Append(" / ").Append(FreebiePool)
-          .Append("** (потрачено ").Append(consumed).Append(").");
+          .Append(" / ").Append(effective)
+          .Append("** (потрачено ").Append(consumed).Append(")");
+        if (flawsCost > 0 || meritsCost > 0)
+        {
+            sb.Append(" [база ").Append(BaseFreebiePool);
+            if (flawsCost > 0) sb.Append(" +Flaws ").Append(flawsCost);
+            if (meritsCost > 0) sb.Append(" −Merits ").Append(meritsCost);
+            sb.Append("]");
+        }
+        sb.AppendLine(".");
         var spent = DescribeSpent(draft);
         if (spent.Count == 0)
         {
@@ -51,6 +62,18 @@ public static partial class VampireFinishingResolver
         {
             sb.AppendLine();
             foreach (var line in spent) sb.Append("  • ").AppendLine(line);
+        }
+        if (VampireMeritsFlawsResolver.MeritsCount(draft) > 0 ||
+            VampireMeritsFlawsResolver.FlawsCount(draft) > 0)
+        {
+            sb.Append("Учтено: ");
+            if (VampireMeritsFlawsResolver.MeritsCount(draft) > 0)
+                sb.Append("Merits×").Append(VampireMeritsFlawsResolver.MeritsCount(draft));
+            if (VampireMeritsFlawsResolver.MeritsCount(draft) > 0 &&
+                VampireMeritsFlawsResolver.FlawsCount(draft) > 0) sb.Append(", ");
+            if (VampireMeritsFlawsResolver.FlawsCount(draft) > 0)
+                sb.Append("Flaws×").Append(VampireMeritsFlawsResolver.FlawsCount(draft));
+            sb.AppendLine(".");
         }
 
         return sb.ToString();

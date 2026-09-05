@@ -12,6 +12,14 @@ public static partial class VampireFinishingResolver
     /// <summary>Канонический freebie-курс V20 стр. 86.</summary>
     public const int FreebiePool = 15;
 
+    /// <summary>Базовый freebie-пул (V20 стр. 86). Всегда 15.</summary>
+    /// <remarks>
+    /// Используйте <see cref="EffectiveFreebiePool"/> для учёта Merits/Flaws.
+    /// Эта константа оставлена для обратной совместимости и прямого расчёта
+    /// там, где Merits/Flaws не нужны (например, в миграции).
+    /// </remarks>
+    public const int BaseFreebiePool = 15;
+
     /// <summary>Стоимость за +1 для каждой из целей.</summary>
     public static int CostOf(FreebieTarget t) => t switch
     {
@@ -93,11 +101,15 @@ public static partial class VampireFinishingResolver
         return draft.FreebieSpent.TryGetValue(key, out var v) ? v : 0;
     }
 
-    /// <summary>Суммарно потрачено пунктов из пула 15.</summary>
+    /// <summary>Суммарно потрачено пунктов из пула.</summary>
+    /// <remarks>
+    /// Включает в себя сумму цен уже добавленных Merits — они покупаются
+    /// за freebie (V20 стр. 86).
+    /// </remarks>
     public static int ConsumedFreebies(VampireCharacter draft)
     {
         if (draft == null) return 0;
-        var sum = 0;
+        var sum = VampireMeritsFlawsResolver.MeritsCost(draft);
         foreach (var (k, count) in draft.FreebieSpent)
         {
             if (count <= 0) continue;
@@ -110,9 +122,19 @@ public static partial class VampireFinishingResolver
         return sum;
     }
 
-    /// <summary>Сколько свободных пунктов осталось.</summary>
+    /// <summary>Эффективный freebie-пул на текущий момент (V20 стр. 86, 92).</summary>
+    /// <remarks>
+    /// Формула: 15 (базовый пул) + сумма Flaws − сумма Merits.
+    /// Flaws дают бонусные пункты, Merits тратят freebie.
+    /// </remarks>
+    public static int EffectiveFreebiePool(VampireCharacter draft)
+        => BaseFreebiePool
+           + VampireMeritsFlawsResolver.FlawsCost(draft)
+           - VampireMeritsFlawsResolver.MeritsCost(draft);
+
+    /// <summary>Сколько свободных пунктов осталось (с учётом Merits и Flaws).</summary>
     public static int RemainingFreebies(VampireCharacter draft)
-        => Math.Max(0, FreebiePool - ConsumedFreebies(draft));
+        => Math.Max(0, EffectiveFreebiePool(draft) - ConsumedFreebies(draft));
 
         /// <summary>Все freebie потрачены?</summary>
         public static bool FreebiesExhausted(VampireCharacter draft)
@@ -126,9 +148,9 @@ public static partial class VampireFinishingResolver
         public static void MarkFreebiesExhausted(VampireCharacter draft)
         {
             if (draft == null) throw new ArgumentNullException(nameof(draft));
-            // Записываем «+1 Background Факт» столько раз, сколько нужно, чтобы добить до 15.
+            // Записываем «+1 Background Факт» столько раз, сколько нужно, чтобы добить до эффективного пула.
             var cost = CostOf(FreebieTarget.Background); // = 1
-            var need = (FreebiePool - ConsumedFreebies(draft)) / cost;
+            var need = Math.Max(0, EffectiveFreebiePool(draft) - ConsumedFreebies(draft)) / cost;
             for (int i = 0; i < need; i++)
             {
                 draft.FreebieSpent[Key(FreebieTarget.Background, $"_sentinel_{i}")] = 1;
@@ -154,9 +176,9 @@ public static partial class VampireFinishingResolver
             return Decision.Fail(Failure.InvalidName, "Имя поля не указано.");
 
         var cost = CostOf(target);
-        if (ConsumedFreebies(draft) + cost > FreebiePool)
+        if (ConsumedFreebies(draft) + cost > EffectiveFreebiePool(draft))
             return Decision.Fail(Failure.PoolExhausted,
-                $"Пул свободных пунктов ({FreebiePool}) уже исчерпан. Этот параметр стоит {cost}.");
+                $"Эффективный пул ({EffectiveFreebiePool(draft)}) уже исчерпан. Этот параметр стоит {cost}.");
 
         var (hardCap, _) = GetCaps(target, draft);
         // curTotal — итоговое значение (Шаг 2/3/4 + freebie), нужно для проверки hardCap.
