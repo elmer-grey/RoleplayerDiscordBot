@@ -69,7 +69,8 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
         LastLocation = e.LastLocation,
         LastCoverImageUrl = e.LastCoverImageUrl,
         LastUpdatedMark = e.LastUpdatedMark,
-        LastUpdatedAt = e.LastUpdatedAt
+        LastUpdatedAt = e.LastUpdatedAt,
+        ActualStartTimeUtc = e.ActualStartTimeUtc
         });
     }
     }

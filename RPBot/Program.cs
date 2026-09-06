@@ -23,6 +23,7 @@ using System.Text.Encodings.Web;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.IO;
+using Discord.Rest;
 
 namespace RPBot
 {
@@ -2823,18 +2824,83 @@ private static BotUI? _ui;
                     }
 
                     var guildEvent = guild.Events.FirstOrDefault(e => e.Id == entry.EventId);
-                    if (guildEvent == null)
-                    {
-                        // Событие исчезло с сервера (удалено).
-                        // Перед удалением записи — обновим сообщение в Discord,
-                        // чтобы оно не висело как "Новое событие".
-                        await TryAnnounceDeletedOrCancelledAsync(entry, "удалено");
-                        _eventAnnouncementStore.Remove(entry.GuildId, entry.EventId);
-                        removed++;
-                        continue;
-                    }
+                                // Кэш guild.Events НЕ содержит события в статусе Completed/Cancelled
+                                // (Discord архивирует их через ~1 час). Чтобы не помечать их как
+                                // «удалённые» на каждом RESYNC, пробуем достать актуальные данные
+                                // через REST по eventId.
+                                if (guildEvent == null)
+                                {
+                                    RestGuildEvent? restEvent = null;
+                                    string? restError = null;
+                                    try
+                                    {
+                                        var restGuild = await _client!.Rest.GetGuildAsync(entry.GuildId).ConfigureAwait(false);
+                                        if (restGuild != null)
+                                        {
+                                            restEvent = await restGuild.GetEventAsync(entry.EventId).ConfigureAwait(false);
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        restError = ex.Message;
+                                    }
 
-                    var status = guildEvent.Status switch
+                                    if (restEvent is not null)
+                                    {
+                                        // REST говорит, что событие существует — Completed/Cancelled/Active/Scheduled.
+                                        var restStatus = restEvent.Status switch
+                                        {
+                                            GuildScheduledEventStatus.Active    => "started",
+                                            GuildScheduledEventStatus.Completed => "completed",
+                                            GuildScheduledEventStatus.Cancelled => "cancelled",
+                                            _                                   => "scheduled"
+                                        };
+
+                                        await LogStartup($"[EVENT][RESYNC] Запись guild={entry.GuildId} event={entry.EventId} не найдена в кэше, но REST вернул status={restEvent.Status} (применяем {restStatus})");
+                                        // В кэше клиента нет SocketGuildEvent, но REST вернул данные —
+                                        // обновим наш анонс (Discord embed + Telegram + DM), чтобы
+                                        // старый «Новое событие» не висел в канале как актуальный.
+                                        // Только для финальных статусов (started/completed/cancelled) —
+                                        // для scheduled обработает обычный AnnounceCreatedAsync ниже.
+                                        if (restStatus != "scheduled" && _eventAnnouncer != null)
+                                        {
+                                            await _eventAnnouncer.AnnounceStatusChangedFromRestAsync(restEvent, entry, restStatus);
+                                        }
+                                        else
+                                        {
+                                            entry.LastUpdatedMark = restStatus;
+                                            entry.LastUpdatedAt = DateTime.UtcNow;
+                                            _eventAnnouncementStore.UpdateEntry(entry);
+                                        }
+                                        continue;
+                                    }
+
+                                    // REST тоже пуст — реальное удаление. Помечаем только если
+                                    // запись ни разу не была переведена в финальный статус
+                                    // (событие создали и тут же удалили, до того как бот успел
+                                    // обработать завершение). Иначе оставляем запись, чтобы
+                                    // embed «удалено» не появлялся на архивных событиях.
+                                    var everFinalized = !string.IsNullOrEmpty(entry.LastUpdatedMark)
+                                        && (entry.LastUpdatedMark.StartsWith("completed")
+                                         || entry.LastUpdatedMark.StartsWith("cancelled")
+                                         || entry.LastUpdatedMark.StartsWith("started"));
+
+                                    if (everFinalized)
+                                    {
+                                        await LogStartup($"[EVENT][RESYNC] Пропуск пометки «удалено» для guild={entry.GuildId} event={entry.EventId}: REST пуст, но LastUpdatedMark='{entry.LastUpdatedMark}'. restError={restError ?? "<none>"}");
+                                        continue;
+                                    }
+
+                                    // Событие исчезло с сервера (удалено).
+                                    // Перед удалением записи — обновим сообщение в Discord,
+                                    // чтобы оно не висело как "Новое событие".
+                                    await TryAnnounceDeletedOrCancelledAsync(entry, "удалено");
+                                    _eventAnnouncementStore.Remove(entry.GuildId, entry.EventId);
+                                    removed++;
+                                    continue;
+                                }
+
+                                var status = guildEvent.Status switch
                     {
                         GuildScheduledEventStatus.Active    => "started",
                         GuildScheduledEventStatus.Completed => "completed",

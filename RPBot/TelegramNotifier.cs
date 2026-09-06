@@ -307,82 +307,95 @@ private async Task<bool> DeleteMessageAsync(ulong guildId, int messageId, Cancel
 
 public async Task<bool> EditMessageTextAsync(ulong guildId, int messageId, string text, CancellationToken ct = default)
 {
+    (bool success, string? _) = await EditMessageTextWithDetailsAsync(guildId, messageId, text, ct).ConfigureAwait(false);
+    return success;
+}
+
+/// <summary>
+/// Вариант EditMessageTextAsync, возвращающий детальную причину ошибки
+/// (для логирования: раньше fail без причины ввёл в ступор при разборе
+/// инцидентов). Используется в EventAnnouncer для записи в лог.
+/// </summary>
+public async Task<(bool, string?)> EditMessageTextWithDetailsAsync(ulong guildId, int messageId, string text, CancellationToken ct = default)
+{
     var cfg = _serverConfigAccessor(guildId);
     if (cfg == null || !cfg.TelegramEnabled)
-    return false;
+    {
+        return (false, "Telegram отключён или ServerConfig не найден");
+    }
 
     if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
-    return false;
+    {
+        return (false, "TelegramBotToken пуст или TelegramChatId = 0");
+    }
 
     if (messageId <= 0 || string.IsNullOrWhiteSpace(text))
-    return false;
+    {
+        return (false, "message_id<=0 или пустой текст");
+    }
 
     var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/editMessageText";
     var payload = new Dictionary<string, object>
     {
-    ["chat_id"] = cfg.TelegramChatId,
-    ["message_id"] = messageId,
-    ["text"] = EscapeHtml(text),
-    ["parse_mode"] = "HTML",
-    ["disable_web_page_preview"] = true
+        ["chat_id"] = cfg.TelegramChatId,
+        ["message_id"] = messageId,
+        ["text"] = EscapeHtml(text),
+        ["parse_mode"] = "HTML",
+        ["disable_web_page_preview"] = true
     };
 
     if (cfg.TelegramMessageThreadId > 0)
     {
-    payload["message_thread_id"] = cfg.TelegramMessageThreadId;
+        payload["message_thread_id"] = cfg.TelegramMessageThreadId;
     }
 
-    var json = JsonSerializer.Serialize(payload);
-    using var content = new StringContent(json, Encoding.UTF8, "application/json");
-    try
+    var send = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);
+    if (send.ok)
     {
-    using var resp = await _httpClient.PostAsync(url, content, ct).ConfigureAwait(false);
-    return resp.IsSuccessStatusCode;
+        return (true, null);
     }
-    catch
-    {
-    return false;
-    }
+    return (false, FormatTelegramFailure(send.body));
 }
 
 public async Task<bool> EditMessageCaptionAsync(ulong guildId, int messageId, string caption, CancellationToken ct = default)
 {
+    (bool success, string? _) = await EditMessageCaptionWithDetailsAsync(guildId, messageId, caption, ct).ConfigureAwait(false);
+    return success;
+}
+
+/// <summary>
+/// Детальная версия EditMessageCaptionAsync — см. EditMessageTextWithDetailsAsync.
+/// </summary>
+public async Task<(bool ok, string? error)> EditMessageCaptionWithDetailsAsync(ulong guildId, int messageId, string caption, CancellationToken ct = default)
+{
     var cfg = _serverConfigAccessor(guildId);
     if (cfg == null || !cfg.TelegramEnabled)
-    return false;
+        return (false, "Telegram отключён или ServerConfig не найден");
 
     if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
-    return false;
+        return (false, "TelegramBotToken пуст или TelegramChatId = 0");
 
     if (messageId <= 0 || string.IsNullOrWhiteSpace(caption))
-    return false;
+        return (false, "message_id<=0 или пустой caption");
 
     var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/editMessageCaption";
     var payload = new Dictionary<string, object>
     {
-    ["chat_id"] = cfg.TelegramChatId,
-    ["message_id"] = messageId,
-    ["caption"] = EscapeHtml(caption),
-    ["parse_mode"] = "HTML",
-    ["disable_web_page_preview"] = true
+        ["chat_id"] = cfg.TelegramChatId,
+        ["message_id"] = messageId,
+        ["caption"] = EscapeHtml(caption),
+        ["parse_mode"] = "HTML",
+        ["disable_web_page_preview"] = true
     };
 
     if (cfg.TelegramMessageThreadId > 0)
     {
-    payload["message_thread_id"] = cfg.TelegramMessageThreadId;
+        payload["message_thread_id"] = cfg.TelegramMessageThreadId;
     }
 
-    var json = JsonSerializer.Serialize(payload);
-    using var content = new StringContent(json, Encoding.UTF8, "application/json");
-    try
-    {
-    using var resp = await _httpClient.PostAsync(url, content, ct).ConfigureAwait(false);
-    return resp.IsSuccessStatusCode;
-    }
-    catch
-    {
-    return false;
-    }
+    var send = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);
+    if (send.ok) return (true, null);
+    return (false, FormatTelegramFailure(send.body));
 }
 
 private static int? TryParseTelegramMessageId(string json)

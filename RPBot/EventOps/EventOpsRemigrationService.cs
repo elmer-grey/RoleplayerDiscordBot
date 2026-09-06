@@ -235,7 +235,7 @@ namespace RPBot.EventOps
                 builder.AddField("🕒 Когда", $"<t:{startTime.Value.ToUnixTimeSeconds()}:F>", true);
             }
 
-            builder.WithFooter("Чтобы приходило в личку: /event_notify subscribe • Выкл: напиши «стоп» • Вкл: «хочу»");
+            builder.WithFooter("Чтобы видеть в личке: /event_notify action: Подписаться на уведомления • Выкл: напиши «стоп» • Вкл: «хочу»");
 
             return builder.Build();
         }

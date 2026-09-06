@@ -1921,7 +1921,11 @@ namespace RPBot
                             {
                                 LogWarn($"Канал для статистики не найден (RecordChannelID={recordChannelId})");
                                 await commands.DeleteControlMessageAsync(session);
-                            }
+                                                            // Sheets-запись и сохранение в файл всё равно делаем:
+                                                            // событие завершилось, статистика не зависит от того,
+                                                            // получилось ли её отправить в Discord-канал.
+                                                            await commands.PersistCompletedSessionAsync(session);
+                                                        }
                         }
                         else
                         {
@@ -2009,104 +2013,120 @@ namespace RPBot
         }
 
         private async Task SendSessionStats(GameSession session, ISocketMessageChannel channel)
-        {
-            lock (session.StatsSync)
-            {
-                if (session.StatsSent)
                 {
-                    LogDebug($"Статистика для сессии {session.SessionId} уже была отправлена");
-                    return;
+                                lock (session.StatsSync)
+                                {
+                                    if (session.StatsSent)
+                                    {
+                                        LogDebug($"Статистика для сессии {session.SessionId} уже была отправлена");
+                                        return;
+                                    }
+
+                                    session.StatsSent = true;
+                                }
+
+                                LogDebug($"Формирование статистики для сессии {session.SessionId}...");
+
+                                try
+                                {
+                                    var statsMessage = BuildSessionStats(session);
+                                    await channel.SendMessageAsync(statsMessage);
+                                    LogDebug($"Статистика по времени для сессии {session.SessionId} отправлена");
+
+                                    if (session.Rolls.Count > 0)
+                                    {
+                                        LogDebug($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
+
+                                        if (Program.ServerConfigResolver?.Invoke(session.GuildId) is { } statsCfg)
+                                        {
+                                            if (_client.GetChannel(statsCfg.StatsChannelID) is ITextChannel statsChannel)
+                                            {
+                                                var buttons = new ComponentBuilder()
+                                                    .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
+                                                    .WithButton("Общая", "general_stats", ButtonStyle.Primary)
+                                                    .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
+                                                    .Build();
+
+                                                var masterMention = session.MasterId != 0
+                                                    ? MentionUtils.MentionUser(session.MasterId)
+                                                    : session.MasterName;
+
+                                                var buttonsMsg = await statsChannel.SendMessageAsync(
+                                                    $"{masterMention}, какую статистику бросков вывести для игры `{session.GameName}`? Нажми на одну из кнопок ниже",
+                                                    components: buttons);
+
+                                                session.StatsMessageId = buttonsMsg.Id;
+                                                LogDebug($"Кнопки статистики отправлены в канал {statsChannel.Id}, ID сообщения: {buttonsMsg.Id}");
+                                            }
+                                            else
+                                            {
+                                                LogWarn($"Канал статистики {statsCfg.StatsChannelID} не найден");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            LogWarn($"Конфигурация сервера {session.GuildId} не найдена");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        LogDebug($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
+                                        RemoveSession(session);
+                                                        _ = Task.Run(() => SaveSessionsAsync());
+                                                        // Архивировать нечего: статистика не нужна.
+                                                        // Sheets-запись и сохранение файла всё равно выполняем.
+                                                        await PersistCompletedSessionAsync(session);
+                                                        return;
+                                                    }
+
+                                                    // Архивируем сессию: пока пользователь не нажал ни одну кнопку
+                                                    // статистики, данные хранятся в памяти и не теряются при рестарте.
+                                                    ArchiveStoppedSession(session);
+
+                                                    // Google Sheets — в последнюю очередь, после всех Discord-сообщений.
+                                                    await PersistCompletedSessionAsync(session);
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogError($"Ошибка при отправке статистики: {ex.Message}");
+                                }
                 }
 
-                session.StatsSent = true;
-            }
-
-            LogDebug($"Формирование статистики для сессии {session.SessionId}...");
-
-            try
-            {
-                var statsMessage = BuildSessionStats(session);
-                await channel.SendMessageAsync(statsMessage);
-                LogDebug($"Статистика по времени для сессии {session.SessionId} отправлена");
-
-                if (session.Rolls.Count > 0)
+                /// <summary>
+                /// Финализирует завершённую сессию: записывает её в Google Sheets (если
+                /// доступен) и сохраняет обновлённый state в файл. Вызывается независимо от
+                /// того, удалось ли отправить статистику в Discord-канал: данные сессии —
+                /// факт, а не побочный эффект доставки embed-а.
+                /// </summary>
+                private async Task PersistCompletedSessionAsync(GameSession session)
                 {
-                    LogDebug($"Сессия {session.SessionId} содержит {session.Rolls.Count} бросков - подготовка кнопок статистики");
+                                // Сохранение файла сессий — всегда.
+                                try { _ = Task.Run(() => SaveSessionsAsync()); }
+                                catch (Exception ex) { LogError($"[Sessions] Ошибка запуска SaveSessionsAsync: {ex.Message}"); }
 
-                    if (Program.ServerConfigResolver?.Invoke(session.GuildId) is { } statsCfg)
-                    {
-                        if (_client.GetChannel(statsCfg.StatsChannelID) is ITextChannel statsChannel)
-                        {
-                            var buttons = new ComponentBuilder()
-                                .WithButton("Не надо", "no_stats", ButtonStyle.Secondary)
-                                .WithButton("Общая", "general_stats", ButtonStyle.Primary)
-                                .WithButton("Подробная", "detailed_stats", ButtonStyle.Primary)
-                                .Build();
-
-                            var masterMention = session.MasterId != 0
-                                ? MentionUtils.MentionUser(session.MasterId)
-                                : session.MasterName;
-
-                            var buttonsMsg = await statsChannel.SendMessageAsync(
-                                $"{masterMention}, какую статистику бросков вывести для игры `{session.GameName}`? Нажми на одну из кнопок ниже",
-                                components: buttons);
-
-                            session.StatsMessageId = buttonsMsg.Id;
-                            LogDebug($"Кнопки статистики отправлены в канал {statsChannel.Id}, ID сообщения: {buttonsMsg.Id}");
-                        }
-                        else
-                        {
-                            LogWarn($"Канал статистики {statsCfg.StatsChannelID} не найден");
-                        }
-                    }
-                    else
-                    {
-                        LogWarn($"Конфигурация сервера {session.GuildId} не найдена");
-                    }
-                }
-                else
-                {
-                    LogDebug($"Сессия {session.SessionId} не содержит бросков - немедленное удаление");
-                    RemoveSession(session);
-                    _ = Task.Run(() => SaveSessionsAsync());
-                                    // Архивировать нечего: статистика не нужна.
+                                if (_googleSheets == null)
+                                {
+                                    LogDebug($"[Sheets] Сервис не инициализирован — запись пропущена");
                                     return;
                                 }
 
-                                // Архивируем сессию: пока пользователь не нажал ни одну кнопку
-                                // статистики, данные хранятся в памяти и не теряются при рестарте.
-                                ArchiveStoppedSession(session);
-                                _ = Task.Run(() => SaveSessionsAsync());
-
-                                // Google Sheets — в последнюю очередь, после всех Discord-сообщений
-                if (_googleSheets != null)
-                {
-                    try
-                    {
-                        var row = await _googleSheets.AppendSessionAsync(session).ConfigureAwait(false);
-                        if (row > 0)
-                        {
-                            session.SheetRowIndex = row;
-                        }
-                        else
-                        {
-                            LogWarn($"[Sheets] Запись не удалась — AppendSessionAsync вернул {row}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        LogError($"[Sheets] Ошибка записи: {ex.GetType().Name}: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    LogDebug($"[Sheets] Сервис не инициализирован — запись пропущена");
-                }
-            }
-            catch (Exception ex)
-            {
-                LogError($"Ошибка при отправке статистики: {ex.Message}");
-            }
+                                try
+                                {
+                                    var row = await _googleSheets.AppendSessionAsync(session).ConfigureAwait(false);
+                                    if (row > 0)
+                                    {
+                                        session.SheetRowIndex = row;
+                                        LogDebug($"[Sheets] Запись выполнена: row={row}, session={session.SessionId}");
+                                    }
+                                    else
+                                    {
+                                        LogWarn($"[Sheets] Запись не удалась — AppendSessionAsync вернул {row}");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogError($"[Sheets] Ошибка записи session={session.SessionId}: {ex.GetType().Name}: {ex.Message}");
+                                }
         }
 
         private void RemoveSession(GameSession session)

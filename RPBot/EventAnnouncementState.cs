@@ -69,5 +69,10 @@ public string? LastLocation { get; set; }
 public string? LastCoverImageUrl { get; set; }
 public string? LastUpdatedMark { get; set; }
 public DateTime? LastUpdatedAt { get; set; }
+
+// Фактическое время старта события (UTC). Записывается в момент started,
+// чтобы при completed/cancelled корректно показать «когда событие
+// действительно началось», а не плановое время.
+public DateTimeOffset? ActualStartTimeUtc { get; set; }
 }
 }
