@@ -103,13 +103,15 @@ public static partial class VampireFinishingResolver
 
     /// <summary>Суммарно потрачено пунктов из пула.</summary>
     /// <remarks>
-    /// Включает в себя сумму цен уже добавленных Merits — они покупаются
-    /// за freebie (V20 стр. 86).
+    /// Считает ТОЛЬКО траты freebie (по FreebieSpent). Стоимость Merits уже учтена
+    /// в <see cref="EffectiveFreebiePool"/> как вычет из потолка, поэтому здесь
+    /// не должна учитываться повторно — иначе Merits вычитаются дважды
+    /// (V20 стр. 86: Merits покупаются из того же пула, что и freebie).
     /// </remarks>
     public static int ConsumedFreebies(VampireCharacter draft)
     {
         if (draft == null) return 0;
-        var sum = VampireMeritsFlawsResolver.MeritsCost(draft);
+        var sum = 0;
         foreach (var (k, count) in draft.FreebieSpent)
         {
             if (count <= 0) continue;
@@ -139,6 +141,42 @@ public static partial class VampireFinishingResolver
         /// <summary>Все freebie потрачены?</summary>
         public static bool FreebiesExhausted(VampireCharacter draft)
             => RemainingFreebies(draft) == 0;
+
+        /// <summary>Шаг 5 подтверждён пользователем (лист заморожен для специализаций)?</summary>
+        /// <remarks>
+        /// Устанавливается через <see cref="ConfirmStep5"/>. После этого специализации
+        /// разрешены, даже если в пуле ещё остались пункты — игрок явно согласился
+        /// их «заморозить» и больше не менять.
+        /// </remarks>
+        public static bool IsStep5Finalized(VampireCharacter draft)
+            => draft != null && draft.Step5Finalized;
+
+        /// <summary>
+        /// Подтвердить завершение Шага 5: выставить флаг заморозки.
+        /// Используется визардом после диалога «Вы уверены?».
+        /// </summary>
+        public static void ConfirmStep5(VampireCharacter draft)
+        {
+            if (draft == null) throw new ArgumentNullException(nameof(draft));
+            draft.Step5Finalized = true;
+            draft.Step5FinalizedAt = DateTime.UtcNow;
+        }
+
+        /// <summary>Откатить подтверждение Шага 5 (для отмены игроком).</summary>
+        public static void UnconfirmStep5(VampireCharacter draft)
+        {
+            if (draft == null) throw new ArgumentNullException(nameof(draft));
+            draft.Step5Finalized = false;
+            draft.Step5FinalizedAt = null;
+        }
+
+        /// <summary>Специализации разрешены?</summary>
+        /// <remarks>
+        /// Условие разрешения: либо все freebie потрачены (пул = 0),
+        /// либо игрок явно подтвердил завершение Шага 5 через диалог.
+        /// </remarks>
+        public static bool SpecializationsAllowed(VampireCharacter draft)
+            => draft != null && (FreebiesExhausted(draft) || IsStep5Finalized(draft));
 
         /// <summary>
         /// Пометить все freebie как потраченные (без фактической траты на параметры).
@@ -176,6 +214,29 @@ public static partial class VampireFinishingResolver
             return Decision.Fail(Failure.InvalidName, "Имя поля не указано.");
 
         var cost = CostOf(target);
+        // Лимит на количество разных дисциплин / фактов: при попытке добавить +1 к новому
+        // полю (которого ещё нет ни в основном, ни в freebie-словаре) — проверяем суммарный
+        // размер обоих словарей.
+        if (target == FreebieTarget.Background
+            && draft.FreebieBackgrounds != null
+            && !draft.FreebieBackgrounds.ContainsKey(field)
+            && (draft.Backgrounds?.ContainsKey(field) != true))
+        {
+            int existing = (draft.Backgrounds?.Count ?? 0) + draft.FreebieBackgrounds.Count;
+            if (existing + 1 > VampireAdvantagesCatalog.MaxBackgroundsPerCharacter)
+                return Decision.Fail(Failure.AboveCap,
+                    $"Достигнут лимит разных фактов биографии: {VampireAdvantagesCatalog.MaxBackgroundsPerCharacter}.");
+        }
+        if (target == FreebieTarget.Discipline
+            && draft.FreebieDisciplines != null
+            && !draft.FreebieDisciplines.ContainsKey(field)
+            && (draft.Disciplines?.ContainsKey(field) != true))
+        {
+            int existing = (draft.Disciplines?.Count ?? 0) + draft.FreebieDisciplines.Count;
+            if (existing + 1 > VampireAdvantagesCatalog.MaxDisciplinesPerCharacter)
+                return Decision.Fail(Failure.AboveCap,
+                    $"Достигнут лимит разных дисциплин: {VampireAdvantagesCatalog.MaxDisciplinesPerCharacter}.");
+        }
         if (ConsumedFreebies(draft) + cost > EffectiveFreebiePool(draft))
             return Decision.Fail(Failure.PoolExhausted,
                 $"Эффективный пул ({EffectiveFreebiePool(draft)}) уже исчерпан. Этот параметр стоит {cost}.");

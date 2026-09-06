@@ -195,11 +195,13 @@ public static class VampireAbilitiesResolver
                 return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
                     $"Специализация доступна при значении 4 и более. У «{paramName}» сейчас {value}.");
 
-                    // Запрет: Шаги 2 и 3 ещё не учитывают freebie; разрешаем специализацию
-                    // только после полного распределения freebie-пула (Шаг 5).
-                    if (!VampireFinishingResolver.FreebiesExhausted(draft))
+                    // Запрет: Шаги 2 и 3 ещё не учитывают freebie; специализации способностей
+                    // требуют завершения Шага 5 (либо пул = 0, либо явное подтверждение).
+                    // V20 стр. 101: специализация при value ≥ 4. Способности Шагом 3 дают
+                    // максимум 3 — поэтому Шаг 5 ОБЯЗАТЕЛЕН для их специализации.
+                    if (!VampireFinishingResolver.SpecializationsAllowed(draft))
                         return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.SpecializationRequired,
-                            "Специализации доступны только после полного распределения свободных пунктов (Шаг 5).");
+                            "Специализации доступны только после завершения Шага 5 (потратьте все freebie или подтвердите завершение через диалог).");
 
                     draft.Specializations[paramName] = specialization.Trim();
                     return VampireAbilitiesDecision.Ok($"Специализация «{paramName}» → «{specialization.Trim()}».");

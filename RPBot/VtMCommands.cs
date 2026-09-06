@@ -972,6 +972,35 @@ public sealed class VampireCommands
                                                         return;
                                                     }
 
+                                                case VampireWizardAction.FinishingFinalize:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondAsync("⚠️ Подтверждение Шага 5 доступно только из Шага 5.", ephemeral: true);
+                                                            return;
+                                                        }
+
+                                                        // Подтверждаем, что игрок добровольно завершает Шаг 5 с непустым пулом.
+                                                        // После этого специализации разрешены, но снять отметку можно только повторным
+                                                        // переходом на эту страницу — поэтому явно делаем reset-флажка быть не должно.
+                                                        VampireFinishingResolver.ConfirmStep5(session.Draft);
+                                                        await CommitDraftAsync(component, session);
+
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при подтверждении Шага 5: {ex.Message}");
+                                                        }
+                                                        await component.RespondAsync(
+                                                            "⚠ Шаг 5 заморожен. Свободные пункты больше нельзя тратить; специализации теперь доступны.",
+                                                            ephemeral: true);
+                                                        return;
+                                                    }
+
                                                 case VampireWizardAction.BackToAdvantages:
                                                     {
                                                         if (session.Step != VampireWizardStep.FinishingTouches)

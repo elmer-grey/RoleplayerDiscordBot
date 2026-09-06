@@ -207,10 +207,14 @@ public static class VampireAttributesResolver
                 return Fail(draft, VampireAttributesFailure.BelowBase, msg);
             }
 
-            // Запрет: разрешаем специализацию только после полного распределения freebie-пула (Шаг 5).
-            if (!VampireFinishingResolver.FreebiesExhausted(draft))
+            // Специализация разрешена только после завершения Шага 5
+            // (либо все freebie потрачены, либо игрок явно подтвердил диалогом).
+            // V20 стр. 101: специализация при value ≥ 4. Для характеристик это может быть
+            // достигнуто уже на Шаге 2, но общий сценарий визарда требует закрытия Шага 5,
+            // прежде чем фиксировать специализации (UI и валидация листа едины).
+            if (!VampireFinishingResolver.SpecializationsAllowed(draft))
                 return Fail(draft, VampireAttributesFailure.BelowBase,
-                    "Специализации доступны только после полного распределения свободных пунктов (Шаг 5).");
+                    "Специализации доступны только после завершения Шага 5 (потратьте все freebie или подтвердите завершение через диалог).");
 
             draft.Specializations[attributeName] = specialization.Trim();
             return CompleteCheck(draft).WithMessage(

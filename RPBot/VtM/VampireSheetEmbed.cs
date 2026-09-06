@@ -265,7 +265,7 @@ public static class VampireSheetEmbed
         return sb.ToString();
     }
 
-    /// <summary>Колонка «Дисциплины» (до 5 строк).</summary>
+    /// <summary>Колонка «Дисциплины» (до 6 строк).</summary>
     public static string BuildAdvantagesColumn(VampireCharacter c)
     {
         var sb = new StringBuilder();
@@ -279,7 +279,7 @@ public static class VampireSheetEmbed
             int shown = 0;
             foreach (var name in names)
             {
-                if (shown >= 5) break;
+                if (shown >= 6) break;
                 int value = VampireAdvantagesResolver.GetDisciplineValue(c, name);
                 sb.Append("`").Append(PadRight(name, 13)).Append("` ");
                 sb.AppendLine(DotsString(Math.Clamp(value, 0, 5), 5));
@@ -293,7 +293,7 @@ public static class VampireSheetEmbed
         return sb.ToString();
     }
 
-    /// <summary>Колонка «Факты биографии» (Backgrounds) — до 5 строк.</summary>
+    /// <summary>Колонка «Факты биографии» (Backgrounds) — до 6 строк.</summary>
     public static string BuildBackgroundsColumn(VampireCharacter c)
     {
         var sb = new StringBuilder();
@@ -307,7 +307,7 @@ public static class VampireSheetEmbed
             int shown = 0;
             foreach (var name in names)
             {
-                if (shown >= 5) break;
+                if (shown >= 6) break;
                 int rank = Math.Clamp(VampireAdvantagesResolver.GetBackgroundRank(c, name), 1, 5);
                 sb.Append("• ").Append(name).Append(' ').Append(DotsString(rank, 5)).AppendLine();
                 shown++;

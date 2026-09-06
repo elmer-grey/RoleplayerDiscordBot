@@ -33,6 +33,12 @@ public static class VampireAdvantagesCatalog
     /// <summary>Кэп на одно поле (дисциплина / факт / добродетель): макс 5.</summary>
     public const int PerFieldCap = 5;
 
+    /// <summary>Максимум разных дисциплин у одного персонажа (V20: канонически не больше 6).</summary>
+    public const int MaxDisciplinesPerCharacter = 6;
+
+    /// <summary>Максимум разных фактов биографии у одного персонажа (V20: канонически не больше 6).</summary>
+    public const int MaxBackgroundsPerCharacter = 6;
+
     /// <summary>Минимальное значение любой ячейки: 0 для дисциплин/фактов, 1 для добродетелей.</summary>
     public const int MinDiscipline = 0;
     public const int MinBackground = 1;

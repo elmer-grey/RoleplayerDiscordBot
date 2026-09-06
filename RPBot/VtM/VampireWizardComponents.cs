@@ -127,6 +127,9 @@ public enum VampireWizardAction
                                 FinishingReset,
                                 /// <summary>Завершить Шаг 5 и перейти к Шагу 6 (или показать лист).</summary>
                                 FinishingDone,
+                                /// <summary>Подтвердить завершение Шага 5 через диалог (когда пул ещё не пуст).
+                                /// После этого специализации разрешены, а траты freebie заморожены.</summary>
+                                FinishingFinalize,
                                 /// <summary>Вернуться на Шаг 4.3 (Добродетели).</summary>
                                 BackToAdvantages,
                     }
@@ -478,13 +481,24 @@ public static class VampireWizardComponents
                                                                         var cb = new ComponentBuilder();
                                                                         cb.WithSelectMenu(BuildFinishingSelect(draft));
 
-                                                                        // Специализации доступны только после полного распределения freebie-пула.
-                                                                        // (V20 стр. 101: специализация требуется при значении ≥ 4; Шаг 2/3 дают
-                                                                        // максимум 3, поэтому ждём Шаг 5.)
-                                                                        if (VampireFinishingResolver.FreebiesExhausted(draft))
+                                                                        // Специализации доступны только после завершения Шага 5.
+                                                                        // V20 стр. 101: специализация требуется при значении ≥ 4; Шаг 2/3 дают
+                                                                        // максимум 3, поэтому ждём Шаг 5. Завершение = либо пул = 0,
+                                                                        // либо явное подтверждение игрока через диалог.
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var finalized = VampireFinishingResolver.IsStep5Finalized(draft);
+                                                                        if (finalized || remaining == 0)
                                                                         {
                                                                             var specMenu = BuildSpecializationSelect(draft);
                                                                             if (specMenu != null) cb.WithSelectMenu(specMenu);
+                                                                        }
+                                                                        else if (remaining > 0 && !finalized)
+                                                                        {
+                                                                            // Пул ещё не пуст и Шаг 5 не подтверждён — предлагаем подтвердить.
+                                                                            cb.WithButton(
+                                                                                $"⚠ Подтвердить и заморозить (ост. {remaining})",
+                                                                                BuildCustomId(VampireWizardAction.FinishingFinalize, draft.CharacterId),
+                                                                                ButtonStyle.Danger);
                                                                         }
 
                                                                         cb.WithButton("⬅ Назад (4.3)", BuildCustomId(VampireWizardAction.BackToAdvantages, draft.CharacterId), ButtonStyle.Secondary)
@@ -1087,6 +1101,7 @@ public static class VampireWizardComponents
                                                 VampireWizardAction.FinishingInc        => "finishing_inc",
                                                 VampireWizardAction.FinishingReset      => "finishing_reset",
                                                 VampireWizardAction.FinishingDone       => "finishing_done",
+                                                VampireWizardAction.FinishingFinalize   => "finishing_finalize",
                                                 VampireWizardAction.BackToAdvantages    => "back_to_advantages",
                                                 _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
@@ -1145,6 +1160,7 @@ public static class VampireWizardComponents
                                     case "finishing_inc":          action = VampireWizardAction.FinishingInc;          return true;
                                     case "finishing_reset":        action = VampireWizardAction.FinishingReset;        return true;
                                     case "finishing_done":         action = VampireWizardAction.FinishingDone;         return true;
+                                    case "finishing_finalize":     action = VampireWizardAction.FinishingFinalize;     return true;
                                     case "back_to_advantages":     action = VampireWizardAction.BackToAdvantages;     return true;
                                                 default:               action = default;                         return false;
         }

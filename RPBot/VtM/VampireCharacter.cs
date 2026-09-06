@@ -324,6 +324,20 @@ public sealed class VampireCharacter
                 [JsonPropertyName("willpowerBonus")]
                 public int WillpowerBonus { get; set; } = 0;
 
+                /// <summary>
+                /// Шаг 5 подтверждён пользователем: freebie не добиты до нуля,
+                /// но игрок явно согласился заморозить значения листа и перейти
+                /// к специализациям. После этого траты freebie больше нельзя менять.
+                /// </summary>
+                [JsonPropertyName("step5Finalized")]
+                public bool Step5Finalized { get; set; }
+
+                /// <summary>
+                /// Когда был подтверждён Шаг 5 (UTC). null, если ещё не подтверждён.
+                /// </summary>
+                [JsonPropertyName("step5FinalizedAt")]
+                public DateTime? Step5FinalizedAt { get; set; }
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>
