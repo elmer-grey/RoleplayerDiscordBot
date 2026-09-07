@@ -25,23 +25,23 @@ public class VampireSheetComponentsTests
     }
 
     [Fact]
-    public void Build_FourCoreButtonsInOneRow()
+    public void Build_FiveCoreButtonsInOneRow()
     {
         var c = NewCharacter();
         var mc = VampireSheetComponents.Build(c);
         var (_, buttons) = Unwrap(mc);
-        Assert.Equal(4, buttons.Length);
+        Assert.Equal(5, buttons.Length);
     }
 
     [Fact]
-    public void Build_CoreButtonsArePrimaryExceptClan()
+    public void Build_CoreButtonsArePrimaryExceptClanAndMorality()
     {
         var c = NewCharacter();
         var mc = VampireSheetComponents.Build(c);
         var (_, buttons) = Unwrap(mc);
         Assert.All(buttons, b =>
         {
-            if (b.Label == "Клан")
+            if (b.Label == "Клан" || b.Label == "Мораль")
                 Assert.Equal(ButtonStyle.Secondary, b.Style);
             else
                 Assert.Equal(ButtonStyle.Primary, b.Style);
@@ -75,7 +75,8 @@ public class VampireSheetComponentsTests
             Assert.True(action is VampireSheetAction.Description
                               or VampireSheetAction.Willpower
                               or VampireSheetAction.Health
-                              or VampireSheetAction.Clan);
+                              or VampireSheetAction.Clan
+                              or VampireSheetAction.Morality);
         }
     }
 

@@ -17,9 +17,11 @@ namespace RPBot.VtM
         Health,
         /// <summary>Открыть/скрыть блок «Клан» (клановые дисциплины + изъян).</summary>
         Clan,
-        /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
-        ToggleActive,
-    }
+            /// <summary>Открыть/скрыть блок «Мораль» (Путь, расстройства, проверка совести).</summary>
+            Morality,
+            /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
+            ToggleActive,
+        }
 
     /// <summary>
     /// Константы customId и фабрика кнопок под листом персонажа.
@@ -40,8 +42,9 @@ namespace RPBot.VtM
         private const string ButtonLabelWillpower   = "Воля";
         private const string ButtonLabelHealth      = "Здоровье";
             private const string ButtonLabelClan        = "Клан";
-            private const string ButtonLabelActive      = "✅ Активный";
-            private const string ButtonLabelInactive    = "❌ Неактивный";
+                    private const string ButtonLabelMorality    = "Мораль";
+                    private const string ButtonLabelActive      = "✅ Активный";
+                    private const string ButtonLabelInactive    = "❌ Неактивный";
 
             /// <summary>
             /// Собрать кнопки под листом в одном ActionRow.
@@ -71,7 +74,9 @@ namespace RPBot.VtM
                     .WithButton(ButtonLabelHealth, BuildCustomId(VampireSheetAction.Health, character.CharacterId),
                         ButtonStyle.Primary)
                     .WithButton(ButtonLabelClan, BuildCustomId(VampireSheetAction.Clan, character.CharacterId),
-                        ButtonStyle.Secondary);
+                                        ButtonStyle.Secondary)
+                                    .WithButton(ButtonLabelMorality, BuildCustomId(VampireSheetAction.Morality, character.CharacterId),
+                                        ButtonStyle.Secondary);
 
                 if (showActiveToggle)
                 {
@@ -113,21 +118,23 @@ namespace RPBot.VtM
             VampireSheetAction.Willpower   => "wp",
             VampireSheetAction.Health      => "hp",
             VampireSheetAction.Clan        => "clan",
-            VampireSheetAction.ToggleActive => "active",
-            _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
-        };
+                    VampireSheetAction.Morality    => "moral",
+                    VampireSheetAction.ToggleActive => "active",
+                    _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
+                };
 
-        private static bool TryParseAction(string s, out VampireSheetAction action)
-        {
-            switch (s)
-            {
-                case "desc":   action = VampireSheetAction.Description; return true;
-                case "wp":     action = VampireSheetAction.Willpower;   return true;
-                case "hp":     action = VampireSheetAction.Health;      return true;
-                case "clan":   action = VampireSheetAction.Clan;        return true;
-                case "active": action = VampireSheetAction.ToggleActive; return true;
-                default:       action = default;                        return false;
-            }
-        }
+                private static bool TryParseAction(string s, out VampireSheetAction action)
+                {
+                    switch (s)
+                    {
+                        case "desc":   action = VampireSheetAction.Description; return true;
+                        case "wp":     action = VampireSheetAction.Willpower;   return true;
+                        case "hp":     action = VampireSheetAction.Health;      return true;
+                        case "clan":   action = VampireSheetAction.Clan;        return true;
+                        case "moral":  action = VampireSheetAction.Morality;    return true;
+                        case "active": action = VampireSheetAction.ToggleActive; return true;
+                        default:       action = default;                        return false;
+                    }
+                }
     }
 }

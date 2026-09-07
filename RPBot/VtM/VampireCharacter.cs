@@ -351,6 +351,37 @@ public sealed class VampireCharacter
                 [JsonPropertyName("step5FinalizedAt")]
                 public DateTime? Step5FinalizedAt { get; set; }
 
+                // ─── Мораль (V20 стр. 92, 313+, 333) ───────────────────────────────
+
+                /// <summary>
+                /// Путь Просветления (Path of Enlightenment). Пусто, если персонаж следует
+                /// обычной Человечности. Иначе — название из внутреннего списка (V20 стр. 271-307):
+                /// «Путь Каина», «Путь Сердца и Духа», «Путь Мудрости», «Путь Сплочённости» и т.д.
+                /// </summary>
+                /// <remarks>
+                /// Если задано — пул проверки совести берётся из <see cref="PathRating"/>,
+                /// иначе из текущей Человечности (V20 стр. 269).
+                /// </remarks>
+                [JsonPropertyName("path")]
+                public string Path { get; set; } = "";
+
+                /// <summary>
+                /// Значение выбранного Пути (1..5). Если <see cref="Path"/> пусто, поле игнорируется.
+                /// </summary>
+                [JsonPropertyName("pathRating")]
+                public int PathRating { get; set; }
+
+                /// <summary>
+                /// Психические расстройства персонажа (V20 стр. 313-317). Имена — из
+                /// <see cref="VampireDerangementCatalog"/> или произвольные, заданные рассказчиком.
+                /// </summary>
+                /// <remarks>
+                /// Дубликаты и пустые строки игнорируются. Получает при провале проверки совести (botch)
+                /// либо инициируется рассказчиком вручную.
+                /// </remarks>
+                [JsonPropertyName("derangements")]
+                public List<string> Derangements { get; set; } = new();
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>

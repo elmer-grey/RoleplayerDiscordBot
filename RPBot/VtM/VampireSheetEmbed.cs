@@ -135,7 +135,7 @@ public static class VampireSheetEmbed
             IsInline = true,
         });
 
-        // Нижний ряд: Достоинства-Недостатки / Суть / Здоровье-Изъян-Опыт.
+        // Нижний ряд: Достоинства-Недостатки / Суть / Мораль / Здоровье-Изъян-Опыт.
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "──────── Достоинства и недостатки ────────",
@@ -150,10 +150,16 @@ public static class VampireSheetEmbed
         });
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Здоровье и опыт ────────",
-            Value = BuildHealthExperienceBlock(character),
+                    Name = "──────── Мораль ────────",
+                    Value = VampireMoralityEmbed.BuildBlock(character),
             IsInline = true,
         });
+                eb.AddField(new EmbedFieldBuilder
+                {
+                    Name = "──────── Здоровье и опыт ────────",
+                    Value = BuildHealthExperienceBlock(character),
+                    IsInline = true,
+                });
 
         eb.Footer = new EmbedFooterBuilder
         {
