@@ -1280,6 +1280,7 @@ private void SaveServerConfigs()
         {
             _vampireCommands ??= new VampireCommands();
             SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
+            SlashModuleRegistry.Register(new VampireCombatSlashModule());
         }
 
         // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
