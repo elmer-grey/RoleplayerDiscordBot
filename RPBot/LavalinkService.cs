@@ -474,6 +474,100 @@ namespace RPBot
             }
         }
 
+        // ─── Надёжный Join с ожиданием voice state ──────────────────────
+
+        /// <summary>
+        /// Подключается к голосовому каналу и надёжно ждёт пока Discord
+        /// пришлёт VOICE_STATE_UPDATE для бота (с правильным channelId и sessionId).
+        /// Lavalink4NET.JoinAsync внутри ждёт свой собственный TCS, но если бот
+        /// уже был в каком-то канале ранее и стейт устарел — он кидает
+        /// "player could not be retrieved within the specified time" с channelId:null.
+        /// Здесь же мы ждём реальное событие от Discord с явным таймаутом.
+        /// </summary>
+        private async Task<NotifyingPlayer?> JoinAndAwaitVoiceAsync(
+            SocketGuildUser user,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default)
+        {
+            if (_audioService is null || user.VoiceChannel is null)
+                return null;
+
+            var guildId = user.Guild.Id;
+            var targetChannelId = user.VoiceChannel.Id;
+            var client = _discordClient;
+            var selfId = client.CurrentUser?.Id ?? 0;
+
+            // Если бот уже подключён к нужному каналу — пропускаем join, сразу создаём плеер
+            var botCurrent = user.Guild.GetUser(selfId)?.VoiceChannel;
+            if (botCurrent?.Id == targetChannelId)
+            {
+                Log($"[Music] JoinAndAwaitVoice: бот уже в канале {targetChannelId}, join не требуется");
+            }
+            else
+            {
+                // Подписываемся на voice state ДО JoinAsync — иначе можем пропустить событие
+                var tcs = new TaskCompletionSource<(ulong? channelId, string? sessionId)>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                Task handler(SocketUser u, SocketVoiceState before, SocketVoiceState after)
+                {
+                    if (u.Id != selfId) return Task.CompletedTask;
+                    if (after.VoiceChannel?.Id != targetChannelId) return Task.CompletedTask;
+                    Log($"[Music][DBG] JoinAndAwaitVoice: бот подтвердил voice state channelId={after.VoiceChannel?.Id} sessionId='{after.VoiceSessionId}'");
+                    tcs.TrySetResult((after.VoiceChannel?.Id, after.VoiceSessionId));
+                    return Task.CompletedTask;
+                }
+
+                client.UserVoiceStateUpdated += handler;
+                try
+                {
+                    // Запускаем JoinAsync на отдельном потоке — gateway должен обрабатывать события
+                    var joinTask = Task.Run(() => _audioService.Players.JoinAsync(
+                        user.VoiceChannel,
+                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(
+                            props => new NotifyingPlayer(props)),
+                        Options.Create(new QueuedLavalinkPlayerOptions()),
+                        cancellationToken).AsTask(), cancellationToken);
+
+                    // Параллельно ждём реальное событие от Discord (надёжнее внутреннего TCS Lavalink4NET)
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeoutCts.CancelAfter(timeout);
+                    var completedTask = await Task.WhenAny(tcs.Task, joinTask, Task.Delay(Timeout.Infinite, timeoutCts.Token));
+                    if (completedTask == tcs.Task)
+                    {
+                        var info = await tcs.Task;
+                        if (info.channelId is null)
+                        {
+                            Log($"[Music] JoinAndAwaitVoice: событие voice state без channelId — отмена");
+                            return null;
+                        }
+                    }
+                    else if (completedTask == joinTask)
+                    {
+                        // JoinAsync сам завершился — попробуем достать плеер
+                        if (joinTask.IsFaulted)
+                        {
+                            Log($"[Music] JoinAndAwaitVoice: JoinAsync упал — {joinTask.Exception?.GetBaseException().Message}");
+                            return null;
+                        }
+                    }
+                    else
+                    {
+                        Log($"[Music] JoinAndAwaitVoice: таймаут {timeout.TotalSeconds:F0}с ожидания voice state");
+                        return null;
+                    }
+                }
+                finally
+                {
+                    client.UserVoiceStateUpdated -= handler;
+                }
+            }
+
+            // Получаем плеер (он должен быть уже создан JoinAsync; если нет — создастся)
+            try { return await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
+            catch (Exception ex) { Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync — {ex.Message}"); return null; }
+        }
+
         // ─── Health-probe ─────────────────────────────────────────────────
 
         /// <summary>Возвращает null при успехе или строку с ошибкой.</summary>
@@ -584,17 +678,18 @@ namespace RPBot
             {
                 try
                 {
-                    Log($"[Music] JoinAsync: guild={guildId} channel={voiceChannel.Id} ({voiceChannel.Name})");
-                    player = await Task.Run(() => _audioService.Players.JoinAsync(
-                        voiceChannel,
-                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
-                        Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken).AsTask(), cancellationToken);
-                    Log($"[Music] JoinAsync: успех, player state={player?.State}");
+                    Log($"[Music] JoinAndAwaitVoice: guild={guildId} channel={voiceChannel.Id} ({voiceChannel.Name})");
+                    player = await JoinAndAwaitVoiceAsync(user, TimeSpan.FromSeconds(15), cancellationToken);
+                    if (player is null)
+                    {
+                        Log($"[Music] JoinAndAwaitVoice: не удалось получить плеер после ожидания voice state");
+                        return $"❌ Ошибка подключения к голосовому каналу: не дождались voice state от Discord.";
+                    }
+                    Log($"[Music] JoinAndAwaitVoice: успех, player state={player?.State}");
                 }
                 catch (Exception ex)
                 {
-                    Log($"[Music] JoinAsync exception: {ex}");
+                    Log($"[Music] JoinAndAwaitVoice exception: {ex}");
                     return $"❌ Ошибка подключения к голосовому каналу: {ex.Message}";
                 }
             }
@@ -677,11 +772,9 @@ namespace RPBot
             {
                 try
                 {
-                    player = await Task.Run(() => _audioService.Players.JoinAsync(
-                        voiceChannel,
-                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(props => new NotifyingPlayer(props)),
-                        Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken).AsTask(), cancellationToken);
+                    player = await JoinAndAwaitVoiceAsync(user, TimeSpan.FromSeconds(15), cancellationToken);
+                    if (player is null)
+                        return new PlayResult { Message = "❌ Ошибка подключения: не дождались voice state от Discord. Попробуй ещё раз." };
                 }
                 catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
             }
@@ -1010,19 +1103,19 @@ namespace RPBot
             {
                 try
                 {
-                    // JoinAsync ждёт VOICE_SERVER_UPDATE от Discord Gateway.
-                    // Если мы на гейтвей-потоке — этот ответ никогда не придёт (дедлок).
-                    // Task.Run уходит с гейтвей-потока и позволяет Gateway обрабатывать входящие события.
-                    player = await Task.Run(() => _audioService.Players.JoinAsync(
-                        user.VoiceChannel,
-                        PlayerFactory.Create<NotifyingPlayer, QueuedLavalinkPlayerOptions>(
-                            props => new NotifyingPlayer(props)),
-                        Options.Create(new QueuedLavalinkPlayerOptions()),
-                        cancellationToken).AsTask(), cancellationToken);
+                    // Используем надёжный helper: ждём реальное событие от Discord
+                    // о voice state бота (с явным таймаутом 15с), параллельно запустив
+                    // JoinAsync на отдельном потоке, чтобы gateway мог обрабатывать события.
+                    player = await JoinAndAwaitVoiceAsync(user, TimeSpan.FromSeconds(15), cancellationToken);
+                    if (player is null)
+                    {
+                        Log($"[Music] EnsureJoinedAsync: не дождались voice state от Discord");
+                        return null;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Log($"[Music] EnsureJoinedAsync: ошибка JoinAsync — {ex.Message}");
+                    Log($"[Music] EnsureJoinedAsync: ошибка JoinAndAwaitVoice — {ex.Message}");
                     return null;
                 }
             }
