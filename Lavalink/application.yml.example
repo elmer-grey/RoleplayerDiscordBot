@@ -63,12 +63,10 @@ plugins:
     clients:
       - WEB             # полная загрузка плейлистов и поиск
       - TVHTML5_SIMPLY  # загружает метаданные трека
-      - TV              # playback-only с OAuth через remote cipher
     remoteCipher:
-      # ⚠ По умолчанию используется публичный сервис cipher.kikkia.dev (тот же автор yt-cipher).
-      # Если хостишь локальный yt-cipher (deno run server.ts), поменяй на http://localhost:8001
-      # и выстави YtCipherAutoStart=true в config.json.
-      url: "https://cipher.kikkia.dev"
+      # Локальный yt-cipher, который автоматически поднимает RPBot на 127.0.0.1:8001
+      # (Music.YtCipherAutoStart=true). Если поднимаешь свой — поменяй URL.
+      url: "http://127.0.0.1:8001"
       userAgent: "RoleplayerDiscordBot"
     oauth:
       enabled: true
