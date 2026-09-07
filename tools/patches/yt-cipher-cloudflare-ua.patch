@@ -1,0 +1,19 @@
+diff --git a/src/playerCache.ts b/src/playerCache.ts
+--- a/src/playerCache.ts
++++ b/src/playerCache.ts
+@@ -55,7 +55,14 @@ export async function getPlayerFilePath(playerScript: PlayerScript): Promise<str
+     } catch (error) {
+         if (error instanceof Deno.errors.NotFound) {
+             console.log(`Cache miss for player: ${playerUrl}. Fetching...`);
+-            const response = await fetch(playerUrl);
++            const response = await fetch(playerUrl, {
++                headers: {
++                    // Cloudflare в 2026 блокирует запросы без User-Agent.
++                    // youtube-plugin (TV client) шлёт этот же UA, поэтому Cloudflare пропускает.
++                    "User-Agent": "com.google.android.youtube/19.09.3 (Linux; U; Android 11) gzip",
++                    "Accept-Language": "en-US,en;q=0.9",
++                },
++            });
+             playerScriptFetches.labels({ player_url: playerUrl, status: String(response.status) }).inc();
+             if (!response.ok) {
+                 throw new Error(`Failed to fetch player from ${playerUrl}: ${response.statusText}`);
