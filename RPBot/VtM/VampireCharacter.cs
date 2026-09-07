@@ -382,6 +382,18 @@ public sealed class VampireCharacter
                 [JsonPropertyName("derangements")]
                 public List<string> Derangements { get; set; } = new();
 
+                /// <summary>
+                /// Активные атавизмы (Гангрел, V20 стр. 95). Добавляются при входе в ярость
+                /// и становятся постоянными, если рассказчик решит.
+                /// </summary>
+                /// <remarks>
+                /// Хранится на персонаже, чтобы можно было отображать список в листе и стирать
+                /// вручную. Сейчас заполняется автоматически в <see cref="VampireFrenzyResolver"/>
+                /// при провале проверки самоконтроля для Гангрела.
+                /// </remarks>
+                [JsonPropertyName("activeAtavisms")]
+                public List<string> ActiveAtavisms { get; set; } = new();
+
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").
     /// </summary>

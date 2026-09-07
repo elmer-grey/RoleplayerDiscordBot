@@ -5567,6 +5567,16 @@ await Task.CompletedTask;
                             await new VampireCommands().HandleMoralityButtonAsync(component);
                         return;
                     }
+                    if (cid.StartsWith(VampireFrenzyComponents.Prefix, StringComparison.Ordinal))
+                    {
+                        if (component.GuildId.HasValue)
+                        {
+                            var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+                            var rng = new SystemRandomAdapter();
+                            await new VampireFrenzyButtonHandler(storage, rng).HandleAsync(component);
+                        }
+                        return;
+                    }
                     if (cid.StartsWith(VampireRollComponents.RerollPrefix, StringComparison.Ordinal) ||
                         cid.StartsWith(VampireRollComponents.RepeatAction, StringComparison.Ordinal) ||
                         cid.StartsWith(VampireRollComponents.DoneAction, StringComparison.Ordinal))

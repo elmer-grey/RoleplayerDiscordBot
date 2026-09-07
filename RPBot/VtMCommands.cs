@@ -196,7 +196,7 @@ public sealed class VampireCommands
             var dm = await recipient.CreateDMChannelAsync();
             dmMessage = await dm.SendMessageAsync(
                 embed: VampireSheetEmbed.Build(character),
-                components: VampireSheetComponents.Build(character, showExperienceButton: true));
+                components: VampireSheetComponents.Build(character, showExperienceButton: true, showFrenzyButton: true));
         }
         catch (Exception ex)
         {
@@ -627,6 +627,14 @@ public sealed class VampireCommands
                 await component.RespondAsync(
                     "**Опыт** — выберите действие:",
                     components: VampireExperienceComponents.Build(charId),
+                    ephemeral: true);
+                return;
+            }
+            case VampireSheetAction.Frenzy:
+            {
+                await component.RespondAsync(
+                    embed: VampireFrenzyEmbed.Build(character),
+                    components: VampireFrenzyComponents.Build(character),
                     ephemeral: true);
                 return;
             }

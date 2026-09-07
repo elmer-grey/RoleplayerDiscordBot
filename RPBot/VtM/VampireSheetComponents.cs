@@ -21,6 +21,8 @@ namespace RPBot.VtM
         Morality,
         /// <summary>Открыть/скрыть блок «Опыт» (начисление/трата).</summary>
         Experience,
+        /// <summary>Открыть блок «Ярость» (проверка сопротивления ярости V20 стр. 322-325, #42).</summary>
+        Frenzy,
         /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
         ToggleActive,
     }
@@ -46,6 +48,7 @@ namespace RPBot.VtM
         private const string ButtonLabelClan        = "Клан";
         private const string ButtonLabelMorality    = "Мораль";
         private const string ButtonLabelExperience  = "Опыт";
+        private const string ButtonLabelFrenzy      = "🔥 Ярость";
         private const string ButtonLabelActive      = "✅ Активный";
         private const string ButtonLabelInactive    = "❌ Неактивный";
 
@@ -64,11 +67,15 @@ namespace RPBot.VtM
             /// true — добавить второй ActionRow с кнопкой «Опыт» (Roadmap #34).
             /// false — не показывать.
             /// </param>
+            /// <param name="showFrenzyButton">
+            /// true — добавить кнопку «🔥 Ярость» во второй ряд (#42 «Зверь в ярости»).
+            /// </param>
             public static MessageComponent Build(
                 VampireCharacter character,
                 bool showActiveToggle = false,
                 bool isActive = true,
-                bool showExperienceButton = false)
+                bool showExperienceButton = false,
+                bool showFrenzyButton = false)
             {
                 if (character == null) throw new ArgumentNullException(nameof(character));
                 if (character.CharacterId == Guid.Empty)
@@ -93,11 +100,22 @@ namespace RPBot.VtM
                     cb.WithButton(label, BuildCustomId(VampireSheetAction.ToggleActive, character.CharacterId), style);
                 }
 
-                if (showExperienceButton)
+                if (showExperienceButton || showFrenzyButton)
                 {
-                    cb.WithButton(ButtonLabelExperience,
-                        BuildCustomId(VampireSheetAction.Experience, character.CharacterId),
-                        ButtonStyle.Success);
+                    // Второй ряд: «Опыт» и/или «Ярость». Discord разрешает до 5 кнопок в ряду,
+                    // пока оставляем в отдельном ActionRow для чистоты.
+                    if (showExperienceButton)
+                    {
+                        cb.WithButton(ButtonLabelExperience,
+                            BuildCustomId(VampireSheetAction.Experience, character.CharacterId),
+                            ButtonStyle.Success, row: 1);
+                    }
+                    if (showFrenzyButton)
+                    {
+                        cb.WithButton(ButtonLabelFrenzy,
+                            BuildCustomId(VampireSheetAction.Frenzy, character.CharacterId),
+                            ButtonStyle.Danger, row: 1);
+                    }
                 }
 
                 return cb.Build();
@@ -135,6 +153,7 @@ namespace RPBot.VtM
             VampireSheetAction.Clan         => "clan",
             VampireSheetAction.Morality     => "moral",
             VampireSheetAction.Experience   => "xp",
+            VampireSheetAction.Frenzy       => "frenzy",
             VampireSheetAction.ToggleActive => "active",
             _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
         };
@@ -149,6 +168,7 @@ namespace RPBot.VtM
                 case "clan":   action = VampireSheetAction.Clan;         return true;
                 case "moral":  action = VampireSheetAction.Morality;     return true;
                 case "xp":     action = VampireSheetAction.Experience;   return true;
+                case "frenzy": action = VampireSheetAction.Frenzy;       return true;
                 case "active": action = VampireSheetAction.ToggleActive; return true;
                 default:       action = default;                          return false;
             }
