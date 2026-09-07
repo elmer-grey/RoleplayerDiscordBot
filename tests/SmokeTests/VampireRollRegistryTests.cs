@@ -144,32 +144,6 @@ public class VampireRollComponentsTests
     }
 
     [Theory]
-    [InlineData("vam_reroll_amt:1:12345", 12345UL, 1)]
-    [InlineData("vam_reroll_amt:2:42", 42UL, 2)]
-    [InlineData("vam_reroll_amt:3:9999999999", 9999999999UL, 3)]
-    public void TryParseRerollAmount_Valid(string customId, ulong expectedUser, int expectedCount)
-    {
-        Assert.True(VampireRollComponents.TryParseRerollAmount(customId, out var user, out var count));
-        Assert.Equal(expectedUser, user);
-        Assert.Equal(expectedCount, count);
-    }
-
-    [Theory]
-    [InlineData("vam_reroll_amt:0:42")]
-    [InlineData("vam_reroll_amt:4:42")]
-    [InlineData("vam_reroll_amt:-1:42")]
-    [InlineData("vam_reroll_amt:abc:42")]
-    [InlineData("vam_reroll_amt:1:notnumber")]
-    [InlineData("vam_reroll_amt:1")]
-    [InlineData("vam_reroll_amt:1:42:extra")]
-    [InlineData("other_button")]
-    [InlineData("")]
-    public void TryParseRerollAmount_Invalid_ReturnsFalse(string customId)
-    {
-        Assert.False(VampireRollComponents.TryParseRerollAmount(customId, out _, out _));
-    }
-
-    [Theory]
     [InlineData("vam_reroll_back:12345", 12345UL, true)]
     [InlineData("vam_reroll_back:42", 42UL, true)]
     public void IsRerollBackButton_Valid(string customId, ulong expectedUser, bool expected)
@@ -262,5 +236,54 @@ public class VampireRollComponentsTests
     {
         var empty = VampireRollComponents.BuildEmpty();
         Assert.NotNull(empty);
+    }
+
+    // ─── SelectMenu customId (vam_reroll_menu:{userId}) ────────────────────
+    // Кнопка открытия теперь одна, а picker — SelectMenu; customId меню
+    // содержит только userId (значение бросается в component.Data.Values[0]).
+
+    [Theory]
+    [InlineData("vam_reroll_menu:12345", 12345UL)]
+    [InlineData("vam_reroll_menu:42", 42UL)]
+    [InlineData("vam_reroll_menu:9999999999", 9999999999UL)]
+    public void TryParseRerollMenu_Valid(string customId, ulong expectedUser)
+    {
+        Assert.True(VampireRollComponents.TryParseRerollMenu(customId, out var user));
+        Assert.Equal(expectedUser, user);
+    }
+
+    [Theory]
+    [InlineData("vam_reroll_menu")]
+    [InlineData("vam_reroll_menu:")]
+    [InlineData("vam_reroll_menu:abc")]
+    [InlineData("vam_reroll_menu:1:extra")]
+    [InlineData("vam_reroll:42")] // open-button — не меню
+    [InlineData("other_button")]
+    [InlineData("")]
+    public void TryParseRerollMenu_Invalid_ReturnsFalse(string customId)
+    {
+        Assert.False(VampireRollComponents.TryParseRerollMenu(customId, out _));
+    }
+
+    [Theory]
+    [InlineData("1", 1)]
+    [InlineData("2", 2)]
+    [InlineData("3", 3)]
+    public void TryParseRerollMenuValue_Valid(string raw, int expected)
+    {
+        Assert.True(VampireRollComponents.TryParseRerollMenuValue(raw, out var count));
+        Assert.Equal(expected, count);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("4")]
+    [InlineData("-1")]
+    [InlineData("abc")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseRerollMenuValue_Invalid_ReturnsFalse(string? raw)
+    {
+        Assert.False(VampireRollComponents.TryParseRerollMenuValue(raw, out _));
     }
 }

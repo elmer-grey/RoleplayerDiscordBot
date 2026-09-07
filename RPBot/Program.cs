@@ -96,6 +96,7 @@ private MusicPlaylistStore? _playlistStore;
 private MusicQueueStore? _musicQueueStore;
 private MusicStats? _musicStats;
 private VampireCommands? _vampireCommands;
+private VampireRollButtonHandler? _vampireRollButtonHandler;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent?> _pendingBetUi = new();
 
@@ -1279,6 +1280,7 @@ private void SaveServerConfigs()
         // обернём по аналогии с Music.Enabled.
         {
             _vampireCommands ??= new VampireCommands();
+            _vampireRollButtonHandler ??= new VampireRollButtonHandler();
             SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
             SlashModuleRegistry.Register(new VampireCombatSlashModule());
         }
@@ -5563,6 +5565,13 @@ await Task.CompletedTask;
                             await new VampireCommands().HandleMoralitySelectAsync(component);
                         else
                             await new VampireCommands().HandleMoralityButtonAsync(component);
+                        return;
+                    }
+                    if (cid.StartsWith(VampireRollComponents.RerollPrefix, StringComparison.Ordinal) ||
+                        cid.StartsWith(VampireRollComponents.RepeatAction, StringComparison.Ordinal) ||
+                        cid.StartsWith(VampireRollComponents.DoneAction, StringComparison.Ordinal))
+                    {
+                        await _vampireRollButtonHandler!.HandleAsync(component);
                         return;
                     }
                     if (_musicCommands is not null &&

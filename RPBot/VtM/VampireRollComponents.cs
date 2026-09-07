@@ -9,16 +9,16 @@ namespace RPBot.VtM
     /// Под основным сообщением с броском — 2 ряда кнопок:
     ///   • Ряд 1: «🎲 Переброс за волю» (customId <c>vam_reroll:{userId}</c>) и «✅ Готово»
     ///     (customId <c>vam_done:{userId}</c>, просто снимает кнопки).
-    ///   • Ряд 2: «🔁 Повторить» (customId <c>vam_repeat:{userId}</c>) — повторный бросок того же
-    ///     пула без траты пункта воли (V20: «повторный бросок»).
+    ///   • Ряд 2: «🔁 Повторить» (customId <c>vam_repeat:{userId}</c>) — повторный бросок по V20:
+    ///     пул N-1 кубов, берётся новый результат.
     ///
     /// При нажатии на «🎲 Переброс за волю» handler перерисовывает сообщение на picker
-    /// (<see cref="BuildRerollAmountPicker"/>) с выбором числа кубиков 1/2/3 и кнопкой «← Назад».
-    /// По выбору N handler применяет <see cref="WillpowerReroll"/> со списанием пункта воли и
-    /// удаляет запись из <see cref="VampireRollRegistry"/>.
+    /// (<see cref="BuildRerollAmountPicker"/>) с SelectMenu выбора числа кубиков 1/2/3
+    /// и кнопкой «← Назад». По выбору N handler применяет <see cref="WillpowerReroll"/>
+    /// со списанием пункта воли и удаляет запись из <see cref="VampireRollRegistry"/>.
     ///
-    /// «🔁 Повторить» — повторный бросок (V20, стр. 274): можно повторить любой бросок один раз,
-    /// результат — лучший из двух. Стоимости воли нет.
+    /// «🔁 Повторить» — повторный бросок по правилу повторных попыток (V20, стр. 286/267):
+    /// пул уменьшается на 1 кубик, берётся результат повторного броска. Стоимости воли нет.
     ///
     /// Приватной видимости в Discord нет — handler проверяет <c>component.User.Id == originalUserId</c>
     /// и при чужом нажатии отвечает ephemeral «это не твой бросок».
@@ -28,13 +28,13 @@ namespace RPBot.VtM
         /// <summary>Префикс кнопки «Переброс за волю» (открывает picker).</summary>
         public const string RerollPrefix = "vam_reroll";
 
-        /// <summary>Префикс кнопки выбора числа кубиков в picker'е (после открытия переброса).</summary>
-        public const string RerollAmountPrefix = "vam_reroll_amt";
+        /// <summary>Префикс SelectMenu для выбора числа кубиков в picker'е.</summary>
+        public const string RerollMenuAction = "vam_reroll_menu";
 
         /// <summary>Префикс кнопки «← Назад» из picker'а.</summary>
         public const string RerollBackAction = "vam_reroll_back";
 
-        /// <summary>Префикс кнопки «🔁 Повторить» (повторный бросок без траты воли).</summary>
+        /// <summary>Префикс кнопки «🔁 Повторить» (повторный бросок по V20: пул −1, берётся новый результат).</summary>
         public const string RepeatAction = "vam_repeat";
 
         /// <summary>Префикс кнопки «✅ Готово».</summary>
@@ -54,7 +54,8 @@ namespace RPBot.VtM
         }
 
         /// <summary>
-        /// Picker числа кубиков для переброса (3 кнопки в 1 ряду + кнопка «← Назад» во 2 ряду).
+        /// Picker числа кубиков для переброса: SelectMenu (1/2/3 кубика) в 1 ряду
+        /// + кнопка «← Назад» во 2 ряду. Три варианта собраны в одну SelectMenu.
         /// </summary>
         /// <remarks>
         /// Вызывается при нажатии «🎲 Переброс за волю». Handler по выбору N применяет
@@ -63,10 +64,17 @@ namespace RPBot.VtM
         /// <param name="originalUserId">Discord-ID автора броска.</param>
         public static MessageComponent BuildRerollAmountPicker(ulong originalUserId)
         {
+            var menu = new SelectMenuBuilder()
+                .WithCustomId($"{RerollMenuAction}:{originalUserId}")
+                .WithPlaceholder("Сколько кубиков перебросить за 1 волю?")
+                .WithMinValues(1)
+                .WithMaxValues(1)
+                .AddOption("1 кубик", "1", "Перебросить 1 худший regular-кубик (−1 воля).")
+                .AddOption("2 кубика", "2", "Перебросить 2 худших regular-кубика (−1 воля).")
+                .AddOption("3 кубика", "3", "Перебросить 3 худших regular-кубика (−1 воля).");
+
             return new ComponentBuilder()
-                .WithButton("1 кубик", $"{RerollAmountPrefix}:1:{originalUserId}", ButtonStyle.Primary)
-                .WithButton("2 кубика", $"{RerollAmountPrefix}:2:{originalUserId}", ButtonStyle.Primary)
-                .WithButton("3 кубика", $"{RerollAmountPrefix}:3:{originalUserId}", ButtonStyle.Primary)
+                .WithSelectMenu(menu)
                 .WithButton("← Назад", $"{RerollBackAction}:{originalUserId}", ButtonStyle.Secondary)
                 .Build();
         }
@@ -90,20 +98,28 @@ namespace RPBot.VtM
         }
 
         /// <summary>
-        /// Разобрать customId кнопки выбора числа кубиков из picker'а.
+        /// Разобрать customId SelectMenu выбора числа кубиков из picker'а.
         /// </summary>
-        /// <returns>true, если это кнопка picker'а и parsed корректен.</returns>
-        public static bool TryParseRerollAmount(string customId, out ulong originalUserId, out int count)
+        /// <returns>true, если это SelectMenu picker'а и parsed корректен.</returns>
+        public static bool TryParseRerollMenu(string customId, out ulong originalUserId)
         {
             originalUserId = 0;
-            count = 0;
             if (string.IsNullOrEmpty(customId)) return false;
-            if (!customId.StartsWith(RerollAmountPrefix + ":")) return false;
+            if (!customId.StartsWith(RerollMenuAction + ":")) return false;
             var parts = customId.Split(':');
-            if (parts.Length != 3) return false;
-            if (!int.TryParse(parts[1], out count)) return false;
+            if (parts.Length != 2) return false;
+            return ulong.TryParse(parts[1], out originalUserId);
+        }
+
+        /// <summary>
+        /// Разобрать выбранное значение в SelectMenu (1..3 кубика).
+        /// </summary>
+        public static bool TryParseRerollMenuValue(string? value, out int count)
+        {
+            count = 0;
+            if (string.IsNullOrEmpty(value)) return false;
+            if (!int.TryParse(value, out count)) return false;
             if (count < 1 || count > 3) return false;
-            if (!ulong.TryParse(parts[2], out originalUserId)) return false;
             return true;
         }
 
