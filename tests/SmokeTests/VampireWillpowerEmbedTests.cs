@@ -66,12 +66,12 @@ public class VampireWillpowerEmbedTests
     }
 
     [Fact]
-    public void Components_HasThreeButtons()
+    public void Components_HasFourButtons()
     {
         var c = NewCharacter();
         var mc = VampireWillpowerEmbed.Components(c);
         var row = Assert.IsType<ActionRowComponent>(Assert.Single(mc.Components));
-        Assert.Equal(3, row.Components.OfType<ButtonComponent>().Count());
+            Assert.Equal(4, row.Components.OfType<ButtonComponent>().Count());
     }
 
     [Fact]

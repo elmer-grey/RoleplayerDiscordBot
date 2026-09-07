@@ -13,6 +13,8 @@ namespace RPBot.VtM
         SpendOne,
         /// <summary>Восстановить 1 пункт (только в конце истории, по решению рассказчика).</summary>
         RestoreOne,
+        /// <summary>Восстановить 1 пункт за выполнение условия архетипа (#35, лимит 1/ночь).</summary>
+        RestoreByArchetype,
         /// <summary>Закрыть блок.</summary>
         Close,
     }
@@ -35,6 +37,7 @@ namespace RPBot.VtM
             return new ComponentBuilder()
                 .WithButton("Сопротивление (−1)", BuildId(WillpowerAction.SpendOne,   characterId), ButtonStyle.Primary)
                 .WithButton("Восстановление (+1)", BuildId(WillpowerAction.RestoreOne, characterId), ButtonStyle.Success)
+                .WithButton("За архетип (+1)",     BuildId(WillpowerAction.RestoreByArchetype, characterId), ButtonStyle.Success)
                 .WithButton("Скрыть",              BuildId(WillpowerAction.Close,      characterId), ButtonStyle.Secondary)
                 .Build();
         }
@@ -60,9 +63,10 @@ namespace RPBot.VtM
 
         private static string ActionToString(WillpowerAction action) => action switch
         {
-            WillpowerAction.SpendOne   => "spend",
-            WillpowerAction.RestoreOne => "restore",
-            WillpowerAction.Close      => "close",
+            WillpowerAction.SpendOne           => "spend",
+            WillpowerAction.RestoreOne         => "restore",
+            WillpowerAction.RestoreByArchetype => "restore_archetype",
+            WillpowerAction.Close              => "close",
             _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(WillpowerAction)),
         };
 
@@ -70,10 +74,11 @@ namespace RPBot.VtM
         {
             switch (s)
             {
-                case "spend":   action = WillpowerAction.SpendOne;   return true;
-                case "restore": action = WillpowerAction.RestoreOne; return true;
-                case "close":   action = WillpowerAction.Close;      return true;
-                default:        action = default;                    return false;
+                case "spend":             action = WillpowerAction.SpendOne;           return true;
+                case "restore":           action = WillpowerAction.RestoreOne;         return true;
+                case "restore_archetype": action = WillpowerAction.RestoreByArchetype; return true;
+                case "close":             action = WillpowerAction.Close;              return true;
+                default:                  action = default;                            return false;
             }
         }
     }
