@@ -118,30 +118,95 @@ public class VampireRollRegistryTests
 
 public class VampireRollComponentsTests
 {
+    // ─── Новая схема (одна кнопка открытия + picker) ────────────────────────
+
     [Theory]
-    [InlineData("vam_reroll:1:12345", 12345UL, 1)]
-    [InlineData("vam_reroll:2:42", 42UL, 2)]
-    [InlineData("vam_reroll:3:9999999999", 9999999999UL, 3)]
-    public void TryParseReroll_Valid(string customId, ulong expectedUser, int expectedCount)
+    [InlineData("vam_reroll:12345", 12345UL)]
+    [InlineData("vam_reroll:42", 42UL)]
+    [InlineData("vam_reroll:9999999999", 9999999999UL)]
+    public void IsRerollOpenButton_Valid(string customId, ulong expectedUser)
     {
-        Assert.True(VampireRollComponents.TryParseReroll(customId, out var user, out var count));
+        Assert.True(VampireRollComponents.IsRerollOpenButton(customId, out var user));
+        Assert.Equal(expectedUser, user);
+    }
+
+    [Theory]
+    [InlineData("vam_reroll")]
+    [InlineData("vam_reroll:")]
+    [InlineData("vam_reroll:abc")]
+    [InlineData("vam_reroll:1:42")]      // старая схема — невалидно для открытия
+    [InlineData("vam_reroll:42:extra")]
+    [InlineData("other_button")]
+    [InlineData("")]
+    public void IsRerollOpenButton_Invalid_ReturnsFalse(string customId)
+    {
+        Assert.False(VampireRollComponents.IsRerollOpenButton(customId, out _));
+    }
+
+    [Theory]
+    [InlineData("vam_reroll_amt:1:12345", 12345UL, 1)]
+    [InlineData("vam_reroll_amt:2:42", 42UL, 2)]
+    [InlineData("vam_reroll_amt:3:9999999999", 9999999999UL, 3)]
+    public void TryParseRerollAmount_Valid(string customId, ulong expectedUser, int expectedCount)
+    {
+        Assert.True(VampireRollComponents.TryParseRerollAmount(customId, out var user, out var count));
         Assert.Equal(expectedUser, user);
         Assert.Equal(expectedCount, count);
     }
 
     [Theory]
-    [InlineData("vam_reroll:0:42")]
-    [InlineData("vam_reroll:4:42")]
-    [InlineData("vam_reroll:-1:42")]
-    [InlineData("vam_reroll:abc:42")]
-    [InlineData("vam_reroll:1:notnumber")]
-    [InlineData("vam_reroll:1")]
-    [InlineData("vam_reroll:1:42:extra")]
+    [InlineData("vam_reroll_amt:0:42")]
+    [InlineData("vam_reroll_amt:4:42")]
+    [InlineData("vam_reroll_amt:-1:42")]
+    [InlineData("vam_reroll_amt:abc:42")]
+    [InlineData("vam_reroll_amt:1:notnumber")]
+    [InlineData("vam_reroll_amt:1")]
+    [InlineData("vam_reroll_amt:1:42:extra")]
     [InlineData("other_button")]
     [InlineData("")]
-    public void TryParseReroll_Invalid_ReturnsFalse(string customId)
+    public void TryParseRerollAmount_Invalid_ReturnsFalse(string customId)
     {
-        Assert.False(VampireRollComponents.TryParseReroll(customId, out _, out _));
+        Assert.False(VampireRollComponents.TryParseRerollAmount(customId, out _, out _));
+    }
+
+    [Theory]
+    [InlineData("vam_reroll_back:12345", 12345UL, true)]
+    [InlineData("vam_reroll_back:42", 42UL, true)]
+    public void IsRerollBackButton_Valid(string customId, ulong expectedUser, bool expected)
+    {
+        Assert.Equal(expected, VampireRollComponents.IsRerollBackButton(customId, out var user));
+        Assert.Equal(expectedUser, user);
+    }
+
+    [Theory]
+    [InlineData("vam_reroll_back")]
+    [InlineData("vam_reroll_back:")]
+    [InlineData("vam_reroll_back:abc")]
+    [InlineData("vam_reroll_back:1:extra")]
+    [InlineData("other_button")]
+    public void IsRerollBackButton_Invalid_ReturnsFalse(string customId)
+    {
+        Assert.False(VampireRollComponents.IsRerollBackButton(customId, out _));
+    }
+
+    [Theory]
+    [InlineData("vam_repeat:12345", 12345UL, true)]
+    [InlineData("vam_repeat:42", 42UL, true)]
+    public void IsRepeatButton_Valid(string customId, ulong expectedUser, bool expected)
+    {
+        Assert.Equal(expected, VampireRollComponents.IsRepeatButton(customId, out var user));
+        Assert.Equal(expectedUser, user);
+    }
+
+    [Theory]
+    [InlineData("vam_repeat")]
+    [InlineData("vam_repeat:")]
+    [InlineData("vam_repeat:abc")]
+    [InlineData("vam_repeat:1:extra")]
+    [InlineData("other_button")]
+    public void IsRepeatButton_Invalid_ReturnsFalse(string customId)
+    {
+        Assert.False(VampireRollComponents.IsRepeatButton(customId, out _));
     }
 
     [Theory]
@@ -164,6 +229,18 @@ public class VampireRollComponentsTests
         Assert.False(VampireRollComponents.IsDoneButton(customId, out _));
     }
 
+    // ─── Старая схема (vam_reroll:N:userId) больше НЕ парсится ──────────────
+    // Подтверждаем: старый формат не открывает picker и не считается кнопкой выбора числа.
+
+    [Theory]
+    [InlineData("vam_reroll:1:12345")]
+    [InlineData("vam_reroll:2:42")]
+    [InlineData("vam_reroll:3:42")]
+    public void OldRerollSchema_NotOpenButton(string customId)
+    {
+        Assert.False(VampireRollComponents.IsRerollOpenButton(customId, out _));
+    }
+
     [Fact]
     public void BuildRollButtons_ProducesNonEmptyComponent()
     {
@@ -171,6 +248,13 @@ public class VampireRollComponentsTests
         Assert.NotNull(buttons);
         // Не проверяем структуру — это DNET-объект, мы лишь удостоверяемся,
         // что строитель не падает и отдаёт ненулевой MessageComponent.
+    }
+
+    [Fact]
+    public void BuildRerollAmountPicker_ProducesNonEmptyComponent()
+    {
+        var picker = VampireRollComponents.BuildRerollAmountPicker(42UL);
+        Assert.NotNull(picker);
     }
 
     [Fact]
