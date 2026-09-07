@@ -45,6 +45,7 @@ public sealed class VampireSlashModule : ISlashCommandModule
                     .AddChoice("unbind", "unbind")
                     .AddChoice("show",   "show")
                     .AddChoice("create", "create")
+                    .AddChoice("diablerie", "diablerie")
                     .WithRequired(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("name")
@@ -62,6 +63,33 @@ public sealed class VampireSlashModule : ISlashCommandModule
                     .WithType(ApplicationCommandOptionType.String)
                     .AddChoice("dm",     "dm")
                     .AddChoice("public", "public")
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("attacker")
+                    .WithDescription("Только для action=diablerie: кто совершает диаблери.")
+                    .WithType(ApplicationCommandOptionType.User)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("victim")
+                    .WithDescription("Только для action=diablerie: жертва диаблери.")
+                    .WithType(ApplicationCommandOptionType.User)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("gen")
+                    .WithDescription("Только для action=diablerie: поколение атакующего (3..15).")
+                    .WithType(ApplicationCommandOptionType.Integer)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("hum")
+                    .WithDescription("Только для action=diablerie: Человечность или PathRating атакующего (1..10).")
+                    .WithType(ApplicationCommandOptionType.Integer)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("success")
+                    .WithDescription("Только для action=diablerie: диаблери удалось? По умолчанию — true.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .AddChoice("true", "true")
+                    .AddChoice("false", "false")
                     .WithRequired(false)),
         };
     }
@@ -86,8 +114,11 @@ public sealed class VampireSlashModule : ISlashCommandModule
             case "create":
                 await _commands.HandleCreateAsync(command);
                 return true;
+            case "diablerie":
+                await _commands.HandleDiablerieAsync(command);
+                return true;
             default:
-                await command.RespondAsync("Неизвестное действие. Укажите `bind`, `unbind`, `show` или `create`.", ephemeral: true);
+                await command.RespondAsync("Неизвестное действие. Укажите `bind`, `unbind`, `show`, `create` или `diablerie`.", ephemeral: true);
                 return true;
         }
     }

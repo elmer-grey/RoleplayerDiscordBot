@@ -37,8 +37,10 @@ public class VampireExperienceModalTests
     public void Build_HasAmountField()
     {
         var modal = VampireExperienceModal.Build(ExperienceModalAction.Grant, Guid.NewGuid());
-        Assert.Contains(modal.Components.OfType<Discord.TextInputComponent>(),
-            c => c.CustomId == VampireExperienceModal.AmountFieldId);
+        var labels = modal.Component.Components.OfType<Discord.LabelComponent>().ToList();
+        Assert.Contains(labels,
+            l => l.Component is Discord.TextInputComponent ti
+                 && ti.CustomId == VampireExperienceModal.AmountFieldId);
     }
 
     [Theory]
