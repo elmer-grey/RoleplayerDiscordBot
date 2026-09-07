@@ -5250,13 +5250,13 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                         if (_musicCommands is not null)
                             await _musicCommands.HandleMusicAsync(command);
                         else
-                            await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                            await command.RespondAsync("🎵 Музыкальный модуль временно отключён.", ephemeral: true);
                         break;
                     case "music-playlist":
                         if (_musicCommands is not null)
                             await _musicCommands.HandleMusicPlaylistAsync(command);
                         else
-                            await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
+                            await command.RespondAsync("🎵 Музыкальный модуль временно отключён.", ephemeral: true);
                         break;
                     default:
                         await command.RespondAsync("Команда не распознана.");
