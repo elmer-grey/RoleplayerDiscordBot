@@ -196,7 +196,7 @@ public sealed class VampireCommands
             var dm = await recipient.CreateDMChannelAsync();
             dmMessage = await dm.SendMessageAsync(
                 embed: VampireSheetEmbed.Build(character),
-                components: VampireSheetComponents.Build(character));
+                components: VampireSheetComponents.Build(character, showExperienceButton: true));
         }
         catch (Exception ex)
         {
@@ -476,6 +476,22 @@ public sealed class VampireCommands
                 {
                     await component.RespondAsync(embed: embed, ephemeral: true);
                 }
+                return;
+            }
+            case VampireSheetAction.Morality:
+            {
+                await component.RespondAsync(
+                    embed: VampireMoralityEmbed.BuildEmbed(character),
+                    components: VampireMoralityComponents.Build(charId),
+                    ephemeral: true);
+                return;
+            }
+            case VampireSheetAction.Experience:
+            {
+                await component.RespondAsync(
+                    "**Опыт** — выберите действие:",
+                    components: VampireExperienceComponents.Build(charId),
+                    ephemeral: true);
                 return;
             }
             case VampireSheetAction.ToggleActive:
@@ -1250,6 +1266,218 @@ public sealed class VampireCommands
     {
         // На Этапе 1 у пользователя одна сессия; ищем её.
         return VampireWizardRegistry.Instance.GetByUser(userId);
+    }
+
+    /// <summary>
+    /// Обработка нажатия на кнопки Grant/Spend опыта (Roadmap #34).
+    /// Открывает модалку с полем «Количество».
+    /// </summary>
+    public async Task HandleExperienceButtonAsync(SocketMessageComponent component)
+    {
+        if (!VampireExperienceComponents.TryParse(component.Data.CustomId, out var action, out var charId))
+        {
+            await component.RespondAsync("⚠️ Не удалось разобрать кнопку опыта.", ephemeral: true);
+            return;
+        }
+        if (!component.GuildId.HasValue)
+        {
+            await component.RespondAsync("Кнопки опыта работают только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+        var character = storage.GetByCharacterId(charId);
+        if (character == null)
+        {
+            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != component.User.Id)
+        {
+            await component.RespondAsync("⚠️ Только владелец чарника может изменять опыт.", ephemeral: true);
+            return;
+        }
+        await component.RespondWithModalAsync(VampireExperienceModal.Build(action, charId));
+    }
+
+    /// <summary>
+    /// Обработка сабмита модалки опыта: применяет дельту к персонажу и сохраняет.
+    /// </summary>
+    public async Task HandleExperienceModalAsync(SocketModal modal)
+    {
+        if (!VampireExperienceModal.TryParse(modal.Data.CustomId, out var action, out var charId))
+        {
+            await modal.RespondAsync("⚠️ Не удалось разобрать модалку опыта.", ephemeral: true);
+            return;
+        }
+
+        string raw = string.Empty;
+        foreach (var comp in modal.Data.Components)
+        {
+            if (string.Equals(comp.CustomId, VampireExperienceModal.AmountFieldId, StringComparison.OrdinalIgnoreCase))
+                raw = comp.Value ?? string.Empty;
+        }
+        if (!VampireExperienceModal.TryParseAmount(raw, out var amount))
+        {
+            await modal.RespondAsync("⚠️ Количество опыта должно быть положительным целым.", ephemeral: true);
+            return;
+        }
+
+        var guildId = modal.GuildId ?? (modal.User as SocketGuildUser)?.Guild.Id;
+        if (!guildId.HasValue)
+        {
+            await modal.RespondAsync("Модалка доступна только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(guildId.Value);
+        var character = storage.GetByCharacterId(charId);
+        if (character == null)
+        {
+            await modal.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != modal.User.Id)
+        {
+            await modal.RespondAsync("⚠️ Только владелец чарника может изменять опыт.", ephemeral: true);
+            return;
+        }
+
+        string msg;
+        if (action == ExperienceModalAction.Grant)
+        {
+            character.ExperienceCurrent += amount;
+            character.ExperienceTotal   += amount;
+            msg = $"✅ Начислено **{amount}** опыта. Текущий: **{character.ExperienceCurrent}**.";
+        }
+        else
+        {
+            if (character.ExperienceCurrent < amount)
+            {
+                await modal.RespondAsync(
+                    $"⚠️ Недостаточно опыта: доступно {character.ExperienceCurrent}, нужно {amount}.",
+                    ephemeral: true);
+                return;
+            }
+            character.ExperienceCurrent -= amount;
+            msg = $"✅ Потрачено **{amount}** опыта. Остаток: **{character.ExperienceCurrent}**.";
+        }
+
+        await storage.UpsertAsync(character);
+
+        await modal.RespondAsync(msg, ephemeral: true);
+    }
+
+    /// <summary>
+    /// Обработка нажатий кнопок блока «Мораль» (Roadmap #37):
+    /// Add — открывает меню расстройств; Remove — убирает последнее; Close — закрывает.
+    /// </summary>
+    public async Task HandleMoralityButtonAsync(SocketMessageComponent component)
+    {
+        if (!VampireMoralityComponents.TryParse(component.Data.CustomId, out var action, out var charId))
+        {
+            await component.RespondAsync("⚠️ Не удалось разобрать кнопку морали.", ephemeral: true);
+            return;
+        }
+        if (!component.GuildId.HasValue)
+        {
+            await component.RespondAsync("Кнопки морали работают только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+        var character = storage.GetByCharacterId(charId);
+        if (character == null)
+        {
+            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != component.User.Id)
+        {
+            await component.RespondAsync("⚠️ Только владелец чарника может изменять мораль.", ephemeral: true);
+            return;
+        }
+
+        switch (action)
+        {
+            case MoralityAction.Close:
+                await component.UpdateAsync(msg =>
+                {
+                    msg.Embeds = Array.Empty<Embed>();
+                    msg.Content = "Блок «Мораль» закрыт.";
+                    msg.Components = new ComponentBuilder().Build();
+                });
+                return;
+
+            case MoralityAction.RemoveLastDerangement:
+                if (character.Derangements == null || character.Derangements.Count == 0)
+                {
+                    await component.RespondAsync("ℹ️ Список расстройств пуст.", ephemeral: true);
+                    return;
+                }
+                var removed = character.Derangements[^1];
+                character.Derangements.RemoveAt(character.Derangements.Count - 1);
+                await storage.UpsertAsync(character);
+                await component.RespondAsync($"✅ Удалено расстройство «{removed}».",
+                    components: VampireMoralityComponents.Build(charId), ephemeral: true);
+                return;
+
+            case MoralityAction.StartAddDerangement:
+                await component.RespondAsync(
+                    "Выберите расстройство для добавления:",
+                    components: VampireMoralityComponents.Build(charId, withDerangementMenu: true),
+                    ephemeral: true);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Обработка выбора расстройства в SelectMenu блока «Мораль» (Roadmap #37).
+    /// </summary>
+    public async Task HandleMoralitySelectAsync(SocketMessageComponent component)
+    {
+        var charId = VampireMoralityComponents.TryParseSelectedMenu(component.Data.CustomId);
+        if (charId == null)
+        {
+            await component.RespondAsync("⚠️ Не удалось разобрать выбор расстройства.", ephemeral: true);
+            return;
+        }
+        if (!component.GuildId.HasValue)
+        {
+            await component.RespondAsync("Мораль работает только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+        var character = storage.GetByCharacterId(charId.Value);
+        if (character == null)
+        {
+            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != component.User.Id)
+        {
+            await component.RespondAsync("⚠️ Только владелец чарника может менять мораль.", ephemeral: true);
+            return;
+        }
+        var values = component.Data.Values;
+        if (values == null || values.Count == 0)
+        {
+            await component.RespondAsync("ℹ️ Ничего не выбрано.", ephemeral: true);
+            return;
+        }
+        var picked = values.First();
+        if (!VampireDerangementCatalog.IsKnown(picked))
+        {
+            await component.RespondAsync("⚠️ Неизвестное расстройство.", ephemeral: true);
+            return;
+        }
+        character.Derangements ??= new System.Collections.Generic.List<string>();
+        if (character.Derangements.Contains(picked))
+        {
+            await component.RespondAsync($"ℹ️ «{picked}» уже в списке расстройств.", ephemeral: true);
+            return;
+        }
+        character.Derangements.Add(picked);
+        await storage.UpsertAsync(character);
+        await component.RespondAsync($"✅ Добавлено расстройство «{picked}».",
+            components: VampireMoralityComponents.Build(charId.Value), ephemeral: true);
     }
 }
 

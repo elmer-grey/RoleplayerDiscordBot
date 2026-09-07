@@ -17,11 +17,13 @@ namespace RPBot.VtM
         Health,
         /// <summary>Открыть/скрыть блок «Клан» (клановые дисциплины + изъян).</summary>
         Clan,
-            /// <summary>Открыть/скрыть блок «Мораль» (Путь, расстройства, проверка совести).</summary>
-            Morality,
-            /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
-            ToggleActive,
-        }
+        /// <summary>Открыть/скрыть блок «Мораль» (Путь, расстройства, проверка совести).</summary>
+        Morality,
+        /// <summary>Открыть/скрыть блок «Опыт» (начисление/трата).</summary>
+        Experience,
+        /// <summary>Переключить «активность» персонажа для бросков (только если у игрока несколько чарников).</summary>
+        ToggleActive,
+    }
 
     /// <summary>
     /// Константы customId и фабрика кнопок под листом персонажа.
@@ -41,10 +43,11 @@ namespace RPBot.VtM
         private const string ButtonLabelDescription = "Описание";
         private const string ButtonLabelWillpower   = "Воля";
         private const string ButtonLabelHealth      = "Здоровье";
-            private const string ButtonLabelClan        = "Клан";
-                    private const string ButtonLabelMorality    = "Мораль";
-                    private const string ButtonLabelActive      = "✅ Активный";
-                    private const string ButtonLabelInactive    = "❌ Неактивный";
+        private const string ButtonLabelClan        = "Клан";
+        private const string ButtonLabelMorality    = "Мораль";
+        private const string ButtonLabelExperience  = "Опыт";
+        private const string ButtonLabelActive      = "✅ Активный";
+        private const string ButtonLabelInactive    = "❌ Неактивный";
 
             /// <summary>
             /// Собрать кнопки под листом в одном ActionRow.
@@ -57,10 +60,15 @@ namespace RPBot.VtM
             /// <param name="isActive">
             /// true если этот чарник сейчас активный. Влияет на текст кнопки активности.
             /// </param>
+            /// <param name="showExperienceButton">
+            /// true — добавить второй ActionRow с кнопкой «Опыт» (Roadmap #34).
+            /// false — не показывать.
+            /// </param>
             public static MessageComponent Build(
                 VampireCharacter character,
                 bool showActiveToggle = false,
-                bool isActive = true)
+                bool isActive = true,
+                bool showExperienceButton = false)
             {
                 if (character == null) throw new ArgumentNullException(nameof(character));
                 if (character.CharacterId == Guid.Empty)
@@ -74,15 +82,22 @@ namespace RPBot.VtM
                     .WithButton(ButtonLabelHealth, BuildCustomId(VampireSheetAction.Health, character.CharacterId),
                         ButtonStyle.Primary)
                     .WithButton(ButtonLabelClan, BuildCustomId(VampireSheetAction.Clan, character.CharacterId),
-                                        ButtonStyle.Secondary)
-                                    .WithButton(ButtonLabelMorality, BuildCustomId(VampireSheetAction.Morality, character.CharacterId),
-                                        ButtonStyle.Secondary);
+                        ButtonStyle.Secondary)
+                    .WithButton(ButtonLabelMorality, BuildCustomId(VampireSheetAction.Morality, character.CharacterId),
+                        ButtonStyle.Secondary);
 
                 if (showActiveToggle)
                 {
                     var label = isActive ? ButtonLabelActive : ButtonLabelInactive;
                     var style = isActive ? ButtonStyle.Success : ButtonStyle.Secondary;
                     cb.WithButton(label, BuildCustomId(VampireSheetAction.ToggleActive, character.CharacterId), style);
+                }
+
+                if (showExperienceButton)
+                {
+                    cb.WithButton(ButtonLabelExperience,
+                        BuildCustomId(VampireSheetAction.Experience, character.CharacterId),
+                        ButtonStyle.Success);
                 }
 
                 return cb.Build();
@@ -114,27 +129,29 @@ namespace RPBot.VtM
 
         private static string ActionToString(VampireSheetAction action) => action switch
         {
-            VampireSheetAction.Description => "desc",
-            VampireSheetAction.Willpower   => "wp",
-            VampireSheetAction.Health      => "hp",
-            VampireSheetAction.Clan        => "clan",
-                    VampireSheetAction.Morality    => "moral",
-                    VampireSheetAction.ToggleActive => "active",
-                    _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
-                };
+            VampireSheetAction.Description  => "desc",
+            VampireSheetAction.Willpower    => "wp",
+            VampireSheetAction.Health       => "hp",
+            VampireSheetAction.Clan         => "clan",
+            VampireSheetAction.Morality     => "moral",
+            VampireSheetAction.Experience   => "xp",
+            VampireSheetAction.ToggleActive => "active",
+            _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireSheetAction)),
+        };
 
-                private static bool TryParseAction(string s, out VampireSheetAction action)
-                {
-                    switch (s)
-                    {
-                        case "desc":   action = VampireSheetAction.Description; return true;
-                        case "wp":     action = VampireSheetAction.Willpower;   return true;
-                        case "hp":     action = VampireSheetAction.Health;      return true;
-                        case "clan":   action = VampireSheetAction.Clan;        return true;
-                        case "moral":  action = VampireSheetAction.Morality;    return true;
-                        case "active": action = VampireSheetAction.ToggleActive; return true;
-                        default:       action = default;                        return false;
-                    }
-                }
+        private static bool TryParseAction(string s, out VampireSheetAction action)
+        {
+            switch (s)
+            {
+                case "desc":   action = VampireSheetAction.Description;  return true;
+                case "wp":     action = VampireSheetAction.Willpower;    return true;
+                case "hp":     action = VampireSheetAction.Health;       return true;
+                case "clan":   action = VampireSheetAction.Clan;         return true;
+                case "moral":  action = VampireSheetAction.Morality;     return true;
+                case "xp":     action = VampireSheetAction.Experience;   return true;
+                case "active": action = VampireSheetAction.ToggleActive; return true;
+                default:       action = default;                          return false;
+            }
+        }
     }
 }

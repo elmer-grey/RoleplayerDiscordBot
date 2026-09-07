@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text;
+using Discord;
 
 namespace RPBot.VtM
 {
@@ -50,6 +51,19 @@ namespace RPBot.VtM
                 }
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Полный embed для кнопки «Мораль» (открывается ephemeral-сообщением из листа).
+        /// </summary>
+        public static Embed BuildEmbed(VampireCharacter c)
+        {
+            return new EmbedBuilder()
+                .WithTitle($"Мораль — {c.CharacterName}")
+                .WithColor(VampireSheetEmbed.DefaultColor)
+                .WithDescription(BuildBlock(c))
+                .WithFooter("V20 стр. 313-317, 333")
+                .Build();
         }
     }
 }

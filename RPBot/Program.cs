@@ -4185,6 +4185,13 @@ await Task.CompletedTask;
                     return;
                 }
 
+                // VtM: начисление/трата опыта (vtm_xp_modal:grant|spend:<characterId>)
+                if (parts[0] == VampireExperienceModal.Prefix)
+                {
+                    await _vampireCommands!.HandleExperienceModalAsync(modal);
+                    return;
+                }
+
                 // Handle bet modal: pred_bet_modal:<guildId>
                 if (parts[0] == "pred_bet_modal")
                 {
@@ -5539,6 +5546,22 @@ await Task.CompletedTask;
                     if (cid.StartsWith("vtm_wiz:", StringComparison.Ordinal))
                     {
                         await new VampireCommands().HandleWizardButtonAsync(component);
+                        return;
+                    }
+                    if (cid.StartsWith(VampireExperienceComponents.Prefix, StringComparison.Ordinal))
+                    {
+                        await new VampireCommands().HandleExperienceButtonAsync(component);
+                        return;
+                    }
+                    if (cid.StartsWith(VampireMoralityComponents.Prefix, StringComparison.Ordinal))
+                    {
+                        // Меню выбора расстройства имеет :sel: и не является кнопкой —
+                        // отдельный метод.
+                        var isSelectMenu = cid.Contains(":sel:", StringComparison.Ordinal);
+                        if (isSelectMenu)
+                            await new VampireCommands().HandleMoralitySelectAsync(component);
+                        else
+                            await new VampireCommands().HandleMoralityButtonAsync(component);
                         return;
                     }
                     if (_musicCommands is not null &&

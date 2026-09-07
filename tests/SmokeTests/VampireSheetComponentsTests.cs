@@ -76,7 +76,8 @@ public class VampireSheetComponentsTests
                               or VampireSheetAction.Willpower
                               or VampireSheetAction.Health
                               or VampireSheetAction.Clan
-                              or VampireSheetAction.Morality);
+                              or VampireSheetAction.Morality
+                              or VampireSheetAction.Experience);
         }
     }
 
@@ -104,5 +105,36 @@ public class VampireSheetComponentsTests
         Assert.True(VampireSheetComponents.IsOurButton("vtm_btn:desc:abc"));
         Assert.False(VampireSheetComponents.IsOurButton("vam_reroll:1:123"));
         Assert.False(VampireSheetComponents.IsOurButton(""));
+    }
+
+    [Fact]
+    public void Build_WithExperienceButton_AddsSecondRow()
+    {
+        var c = NewCharacter();
+        var mc = VampireSheetComponents.Build(c, showExperienceButton: true);
+        var rows = mc.Components.OfType<ActionRowComponent>().ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(5, rows[0].Components.OfType<ButtonComponent>().Count());
+        var xpButton = Assert.Single(rows[1].Components.OfType<ButtonComponent>());
+        Assert.Equal("Опыт", xpButton.Label);
+        Assert.Equal(ButtonStyle.Success, xpButton.Style);
+    }
+
+    [Fact]
+    public void Build_WithoutExperienceButton_HasOneRow()
+    {
+        var c = NewCharacter();
+        var mc = VampireSheetComponents.Build(c);
+        Assert.Single(mc.Components);
+    }
+
+    [Fact]
+    public void Build_XpCustomId_ParsesToExperienceAction()
+    {
+        var id = Guid.NewGuid();
+        var cid = VampireSheetComponents.BuildCustomId(VampireSheetAction.Experience, id);
+        Assert.True(VampireSheetComponents.TryParse(cid, out var action, out var parsed));
+        Assert.Equal(VampireSheetAction.Experience, action);
+        Assert.Equal(id, parsed);
     }
 }

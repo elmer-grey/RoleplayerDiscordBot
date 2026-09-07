@@ -149,7 +149,7 @@ public sealed class VampireSyncService
             {
                 var embed = VampireSheetEmbed.Build(ch);
                 var components = refr.Kind == SheetMessageKind.DmSheetWithButtons
-                    ? VampireSheetComponents.Build(ch)
+                    ? VampireSheetComponents.Build(ch, showExperienceButton: true)
                     : null;
                 if (components != null)
                     await _discord.UpdateEmbedAndComponentsAsync(handle.Value, embed, components, ct).ConfigureAwait(false);
