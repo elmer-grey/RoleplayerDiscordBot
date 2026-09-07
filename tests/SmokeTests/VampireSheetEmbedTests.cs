@@ -347,6 +347,37 @@ public class VampireSheetEmbedTests
         Assert.DoesNotContain("Кровь", body);
     }
 
+    /// <summary>
+    /// VtM V20 #42: при Hunger = 5 Зверь в ярости — предупреждение должно появиться в колонке «Суть».
+    /// </summary>
+    [Fact]
+    public void Build_Essence_Hunger5_ShowsBeastWarning()
+    {
+        var c = NewCharacter();
+        c.Hunger = 5;
+        var embed = VampireSheetEmbed.Build(c);
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        Assert.Contains("⚠ Зверь в ярости", e.Value.ToString());
+    }
+
+    /// <summary>
+    /// VtM V20 #42: при Hunger &lt; 5 предупреждения быть не должно.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void Build_Essence_HungerBelow5_NoBeastWarning(int hunger)
+    {
+        var c = NewCharacter();
+        c.Hunger = hunger;
+        var embed = VampireSheetEmbed.Build(c);
+        var e = embed.Fields.First(f => f.Name.Contains("Суть"));
+        Assert.DoesNotContain("Зверь в ярости", e.Value.ToString());
+    }
+
     [Fact]
     public void Build_HealthExperience_HasAllParts()
     {

@@ -374,6 +374,10 @@ public static class VampireSheetEmbed
     }
 
     /// <summary>Колонка «Суть»: Человечность / Воля / Голод. Кровь не показывается — в V20 её роль играет Голод.</summary>
+    /// <remarks>
+    /// При Голод = 5 персонаж находится «в ярости» (V20 стр. 268+) — добавляем строку-предупреждение.
+    /// Это минимальная реализация #42 без полной механики (расстройства, проверки Зверя и т.д.).
+    /// </remarks>
     public static string BuildEssenceBlock(VampireCharacter c)
     {
         var sb = new StringBuilder();
@@ -383,6 +387,10 @@ public static class VampireSheetEmbed
         sb.AppendLine(DotsString(VampireFinishingResolver.ComputeWillpower(c), 10));
         sb.Append("`").Append(PadRight("Голод", 13)).Append("` ");
         sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
+        if (c.Hunger >= 5)
+        {
+            sb.AppendLine("**⚠ Зверь в ярости**");
+        }
         return sb.ToString();
     }
 
