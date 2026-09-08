@@ -9,12 +9,12 @@ namespace SmokeTests;
 public class VampireMoralityComponentsTests
 {
     [Fact]
-    public void Build_HasThreeButtons()
+    public void Build_HasFourButtons()
     {
         var c = new VampireCharacter { CharacterId = Guid.NewGuid() };
         var mc = VampireMoralityComponents.Build(c.CharacterId);
         var row = Assert.IsType<ActionRowComponent>(Assert.Single(mc.Components));
-        Assert.Equal(3, row.Components.Count);
+        Assert.Equal(4, row.Components.Count);
         Assert.All(row.Components, x => Assert.IsType<ButtonComponent>(x));
     }
 
@@ -27,6 +27,7 @@ public class VampireMoralityComponentsTests
         Assert.Equal(2, mc.Components.Count);
         var rows = mc.Components.OfType<ActionRowComponent>().ToList();
         Assert.Equal(2, rows.Count);
+        // С меню расстройств: 3 кнопки (Conscience / Remove / Close) + SelectMenu.
         Assert.Equal(3, rows[0].Components.OfType<ButtonComponent>().Count());
         var select = Assert.Single(rows[1].Components.OfType<SelectMenuComponent>());
         Assert.Equal(10, select.Options.Count);
@@ -42,6 +43,7 @@ public class VampireMoralityComponentsTests
     [InlineData(MoralityAction.Close)]
     [InlineData(MoralityAction.StartAddDerangement)]
     [InlineData(MoralityAction.RemoveLastDerangement)]
+    [InlineData(MoralityAction.ConscienceCheck)]
     public void BuildId_Roundtrips(MoralityAction action)
     {
         var id = Guid.NewGuid();

@@ -1569,7 +1569,143 @@ public sealed class VampireCommands
                     components: VampireMoralityComponents.Build(charId, withDerangementMenu: true),
                     ephemeral: true);
                 return;
+
+            case MoralityAction.ConscienceCheck:
+                await HandleConscienceCheckAsync(component, storage, character);
+                return;
         }
+    }
+
+    /// <summary>
+    /// Обработка нажатия «Проверка совести» (Roadmap #37, V20 стр. 333).
+    /// Бросает пул по текущей Человечности/Пути, интерпретирует результат и применяет потери.
+    /// </summary>
+    private async Task HandleConscienceCheckAsync(
+        SocketMessageComponent component,
+        VampireStorage storage,
+        VampireCharacter character)
+    {
+        var currentHumanity = VampireFinishingResolver.ComputeHumanity(character);
+        var poolSize = VampireConscienceResolver.ConscienceDicePool(character, currentHumanity);
+
+        if (poolSize < 1)
+        {
+            await component.RespondAsync(
+                "ℹ️ Пул проверки совести равен 0 (Человечность не задана). Бросок не требуется.",
+                ephemeral: true);
+            return;
+        }
+
+        // Бросок V20-пула. Используем тот же IRandom, что и frenzy — SystemRandomAdapter.
+        var rng = new SystemRandomAdapter();
+        var roll = VampireDicePool.RollV20(poolSize, rng);
+
+        // Интерпретация по правилам проверки совести (см. VampireConscienceResolver).
+        var conscienceResult = VampireConscienceResolver.Roll(roll.Dice);
+        var apply = VampireConscienceResolver.Apply(conscienceResult.Outcome);
+
+        // Применяем потери к персонажу. Возвращает фактические изменения (с учётом границ).
+        var applied = VampireMoralityResolver.ApplyConscience(character, apply);
+        await storage.UpsertAsync(character);
+
+        // Собираем embed-ответ.
+        var embed = BuildConscienceCheckEmbed(character, poolSize, roll, conscienceResult, apply, applied);
+        await component.RespondAsync(embed: embed, ephemeral: true);
+    }
+
+    /// <summary>
+    /// Собрать embed с результатом проверки совести: пул, кубики, успехи, исход,
+    /// фактически применённые потери и итоговые значения Humanity/Conscience.
+    /// </summary>
+    private static Embed BuildConscienceCheckEmbed(
+        VampireCharacter character,
+        int poolSize,
+        V20RollResult roll,
+        ConscienceRollResult conscience,
+        ConscienceApplyResult apply,
+        VampireMoralityResolver.MoralityApplyOutcome applied)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("🎲 **Пул:** ").Append(poolSize).Append(" кубов");
+        if (!string.IsNullOrEmpty(character.Path))
+            sb.Append(" (Путь «").Append(character.Path).Append("» = ").Append(character.PathRating).Append(")");
+        sb.Append('\n');
+        sb.Append("🎯 **Сложность:** ").Append(conscience.Difficulty).Append('\n');
+        sb.Append("🔢 **Кубики:** ");
+        for (int i = 0; i < roll.Dice.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            var d = roll.Dice[i];
+            sb.Append(d >= conscience.Difficulty ? "**" : "")
+              .Append(d)
+              .Append(d >= conscience.Difficulty ? "**" : "");
+        }
+        sb.Append('\n');
+        sb.Append("✅ **Успехов:** ").Append(conscience.Successes).Append('\n');
+
+        // Заголовок блока: цвет по исходу.
+        string outcomeTitle = conscience.Outcome switch
+        {
+            VampireConscienceResolver.ConscienceRollOutcome.Success => "🟢 Успех",
+            VampireConscienceResolver.ConscienceRollOutcome.Failure => "🟡 Неудача",
+            VampireConscienceResolver.ConscienceRollOutcome.Botch   => "🔴 Провал",
+            _ => "❔",
+        };
+        sb.Append('\n').Append("**").Append(outcomeTitle).Append(":** ")
+          .Append(VampireConscienceResolver.Describe(conscience.Outcome)).Append('\n');
+
+        // Что применилось.
+        // Для Человечности показываем суммарное изменение (new − old), потому что при ботче
+        // падение Conscience тоже даёт −1 к Чел. через формулу.
+        if (applied.OldHumanity != applied.NewHumanity)
+        {
+            var totalDelta = applied.NewHumanity - applied.OldHumanity;
+            sb.Append("📉 **Человечность:** ")
+              .Append(applied.OldHumanity).Append(" → ").Append(applied.NewHumanity)
+              .Append(" (").Append(totalDelta).Append(")\n");
+            // Пояснение о структуре потерь.
+            if (applied.AppliedConscienceLoss > 0 && applied.AppliedHumanityLoss > 0)
+            {
+                sb.Append("    _−").Append(applied.AppliedHumanityLoss)
+                  .Append(" от −1 HumanityBonus, −").Append(applied.AppliedConscienceLoss)
+                  .Append(" от −1 Совести (формула)_\n");
+            }
+            else if (applied.AppliedHumanityLoss > 0)
+            {
+                sb.Append("    _−").Append(applied.AppliedHumanityLoss).Append(" от −1 HumanityBonus_\n");
+            }
+            else if (applied.AppliedConscienceLoss > 0)
+            {
+                sb.Append("    _−").Append(applied.AppliedConscienceLoss).Append(" от −1 Совести_\n");
+            }
+        }
+        if (applied.OldConscience != applied.NewConscience)
+        {
+            sb.Append("📉 **Совесть:** ")
+              .Append(applied.OldConscience).Append(" → ").Append(applied.NewConscience).Append('\n');
+        }
+        if (!string.IsNullOrEmpty(applied.AddedDerangement))
+        {
+            sb.Append("🌀 **Получено расстройство:** «").Append(applied.AddedDerangement).Append("»\n");
+        }
+
+        // Предупреждение о границе.
+        if (apply.HumanityDelta != 0 && applied.AppliedHumanityLoss == 0 && applied.NewHumanity == 1)
+        {
+            sb.Append("\n⚠️ Дальнейшая потеря Человечности невозможна — персонаж уже на грани (Чел. = 1).\n");
+        }
+
+        var eb = new EmbedBuilder()
+            .WithTitle("Проверка совести")
+            .WithDescription(sb.ToString())
+            .WithColor(conscience.Outcome switch
+            {
+                VampireConscienceResolver.ConscienceRollOutcome.Success => Color.Green,
+                VampireConscienceResolver.ConscienceRollOutcome.Failure => Color.Orange,
+                VampireConscienceResolver.ConscienceRollOutcome.Botch   => Color.Red,
+                _ => Color.Default,
+            });
+        return eb.Build();
     }
 
     /// <summary>

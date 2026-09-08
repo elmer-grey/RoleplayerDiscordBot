@@ -15,6 +15,10 @@ namespace RPBot.VtM
         StartAddDerangement,
         /// <summary>Удалить последнее расстройство из списка (для отмены ошибки/теста).</summary>
         RemoveLastDerangement,
+        /// <summary>Бросить проверку совести (Roadmap #37, V20 стр. 333). Инициатор — игрок,
+        /// но V20 предполагает, что назначает рассказчик; сейчас бросает сам владелец чарника
+        /// (ST может запретить в более строгом режиме).</summary>
+        ConscienceCheck,
     }
 
     /// <summary>
@@ -36,19 +40,22 @@ namespace RPBot.VtM
             if (characterId == Guid.Empty)
                 throw new ArgumentException("CharacterId обязателен", nameof(characterId));
 
-            var cb = new ComponentBuilder()
-                .WithButton("Добавить расстройство",
-                    BuildId(MoralityAction.StartAddDerangement, characterId),
-                    ButtonStyle.Primary)
-                .WithButton("Удалить последнее",
-                    BuildId(MoralityAction.RemoveLastDerangement, characterId),
-                    ButtonStyle.Secondary)
-                .WithButton("Скрыть",
-                    BuildId(MoralityAction.Close, characterId),
-                    ButtonStyle.Secondary);
-
+            // Discord ограничивает 5 элементов в ActionRow.
+            // Базовая раскладка: 4 кнопки (Conscience / Add / Remove / Close). При показе
+            // SelectMenu расстройств — 3 кнопки (без Add, потому что SelectMenu его и открывает).
             if (withDerangementMenu)
             {
+                var cb = new ComponentBuilder()
+                    .WithButton("Проверка совести",
+                        BuildId(MoralityAction.ConscienceCheck, characterId),
+                        ButtonStyle.Success)
+                    .WithButton("Удалить последнее",
+                        BuildId(MoralityAction.RemoveLastDerangement, characterId),
+                        ButtonStyle.Secondary)
+                    .WithButton("Скрыть",
+                        BuildId(MoralityAction.Close, characterId),
+                        ButtonStyle.Secondary);
+
                 var menu = new SelectMenuBuilder()
                     .WithCustomId(BuildSelectId(characterId))
                     .WithPlaceholder("Выберите расстройство…")
@@ -62,9 +69,23 @@ namespace RPBot.VtM
                         .WithDescription(Truncate(d.Effect, 100)));
                 }
                 cb.WithSelectMenu(menu);
+                return cb.Build();
             }
 
-            return cb.Build();
+            return new ComponentBuilder()
+                .WithButton("Проверка совести",
+                    BuildId(MoralityAction.ConscienceCheck, characterId),
+                    ButtonStyle.Success)
+                .WithButton("Добавить расстройство",
+                    BuildId(MoralityAction.StartAddDerangement, characterId),
+                    ButtonStyle.Primary)
+                .WithButton("Удалить последнее",
+                    BuildId(MoralityAction.RemoveLastDerangement, characterId),
+                    ButtonStyle.Secondary)
+                .WithButton("Скрыть",
+                    BuildId(MoralityAction.Close, characterId),
+                    ButtonStyle.Secondary)
+                .Build();
         }
 
         /// <summary>CustomId кнопки «Мораль».</summary>
@@ -107,6 +128,7 @@ namespace RPBot.VtM
             MoralityAction.Close                 => "close",
             MoralityAction.StartAddDerangement   => "add",
             MoralityAction.RemoveLastDerangement => "remove",
+            MoralityAction.ConscienceCheck       => "conscience",
             _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(MoralityAction)),
         };
 
@@ -114,10 +136,11 @@ namespace RPBot.VtM
         {
             switch (s)
             {
-                case "close":  action = MoralityAction.Close;                 return true;
-                case "add":    action = MoralityAction.StartAddDerangement;   return true;
-                case "remove": action = MoralityAction.RemoveLastDerangement; return true;
-                default:       action = default;                              return false;
+                case "close":     action = MoralityAction.Close;                 return true;
+                case "add":       action = MoralityAction.StartAddDerangement;   return true;
+                case "remove":    action = MoralityAction.RemoveLastDerangement; return true;
+                case "conscience":action = MoralityAction.ConscienceCheck;       return true;
+                default:          action = default;                              return false;
             }
         }
 
