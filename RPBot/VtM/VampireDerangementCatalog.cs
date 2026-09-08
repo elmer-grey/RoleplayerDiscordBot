@@ -34,7 +34,12 @@ public static class VampireDerangementCatalog
 
     public sealed class DerangementsDocument
     {
-        [JsonPropertyName("version")] public int Version { get; set; }
+        /// <summary>
+        /// Актуальная версия схемы этого документа. Источник истины — embedded JSON.
+        /// При значении на диске меньше, чем в embedded — VampireStartService Шаг 0
+        /// пересеет файл целиком.
+        /// </summary>
+        [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; }
         [JsonPropertyName("derangements")] public DerangementEntry[] Derangements { get; set; } = Array.Empty<DerangementEntry>();
     }
 
@@ -68,6 +73,19 @@ public static class VampireDerangementCatalog
         stream.CopyTo(fs);
         return (true, FilePath);
     }
+
+    /// <summary>
+    /// Сравнить версию на диске с embedded и при необходимости пересеять.
+    /// Вызывается из <c>VampireStartService</c> Шаг 0 (апгрейд словарей).
+    /// </summary>
+    /// <remarks>
+    /// Полная перезапись из embedded, без merge — это сознательное решение:
+    /// словари поставляются «как есть», пользовательских правок не
+    /// предполагается. Если в embedded поле <c>schema_version</c> поднято,
+    /// значит состав изменился, и старый файл больше неактуален.
+    /// </remarks>
+    public static CatalogUpdater.UpgradeResult UpgradeIfStale()
+        => CatalogUpdater.UpgradeIfStaleAsync(FilePath, ResourceName);
 
     /// <summary>Загрузить словарь расстройств с диска. Пустой массив при отсутствии файла.</summary>
     public static DerangementsDocument Load()

@@ -1,0 +1,170 @@
+{
+  "$schema": "./weapons.schema.md",
+  "schema_version": 1,
+  "_comment": "Стандартный список оружия VtM V20 (стр. 281-282). Damage — это количество успехов, которые нужно нанести (V20 стр. 301: damage level = base successes × weapon damage). Range/Rate/Clip даны для справки, в текущем /vampire_damage не учитываются. damage_type по V20: lethal (огнестрел, дробящее, колющее). aggravated зарезервирован для огня, серебра, солнца. Поле schema_version увеличивается при изменении состава/полей — VampireStartService Шаг 0 пересеет файл на диске.",
+  "weapons": [
+    {
+      "id": "fists",
+      "name_ru": "Кулаки",
+      "name_en": "Fists",
+      "damage": 0,
+      "damage_type": "light",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "claws_fangs",
+      "name_ru": "Когти и клыки",
+      "name_en": "Claws and Fangs",
+      "damage": 0,
+      "damage_type": "aggravated",
+      "adds_strength": true,
+      "category": "melee",
+      "_comment": "Сверхъестественные атаки вампира (Когти Гангрела, Клыки) наносят aggravated по другим вампирам и lethal по смертным/сверхъестественным."
+    },
+    {
+      "id": "brass_knuckles",
+      "name_ru": "Кастет",
+      "name_en": "Brass Knuckles",
+      "damage": 1,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "knife",
+      "name_ru": "Нож",
+      "name_en": "Knife",
+      "damage": 2,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "baseball_bat",
+      "name_ru": "Бита",
+      "name_en": "Baseball Bat",
+      "damage": 3,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "tire_iron",
+      "name_ru": "Монтировка",
+      "name_en": "Tire Iron",
+      "damage": 3,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "spear",
+      "name_ru": "Копьё",
+      "name_en": "Spear",
+      "damage": 3,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "saber",
+      "name_ru": "Сабля",
+      "name_en": "Saber",
+      "damage": 3,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee",
+      "_comment": "Requires Strength 2 (V20)."
+    },
+    {
+      "id": "axe",
+      "name_ru": "Топор",
+      "name_en": "Axe",
+      "damage": 4,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "sword",
+      "name_ru": "Меч",
+      "name_en": "Sword",
+      "damage": 4,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee",
+      "_comment": "Requires Strength 3 (V20)."
+    },
+    {
+      "id": "sledgehammer",
+      "name_ru": "Кувалда",
+      "name_en": "Sledgehammer",
+      "damage": 5,
+      "damage_type": "lethal",
+      "adds_strength": true,
+      "category": "melee"
+    },
+    {
+      "id": "pistol_22",
+      "name_ru": "Пистолет .22",
+      "name_en": ".22 Caliber Pistol",
+      "damage": 2,
+      "damage_type": "lethal",
+      "adds_strength": false,
+      "category": "firearm",
+      "range": 12,
+      "rate": 3,
+      "clip": 6
+    },
+    {
+      "id": "pistol_9mm",
+      "name_ru": "Пистолет 9 мм",
+      "name_en": "9mm Pistol",
+      "damage": 3,
+      "damage_type": "lethal",
+      "adds_strength": false,
+      "category": "firearm",
+      "range": 20,
+      "rate": 3,
+      "clip": 15
+    },
+    {
+      "id": "magnum_357",
+      "name_ru": "Револьвер .357",
+      "name_en": ".357 Magnum",
+      "damage": 4,
+      "damage_type": "lethal",
+      "adds_strength": false,
+      "category": "firearm",
+      "range": 25,
+      "rate": 2,
+      "clip": 6
+    },
+    {
+      "id": "desert_eagle",
+      "name_ru": "Desert Eagle",
+      "name_en": "Desert Eagle (.50 AE)",
+      "damage": 5,
+      "damage_type": "lethal",
+      "adds_strength": false,
+      "category": "firearm",
+      "range": 25,
+      "rate": 2,
+      "clip": 7
+    },
+    {
+      "id": "shotgun_12g",
+      "name_ru": "Дробовик 12-го калибра",
+      "name_en": "12-Gauge Shotgun",
+      "damage": 4,
+      "damage_type": "lethal",
+      "adds_strength": false,
+      "category": "firearm",
+      "range": 10,
+      "rate": 1,
+      "clip": 2,
+      "_comment": "В упор (≤3м) +1 damage (V20)."
+    }
+  ]
+}

@@ -35,7 +35,12 @@ public static class VampireClanFlawCatalog
 
     public sealed class ClanFlawsDocument
     {
-        [JsonPropertyName("version")] public int Version { get; set; }
+        /// <summary>
+        /// Актуальная версия схемы. Источник истины — embedded JSON.
+        /// При значении на диске меньше, чем в embedded — VampireStartService Шаг 0
+        /// пересеет файл целиком.
+        /// </summary>
+        [JsonPropertyName("schema_version")] public int SchemaVersion { get; set; }
         [JsonPropertyName("clans")] public ClanFlawEntry[] Clans { get; set; } = Array.Empty<ClanFlawEntry>();
     }
 
@@ -62,6 +67,13 @@ public static class VampireClanFlawCatalog
         stream.CopyTo(fs);
         return (true, FilePath);
     }
+
+    /// <summary>
+    /// Сравнить версию на диске с embedded и при необходимости пересеять.
+    /// Вызывается из <c>VampireStartService</c> Шаг 0.
+    /// </summary>
+    public static CatalogUpdater.UpgradeResult UpgradeIfStale()
+        => CatalogUpdater.UpgradeIfStaleAsync(FilePath, ResourceName);
 
     /// <summary>Загрузить словарь с диска. Пустой массив при отсутствии файла.</summary>
     public static ClanFlawsDocument Load()
