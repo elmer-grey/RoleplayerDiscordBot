@@ -24,16 +24,19 @@ public class VampireDiablerieResolverTests
     }
 
     [Fact]
-    public void Resolve_Success_GapFive_DropsByThree()
+    public void Resolve_Success_GapFive_DropsByTwo()
     {
+        // V20 стр. 311: «может понизить поколение персонажа более чем на одну ступень»
+        // при разнице поколений ≥ 5. Минимум = 2 ступени (бонус за возраст 2000+ лет
+        // остаётся на усмотрение рассказчика).
         var r = VampireDiablerieResolver.Resolve(
             attackerGeneration: 12,
             victimGeneration: 7,
             attackerHumanity: 7,
             success: true);
 
-        Assert.Equal(3, r.GenerationDrop);
-        Assert.Equal(9, r.AttackerGenerationAfter);
+        Assert.Equal(2, r.GenerationDrop);
+        Assert.Equal(10, r.AttackerGenerationAfter);
     }
 
     [Fact]
@@ -53,14 +56,15 @@ public class VampireDiablerieResolverTests
     public void Resolve_Success_VictimOlder_DropsGeneration()
     {
         // жертва старше (меньше число), атакующий — неофициальный новообращённый
+        // Разница = 5 → дроп = 2 (V20 стр. 311)
         var r = VampireDiablerieResolver.Resolve(
             attackerGeneration: 13,
             victimGeneration: 8,
             attackerHumanity: 5,
             success: true);
 
-        Assert.Equal(3, r.GenerationDrop);
-        Assert.Equal(10, r.AttackerGenerationAfter);
+        Assert.Equal(2, r.GenerationDrop);
+        Assert.Equal(11, r.AttackerGenerationAfter);
     }
 
     [Fact]
@@ -145,8 +149,8 @@ public class VampireDiablerieResolverTests
             attackerHumanity: 7,
             success: true);
 
-        // newGen = 9, victimGen = 7 → разница 2
-        Assert.Equal(2, r2.AuraStainsYears);
+        // newGen = 10, victimGen = 7 → разница 3
+        Assert.Equal(3, r2.AuraStainsYears);
     }
 
     // ─── Провал ─────────────────────────────────────────────────────────

@@ -15,13 +15,16 @@ namespace RPBot.VtM;
 /// </remarks>
 public static class VampireDiablerieResolver
 {
-    /// <summary>Минимальное понижение поколения за успешное диаблери.</summary>
+    /// <summary>Минимальное понижение поколения за успешное диаблери
+    /// (V20 стр. 311: «...может понизить поколение персонажа более чем на одну ступень»).</summary>
     public const int GenerationDropMin = 1;
 
-    /// <summary>Понижение поколения, если разница поколений ≥ 5.</summary>
-    public const int GenerationDropLarge = 3;
+    /// <summary>Понижение поколения, если разница поколений ≥ 5 (V20 стр. 311: «более чем
+    /// на одну ступень» — минимум две). Бонус за возраст 2000+ лет (3-4 ступени)
+    /// остаётся на усмотрение рассказчика.</summary>
+    public const int GenerationDropLarge = 2;
 
-    /// <summary>Разница поколений, при которой понижение увеличено до 3.</summary>
+    /// <summary>Разница поколений, при которой понижение увеличено с +1 до +2.</summary>
     public const int GenerationGapLargeThreshold = 5;
 
     /// <summary>Снижение Человечности за сам факт диаблери (минимум).</summary>
