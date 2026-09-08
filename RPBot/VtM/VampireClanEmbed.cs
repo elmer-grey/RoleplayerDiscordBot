@@ -45,7 +45,7 @@ public static class VampireClanEmbed
         }
 
         var flawShort = VampireParameterCatalog.GetClanFlawShort(c.Clan);
-        var flawLong  = VampireParameterCatalog.GetClanFlawLong(c.Clan);
+        var flawLong  = VampireClanFlawCatalog.GetClanFlawLong(c.Clan);
         if (!string.IsNullOrEmpty(flawLong))
         {
             eb.AddField("Клановый изъян (кратко)", flawShort, inline: false);

@@ -259,7 +259,7 @@ public class VampireFinishingDemoTest : IDisposable
 
         // Слабость Каитифа — показываем формулой, что это вне freebie-пула.
         Say($"=== Слабость Каитифа: «{VampireParameterCatalog.GetClanFlawShort(draft.Clan)}» (см. Шаг 6) ===");
-        Say($"  длинная формулировка: «{VampireParameterCatalog.GetClanFlawLong(draft.Clan)}»");
+        Say($"  длинная формулировка: «{VampireClanFlawCatalog.GetClanFlawLong(draft.Clan)}»");
         Say("");
 
         Say("=== Демо Шага 5 (Каитиф) завершено ===");

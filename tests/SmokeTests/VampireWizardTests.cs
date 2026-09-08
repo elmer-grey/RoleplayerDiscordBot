@@ -90,10 +90,11 @@ public class VampireWizardTests
     [Fact]
     public void Catalog_GetClanFlawLong_NotShorterThanShort()
     {
+        VampireClanFlawCatalog.EnsureSeeded();
         foreach (var clan in VampireParameterCatalog.Clans)
         {
             var s = VampireParameterCatalog.GetClanFlawShort(clan);
-            var l = VampireParameterCatalog.GetClanFlawLong(clan);
+            var l = VampireClanFlawCatalog.GetClanFlawLong(clan);
             Assert.True(l.Length >= s.Length,
                 $"У {clan} полный изъян должен быть ≥ краткого");
         }
