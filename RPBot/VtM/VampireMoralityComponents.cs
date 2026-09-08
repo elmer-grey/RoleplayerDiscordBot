@@ -56,11 +56,11 @@ namespace RPBot.VtM
                     .WithPlaceholder("Выберите расстройство…")
                     .WithMinValues(1)
                     .WithMaxValues(1);
-                foreach (var d in VampireDerangementCatalog.All)
+                foreach (var d in VampireDerangementCatalog.All())
                 {
                     menu.AddOption(new SelectMenuOptionBuilder()
-                        .WithLabel(d.Name)
-                        .WithValue(d.Name)
+                        .WithLabel(d.NameRu)
+                        .WithValue(d.NameRu)
                         .WithDescription(Truncate(d.Effect, 100)));
                 }
                 cb.WithSelectMenu(menu);

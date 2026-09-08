@@ -1,80 +1,112 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
-namespace RPBot.VtM
+namespace RPBot.VtM;
+
+/// <summary>
+/// Хранилище словаря психических расстройств VtM V20 (стр. 313-317) на диске
+/// + копирование шаблона из embedded-ресурса при первом запуске.
+/// <para>Файловая структура:
+/// <c>%LOCALAPPDATA%/RPBot/Data/vampire/derangements.json</c>
+/// (см. <see cref="BotConfig.GetDataDirectory"/>).</para>
+/// <para>Рассказчик может добавить расстройство не из каталога — поле
+/// <see cref="VampireCharacter.Derangements"/> это позволяет. Каталог нужен
+/// только для UI-выбора.</para>
+/// </summary>
+public static class VampireDerangementCatalog
 {
-    /// <summary>
-    /// Каталог психических расстройств VtM V20 (стр. 313-317).
-    /// Используется для SelectMenu при добавлении расстройства персонажу.
-    /// </summary>
-    /// <remarks>
-    /// <para>Подборка из основного списка: 10 расстройств. Описания сжатые —
-    /// только суть и игровой эффект, без нарратива. Полные тексты — в
-    /// <c>bin/Debug/net8.0/Заготовки/rules-source/v20_pages320-380.txt</c>.</para>
-    ///
-    /// <para>Рассказчик может добавить расстройство не из каталога — поле
-    /// <see cref="VampireCharacter.Derangements"/> это позволяет. Каталог нужен
-    /// только для UI-выбора.</para>
-    /// </remarks>
-    public static class VampireDerangementCatalog
+    private const string ResourceName = "RPBot.Resources.derangements.v20.json";
+    private const string TargetRelativePath = "vampire/derangements.json";
+
+    /// <summary>Запись расстройства.</summary>
+    public sealed class DerangementEntry
     {
-        /// <summary>Все расстройства из V20 стр. 313-317, отсортированные по имени.</summary>
-        public static readonly IReadOnlyList<DerangementEntry> All = new[]
-        {
-            new DerangementEntry(
-                "Биполярное расстройство",
-                "Резкие перепады настроения. Депрессия (d10 сцен) → маниакальная фаза (тот же срок).",
-                "Сложность сопротивления ярости/депрессии"),
-            new DerangementEntry(
-                "Булимия",
-                "Патологическая жажда крови. Проверка совести 7 при Поцелуе; при неудаче — пьёт до полного запаса.",
-                "Срыв → приступ ярости (сложность 6, +1 за каждые 15 мин воздержания)"),
-            new DerangementEntry(
-                "Диссоциативная фуга",
-                "Эпизодические провалы памяти под стрессом. Проверка воли 8, при успехе — автопилот на d10 сцен.",
-                "Рассказчик управляет персонажем"),
-            new DerangementEntry(
-                "Истерия",
-                "Неспособность контролировать эмоции. Каждый стресс → проверка сопротивления ярости 6-8.",
-                "Любой провал = немедленный приступ ярости"),
-            new DerangementEntry(
-                "Кровавый анимизм",
-                "Вера в то, что вместе с кровью поглощается душа жертвы. Голоса и воспоминания на часы.",
-                "Проверка воли 6 (жертва жива) / 9 (жертва погибла)"),
-            new DerangementEntry(
-                "Мегаломания",
-                "Одержимость властью и статусом, презрение к окружающим. Высокомерие и заговоры.",
-                "Проверки на выявление «слабых» — без моральных ограничений"),
-            new DerangementEntry(
-                "Обсессивно-компульсивное расстройство",
-                "Навязчивые действия/ритуалы для снижения тревоги (порядок, ритуал питья).",
-                "Сдержать = 1 Воли, хватает до конца сцены"),
-            new DerangementEntry(
-                "Паранойя",
-                "Мания преследования и заговоров. Сложность социальных проверок +1.",
-                "Малейшее подозрение → проверка сопротивления ярости"),
-            new DerangementEntry(
-                "Расстройство идентичности",
-                "Несколько личностей внутри одной. Каждая может иметь свои навыки и добродетели.",
-                "Переключение по эмоциональному стимулу"),
-            new DerangementEntry(
-                "Шизофрения",
-                "Уход от реальности, галлюцинации, перепады настроения. Внутренний конфликт обязателен.",
-                "Сложность проверки ярости +3, пул воли −3d10"),
-        };
-
-        /// <summary>Является ли имя валидным расстройством из каталога.</summary>
-        public static bool IsKnown(string name)
-            => !string.IsNullOrEmpty(name) && All.Any(d => d.Name == name);
-
-        /// <summary>Короткое описание для UI-подсказки. Пустая строка для неизвестных.</summary>
-        public static string Describe(string name)
-            => All.FirstOrDefault(d => d.Name == name)?.Effect ?? "";
+        [JsonPropertyName("id")] public string Id { get; set; } = "";
+        [JsonPropertyName("name_ru")] public string NameRu { get; set; } = "";
+        [JsonPropertyName("summary")] public string Summary { get; set; } = "";
+        [JsonPropertyName("effect")] public string Effect { get; set; } = "";
     }
 
-    /// <summary>Запись расстройства из <see cref="VampireDerangementCatalog"/>.</summary>
-    /// <param name="Name">Имя расстройства (для UI и хранения).</param>
-    /// <param name="Summary">Краткое описание сути (1-2 строки).</param>
-    /// <param name="Effect">Главное игровое последствие (1-2 строки).</param>
-    public sealed record DerangementEntry(string Name, string Summary, string Effect);
+    public sealed class DerangementsDocument
+    {
+        [JsonPropertyName("version")] public int Version { get; set; }
+        [JsonPropertyName("derangements")] public DerangementEntry[] Derangements { get; set; } = Array.Empty<DerangementEntry>();
+    }
+
+    /// <summary>
+    /// Абсолютный путь к файлу derangements.json на диске.
+    /// </summary>
+    public static string FilePath =>
+        Path.Combine(BotConfig.GetDataDirectory(), TargetRelativePath);
+
+    /// <summary>
+    /// Гарантирует, что файл словаря существует на диске. Если нет —
+    /// копирует шаблон из embedded-ресурса.
+    /// </summary>
+    /// <returns>
+    /// <c>(true, filePath)</c>, если словарь существует (свежескопированный
+    /// или уже был); <c>(false, filePath)</c>, если ресурс не найден.
+    /// </returns>
+    public static (bool Ok, string Path) EnsureSeeded()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+
+        if (File.Exists(FilePath))
+            return (true, FilePath);
+
+        using var stream = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream(ResourceName);
+        if (stream == null)
+            return (false, FilePath);
+
+        using var fs = File.Create(FilePath);
+        stream.CopyTo(fs);
+        return (true, FilePath);
+    }
+
+    /// <summary>Загрузить словарь расстройств с диска. Пустой массив при отсутствии файла.</summary>
+    public static DerangementsDocument Load()
+    {
+        EnsureSeeded();
+        if (!File.Exists(FilePath))
+            return new DerangementsDocument();
+
+        try
+        {
+            var json = File.ReadAllText(FilePath);
+            return JsonSerializer.Deserialize<DerangementsDocument>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+            }) ?? new DerangementsDocument();
+        }
+        catch (JsonException)
+        {
+            return new DerangementsDocument();
+        }
+    }
+
+    /// <summary>Все расстройства из словаря, отсортированные по имени.</summary>
+    public static IReadOnlyList<DerangementEntry> All()
+        => Load().Derangements.OrderBy(d => d.NameRu).ToList();
+
+    /// <summary>Найти запись по id (пустая строка/null → null).</summary>
+    public static DerangementEntry? FindById(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        return Array.Find(Load().Derangements,
+            d => string.Equals(d.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Является ли имя валидным расстройством из каталога.</summary>
+    public static bool IsKnown(string name)
+        => !string.IsNullOrEmpty(name) && All().Any(d => d.NameRu == name);
+
+    /// <summary>Короткое описание эффекта для UI-подсказки. Пустая строка для неизвестных.</summary>
+    public static string Describe(string name)
+        => All().FirstOrDefault(d => d.NameRu == name)?.Effect ?? "";
 }

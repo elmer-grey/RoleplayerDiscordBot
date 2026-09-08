@@ -6,6 +6,13 @@ namespace SmokeTests;
 
 public class VampireDerangementCatalogTests
 {
+    public VampireDerangementCatalogTests()
+    {
+        // Гарантируем, что файл словаря расстройств скопирован из
+        // embedded-ресурса при первом запуске тестов в чистом окружении.
+        VampireDerangementCatalog.EnsureSeeded();
+    }
+
     [Theory]
     [InlineData("Биполярное расстройство")]
     [InlineData("Булимия")]
@@ -35,13 +42,13 @@ public class VampireDerangementCatalogTests
     [Fact]
     public void All_ContainsExactlyTenEntries()
     {
-        Assert.Equal(10, VampireDerangementCatalog.All.Count);
+        Assert.Equal(10, VampireDerangementCatalog.All().Count);
     }
 
     [Fact]
     public void All_HasUniqueNames()
     {
-        var names = VampireDerangementCatalog.All.Select(d => d.Name).ToList();
+        var names = VampireDerangementCatalog.All().Select(d => d.NameRu).ToList();
         Assert.Equal(names.Count, names.Distinct().Count());
     }
 
@@ -61,11 +68,11 @@ public class VampireDerangementCatalogTests
     [Fact]
     public void EveryKnown_DerangementHasSummaryAndEffect()
     {
-        foreach (var d in VampireDerangementCatalog.All)
+        foreach (var d in VampireDerangementCatalog.All())
         {
-            Assert.False(string.IsNullOrWhiteSpace(d.Name), "Имя расстройства не должно быть пустым");
-            Assert.False(string.IsNullOrWhiteSpace(d.Summary), $"Расстройство {d.Name}: Summary пустое");
-            Assert.False(string.IsNullOrWhiteSpace(d.Effect), $"Расстройство {d.Name}: Effect пустое");
+            Assert.False(string.IsNullOrWhiteSpace(d.NameRu), "Имя расстройства не должно быть пустым");
+            Assert.False(string.IsNullOrWhiteSpace(d.Summary), $"Расстройство {d.NameRu}: Summary пустое");
+            Assert.False(string.IsNullOrWhiteSpace(d.Effect), $"Расстройство {d.NameRu}: Effect пустое");
         }
     }
 }

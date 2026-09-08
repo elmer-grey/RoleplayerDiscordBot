@@ -179,7 +179,7 @@ namespace RPBot.VtM
         /// </summary>
         private static string? PickNewDerangement(VampireCharacter character)
         {
-            var all = VampireDerangementCatalog.All;
+            var all = VampireDerangementCatalog.All();
             if (all == null || all.Count == 0) return null;
 
             var existing = character.Derangements != null
@@ -188,9 +188,9 @@ namespace RPBot.VtM
 
             foreach (var d in all)
             {
-                if (!existing.Contains(d.Name)) return d.Name;
+                if (!existing.Contains(d.NameRu)) return d.NameRu;
             }
-            return all[0].Name;
+            return all[0].NameRu;
         }
     }
 }
