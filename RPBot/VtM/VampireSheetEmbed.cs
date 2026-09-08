@@ -398,18 +398,34 @@ public static class VampireSheetEmbed
         {
             sb.AppendLine("**⚠ Зверь в ярости**");
         }
-        if (c.ActiveAtavisms != null && c.ActiveAtavisms.Count > 0)
+        if (HasAtavisms(c))
         {
             sb.AppendLine();
             sb.AppendLine("**🐾 Атавизмы:**");
-            for (var i = 0; i < c.ActiveAtavisms.Count; i++)
+            var entries = c.ActiveAtavismEntries;
+            if (entries != null && entries.Count > 0)
             {
-                sb.Append("• ").Append(c.ActiveAtavisms[i]);
-                if (i < c.ActiveAtavisms.Count - 1) sb.AppendLine();
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    sb.Append("• ").Append(entries[i].Describe());
+                    if (i < entries.Count - 1) sb.AppendLine();
+                }
+            }
+            else
+            {
+                for (var i = 0; i < c.ActiveAtavisms.Count; i++)
+                {
+                    sb.Append("• ❔ ").Append(c.ActiveAtavisms[i]);
+                    if (i < c.ActiveAtavisms.Count - 1) sb.AppendLine();
+                }
             }
         }
         return sb.ToString();
     }
+
+    private static bool HasAtavisms(VampireCharacter c) =>
+        (c.ActiveAtavismEntries != null && c.ActiveAtavismEntries.Count > 0)
+        || (c.ActiveAtavisms != null && c.ActiveAtavisms.Count > 0);
 
     /// <summary>Колонка «Здоровье и опыт»: V20 стр. 92 шкала + штраф по таблице + Изъян + Опыт.</summary>
     public static string BuildHealthExperienceBlock(VampireCharacter c)

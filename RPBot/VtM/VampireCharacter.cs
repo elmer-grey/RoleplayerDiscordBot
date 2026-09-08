@@ -390,9 +390,27 @@ public sealed class VampireCharacter
                 /// Хранится на персонаже, чтобы можно было отображать список в листе и стирать
                 /// вручную. Сейчас заполняется автоматически в <see cref="VampireFrenzyResolver"/>
                 /// при провале проверки самоконтроля для Гангрела.
+                /// <para>Устаревшее поле — для UI и резолвера рекомендуется использовать
+                /// <see cref="ActiveAtavismEntries"/>. Сохранено для обратной совместимости
+                /// со старыми сохранёнными персонажами; новые записи пишутся в оба списка.</para>
                 /// </remarks>
                 [JsonPropertyName("activeAtavisms")]
                 public List<string> ActiveAtavisms { get; set; } = new();
+
+                /// <summary>
+                /// Активные атавизмы с метаданными (тип, сцена получения). Заменяет
+                /// устаревший <see cref="ActiveAtavisms"/>. Каждый элемент содержит
+                /// имя, <see cref="AtavismKind"/> и (опционально) сцену.
+                /// </summary>
+                /// <remarks>
+                /// При десериализации из JSON, если у персонажа есть только старый
+                /// <see cref="ActiveAtavisms"/> без метаданных, embed автоматически
+                /// подтянет их как <see cref="AtavismKind.Unknown"/> для отображения.
+                /// Обратная запись ведётся в оба списка, чтобы данные не потерялись
+                /// при переключении версий.
+                /// </remarks>
+                [JsonPropertyName("activeAtavismEntries")]
+                public List<AtavismEntry> ActiveAtavismEntries { get; set; } = new();
 
     /// <summary>
     /// Сумма значений по всем ключам (для команды "/rollVH параметр1 параметр2 hunger=N").

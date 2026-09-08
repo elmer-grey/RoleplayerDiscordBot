@@ -41,6 +41,9 @@ namespace RPBot.VtM
                 .WithButton(BtnRollRotschreck,
                     BuildId(VampireFrenzyAction.RollRotschreck, character.CharacterId, "rs"),
                     ButtonStyle.Primary)
+                .WithButton("🗑 Очистить атавизм",
+                    BuildId(VampireFrenzyAction.ClearAtavism, character.CharacterId, "fr"),
+                    ButtonStyle.Secondary)
                 .Build();
         }
 

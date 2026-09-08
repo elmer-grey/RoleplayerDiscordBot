@@ -43,7 +43,7 @@ namespace RPBot.VtM
                 inline: true);
 
             eb.AddField(
-                name: "🐾 Атавизмы Гангрела",
+                name: "🐾 Атавизмы",
                 value: BuildAtavismBlock(character),
                 inline: false);
 
@@ -106,11 +106,18 @@ namespace RPBot.VtM
 
         private static string BuildAtavismBlock(VampireCharacter character)
         {
-            var list = character.ActiveAtavisms;
-            if (list == null || list.Count == 0)
-                return "Нет активных атавизмов.\n*У Гангрела атавизм добавляется автоматически при входе в ярость.*";
+            // Приоритет — новые метаданные. Если их нет, читаем устаревший список строк
+            // и помечаем их как Unknown для совместимости со старыми сохранёнными персонажами.
+            var entries = character.ActiveAtavismEntries;
+            if (entries == null || entries.Count == 0)
+            {
+                if (character.ActiveAtavisms == null || character.ActiveAtavisms.Count == 0)
+                    return "Нет активных атавизмов.\n*У Гангрела атавизм добавляется автоматически при входе в ярость.*";
+                return string.Join("\n",
+                    character.ActiveAtavisms.Select((a, i) => $"{i + 1}. ❔ {a} — Неизв."));
+            }
 
-            return string.Join("\n", list.Select((a, i) => $"{i + 1}. {a}"));
+            return string.Join("\n", entries.Select((a, i) => $"{i + 1}. {a.Describe()}"));
         }
 
         private static int GetVirtue(VampireCharacter character, string virtueName)

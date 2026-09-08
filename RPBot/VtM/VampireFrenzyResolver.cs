@@ -184,7 +184,7 @@ public static class VampireFrenzyResolver
                 Difficulty: difficulty,
                 AccumulatedSuccesses: accumulatedSuccesses,
                 RoundsContained: 0,
-                ActiveAtavism: PickAtavism(character, rng, rollAtavism, atavismPicker));
+                ActiveAtavism: PickAtavism(character, rng, rollAtavism, atavismPicker, kind));
         }
 
         // 2. Считаем пул и кидаем.
@@ -202,7 +202,7 @@ public static class VampireFrenzyResolver
         if (successes <= 0)
         {
             outcome = FrenzyRollOutcome.Unleashed;
-            atavism = PickAtavism(character, rng, rollAtavism, atavismPicker);
+            atavism = PickAtavism(character, rng, rollAtavism, atavismPicker, kind);
         }
         else if (total >= FullSuppressThreshold)
         {
@@ -236,7 +236,8 @@ public static class VampireFrenzyResolver
         VampireCharacter character,
         IRandom rng,
         bool rollAtavism,
-        Func<int, string>? picker)
+        Func<int, string>? picker,
+        FrenzyKind kind)
     {
         if (!rollAtavism) return null;
         if (!string.Equals(character.Clan, "Гангрел", StringComparison.OrdinalIgnoreCase)) return null;
@@ -249,6 +250,18 @@ public static class VampireFrenzyResolver
             character.ActiveAtavisms = new List<string>();
         if (!character.ActiveAtavisms.Contains(atavism))
             character.ActiveAtavisms.Add(atavism);
+
+        // Дублируем в новый список с метаданными.
+        if (character.ActiveAtavismEntries == null)
+            character.ActiveAtavismEntries = new List<AtavismEntry>();
+        if (!character.ActiveAtavismEntries.Any(e => e.Name == atavism))
+        {
+            // Звериный признак Гангрела (для Frenzy) или Берсерк (для Rötschreck).
+            var entryKind = kind == FrenzyKind.Rötschreck
+                ? AtavismKind.BerserkPanic
+                : AtavismKind.GangrelBeastFeature;
+            character.ActiveAtavismEntries.Add(new AtavismEntry(atavism, entryKind, AcquiredAt: null));
+        }
 
         return atavism;
     }
