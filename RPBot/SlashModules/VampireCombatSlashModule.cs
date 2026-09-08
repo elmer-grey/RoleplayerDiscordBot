@@ -9,11 +9,13 @@ using RPBot.VtM;
 namespace RPBot.SlashModules;
 
 /// <summary>
-/// Slash-команды боевой механики VtM V20: <c>/vampire_damage</c> и <c>/vampire_combat_help</c>.
+/// Slash-команды боевой механики VtM V20:
+/// <c>/vampire_damage</c>, <c>/vampire_combat_help</c>, <c>/vampire_maneuver</c>, <c>/vampire_weapon</c>, <c>/vampire_armor</c>.
 /// </summary>
 /// <remarks>
-/// <para>Логика расчёта вынесена в <see cref="VampireCombatDamageResolver"/>,
-/// здесь только сбор параметров и вывод embed.</para>
+/// <para>Логика расчёта вынесена в <see cref="VampireCombatDamageResolver"/>
+/// и <see cref="VampireManeuverCatalog"/>. Здесь только сбор параметров
+/// и вывод embed.</para>
 /// </remarks>
 public sealed class VampireCombatSlashModule : ISlashCommandModule
 {
@@ -23,75 +25,105 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
     {
         "vampire_damage",
         "vampire_combat_help",
+        "vampire_maneuver",
+        "vampire_weapon",
+        "vampire_armor",
     };
 
     public IReadOnlyList<SlashCommandBuilder> Register()
     {
-        return new List<SlashCommandBuilder>
-        {
-            new SlashCommandBuilder()
-                .WithName("vampire_damage")
-                .WithDescription(
-                    "Рассчитать пул урона по формуле V20: база + Сила + (успехи атаки − успехи защиты). " +
-                    "Бросает кубы урона и возвращает количество успехов.")
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("base")
-                    .WithDescription("База манёвра (например, 1 для рукопашной/когтей; из таблицы оружия — для оружия).")
-                    .WithType(ApplicationCommandOptionType.Integer)
-                    .WithRequired(true))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("strength")
-                    .WithDescription("Сила атакующего (1..5).")
-                    .WithType(ApplicationCommandOptionType.Integer)
-                    .WithMinValue(1)
-                    .WithMaxValue(5)
-                    .WithRequired(true))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("attack")
-                    .WithDescription("Успехи проверки атаки (≥0).")
-                    .WithType(ApplicationCommandOptionType.Integer)
-                    .WithRequired(true))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("defense")
-                    .WithDescription("Успехи проверки защиты (≥0).")
-                    .WithType(ApplicationCommandOptionType.Integer)
-                    .WithRequired(true))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("damage_type")
-                    .WithDescription("Тип наносимого повреждения (влияет только на текст справки).")
-                    .WithType(ApplicationCommandOptionType.String)
-                    .AddChoice("лёгкое", "light")
-                    .AddChoice("тяжёлое", "aggravated")
-                    .AddChoice("губительное", "deadly")
-                    .WithRequired(false))
-                .AddOption(new SlashCommandOptionBuilder()
-                    .WithName("label")
-                    .WithDescription("Необязательная подпись (например, \"кулак\", \"Beretta\").")
-                    .WithType(ApplicationCommandOptionType.String)
-                    .WithRequired(false)),
+        var builder = new List<SlashCommandBuilder>();
 
-            new SlashCommandBuilder()
-                .WithName("vampire_combat_help")
-                .WithDescription("Справка по формуле боевой проверки и типам повреждений VtM V20."),
-        };
+        builder.Add(new SlashCommandBuilder()
+            .WithName("vampire_damage")
+            .WithDescription(
+                "Рассчитать пул урона по формуле V20 (стр. 301): база + max(0, успехи−1).")
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("base")
+                .WithDescription("База манёвра или оружия. Напр.: 4 для револьвера .38, «Сила+1» для ножа.")
+                .WithType(ApplicationCommandOptionType.Integer)
+                .WithRequired(true))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("attack")
+                .WithDescription("Успехи проверки атаки (≥0).")
+                .WithType(ApplicationCommandOptionType.Integer)
+                .WithRequired(true))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("damage_type")
+                .WithDescription("Тип наносимого повреждения (влияет только на текст справки).")
+                .WithType(ApplicationCommandOptionType.String)
+                .AddChoice("лёгкое", "light")
+                .AddChoice("тяжёлое", "aggravated")
+                .AddChoice("губительное", "deadly")
+                .WithRequired(false))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("label")
+                .WithDescription("Необязательная подпись (например, «кулак», «Beretta»).")
+                .WithType(ApplicationCommandOptionType.String)
+                .WithRequired(false)));
+
+        builder.Add(new SlashCommandBuilder()
+            .WithName("vampire_combat_help")
+            .WithDescription("Справка по формуле боевой проверки, манёврам и таблицам VtM V20."));
+
+        builder.Add(BuildChoiceCommand(
+            "vampire_maneuver",
+            "Описание боевого манёвра по V20 (стр. 303-309).",
+            ManeuverChoices()));
+
+        builder.Add(BuildChoiceCommand(
+            "vampire_weapon",
+            "Описание оружия по V20 (стр. 310-311).",
+            WeaponChoices()));
+
+        builder.Add(BuildChoiceCommand(
+            "vampire_armor",
+            "Описание класса брони по V20 (стр. 310).",
+            ArmorChoices()));
+
+        return builder;
     }
 
-    public async Task<bool> DispatchAsync(SocketSlashCommand command)
+    private static SlashCommandBuilder BuildChoiceCommand(
+        string name, string description, IReadOnlyList<(string Label, string Value)> choices)
+    {
+        var b = new SlashCommandBuilder()
+            .WithName(name)
+            .WithDescription(description)
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("name")
+                .WithDescription("Название из справочника.")
+                .WithType(ApplicationCommandOptionType.String)
+                .WithRequired(true));
+        foreach (var c in choices)
+        {
+            b.AddOption(new SlashCommandOptionBuilder()
+                .WithName("name")
+                .WithDescription(c.Label)
+                .WithType(ApplicationCommandOptionType.String)
+                .AddChoice(c.Label, c.Value)
+                .WithRequired(true));
+        }
+        return b;
+    }
+
+    public Task<bool> DispatchAsync(SocketSlashCommand command)
     {
         return command.Data.Name switch
         {
-            "vampire_damage" => await HandleDamageAsync(command),
-            "vampire_combat_help" => await HandleHelpAsync(command),
-            _ => await UnknownAsync(command),
+            "vampire_damage" => HandleDamageAsync(command),
+            "vampire_combat_help" => HandleHelpAsync(command),
+            "vampire_maneuver" => HandleManeuverAsync(command),
+            "vampire_weapon" => HandleWeaponAsync(command),
+            "vampire_armor" => HandleArmorAsync(command),
+            _ => UnknownAsync(command),
         };
     }
 
     private static async Task<bool> HandleDamageAsync(SocketSlashCommand command)
     {
         if (!TryGetInt(command, "base", out var baseVal) ||
-            !TryGetInt(command, "strength", out var strength) ||
-            !TryGetInt(command, "attack", out var attack) ||
-            !TryGetInt(command, "defense", out var defense))
+            !TryGetInt(command, "attack", out var attack))
         {
             await command.RespondAsync(
                 "Все числовые параметры должны быть целыми числами.",
@@ -99,10 +131,10 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
             return true;
         }
 
-        if (baseVal < 0 || attack < 0 || defense < 0)
+        if (baseVal < 0 || attack < 0)
         {
             await command.RespondAsync(
-                "Параметры `base`, `attack` и `defense` не могут быть отрицательными.",
+                "Параметры `base` и `attack` не могут быть отрицательными.",
                 ephemeral: true);
             return true;
         }
@@ -110,7 +142,7 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         VampireCombatDamageResolver.Pool pool;
         try
         {
-            pool = VampireCombatDamageResolver.ComputePool(baseVal, strength, attack, defense);
+            pool = VampireCombatDamageResolver.ComputePool(baseVal, attack);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -121,7 +153,6 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         var damageTypeRaw = TryGetString(command, "damage_type") ?? "light";
         var label = TryGetString(command, "label");
 
-        // Бросок пула урона — d10, сложность 6
         var rng = new SystemRandomAdapter();
         var dice = Enumerable.Range(0, pool.DamagePoolSize)
             .Select(_ => rng.Next(1, 11))
@@ -136,14 +167,14 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
 
         eb.AddField(
             "Формула",
-            $"база ({pool.BaseManeuver}) + Сила ({pool.AttackerStrength}) + max(0, атака−защита) ({Math.Max(0, pool.NetAttackSuccesses)}) = **{pool.DamagePoolSize}**",
+            $"база ({pool.BaseManeuver}) + max(0, успехи−1) ({pool.ExcessSuccesses}) = **{pool.DamagePoolSize}**",
             inline: false);
 
         if (!string.IsNullOrWhiteSpace(label))
         {
             eb.AddField("Атака", label, inline: true);
         }
-        eb.AddField("Превышение успехов", pool.NetAttackSuccesses.ToString(), inline: true);
+        eb.AddField("Доп. успехи", pool.ExcessSuccesses.ToString(), inline: true);
 
         var diceStr = dice.Length == 0
             ? "—"
@@ -172,7 +203,6 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
             Text = "Vampire: the Masquerade V20, стр. 301-302. Игрок сам вносит повреждения в свой лист.",
         };
 
-        // По дизайн-решению: VtM-расчёт урона публикуется в выделенный канал.
         if (!await VampireRollChannelPublisher.PublishAsync(command, eb.Build()))
             return true;
         return true;
@@ -189,8 +219,112 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         eb.Description = string.Join("\n", lines);
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "Источник: v20_p280-320.txt, стр. 301-302.",
+            Text = "Источник: v20_p280-320.txt, стр. 300-312.",
         };
+        await command.RespondAsync(embed: eb.Build(), ephemeral: true);
+        return true;
+    }
+
+    private static async Task<bool> HandleManeuverAsync(SocketSlashCommand command)
+    {
+        var key = TryGetString(command, "name");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            await command.RespondAsync("Укажите название манёвра.", ephemeral: true);
+            return true;
+        }
+
+        var melee = VampireManeuverCatalog.FindMelee(key);
+        var ranged = VampireManeuverCatalog.FindRanged(key);
+        var m = melee ?? ranged;
+        if (m == null)
+        {
+            await command.RespondAsync($"Манёвр «{key}» не найден.", ephemeral: true);
+            return true;
+        }
+
+        var eb = new EmbedBuilder
+        {
+            Title = $"🤜 {m.Name}",
+            Color = new Color(0xC41E3A),
+        };
+        eb.AddField("Параметры", m.Stat, inline: false);
+        eb.AddField("Точность", FormatSigned(m.Accuracy), inline: true);
+        eb.AddField("Урон", m.DamageFormula, inline: true);
+        if (m.Notes != null)
+        {
+            eb.AddField("Примечания", m.Notes, inline: false);
+        }
+        eb.Footer = new EmbedFooterBuilder { Text = "VtM V20, стр. 303-309." };
+        await command.RespondAsync(embed: eb.Build(), ephemeral: true);
+        return true;
+    }
+
+    private static async Task<bool> HandleWeaponAsync(SocketSlashCommand command)
+    {
+        var key = TryGetString(command, "name");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            await command.RespondAsync("Укажите название оружия.", ephemeral: true);
+            return true;
+        }
+
+        var w = VampireManeuverCatalog.FindWeapon(key);
+        if (w == null)
+        {
+            await command.RespondAsync($"Оружие «{key}» не найдено.", ephemeral: true);
+            return true;
+        }
+
+        var eb = new EmbedBuilder
+        {
+            Title = $"🗡 {w.Name}",
+            Color = new Color(0xC41E3A),
+        };
+        eb.AddField("Урон", w.DamageFormula, inline: true);
+        eb.AddField("Скрытное ношение", w.Concealment, inline: true);
+        if (w.Range > 0)
+        {
+            eb.AddField("Дистанция", $"{w.Range} м (макс {w.MaxRange})", inline: true);
+            eb.AddField("Скорострельность", w.RateOfFire.ToString(), inline: true);
+            eb.AddField("Боезапас", w.Magazine.ToString(), inline: true);
+        }
+        if (w.Notes != null)
+        {
+            eb.AddField("Примечания", w.Notes, inline: false);
+        }
+        eb.Footer = new EmbedFooterBuilder { Text = "VtM V20, стр. 310-311." };
+        await command.RespondAsync(embed: eb.Build(), ephemeral: true);
+        return true;
+    }
+
+    private static async Task<bool> HandleArmorAsync(SocketSlashCommand command)
+    {
+        var key = TryGetString(command, "name");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            await command.RespondAsync("Укажите класс брони.", ephemeral: true);
+            return true;
+        }
+
+        var a = VampireManeuverCatalog.FindArmor(key);
+        if (a == null)
+        {
+            await command.RespondAsync($"Класс брони «{key}» не найден.", ephemeral: true);
+            return true;
+        }
+
+        var eb = new EmbedBuilder
+        {
+            Title = $"🛡 {a.Name}",
+            Color = new Color(0x808080),
+        };
+        eb.AddField("Показатель брони", a.Protection.ToString(), inline: true);
+        eb.AddField("Модификатор удобства", FormatSigned(a.ComfortModifier), inline: true);
+        eb.Description =
+            "Показатель брони прибавляется к пулу прочности от лёгких, тяжёлых и губительных " +
+            "(клыки/когти). Не защищает от огня/солнца. Удобство снижает пулы на ловкость.";
+        eb.Footer = new EmbedFooterBuilder { Text = "VtM V20, стр. 310." };
         await command.RespondAsync(embed: eb.Build(), ephemeral: true);
         return true;
     }
@@ -199,6 +333,41 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
     {
         await command.RespondAsync("Неизвестная команда.", ephemeral: true);
         return true;
+    }
+
+    private static string FormatSigned(int v) => v switch
+    {
+        > 0 => $"+{v}",
+        < 0 => v.ToString(),
+        _ => "0",
+    };
+
+    private static IReadOnlyList<(string Label, string Value)> ManeuverChoices()
+    {
+        var list = new List<(string, string)>();
+        foreach (var m in VampireManeuverCatalog.Melee)
+            list.Add((m.Name, m.Key));
+        foreach (var m in VampireManeuverCatalog.Ranged)
+            list.Add((m.Name, m.Key));
+        return list;
+    }
+
+    private static IReadOnlyList<(string Label, string Value)> WeaponChoices()
+    {
+        var list = new List<(string, string)>();
+        foreach (var w in VampireManeuverCatalog.MeleeWeapons)
+            list.Add((w.Name, w.Key));
+        foreach (var w in VampireManeuverCatalog.RangedWeapons)
+            list.Add((w.Name, w.Key));
+        return list;
+    }
+
+    private static IReadOnlyList<(string Label, string Value)> ArmorChoices()
+    {
+        var list = new List<(string, string)>();
+        foreach (var a in VampireManeuverCatalog.Armor)
+            list.Add((a.Name, a.Key));
+        return list;
     }
 
     private static bool TryGetInt(SocketSlashCommand command, string key, out int value)

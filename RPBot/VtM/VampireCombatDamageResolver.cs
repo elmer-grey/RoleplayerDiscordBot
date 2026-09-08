@@ -11,12 +11,17 @@ namespace RPBot.VtM;
 /// <remarks>
 /// <para>Источник правил: <c>v20_p280-320.txt</c>, стр. 301-302.</para>
 /// <list type="bullet">
-/// <item>Каждый доп. успех проверки атаки увеличивает пул урона на 1d10.</item>
-/// <item>У каждой атаки есть параметр «урон» — зависит от силы атакующего
-/// либо заранее определённое число (для оружия).</item>
+/// <item>База урона = база манёвра/оружия (например, нож = Сила+1,
+/// меч = Сила+2, револьвер .38 = 4).</item>
+/// <item>Каждый доп. успех проверки атаки <em>сверх первого</em>
+/// увеличивает пул урона на 1d10
+/// («каждый дополнительный успех при проверке атаки увеличивает пул проверки
+/// урона от этой атаки на один d10» — V20, стр. 301).</item>
+/// <item>Пул урона не может быть меньше базы манёвра — попадание
+/// гарантирует хотя бы базовый пул.</item>
 /// <item>Сложность проверки урона = 6. Каждый успех = одно повреждение.</item>
-/// <item>Каждое превышение успехов атаки над успехами защиты добавляет +1 к пулу урона
-/// (по согласованию с пользователем — формула 3 из roadmap).</item>
+/// <item>Проверка урона не может закончиться провалом —
+/// только неудачей (= «по касательной», 0 повреждений).</item>
 /// </list>
 /// </remarks>
 public static class VampireCombatDamageResolver
@@ -30,53 +35,41 @@ public static class VampireCombatDamageResolver
     /// <summary>
     /// Результат расчёта пула урона по формуле V20.
     /// </summary>
-    /// <param name="BaseManeuver">База манёвра (например, 1 для кулака/когтей,
-    /// значение из таблицы оружия для конкретного оружия).</param>
-    /// <param name="AttackerStrength">Сила атакующего (1..5).</param>
-    /// <param name="NetAttackSuccesses">Превышение успехов атаки над успехами защиты.
-    /// Может быть ≤ 0 — тогда пул урона всё равно равен базе+сила
-    /// (без надбавки за «лишние» успехи).</param>
-    /// <param name="DamagePoolSize">Итоговый пул урона, ограниченный <see cref="MaxDamagePool"/>.</param>
+    /// <param name="BaseManeuver">База манёвра/оружия. Уже включает Силу,
+    /// если база её требует (например, «Сила + 1» для ножа).</param>
+    /// <param name="ExcessSuccesses">Количество успехов атаки сверх первого
+    /// (т.е. <c>max(0, attackerSuccesses − 1)</c>). Это именно то, что
+    /// добавляется к пулу урона.</param>
+    /// <param name="DamagePoolSize">Итоговый пул урона, ограниченный
+    /// <see cref="MaxDamagePool"/>. Не бывает меньше <c>BaseManeuver</c>.</param>
     public sealed record Pool(
         int BaseManeuver,
-        int AttackerStrength,
-        int NetAttackSuccesses,
+        int ExcessSuccesses,
         int DamagePoolSize)
     {
-        /// <summary>Сумма «база + Сила + дополнительные успехи атаки» (без кэпа).</summary>
-        public int RawTotal => BaseManeuver + AttackerStrength + Math.Max(0, NetAttackSuccesses);
+        /// <summary>Сумма «база + дополнительные успехи атаки» (без кэпа).</summary>
+        public int RawTotal => BaseManeuver + ExcessSuccesses;
     }
 
     /// <summary>
-    /// Посчитать пул урона по формуле V20:
-    /// <c>база манёвра + Сила атакующего + max(0, успехи_атаки − успехи_защиты)</c>.
+    /// Посчитать пул урона по формуле V20 (стр. 301):
+    /// <c>pool = max(BaseManeuver, BaseManeuver + max(0, attackerSuccesses − 1))</c>.
     /// </summary>
-    /// <param name="baseManeuver">База манёвра (≥ 0).</param>
-    /// <param name="attackerStrength">Сила атакующего (1..5).</param>
+    /// <param name="baseManeuver">База манёвра/оружия (≥ 0).</param>
     /// <param name="attackerSuccesses">Успехи проверки атаки (≥ 0).</param>
-    /// <param name="defenderSuccesses">Успехи проверки защиты (≥ 0).</param>
-    public static Pool ComputePool(
-        int baseManeuver,
-        int attackerStrength,
-        int attackerSuccesses,
-        int defenderSuccesses)
+    public static Pool ComputePool(int baseManeuver, int attackerSuccesses)
     {
         ValidateNonNegative(baseManeuver, nameof(baseManeuver));
         ValidateNonNegative(attackerSuccesses, nameof(attackerSuccesses));
-        ValidateNonNegative(defenderSuccesses, nameof(defenderSuccesses));
-        if (attackerStrength < 1 || attackerStrength > 5)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(attackerStrength),
-                attackerStrength,
-                "Сила атакующего должна быть в диапазоне 1..5.");
-        }
 
-        var net = attackerSuccesses - defenderSuccesses;
-        var raw = baseManeuver + attackerStrength + Math.Max(0, net);
-        var capped = Math.Min(raw, MaxDamagePool);
+        // Первый успех не прибавляется к пулу; каждый последующий — +1d10.
+        var excess = Math.Max(0, attackerSuccesses - 1);
+        var raw = baseManeuver + excess;
+        // Пул урона не может быть меньше базы манёвра — попадание есть попадание.
+        var floored = Math.Max(raw, baseManeuver);
+        var capped = Math.Min(floored, MaxDamagePool);
 
-        return new Pool(baseManeuver, attackerStrength, net, capped);
+        return new Pool(baseManeuver, excess, capped);
     }
 
     /// <summary>
@@ -101,14 +94,78 @@ public static class VampireCombatDamageResolver
     /// <summary>
     /// Краткая текстовая справка по боевой формуле V20 для команды <c>/vampire_combat_help</c>.
     /// </summary>
-    public static IReadOnlyList<string> BuildHelpLines() => new[]
+    public static IReadOnlyList<string> BuildHelpLines()
     {
-        "**1. Атака.** /vampire_damage бросает характеристика + навык (или дисциплина) → N успехов.",
-        "**2. Защита.** Атакуемый бросает Ловкость + Защита (или Дисциплина, или Сил. волю) → M успехов.",
-        "**3. Пул урона.** База манёвра + Сила атакующего + (N − M) при N > M.",
-        "**4. Проверка урона.** Бросок пула d10, сложность 6, каждый успех = 1 повреждение.",
-        "Типы повреждений: лёгкое (/), тяжёлое (Х), губительное (Ж — огонь/солнце/клыки/когти вампиров).",
-        "Броня снижает базовый пул урона, см. таблицу оружия и примечания по защите.",
+        var lines = new List<string>
+        {
+            "**Бой в V20 проходит в три фазы:**",
+            "• *Инициатива* — Ловкость + Смекалка (или 6 + Лов + Смек).",
+            "• *Атака* — характеристика + навык. Сложность 6 (по умолчанию).",
+            "• *Результат* — пул урона и проверка на прочность.",
+            "",
+            "**Формула урона (стр. 301):** `pool = база_манёвра + max(0, успехи_атаки − 1)`.",
+            "  Первый успех не прибавляется. Каждый последующий — +1d10.",
+            "  Пул не может быть меньше базы манёвра. Проверка урона — только неудача, не провал.",
+            "  Сложность проверки урона = 6. Каждый успех = 1 повреждение.",
+            "",
+            "**Типы повреждений:**",
+            "• `/` лёгкое — Выносливость + Стойкость на прочность.",
+            "• `Х` тяжёлое — то же; смертным не проходится.",
+            "• `Ж` губительное — прочность только Стойкость (огонь/солнце/клыки/когти).",
+            "",
+            "**Ближний бой — манёвры (стр. 309):**",
+        };
+        foreach (var m in VampireManeuverCatalog.Melee)
+        {
+            lines.Add($"  • *{m.Name}* — `{m.Stat}`, точность `{m.Accuracy:+#;-#;0}`, урон `{m.DamageFormula}`" +
+                      (m.DamageKind != DamageType.None ? $" ({DamageTag(m.DamageKind)})" : "") +
+                      (m.Notes != null ? $". {m.Notes}" : ""));
+        }
+        lines.Add("");
+        lines.Add("**Дистанционный бой — манёвры (стр. 309):**");
+        foreach (var m in VampireManeuverCatalog.Ranged)
+        {
+            lines.Add($"  • *{m.Name}* — `{m.Stat}`, точность `{m.Accuracy:+#;-#;0}`, урон `{m.DamageFormula}`" +
+                      (m.Notes != null ? $". {m.Notes}" : ""));
+        }
+        lines.Add("");
+        lines.Add("**Общие модификаторы (стр. 303-304):**");
+        foreach (var g in VampireManeuverCatalog.General)
+        {
+            lines.Add($"  • *{g.Name}* — {g.Effect}");
+        }
+        lines.Add("");
+        lines.Add("**Таблица брони (стр. 310):**");
+        foreach (var a in VampireManeuverCatalog.Armor)
+        {
+            lines.Add($"  • *{a.Name}* — показатель {a.Protection:+#;-#;0}, удобство {a.ComfortModifier:+#;-#;0}");
+        }
+        lines.Add("");
+        lines.Add("**Холодное оружие (стр. 310):**");
+        foreach (var w in VampireManeuverCatalog.MeleeWeapons)
+        {
+            lines.Add($"  • *{w.Name}* — `{w.DamageFormula}` ({DamageTag(w.DamageType)})");
+        }
+        lines.Add("");
+        lines.Add("**Огнестрельное оружие (стр. 311):**");
+        foreach (var w in VampireManeuverCatalog.RangedWeapons)
+        {
+            lines.Add($"  • *{w.Name}* — база {w.DamageBase}, дист. {w.Range}/{w.MaxRange} м, скоростр. {w.RateOfFire}, боезапас {w.Magazine}" +
+                      (w.Notes != null ? $". {w.Notes}" : ""));
+        }
+        lines.Add("");
+        lines.Add("**Здоровье (стр. 312) — модификаторы пула:**");
+        lines.Add("  • `помят` +0 · `легко ранен` −1 · `ранен` −1 · `серьёзно ранен` −2");
+        lines.Add("  • `тяжело ранен` −2 · `едва жив` −5 · `при смерти` — без сознания.");
+        return lines;
+    }
+
+    private static string DamageTag(DamageType kind) => kind switch
+    {
+        DamageType.Bashing => "лёгкие (/)",
+        DamageType.Lethal => "тяжёлые (Х)",
+        DamageType.Aggravated => "губительные (Ж)",
+        _ => "без урона",
     };
 
     private static void ValidateNonNegative(int value, string paramName)

@@ -7,99 +7,78 @@ namespace SmokeTests;
 
 public class VampireCombatDamageResolverTests
 {
-    // ─── ComputePool — базовая формула ────────────────────────────────
+    // ─── ComputePool — формула V20 стр. 301 ───────────────────────
 
     [Fact]
-    public void ComputePool_BasePlusStrength_NoNetSuccesses()
+    public void ComputePool_FirstSuccessAddsNothing()
     {
         var p = VampireCombatDamageResolver.ComputePool(
-            baseManeuver: 1,
-            attackerStrength: 3,
-            attackerSuccesses: 5,
-            defenderSuccesses: 5);
+            baseManeuver: 4,    // напр. револьвер .38
+            attackerSuccesses: 1); // первый успех — без надбавки
 
-        Assert.Equal(1, p.BaseManeuver);
-        Assert.Equal(3, p.AttackerStrength);
-        Assert.Equal(0, p.NetAttackSuccesses);
-        Assert.Equal(4, p.DamagePoolSize); // 1+3+0
-        Assert.Equal(4, p.RawTotal);
+        Assert.Equal(0, p.ExcessSuccesses);
+        Assert.Equal(4, p.DamagePoolSize);
     }
 
     [Fact]
-    public void ComputePool_NetSuccessesAddToPool()
+    public void ComputePool_EachExtraSuccessAddsOne()
     {
-        var p = VampireCombatDamageResolver.ComputePool(
-            baseManeuver: 1,
-            attackerStrength: 3,
-            attackerSuccesses: 7,
-            defenderSuccesses: 4);
+        // Револьвер .38, база 4. 4 успеха → +3d10 (1-й бесплатный).
+        var p = VampireCombatDamageResolver.ComputePool(baseManeuver: 4, attackerSuccesses: 4);
 
-        Assert.Equal(3, p.NetAttackSuccesses);
-        Assert.Equal(7, p.DamagePoolSize); // 1+3+3
+        Assert.Equal(3, p.ExcessSuccesses);
+        Assert.Equal(7, p.DamagePoolSize);
     }
 
     [Fact]
-    public void ComputePool_DefenseExceedsAttack_NoBonusButPoolStillBuilt()
+    public void ComputePool_PoolNeverBelowBase()
     {
-        // По согласованию: превышение защиты не уменьшает пул урона ниже база+Сила.
-        var p = VampireCombatDamageResolver.ComputePool(
-            baseManeuver: 1,
-            attackerStrength: 3,
-            attackerSuccesses: 2,
-            defenderSuccesses: 8);
+        // Даже при провале — попадание есть попадание, минимум = база.
+        var p = VampireCombatDamageResolver.ComputePool(baseManeuver: 5, attackerSuccesses: 1);
 
-        Assert.Equal(-6, p.NetAttackSuccesses);
-        Assert.Equal(4, p.DamagePoolSize); // 1+3+0
+        Assert.Equal(5, p.DamagePoolSize);
     }
 
     [Fact]
-    public void ComputePool_PoolIsCappedAtMaxDamagePool()
+    public void ComputePool_StrengthAlreadyInBase()
     {
-        var p = VampireCombatDamageResolver.ComputePool(
-            baseManeuver: 10,
-            attackerStrength: 5,
-            attackerSuccesses: 20,
-            defenderSuccesses: 0);
+        // Нож = «Сила + 1». Если Сила=3, база = 4, не 3+1+Сила.
+        var p = VampireCombatDamageResolver.ComputePool(baseManeuver: 4, attackerSuccesses: 3);
 
-        Assert.Equal(VampireCombatDamageResolver.MaxDamagePool, p.DamagePoolSize);
-        Assert.True(p.RawTotal > VampireCombatDamageResolver.MaxDamagePool);
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    [InlineData(4)]
-    [InlineData(5)]
-    public void ComputePool_AcceptsValidStrength(int strength)
-    {
-        var p = VampireCombatDamageResolver.ComputePool(1, strength, 1, 0);
-        Assert.Equal(strength, p.AttackerStrength);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(6)]
-    public void ComputePool_RejectsOutOfRangeStrength(int strength)
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => VampireCombatDamageResolver.ComputePool(1, strength, 1, 0));
+        Assert.Equal(2, p.ExcessSuccesses);
+        Assert.Equal(6, p.DamagePoolSize);
     }
 
     [Fact]
     public void ComputePool_RejectsNegativeBase()
     {
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => VampireCombatDamageResolver.ComputePool(-1, 3, 1, 0));
+            () => VampireCombatDamageResolver.ComputePool(-1, 1));
     }
 
     [Fact]
     public void ComputePool_RejectsNegativeSuccesses()
     {
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => VampireCombatDamageResolver.ComputePool(1, 3, -1, 0));
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => VampireCombatDamageResolver.ComputePool(1, 3, 0, -1));
+            () => VampireCombatDamageResolver.ComputePool(1, -1));
+    }
+
+    [Fact]
+    public void ComputePool_PoolIsCappedAtMaxDamagePool()
+    {
+        var p = VampireCombatDamageResolver.ComputePool(baseManeuver: 25, attackerSuccesses: 30);
+
+        Assert.Equal(VampireCombatDamageResolver.MaxDamagePool, p.DamagePoolSize);
+        Assert.True(p.RawTotal > VampireCombatDamageResolver.MaxDamagePool);
+    }
+
+    [Fact]
+    public void ComputePool_ZeroBaseStillValid()
+    {
+        var p = VampireCombatDamageResolver.ComputePool(baseManeuver: 0, attackerSuccesses: 3);
+
+        Assert.Equal(2, p.ExcessSuccesses);
+        Assert.Equal(2, p.DamagePoolSize);
     }
 
     // ─── CountDamageSuccesses — оценка кубов ─────────────────────────
@@ -148,10 +127,18 @@ public class VampireCombatDamageResolverTests
     {
         var lines = VampireCombatDamageResolver.BuildHelpLines();
         Assert.NotEmpty(lines);
-        Assert.Contains(lines, l => l.Contains("Атака", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(lines, l => l.Contains("Защита", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(lines, l => l.Contains("Пул урона", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(lines, l => l.Contains("сложность 6", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(lines, l => l.Contains("повреждение", StringComparison.OrdinalIgnoreCase));
+        var joined = string.Join("\n", lines);
+        // Формула пула.
+        Assert.Contains("pool", joined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Пул урона", joined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("сложность 6", joined, StringComparison.OrdinalIgnoreCase);
+        // Все ключевые манёвры должны упоминаться.
+        Assert.Contains("Укус", joined, StringComparison.Ordinal);
+        Assert.Contains("Парирование", joined, StringComparison.Ordinal);
+        Assert.Contains("Длинная очередь", joined, StringComparison.Ordinal);
+        // Типы повреждений и оружие.
+        Assert.Contains("губительные", joined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Револьвер", joined, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("брони", joined, StringComparison.OrdinalIgnoreCase);
     }
 }
