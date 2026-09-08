@@ -1826,6 +1826,169 @@ public sealed class VampireCommands
         await component.RespondAsync($"✅ Добавлено расстройство «{picked}».",
             components: VampireMoralityComponents.Build(charId.Value), ephemeral: true);
     }
+
+    /// <summary>
+    /// Обработка кнопок блока «Воля» (vtm_will:*).
+    /// Потратить 1 пункт воли (spend) или восстановить 1 (restore).
+    /// V20 стр. 116: 1 пункт воли = +1 к одному повторному броску, либо
+    /// автоматический успех при сопротивлении ярости/ротшреку, либо
+    /// «игнорирование повреждений» (бросок куба воли на каждое отменяемое).
+    /// </summary>
+    /// <remarks>
+    /// <para>Текущий шаг — только обновляем запас пунктов воли. Бросок куба
+    /// воли для «игнорирования повреждений» будет добавлен отдельной фичей.</para>
+    /// </remarks>
+    public async Task HandleWillpowerButtonAsync(SocketMessageComponent component)
+    {
+        if (!VampireWillpowerComponents.TryParse(component.Data.CustomId, out var action, out var charId))
+        {
+            await component.RespondAsync("⚠️ Не удалось разобрать кнопку воли.", ephemeral: true);
+            return;
+        }
+        if (!component.GuildId.HasValue)
+        {
+            await component.RespondAsync("Кнопки воли работают только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+        var character = storage.GetByCharacterId(charId);
+        if (character == null)
+        {
+            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != component.User.Id)
+        {
+            await component.RespondAsync("⚠️ Только владелец чарника может менять волю.", ephemeral: true);
+            return;
+        }
+
+#pragma warning disable CS0618 // WillpowerPoints устарело для листа, но используется runtime-кнопкой.
+        character.EnsureWillpowerPointsValid();
+        var ceiling = character.Willpower;
+        var current = character.WillpowerPoints;
+
+        switch (action)
+        {
+            case WillpowerAction.SpendOne:
+                if (current <= 0)
+                {
+                    await component.RespondAsync("ℹ️ Нечего тратить — запас воли пуст.", ephemeral: true);
+                    return;
+                }
+                if (character.WillpowerSpentThisTurn)
+                {
+                    await component.RespondAsync(
+                        "⚠️ Уже использовался «Сопротивление» в этом ходу (V20: один раз за ход).",
+                        ephemeral: true);
+                    return;
+                }
+                character.WillpowerPoints = current - 1;
+                character.WillpowerSpentThisTurn = true;
+                await storage.UpsertAsync(character);
+                await component.RespondAsync(
+                    $"✅ Потрачен 1 пункт воли. Остаток: **{character.WillpowerPoints}** / {ceiling}.",
+                    components: VampireWillpowerComponents.Build(charId),
+                    ephemeral: true);
+                return;
+
+            case WillpowerAction.RestoreOne:
+                if (current >= ceiling)
+                {
+                    await component.RespondAsync(
+                        $"ℹ️ Запас воли уже полный: {current} / {ceiling}.",
+                        ephemeral: true);
+                    return;
+                }
+                character.WillpowerPoints = current + 1;
+                await storage.UpsertAsync(character);
+                await component.RespondAsync(
+                    $"✅ Восстановлен 1 пункт воли. Запас: **{character.WillpowerPoints}** / {ceiling}.",
+                    components: VampireWillpowerComponents.Build(charId),
+                    ephemeral: true);
+                return;
+
+            default:
+                await component.RespondAsync("⚠️ Неизвестное действие воли.", ephemeral: true);
+                return;
+        }
+#pragma warning restore CS0618
+    }
+
+    /// <summary>
+    /// Обработка кнопок блока «Здоровье» (vtm_health:*).
+    /// Нанести нелетальный / летальный / агравированный урон (+1 ячейка)
+    /// или вылечить 1 ячейку справа. V20 стр. 92.
+    /// </summary>
+    public async Task HandleHealthButtonAsync(SocketMessageComponent component)
+    {
+        if (!VampireHealthComponents.TryParse(component.Data.CustomId, out var action, out var charId))
+        {
+            await component.RespondAsync("⚠️ Не удалось разобрать кнопку здоровья.", ephemeral: true);
+            return;
+        }
+        if (!component.GuildId.HasValue)
+        {
+            await component.RespondAsync("Кнопки здоровья работают только на сервере.", ephemeral: true);
+            return;
+        }
+        var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
+        var character = storage.GetByCharacterId(charId);
+        if (character == null)
+        {
+            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            return;
+        }
+        if (character.PlayerId != component.User.Id)
+        {
+            await component.RespondAsync("⚠️ Только владелец чарника может менять здоровье.", ephemeral: true);
+            return;
+        }
+
+        character.Health ??= new HealthState(7);
+        var h = character.Health;
+
+        switch (action)
+        {
+            case HealthAction.ApplyNonLethal:
+                if (h.IsDead)
+                {
+                    await component.RespondAsync("☠️ Персонаж мёртв.", ephemeral: true);
+                    return;
+                }
+                h.ApplyNonLethal(1);
+                break;
+            case HealthAction.ApplyLethal:
+                if (h.IsDead)
+                {
+                    await component.RespondAsync("☠️ Персонаж уже мёртв.", ephemeral: true);
+                    return;
+                }
+                h.ApplyLethal(1);
+                break;
+            case HealthAction.ApplyAggravated:
+                if (h.IsDead)
+                {
+                    await component.RespondAsync("☠️ Персонаж уже мёртв.", ephemeral: true);
+                    return;
+                }
+                h.ApplyAggravated(1);
+                break;
+            case HealthAction.HealOne:
+                h.Heal(1);
+                break;
+            default:
+                await component.RespondAsync("⚠️ Неизвестное действие здоровья.", ephemeral: true);
+                return;
+        }
+
+        await storage.UpsertAsync(character);
+        var status = h.IsDead ? "☠️ Персонаж мёртв." : h.IsDestroyed ? "💀 Небоеспособен." : "✅ Состояние обновлено.";
+        await component.RespondAsync(
+            $"{status}\n{VampireHealthEmbed.Build(character).Description}",
+            components: VampireHealthComponents.Build(charId),
+            ephemeral: true);
+    }
 }
 
 /// <summary>

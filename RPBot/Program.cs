@@ -5614,6 +5614,16 @@ await Task.CompletedTask;
                             await new VampireCommands().HandleMoralityButtonAsync(component);
                         return;
                     }
+                    if (cid.StartsWith(VampireWillpowerComponents.Prefix, StringComparison.Ordinal))
+                    {
+                        await new VampireCommands().HandleWillpowerButtonAsync(component);
+                        return;
+                    }
+                    if (cid.StartsWith(VampireHealthComponents.Prefix, StringComparison.Ordinal))
+                    {
+                        await new VampireCommands().HandleHealthButtonAsync(component);
+                        return;
+                    }
                     if (cid.StartsWith(VampireFrenzyComponents.Prefix, StringComparison.Ordinal))
                     {
                         if (component.GuildId.HasValue)
