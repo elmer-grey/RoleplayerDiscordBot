@@ -246,7 +246,12 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
         var eb = BuildRollEmbed(result, build, label, successes);
         var components = VampireRollComponents.BuildRollButtons(
             command.User.Id, build.Specialization);
-        await command.RespondAsync(embed: eb, components: components, ephemeral: false);
+
+        // По дизайн-решению: VtM-броски публикуются в выделенный канал
+        // ServerConfig.VtMRollChannelID, а не в канал вызова команды.
+        if (!await VampireRollChannelPublisher.PublishAsync(command, eb, components))
+            return true;
+
         var botMessage = await command.GetOriginalResponseAsync();
 
         registry.Record(

@@ -172,7 +172,9 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
             Text = "Vampire: the Masquerade V20, стр. 301-302. Игрок сам вносит повреждения в свой лист.",
         };
 
-        await command.RespondAsync(embed: eb.Build());
+        // По дизайн-решению: VtM-расчёт урона публикуется в выделенный канал.
+        if (!await VampireRollChannelPublisher.PublishAsync(command, eb.Build()))
+            return true;
         return true;
     }
 
