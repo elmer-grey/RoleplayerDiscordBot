@@ -73,8 +73,11 @@ public class VampireMoralityResolverTests
     public void Botch_DecrementsBothAndAddsDerangement()
     {
         // Con=4, SC=2, Bonus=2 → Чел.=8.
-        // Ботч: −1 к HumanityBonus (даёт −1 к Чел.) И −1 к Совести (формула даёт ещё −1).
-        // Итого: Чел.=6. Это согласуется с V20: два независимых штрафа, формула пересчитывает итог.
+        // Ботч по согласованной семантике:
+        // 1) HumanityBonus -= 1 (Failure-часть) → Bonus=1.
+        // 2) Conscience -= 1 → Con=3.
+        // 3) Компенсация формулы: Bonus += 1 → Bonus=2.
+        // Итого: Чел.=3+2+2=7 (минус 1 от 8, не минус 2).
         var c = MakeCharacter(conscience: 4, selfControl: 2, humanityBonus: 2);
         var beforeHumanity = VampireFinishingResolver.ComputeHumanity(c);
 
@@ -83,10 +86,11 @@ public class VampireMoralityResolverTests
         Assert.Equal(1, applied.AppliedHumanityLoss);
         Assert.Equal(1, applied.AppliedConscienceLoss);
         Assert.NotNull(applied.AddedDerangement);
-        // Чел. упала на 2 (−1 от −HumanityBonus, −1 от −Conscience через формулу).
-        Assert.Equal(beforeHumanity - 2, applied.NewHumanity);
+        // Чел. упала ровно на 1 (не на 2 — компенсация формулы работает).
+        Assert.Equal(beforeHumanity - 1, applied.NewHumanity);
         Assert.Equal(3, applied.NewConscience);
-        Assert.Equal(1, c.HumanityBonus);
+        // HumanityBonus: −1 от Failure, +1 от компенсации = 0 нетто, остался 2.
+        Assert.Equal(2, c.HumanityBonus);
         Assert.Single(c.Derangements!);
     }
 

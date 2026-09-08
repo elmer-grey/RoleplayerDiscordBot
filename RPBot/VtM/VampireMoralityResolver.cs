@@ -51,6 +51,25 @@ namespace RPBot.VtM
         /// Применить <see cref="VampireConscienceResolver.ConscienceApplyResult"/> к персонажу.
         /// Мутирует переданного <paramref name="character"/>.
         /// </summary>
+        /// <remarks>
+        /// <para><b>Согласованная семантика</b> (владелец чарника):</para>
+        /// <list type="bullet">
+        /// <item>Человечность — это отдельный счётчик, который может падать на 1 за проверку.
+        ///       При ботче «−1 к Совести» — отдельный штраф, <b>не удваивающий</b> потерю
+        ///       Человечности через формулу <c>Чел. = Con + SC + Bonus</c>.</item>
+        /// <item>Поэтому при <b>Failure</b> тратим <see cref="VampireCharacter.HumanityBonus"/> на 1
+        ///       (Совесть не трогается).</item>
+        /// <item>При <b>Botch</b> уменьшаем Совесть на 1 и компенсируем производный эффект
+        ///       в формуле, поднимая <see cref="VampireCharacter.HumanityBonus"/> на +1.
+        ///       В результате HumanityBonus не меняется, но Совесть падает, и итоговая Чел.
+        ///       теряет ровно 1 пункт.</item>
+        /// <item>Это сознательное отступление от «наивного» применения формулы, явно
+        ///       продиктованное тем, что в V20 «−1 к Чел.» и «−1 к Совести» — два разных
+        ///       штрафа, а не суммирующиеся эффекты.</item>
+        /// </list>
+        /// <para>Границы: Conscience и HumanityBonus не уходят ниже значений,
+        /// при которых итоговая Чел. всё ещё = 1.</para>
+        /// </remarks>
         public static MoralityApplyOutcome ApplyConscience(
             VampireCharacter character,
             ConscienceApplyResult apply)
@@ -62,31 +81,31 @@ namespace RPBot.VtM
             var oldConscience = VampireAdvantagesResolver.GetVirtueValue(
                 character, VampireParameterCatalog.VirtueConscience);
 
-            int humanityLoss = 0;
+            int humanityLoss = 0; // фактически снято пунктов Чел. (для UI: «было 8 → стало 7»)
             int conscienceLoss = 0;
             string? addedDerangement = null;
 
-            // ─── 1. Потеря Человечности ────────────────────────────────
+            // Текущие значения добродетелей (с учётом MinVirtue = 1).
+            var con = VampireAdvantagesResolver.GetVirtueValue(
+                character, VampireParameterCatalog.VirtueConscience);
+            var scl = VampireAdvantagesResolver.GetVirtueValue(
+                character, VampireParameterCatalog.VirtueSelfControl);
+
+            // Нижняя граница HumanityBonus: такая, что итоговая Чел. = MinHumanity.
+            // Con и SC всегда ≥ 1 (MinVirtue), так что minBonus всегда корректен.
+            int minBonus = -(con + scl) + MinHumanity;
+
+            // ─── 1. Потеря Человечности (через HumanityBonus) ────────────
             if (apply.HumanityDelta < 0)
             {
-                int desired = -apply.HumanityDelta; // сколько нужно снять
-                // Минимально допустимый HumanityBonus = -(con+scl) + MinHumanity
-                var con = VampireAdvantagesResolver.GetVirtueValue(
-                    character, VampireParameterCatalog.VirtueConscience);
-                var scl = VampireAdvantagesResolver.GetVirtueValue(
-                    character, VampireParameterCatalog.VirtueSelfControl);
-                int minBonus = -(con + scl) + MinHumanity;
-
-                int actual = desired;
-                // HumanityBonus не уходит ниже minBonus.
-                // Возможная «потеря» амортизируется так: если нельзя снять всё —
-                // оставшуюся часть не применяем (редкий случай — у персонажа уже Чел.=1).
+                int desired = -apply.HumanityDelta;
                 int allowed = character.HumanityBonus - minBonus;
+                int actual = desired;
                 if (allowed < actual) actual = allowed;
                 if (actual < 0) actual = 0;
 
                 character.HumanityBonus -= actual;
-                humanityLoss = actual;
+                humanityLoss += actual;
             }
 
             // ─── 2. Потеря Совести (только при ботче) ───────────────────
@@ -109,7 +128,17 @@ namespace RPBot.VtM
                 conscienceLoss = actual;
             }
 
-            // ─── 3. Расстройство при ботче ─────────────────────────────
+            // ─── 3. Компенсация производного эффекта формулы при ботче ───
+            // Если Conscience реально упала (conscienceLoss > 0), итоговая Чел.
+            // по формуле упала бы ещё на 1. По семантике V20 это «другой штраф»,
+            // поэтому компенсируем — поднимаем HumanityBonus на +1, чтобы итоговая
+            // Чел. потеряла только 1 пункт (а не 2).
+            if (conscienceLoss > 0)
+            {
+                character.HumanityBonus += 1;
+            }
+
+            // ─── 4. Расстройство при ботче ──────────────────────────────
             if (apply.AddDerangement)
             {
                 addedDerangement = PickNewDerangement(character);
@@ -123,6 +152,15 @@ namespace RPBot.VtM
             var newHumanity = VampireFinishingResolver.ComputeHumanity(character);
             var newConscience = VampireAdvantagesResolver.GetVirtueValue(
                 character, VampireParameterCatalog.VirtueConscience);
+
+            // humanityLoss отражает «потерю пунктов Чел.» с точки зрения игрока:
+            // oldHumanity − newHumanity. Для Failure это 1, для Botch — тоже 1 (благодаря компенсации).
+            var observedHumanityLoss = oldHumanity - newHumanity;
+            if (observedHumanityLoss != humanityLoss && conscienceLoss > 0)
+            {
+                // Botch: компенсировали формулу, но observed loss = oldHumanity - newHumanity.
+                humanityLoss = observedHumanityLoss;
+            }
 
             return new MoralityApplyOutcome(
                 OldHumanity: oldHumanity,
