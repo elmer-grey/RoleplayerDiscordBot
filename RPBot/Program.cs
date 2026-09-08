@@ -5578,6 +5578,8 @@ await Task.CompletedTask;
                         return;
                     }
                     if (cid.StartsWith(VampireRollComponents.RerollPrefix, StringComparison.Ordinal) ||
+                        cid.StartsWith(VampireRollComponents.RerollMenuAction, StringComparison.Ordinal) ||
+                        cid.StartsWith(VampireRollComponents.RerollBackAction, StringComparison.Ordinal) ||
                         cid.StartsWith(VampireRollComponents.RepeatAction, StringComparison.Ordinal) ||
                         cid.StartsWith(VampireRollComponents.DoneAction, StringComparison.Ordinal))
                     {

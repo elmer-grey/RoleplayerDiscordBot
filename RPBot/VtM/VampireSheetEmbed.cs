@@ -382,7 +382,8 @@ public static class VampireSheetEmbed
     /// <summary>Колонка «Суть»: Человечность / Воля / Голод. Кровь не показывается — в V20 её роль играет Голод.</summary>
     /// <remarks>
     /// При Голод = 5 персонаж находится «в ярости» (V20 стр. 268+) — добавляем строку-предупреждение.
-    /// Это минимальная реализация #42 без полной механики (расстройства, проверки Зверя и т.д.).
+    /// Если у Гангрела есть активные атавизмы (<see cref="VampireFrenzyResolver"/>), выводим их
+    /// отдельной строкой — рассказчик и игрок должны видеть, что Зверь уже далёк от человеческого облика.
     /// </remarks>
     public static string BuildEssenceBlock(VampireCharacter c)
     {
@@ -396,6 +397,16 @@ public static class VampireSheetEmbed
         if (c.Hunger >= 5)
         {
             sb.AppendLine("**⚠ Зверь в ярости**");
+        }
+        if (c.ActiveAtavisms != null && c.ActiveAtavisms.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("**🐾 Атавизмы:**");
+            for (var i = 0; i < c.ActiveAtavisms.Count; i++)
+            {
+                sb.Append("• ").Append(c.ActiveAtavisms[i]);
+                if (i < c.ActiveAtavisms.Count - 1) sb.AppendLine();
+            }
         }
         return sb.ToString();
     }

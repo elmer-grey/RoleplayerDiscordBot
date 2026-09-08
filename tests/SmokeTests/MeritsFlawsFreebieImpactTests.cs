@@ -41,12 +41,14 @@ public class MeritsFlawsFreebieImpactTests
         Assert.Equal(15, VampireFinishingResolver.RemainingFreebies(d));
         Assert.Equal(15, VampireFinishingResolver.EffectiveFreebiePool(d));
 
-        // Merit за 4: пул уменьшается и EffectivePool, и Remaining.
+        // Merit за 4: уменьшает EffectivePool до 11. ConsumedFreebies НЕ включает
+        // стоимость Merit (она уже вычтена из EffectivePool — иначе двойной учёт).
+        // Remaining = 15 − 4 = 11.
         VampireMeritsFlawsResolver.AddMerit(d, "Привилегия", cost: 4);
 
         Assert.Equal(4, VampireMeritsFlawsResolver.MeritsCost(d));
         Assert.Equal(11, VampireFinishingResolver.EffectiveFreebiePool(d)); // 15 − 4
-        Assert.Equal(7,  VampireFinishingResolver.RemainingFreebies(d));    // 11 − 4 consumed
+        Assert.Equal(11, VampireFinishingResolver.RemainingFreebies(d));    // 11 − 0 consumed (Merit уже в потолке)
 
         _out.WriteLine($"EffectivePool={VampireFinishingResolver.EffectiveFreebiePool(d)}, " +
                        $"Remaining={VampireFinishingResolver.RemainingFreebies(d)}");
@@ -57,12 +59,17 @@ public class MeritsFlawsFreebieImpactTests
     {
         var d = new VampireCharacter { Clan = "Носферату" };
 
-        // Сначала берём Merit за 4. Осталось: 15−4=11 effective, 7 remaining.
+        // Сначала берём Merit за 4. Effective = 15 − 4 = 11.
         Assert.True(VampireMeritsFlawsResolver.AddMerit(d, "Привилегия", cost: 4).IsSuccess);
         Assert.Equal(11, VampireFinishingResolver.EffectiveFreebiePool(d));
-        Assert.Equal(7,  VampireFinishingResolver.RemainingFreebies(d));
+        Assert.Equal(11, VampireFinishingResolver.RemainingFreebies(d));
 
-        // Пытаемся купить «Душа коснулась» (cost 7) — должно провалиться.
+        // Пытаемся купить «Душа коснулась» (cost 7) — Effective станет 4,
+        // но consumed уже 0, и будущая проверка должна отклонить, так как
+        // иначе игрок получает Merit бесплатно.
+        // Корректная логика: AddMerit проверяет, что Effective − Consumed >= cost,
+        // где Effective уже учитывает ВСЕ будущие Merits.
+        // Будущая Effective = 15 − 4 − 7 = 4, consumed = 0, итого 4 < 7 → отказ.
         var r = VampireMeritsFlawsResolver.AddMerit(d, "Душа коснулась", cost: 7);
         Assert.False(r.IsSuccess);
         Assert.Equal(VampireMeritsFlawsResolver.Failure.InsufficientFreebies, r.Failure);
@@ -160,9 +167,9 @@ public class MeritsFlawsFreebieImpactTests
     {
         var d = new VampireCharacter { Clan = "Носферату" };
         VampireMeritsFlawsResolver.AddMerit(d, "Привилегия", cost: 4);
-        // Effective=11, Consumed=4, Remaining=7.
+        // Effective=11, Remaining=11 (Merit вычтен из потолка, Consumed=0).
         Assert.Equal(11, VampireFinishingResolver.EffectiveFreebiePool(d));
-        Assert.Equal(7,  VampireFinishingResolver.RemainingFreebies(d));
+        Assert.Equal(11, VampireFinishingResolver.RemainingFreebies(d));
 
         VampireMeritsFlawsResolver.RemoveMerit(d, "Привилегия");
         // После удаления Merit: Effective=15, Consumed=0, Remaining=15.
@@ -180,9 +187,9 @@ public class MeritsFlawsFreebieImpactTests
         VampireMeritsFlawsResolver.AddMerit(d, "Бдительный ум", cost: 1);              // −1
         // Эффективный пул: 15 + 1 − 1 = 15.
         Assert.Equal(15, VampireFinishingResolver.EffectiveFreebiePool(d));
-        // Consumed = MeritsCost(1) + 0 = 1.
-        // Remaining = 15 − 1 = 14.
-        Assert.Equal(14, VampireFinishingResolver.RemainingFreebies(d));
+        // Consumed = 0 (Merit учтён в потолке, AllocateFreebie ещё не вызывался).
+        // Remaining = 15 − 0 = 15.
+        Assert.Equal(15, VampireFinishingResolver.RemainingFreebies(d));
     }
 
     [Fact]
@@ -193,12 +200,18 @@ public class MeritsFlawsFreebieImpactTests
         VampireMeritsFlawsResolver.AddFlawFromCatalog(d, "Некрасивый");
         VampireMeritsFlawsResolver.AddMerit(d, "Бдительный ум", cost: 1);
 
-        // Тратим: Атрибут 5 + Способность 2 + Дисциплина 7 = 14. И consumed = 1+14 = 15. OK.
+        // Тратим: Атрибут 5 + Способность 2 + Дисциплина 7 = 14.
+        // Consumed = 14 (Merit учтён в потолке, не здесь).
+        // Remaining = 15 − 14 = 1.
         Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _).IsSuccess);
         Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Ability, "Атлетика", out _).IsSuccess);
         Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Discipline, "Мощь", out _).IsSuccess);
+        Assert.Equal(1, VampireFinishingResolver.RemainingFreebies(d));
 
-        // Осталось 0. Попытка взять ещё — отказ.
+        // Тратим последний 1 пункт (Background = 1) → 0.
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Background, "Богатство", out _).IsSuccess);
+
+        // Попытка взять ещё — отказ.
         var r = VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Ловкость", out _);
         Assert.False(r.IsSuccess);
         Assert.Equal(VampireFinishingResolver.Failure.PoolExhausted, r.Failure);

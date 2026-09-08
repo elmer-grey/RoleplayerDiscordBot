@@ -60,36 +60,61 @@ namespace RPBot
         private async Task HandleRoll(SocketMessageComponent component, VampireCharacter character,
             VampireFrenzyResolver.FrenzyKind kind, int difficulty)
         {
-            var pool = VampireFrenzyResolver.ComputePoolSize(character, kind);
-            var dice = new int[pool];
-            for (var i = 0; i < pool; i++) dice[i] = _rng.Next(1, 11);
-            var successes = 0;
-            for (var i = 0; i < dice.Length; i++) if (dice[i] >= VampireFrenzyResolver.SuccessThreshold) successes++;
-            var rolls = string.Join(" ", dice);
+            // Полная логика через VampireFrenzyResolver:
+            //   • Пули: добродетель (Самоконтроль / Смелость), кэп 5.
+            //   • Бруха: сложность +2 (кэп 10) через ComputeDifficulty.
+            //   • Инстинкты → автопровал.
+            //   • Гангрел: при провале автоматически выбирается атавизм.
+            //   • Учитывается accumulatedSuccesses (для повторных попыток в том же ходу).
+            var computedDifficulty = VampireFrenzyResolver.ComputeDifficulty(
+                kind: kind,
+                stimulusComplexity: difficulty,
+                conscience: character.Virtues?.TryGetValue(VampireParameterCatalog.VirtueConscience, out var cons) == true ? cons : 1,
+                clan: character.Clan ?? "");
 
-            string status;
-            if (pool == 0 && kind == VampireFrenzyResolver.FrenzyKind.Frenzy && VampireFrenzyResolver.IsInstinctDriven(character))
+            var result = VampireFrenzyResolver.Roll(
+                character: character,
+                kind: kind,
+                difficulty: computedDifficulty,
+                accumulatedSuccesses: 0,
+                rng: _rng,
+                rollAtavism: true);
+
+            // Если что-то поменялось на персонаже (атавизм) — сохранить.
+            await _storage.UpsertAsync(character).ConfigureAwait(false);
+
+            var pool = VampireFrenzyResolver.ComputePoolSize(character, kind);
+            var dicePreview = pool > 0 ? FormatDiceRoll(character, kind, _rng) : "(нет пула)";
+            var status = result.Outcome switch
             {
-                status = $"🐾 Зверь не знает самоконтроля. *Бросок невозможен.*";
-            }
-            else if (successes == 0)
-            {
-                status = $"🔴 **{successes}** успехов — Зверь вырывается.\nКубики: {rolls}";
-            }
-            else
-            {
-                status = $"🎲 Бросок {KindName(kind)} (пул {pool}, сл. {difficulty}): **{successes}** успех(а).\nКубики: {rolls}";
-            }
+                VampireFrenzyResolver.FrenzyRollOutcome.FullySuppressed =>
+                    $"🟢 **Полное подавление** — накоплено {result.AccumulatedSuccesses}/{VampireFrenzyResolver.FullSuppressThreshold}.\n" +
+                    $"Сложность {result.Difficulty}, пул {result.PoolSize}, кубы: {dicePreview}.",
+                VampireFrenzyResolver.FrenzyRollOutcome.PartiallyContained =>
+                    $"🟡 **Частичное сдерживание** — {result.RoundsContained} ход(а) (накоплено {result.AccumulatedSuccesses}/{VampireFrenzyResolver.FullSuppressThreshold}).\n" +
+                    $"Сложность {result.Difficulty}, пул {result.PoolSize}, кубы: {dicePreview}.",
+                VampireFrenzyResolver.FrenzyRollOutcome.Unleashed when VampireFrenzyResolver.IsInstinctDriven(character) =>
+                    $"🐾 **Инстинкты** — Зверь не знает самоконтроля. Бросок невозможен.",
+                VampireFrenzyResolver.FrenzyRollOutcome.Unleashed when !string.IsNullOrEmpty(result.ActiveAtavism) =>
+                    $"🔴 **Зверь вырывается** — атавизм Гангрела: _{result.ActiveAtavism}_.\n" +
+                    $"Сложность {result.Difficulty}, пул {result.PoolSize}, кубы: {dicePreview}.",
+                _ =>
+                    $"🔴 **Зверь вырывается** — {result.Successes} успехов против сложности {result.Difficulty}.\n" +
+                    $"Пул {result.PoolSize}, кубы: {dicePreview}.",
+            };
 
             var embed = VampireFrenzyEmbed.Build(character, status);
             await component.RespondAsync(embed: embed, ephemeral: true).ConfigureAwait(false);
         }
 
-        private static string KindName(VampireFrenzyResolver.FrenzyKind kind) => kind switch
+        /// <summary>Превью значений кубов для embed (бросок НЕ сохраняется на персонаже).</summary>
+        private static string FormatDiceRoll(VampireCharacter character, VampireFrenzyResolver.FrenzyKind kind, IRandom rng)
         {
-            VampireFrenzyResolver.FrenzyKind.Frenzy => "Ярости",
-            VampireFrenzyResolver.FrenzyKind.Rötschreck => "Ротшрека",
-            _ => "?",
-        };
+            var pool = VampireFrenzyResolver.ComputePoolSize(character, kind);
+            if (pool == 0) return "—";
+            var dice = new int[pool];
+            for (var i = 0; i < pool; i++) dice[i] = rng.Next(1, 11);
+            return string.Join(" ", dice);
+        }
     }
 }
