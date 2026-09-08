@@ -203,9 +203,48 @@ public sealed class VampireSyncService
                     VampireHealthEmbed.Build(ch),
                     VampireHealthComponents.Build(ch.CharacterId),
                     ct);
+            case DmBlockKind.Morality:
+                return _discord.UpdateEmbedAndComponentsAsync(
+                    handle,
+                    VampireMoralityEmbed.BuildEmbed(ch),
+                    VampireMoralityComponents.Build(ch.CharacterId),
+                    ct);
+            case DmBlockKind.Frenzy:
+                return _discord.UpdateEmbedAndComponentsAsync(
+                    handle,
+                    VampireFrenzyEmbed.Build(ch),
+                    VampireFrenzyComponents.Build(ch),
+                    ct);
+            case DmBlockKind.Clan:
+                return _discord.UpdateEmbedAndComponentsAsync(
+                    handle,
+                    VampireClanEmbed.Build(ch),
+                    null,
+                    ct);
             default:
                 throw new InvalidOperationException($"Unknown block kind {kind}");
         }
+    }
+
+    /// <summary>
+    /// Комбинированная синхронизация: главный лист (DM + public) И все открытые
+    /// трейт-блоки конкретного игрока в DM. Вызывать из любого места, где
+    /// состояние персонажа могло измениться.
+    /// </summary>
+    public async Task<SyncResult> SyncAllAsync(
+        Guid characterId,
+        ulong userId,
+        CancellationToken ct = default)
+    {
+        var sheetTask = SyncCharacterAsync(characterId, ct);
+        var blocksTask = SyncDmBlocksForUserAsync(userId, characterId, ct);
+        await Task.WhenAll(sheetTask, blocksTask).ConfigureAwait(false);
+        var sheet = await sheetTask.ConfigureAwait(false);
+        var blocks = await blocksTask.ConfigureAwait(false);
+        return new SyncResult(
+            sheet.Updated + blocks.Updated,
+            sheet.Missing + blocks.Missing,
+            sheet.Errors + blocks.Errors);
     }
 }
 

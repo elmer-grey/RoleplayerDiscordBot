@@ -199,4 +199,42 @@ public class VampireDmBlockIndexTests : IDisposable
         await idx.LoadAsync();
         Assert.Null(idx.Get("vic", DmBlockKind.Willpower));
     }
+
+    [Fact]
+    public async Task NewBlockKinds_RoundTrip()
+    {
+        // Закрытие todo vtm-sheet-mirror-registry: Morality, Frenzy, Clan должны
+        // проходить через индекс наравне с базовыми видами.
+        var idx = NewIndex();
+        await idx.LoadAsync();
+
+        await idx.SetAsync("vic", DmBlockKind.Morality, 1, 11);
+        await idx.SetAsync("vic", DmBlockKind.Frenzy, 2, 22);
+        await idx.SetAsync("vic", DmBlockKind.Clan, 3, 33);
+
+        var all = idx.GetAll("vic");
+        Assert.Equal(11UL, all[DmBlockKind.Morality].MessageId);
+        Assert.Equal(22UL, all[DmBlockKind.Frenzy].MessageId);
+        Assert.Equal(33UL, all[DmBlockKind.Clan].MessageId);
+
+        var idx2 = NewIndex();
+        await idx2.LoadAsync();
+        Assert.Equal(11UL, idx2.Get("vic", DmBlockKind.Morality)!.MessageId);
+        Assert.Equal(22UL, idx2.Get("vic", DmBlockKind.Frenzy)!.MessageId);
+        Assert.Equal(33UL, idx2.Get("vic", DmBlockKind.Clan)!.MessageId);
+    }
+
+    [Fact]
+    public void AllBlockKinds_AreDistinct()
+    {
+        // Защита от регрессии при добавлении новых видов.
+        var values = (DmBlockKind[])System.Enum.GetValues(typeof(DmBlockKind));
+        Assert.Equal(values.Length, values.Distinct().Count());
+        Assert.Contains(DmBlockKind.Description, values);
+        Assert.Contains(DmBlockKind.Willpower, values);
+        Assert.Contains(DmBlockKind.Health, values);
+        Assert.Contains(DmBlockKind.Morality, values);
+        Assert.Contains(DmBlockKind.Frenzy, values);
+        Assert.Contains(DmBlockKind.Clan, values);
+    }
 }

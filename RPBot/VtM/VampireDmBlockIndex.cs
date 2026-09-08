@@ -18,6 +18,12 @@ namespace RPBot.VtM
         Description,
         Willpower,
         Health,
+        /// <summary>Блок «Мораль» (V20 стр. 333): проверка совести + расстройства.</summary>
+        Morality,
+        /// <summary>Блок «Ярость» (V20 стр. 322-325): Frenzy + Rötschreck + атавизмы.</summary>
+        Frenzy,
+        /// <summary>Блок «Клан» (дисциплины + изъян).</summary>
+        Clan,
     }
 
     /// <summary>
