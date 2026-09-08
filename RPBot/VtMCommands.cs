@@ -344,6 +344,82 @@ public sealed class VampireCommands
     /// Справочный расчёт итогов диаблери по правилам V20.
     /// Не меняет листы — это решение рассказчика, который применяет результат вручную.
     /// </summary>
+
+    /// <summary>
+    /// <c>/vampire_send &lt;name&gt; [user]</c>. Только рассказчик.
+    /// Принудительно отправляет лист с кнопками конкретному игроку в ЛС.
+    /// </summary>
+    public async Task HandleSendAsync(SocketSlashCommand command)
+    {
+        // Эквивалент HandleShowAsync с mode=Dm; если пользователь передал
+        // where=public — игнорируем и шлём в ЛС (это семантика /vampire_send).
+        var guildId = command.GuildId;
+        if (!guildId.HasValue)
+        {
+            await command.RespondAsync("Команда доступна только на сервере.", ephemeral: true);
+            return;
+        }
+        if (!await IsStorytellerAsync(command))
+        {
+            await command.RespondAsync("Только рассказчик может отправлять листы.", ephemeral: true);
+            return;
+        }
+
+        var name = GetString(command, "name");
+        var userOpt = GetUser(command, "user");
+        var storage = await VampireStorageCache.GetAsync(guildId.Value);
+
+        var decision = VampireShowResolver.Resolve(
+            storage,
+            VampireShowResolver.Mode.Dm,
+            name,
+            userOpt?.id,
+            userOpt.HasValue && command.Channel is IGuildChannel gc ? $"<@{userOpt.Value.id}>" : null);
+
+        if (decision.FailureCode != VampireShowResolver.Failure.None)
+        {
+            await command.RespondAsync(decision.Message, ephemeral: true);
+            return;
+        }
+
+        var displayIndex = new VampireDisplayIndex(guildId.Value);
+        await displayIndex.LoadAsync();
+        await SendSheetToDmAsync(command, decision.Character!, displayIndex, guildId.Value);
+    }
+
+    /// <summary>
+    /// <c>/vampire_show &lt;name&gt;</c>. Публичный embed без кнопок в канале.
+    /// </summary>
+    public async Task HandleShowPublicAsync(SocketSlashCommand command)
+    {
+        var guildId = command.GuildId;
+        if (!guildId.HasValue)
+        {
+            await command.RespondAsync("Команда доступна только на сервере.", ephemeral: true);
+            return;
+        }
+
+        var name = GetString(command, "name");
+        var storage = await VampireStorageCache.GetAsync(guildId.Value);
+
+        var decision = VampireShowResolver.Resolve(
+            storage,
+            VampireShowResolver.Mode.Public,
+            name,
+            null,
+            null);
+
+        if (decision.FailureCode != VampireShowResolver.Failure.None)
+        {
+            await command.RespondAsync(decision.Message, ephemeral: true);
+            return;
+        }
+
+        var displayIndex = new VampireDisplayIndex(guildId.Value);
+        await displayIndex.LoadAsync();
+        await SendSheetPublicAsync(command, decision.Character!, displayIndex, guildId.Value);
+    }
+
     public async Task HandleDiablerieAsync(SocketSlashCommand command)
     {
         var guildId = command.GuildId;

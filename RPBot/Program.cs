@@ -1285,6 +1285,7 @@ private void SaveServerConfigs()
             _vampireRollButtonHandler ??= new VampireRollButtonHandler();
                     _vampireRollRegistry ??= new VampireRollRegistry();
                     SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
+                    SlashModuleRegistry.Register(new VampireTopLevelSlashModule(_vampireCommands));
                     SlashModuleRegistry.Register(new VampireCombatSlashModule());
                     SlashModuleRegistry.Register(new VampireRollSlashModule());
                     // DI-точка для handler'а бросков и slash-команды /vampire_roll.
