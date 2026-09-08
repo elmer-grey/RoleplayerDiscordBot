@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using RPBot;
 using RPBot.VtM;
@@ -8,61 +7,10 @@ using Xunit;
 
 namespace SmokeTests;
 
-// Все тесты этого класса используют RPBOT_DATA_DIR — выделенный в коллекцию,
-// чтобы они выполнялись последовательно и не конкурировали с другими классами
-// за глобальное состояние BotConfig.
-[CollectionDefinition("BotConfig", DisableParallelization = true)]
-public class BotConfigCollection { }
-
 [Collection("BotConfig")]
-public class VampireStorageTests : IDisposable
+public class VampireStorageTests : IsolatedDataTestBase
 {
-    private static int _initOnce;
-    private static readonly object _envLock = new();
-    private readonly string _tempDir;
-    private readonly string _dataRoot;
-    private readonly string? _prevEnv;
-
-    public VampireStorageTests()
-    {
-                lock (_envLock)
-                {
-                    _prevEnv = Environment.GetEnvironmentVariable("RPBOT_DATA_DIR");
-                    _tempDir = Path.Combine(Path.GetTempPath(), $"vtm_test_{Guid.NewGuid():N}");
-                    Directory.CreateDirectory(_tempDir);
-                    _dataRoot = _tempDir;
-
-                    // BotConfig.GetDataDirectory читает RPBOT_DATA_DIR через env и кэширует.
-                    // Подменяем переменную и сбрасываем кэш через рефлексию, чтобы тест
-                    // получил свежий корень данных.
-                    Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _dataRoot);
-                    ResetDataRootCache();
-                    Interlocked.Increment(ref _initOnce);
-                }
-    }
-
-    public void Dispose()
-    {
-                lock (_envLock)
-                {
-                    Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _prevEnv);
-                    ResetDataRootCache();
-                    Interlocked.Decrement(ref _initOnce);
-                    try { Directory.Delete(_tempDir, true); } catch { }
-                }
-    }
-
-    /// <summary>Сбросить статический кэш <see cref="BotConfig"/>.</summary>
-    private static void ResetDataRootCache()
-    {
-                var t = typeof(BotConfig);
-                foreach (var name in new[] { "_dataRootOverride", "_dataRootDefault" })
-                {
-                    var f = t.GetField(name,
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    f?.SetValue(null, null);
-                }
-    }
+    public VampireStorageTests() : base("vtm_storage") { }
 
     private VampireStorage NewStorage(ulong guildId = 123)
         => new VampireStorage(guildId);

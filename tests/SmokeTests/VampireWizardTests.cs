@@ -6,11 +6,10 @@ using Xunit;
 
 namespace SmokeTests;
 
-/// <summary>
-/// Smoke-тесты для VtM V20 визарда создания персонажа (Этап 1 — шаг 1 «Концепция»).
-/// </summary>
-public class VampireWizardTests
+[Collection("BotConfig")]
+public class VampireWizardTests : IsolatedDataTestBase
 {
+    public VampireWizardTests() : base("vtm_wizard") { }
     private static VampireCharacter NewDraft() => new VampireCharacter
     {
         CharacterId = Guid.NewGuid(),

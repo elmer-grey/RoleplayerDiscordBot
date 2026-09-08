@@ -3,12 +3,11 @@ using Xunit;
 
 namespace SmokeTests;
 
-/// <summary>
-/// Тесты применения потерь после проверки совести (Roadmap #37, V20 стр. 333).
-/// Применяются границы, чтобы персонаж не становился NPC за одну проверку.
-/// </summary>
-public class VampireMoralityResolverTests
+[Collection("BotConfig")]
+public class VampireMoralityResolverTests : IsolatedDataTestBase
 {
+    public VampireMoralityResolverTests() : base("vtm_morality_resolver") { }
+
     private static VampireCharacter MakeCharacter(int conscience, int selfControl, int humanityBonus)
     {
         var c = new VampireCharacter();

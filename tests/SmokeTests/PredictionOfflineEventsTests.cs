@@ -6,37 +6,15 @@ using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// Round 5 — PredictionService: баг 6 (онлайн/оффлайн события в канал
-/// прогноза и в embed-кэфф) + баг 7 (скрытие кнопок во время offline).
-/// Покрывает:
-///   * добавление OfflineEvent в лог при Disconnected/Ready;
-///   * различение "restart" (GatewayReconnectException) и "offline" (прочее);
-///   * защиту от дублей Disconnected в течение 5 сек;
-///   * сохранение лога в JSON predictions_state.json при SaveStateAsync;
-///   * восстановление лога через LoadStateAsync;
-///   * отображение в embed'е (BuildEmbed возвращает Color.Red и footer "Бот неактивен").
-/// </summary>
-public class PredictionOfflineEventsTests : IDisposable
+[Collection("BotConfig")]
+public class PredictionOfflineEventsTests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public PredictionOfflineEventsTests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_pred_offline_events_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public PredictionOfflineEventsTests() : base("rpbot_smoke_pred_offline_events") { }
 
     private static DiscordSocketClient NewClient() => new DiscordSocketClient(new DiscordSocketConfig
     {
@@ -161,7 +139,7 @@ public class PredictionOfflineEventsTests : IDisposable
             });
 
             var json = System.Text.Json.JsonSerializer.Serialize(pp, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            var path = Path.Combine(_tmpDir, "predictions_state.json");
+            var path = Path.Combine(TempDir, "predictions_state.json");
             await RPBot.Util.SafeJsonIO.WriteAtomicAsync(path, json);
 
             var text = await File.ReadAllTextAsync(path);

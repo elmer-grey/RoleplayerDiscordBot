@@ -7,9 +7,10 @@ namespace SmokeTests;
 /// <summary>
 /// Покрывает файловые операции над словарём клановых изъянов VtM V20.
 /// </summary>
-public class VampireClanFlawCatalogTests
+[Collection("BotConfig")]
+public class VampireClanFlawCatalogTests : IsolatedDataTestBase
 {
-    public VampireClanFlawCatalogTests()
+    public VampireClanFlawCatalogTests() : base("vtm_clan_flaw_catalog")
     {
         VampireClanFlawCatalog.EnsureSeeded();
     }

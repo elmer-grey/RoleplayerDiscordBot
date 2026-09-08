@@ -78,6 +78,17 @@ private static string ComputeDefaultDataRoot()
 }
 
 /// <summary>
+/// Сбрасывает закешированный корень данных. Только для тестов: параллельные тесты
+/// используют разные <c>RPBOT_DATA_DIR</c> и без сброса первый закэшированный
+/// путь остаётся для всех последующих потоков.
+/// </summary>
+public static void ResetForTests()
+{
+    _dataRootOverride = null;
+    _dataRootDefault = null;
+}
+
+/// <summary>
 /// Каталог для статических ресурсов, идущих рядом с .exe
 /// (Lavalink/application.yml, Web/dashboard.html).
 /// </summary>

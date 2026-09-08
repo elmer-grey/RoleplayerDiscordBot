@@ -3,38 +3,20 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using RPBot.Util;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// 2.x — round 2 unit tests:
-///   * MusicPlaylistStore и MusicQueueStore.SaveAsync/ClearAsync идут через
-///     SafeJsonIO.WriteAtomicAsync (без половинчатых файлов).
-///   * Тест Lavalink retry-логики — проверка, что метод StartLavalinkProcessAsync
-///     и обёртка StartLavalinkWithRetryAsync доступны и не падают при отменённом токене.
-/// </summary>
-public class Round2Tests : IDisposable
+[Collection("BotConfig")]
+public class Round2Tests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public Round2Tests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_r2_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public Round2Tests() : base("rpbot_smoke_r2") { }
 
     [Fact]
     public async Task SafeJsonIO_AtomicWrite_ThenReplace_RestoresContent()
     {
-        var path = Path.Combine(_tmpDir, "music_playlists.json");
+        var path = Path.Combine(TempDir, "music_playlists.json");
         await SafeJsonIO.WriteAtomicAsync(path, "{\"v\":1}");
         await SafeJsonIO.WriteAtomicAsync(path, "{\"v\":2}");
         await SafeJsonIO.WriteAtomicAsync(path, "{\"v\":3}");
@@ -49,7 +31,7 @@ public class Round2Tests : IDisposable
     {
         // SafeJsonIO не делает .bak, но Move(overwrite:true) означает, что
         // при ошибке записи .tmp — основной файл остаётся прежним. Проверяем.
-        var path = Path.Combine(_tmpDir, "music_playlists.json");
+        var path = Path.Combine(TempDir, "music_playlists.json");
         await SafeJsonIO.WriteAtomicAsync(path, "{\"v\":1}");
         var sizeBefore = new FileInfo(path).Length;
 
@@ -67,7 +49,7 @@ public class Round2Tests : IDisposable
     [Fact]
     public async Task SafeJsonIO_CancelledToken_Throws()
     {
-        var path = Path.Combine(_tmpDir, "cancelled.json");
+        var path = Path.Combine(TempDir, "cancelled.json");
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

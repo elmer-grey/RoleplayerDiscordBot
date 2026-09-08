@@ -4,9 +4,10 @@ using Xunit;
 
 namespace SmokeTests;
 
-public class VampireDerangementCatalogTests
+[Collection("BotConfig")]
+public class VampireDerangementCatalogTests : IsolatedDataTestBase
 {
-    public VampireDerangementCatalogTests()
+    public VampireDerangementCatalogTests() : base("vtm_derangements_catalog")
     {
         // Гарантируем, что файл словаря расстройств скопирован из
         // embedded-ресурса при первом запуске тестов в чистом окружении.

@@ -11,8 +11,11 @@ namespace SmokeTests;
 /// <para>Сторадж ключует по <c>PlayerName</c>, но привязка идёт по
 /// <c>CharacterName</c> (более стабильное имя, от Discord-ника не зависит).</para>
 /// </summary>
-public sealed class VampireStorageBindTests
+[Collection("BotConfig")]
+public sealed class VampireStorageBindTests : IsolatedDataTestBase
 {
+    public VampireStorageBindTests() : base("vtm_storage_bind") { }
+
     private static (VampireStorage storage, string temp) NewStorage()
         {
             // Используем уникальный guildId чтобы изолировать файл characters_{guildId}.json.

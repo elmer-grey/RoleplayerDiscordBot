@@ -6,39 +6,15 @@ using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// Round 5 — регрессия для бага 7: кнопки должны СКРЫВАТЬСЯ в embed'е
-/// активного прогноза во время offline-периода.
-///
-/// Логика в PredictionService.UpdateMessageAsync:
-///   if (!p.IsResolved && !botOffline) → BuildComponents(...)
-///   else → comps = null → Discord убирает кнопки.
-///
-/// Здесь мы проверяем, что BuildComponents корректно строит кнопки для
-/// двух фаз (сбор ставок и ожидание разрешения), а Bug7_HidesButtonsWhenOffline
-/// симулирует ту же условную логику на уровне POCO + проверяет через
-/// рефлексию приватного BuildComponents, что для offline случая они не строятся.
-/// </summary>
-public class ButtonHidingTests : IDisposable
+[Collection("BotConfig")]
+public class ButtonHidingTests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public ButtonHidingTests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_buttons_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public ButtonHidingTests() : base("rpbot_smoke_buttons") { }
 
     private static DiscordSocketClient NewClient() => new DiscordSocketClient(new DiscordSocketConfig
     {

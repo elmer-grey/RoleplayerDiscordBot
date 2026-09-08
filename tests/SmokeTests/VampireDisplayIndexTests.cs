@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using RPBot;
 using RPBot.VtM;
@@ -9,48 +7,9 @@ using Xunit;
 namespace SmokeTests;
 
 [Collection("BotConfig")]
-public class VampireDisplayIndexTests : IDisposable
+public class VampireDisplayIndexTests : IsolatedDataTestBase
 {
-    private static int _initOnce;
-    private static readonly object _envLock = new();
-    private readonly string _tempDir;
-    private readonly string? _prevEnv;
-
-    public VampireDisplayIndexTests()
-    {
-        lock (_envLock)
-        {
-            _prevEnv = Environment.GetEnvironmentVariable("RPBOT_DATA_DIR");
-            _tempDir = Path.Combine(Path.GetTempPath(), $"vtm_idx_test_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(_tempDir);
-
-            Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tempDir);
-            ResetDataRootCache();
-            Interlocked.Increment(ref _initOnce);
-        }
-    }
-
-    public void Dispose()
-    {
-        lock (_envLock)
-        {
-            Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _prevEnv);
-            ResetDataRootCache();
-            Interlocked.Decrement(ref _initOnce);
-            try { Directory.Delete(_tempDir, true); } catch { }
-        }
-    }
-
-    private static void ResetDataRootCache()
-    {
-        var t = typeof(BotConfig);
-        foreach (var name in new[] { "_dataRootOverride", "_dataRootDefault" })
-        {
-            var f = t.GetField(name,
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            f?.SetValue(null, null);
-        }
-    }
+    public VampireDisplayIndexTests() : base("vtm_idx") { }
 
     private VampireDisplayIndex NewIndex(ulong guildId = 123)
         => new VampireDisplayIndex(guildId);

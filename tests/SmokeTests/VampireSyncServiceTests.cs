@@ -7,20 +7,10 @@ using Xunit;
 namespace SmokeTests;
 
 [Collection("BotConfig")]
-public class VampireSyncServiceTests : IDisposable
+public class VampireSyncServiceTests : IsolatedDataTestBase
 {
-    private readonly string _tmp;
-
-    public VampireSyncServiceTests()
+    public VampireSyncServiceTests() : base("vtm_sync")
     {
-        _tmp = Path.Combine(Path.GetTempPath(), "vtm_sync_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmp);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmp);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmp, recursive: true); } catch { /* ignore */ }
     }
 
     private static VampireStorage NewStorage(ulong guild = 42) => new VampireStorage(guild);

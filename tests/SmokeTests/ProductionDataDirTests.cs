@@ -9,6 +9,7 @@ namespace RPBot.SmokeTests;
 /// чтобы пользовательские данные не терялись при `dotnet clean` / пересборке.
 /// Поддерживается переопределение через переменную окружения RPBOT_DATA_DIR.
 /// </summary>
+[Collection("BotConfig")]
 public class ProductionDataDirTests : IDisposable
 {
     private readonly string? _savedEnv;
@@ -200,19 +201,5 @@ public class ProductionDataDirTests : IDisposable
             Assert.StartsWith(root, resolved, StringComparison.OrdinalIgnoreCase);
         }
 
-    /// <summary>
-    /// Сбрасываем кеш BotConfig._dataRootOverride / _dataRootDefault, чтобы тесты видели
-    /// актуальное значение переменной окружения. Делаем через reflection — это приватные поля,
-    /// которые не хочется выставлять наружу только ради тестов.
-    /// </summary>
-    private static void ResetCache()
-    {
-        var t = typeof(BotConfig);
-        var f1 = t.GetField("_dataRootOverride",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        var f2 = t.GetField("_dataRootDefault",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        f1?.SetValue(null, null);
-        f2?.SetValue(null, null);
-    }
+    private static void ResetCache() => BotConfig.ResetForTests();
 }

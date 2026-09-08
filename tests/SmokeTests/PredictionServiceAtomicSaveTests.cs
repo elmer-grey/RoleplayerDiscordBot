@@ -7,35 +7,15 @@ using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
 using RPBot.Util;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// 4.x — PredictionService:
-///   * SaveStateAsync идёт через SafeJsonIO.WriteAtomicAsync (файл валиден);
-///   * Shutdown идемпотентен.
-/// Чтобы не поднимать полноценный сервис, тестируем атомарную запись и
-/// поведение Shutdown через сконструированный сценарий.
-/// </summary>
-public class PredictionServiceAtomicSaveTests : IDisposable
+[Collection("BotConfig")]
+public class PredictionServiceAtomicSaveTests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public PredictionServiceAtomicSaveTests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_pred_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        // PredictionService читает BotConfig.GetDataDirectory() — нужно подменить
-        // переменную окружения до создания инстанса.
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public PredictionServiceAtomicSaveTests() : base("rpbot_smoke_pred") { }
 
     private static DiscordSocketClient NewClient() => new DiscordSocketClient(new DiscordSocketConfig
     {
@@ -47,7 +27,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     public async Task SafeJsonIO_PredictionState_WritesValidJson()
     {
         // Эмулирует то, что делает PredictionService.SaveStateAsync после раунда 4.
-        var path = Path.Combine(_tmpDir, "predictions_state.json");
+        var path = Path.Combine(TempDir, "predictions_state.json");
         var snapshot = new Dictionary<ulong, object>
         {
             [1] = new { Title = "Test prediction", GuildId = 1UL }
@@ -65,7 +45,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     [Fact]
     public async Task SafeJsonIO_PredictionState_AtomicRenameLeavesNoTmp()
     {
-        var path = Path.Combine(_tmpDir, "predictions_state.json");
+        var path = Path.Combine(TempDir, "predictions_state.json");
         await SafeJsonIO.WriteAtomicAsync(path, "{}");
         await SafeJsonIO.WriteAtomicAsync(path, "{\"a\":1}");
 
@@ -77,7 +57,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     [Fact]
     public async Task SafeJsonIO_SerialWrites_LastWriteWins_NoTmpRemains()
     {
-        var path = Path.Combine(_tmpDir, "predictions_state.json");
+        var path = Path.Combine(TempDir, "predictions_state.json");
         await SafeJsonIO.WriteAtomicAsync(path, "{}");
         for (int i = 0; i < 10; i++)
         {
@@ -95,7 +75,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     [Fact]
     public void PredictionService_Shutdown_IsIdempotent()
     {
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+        var pts = new PointsService(Path.Combine(TempDir, "points.json"));
         var svc = new PredictionService(NewClient(), pts, "");
 
         svc.Shutdown();
@@ -106,7 +86,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     [Fact]
     public async Task PredictionService_EnsureStateFile_AfterShutdown_DoesNotThrow()
     {
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+        var pts = new PointsService(Path.Combine(TempDir, "points.json"));
         var svc = new PredictionService(NewClient(), pts, "");
         svc.Shutdown();
 

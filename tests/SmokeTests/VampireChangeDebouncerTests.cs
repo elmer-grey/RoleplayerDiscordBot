@@ -11,22 +11,12 @@ namespace SmokeTests;
 /// Использует короткий delay (100 мс), чтобы тесты выполнялись быстро.
 /// </summary>
 [Collection("BotConfig")]
-public class VampireChangeDebouncerTests : IDisposable
+public class VampireChangeDebouncerTests : IsolatedDataTestBase
 {
     private static readonly TimeSpan ShortDelay = TimeSpan.FromMilliseconds(100);
-    private readonly string _tmp;
 
-    public VampireChangeDebouncerTests()
+    public VampireChangeDebouncerTests() : base("vtm_debouncer")
     {
-        _tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-            "vtm_debouncer_" + Guid.NewGuid().ToString("N"));
-        System.IO.Directory.CreateDirectory(_tmp);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmp);
-    }
-
-    public void Dispose()
-    {
-        try { System.IO.Directory.Delete(_tmp, recursive: true); } catch { /* ignore */ }
     }
 
     private static VampireStorage NewStorage(ulong guild = 42) => new VampireStorage(guild);

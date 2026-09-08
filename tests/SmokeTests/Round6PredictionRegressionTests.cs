@@ -10,47 +10,15 @@ using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
 using RPBot.Util;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// Round 6 — PredictionService: регрессионные тесты для race conditions
-/// и исправлений атомарной записи.
-///
-/// R6-Bug3: PlaceBetAsync vs MonitorLoopAsync — после фикса PlaceBetAsync
-/// захватывает p.Sync.WaitAsync() ДО проверки времени, так что гонка
-/// (MonitorLoopAsync ставит IsLocked=true между проверкой и блокировкой)
-/// исключена. Тест симулирует гонку: много потоков одновременно
-/// пытаются сделать ставку, пока время закрытия уже подошло.
-/// До фикса: некоторые ставки могли пройти в окне гонки. После фикса —
-/// не больше одной (или ноль) на одного пользователя, и все они
-/// проходят через тот же SemaphoreSlim.
-///
-/// R6-Bug5: SaveHistoryAsync/SaveStatsAsync/SaveAchievementsAsync
-/// идут через SafeJsonIO.WriteAtomicAsync, а не через File.WriteAllTextAsync.
-/// Тест проверяет, что после серии записей файл валиден и .tmp не остаётся.
-///
-/// R6-Bug1: predictionService.PredictionResolved / PredictionCancelled
-/// срабатывают на resolve/cancel и подписчик может почистить
-/// связанный UI-state.
-/// </summary>
-public class Round6PredictionRegressionTests : IDisposable
+[Collection("BotConfig")]
+public class Round6PredictionRegressionTests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public Round6PredictionRegressionTests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_r6_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public Round6PredictionRegressionTests() : base("rpbot_smoke_r6") { }
 
     private static DiscordSocketClient NewClient() => new DiscordSocketClient(new DiscordSocketConfig
     {
@@ -93,7 +61,7 @@ public class Round6PredictionRegressionTests : IDisposable
     [Fact]
     public async Task Bug3_PlaceBet_LockBeforeCheck_NoPlaceAfterDeadline()
     {
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+        var pts = new PointsService(Path.Combine(TempDir, "points.json"));
         var svc = new PredictionService(NewClient(), pts, "");
 
         // Создаём ActivePrediction напрямую через рефлексию: нам не нужен
@@ -169,7 +137,7 @@ public class Round6PredictionRegressionTests : IDisposable
     [Fact]
     public async Task Bug5_HistoryStatsAchievements_AllAtomic_NoRemainsTmp()
     {
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+        var pts = new PointsService(Path.Combine(TempDir, "points.json"));
         var svc = new PredictionService(NewClient(), pts, "");
 
         var historyPath = (string)HistoryFilePathField.GetValue(svc)!;
@@ -208,7 +176,7 @@ public class Round6PredictionRegressionTests : IDisposable
         // семафором, чтобы не натыкаться на гонку rename на одном .tmp
         // (это ограничение уровня OS, не SafeJsonIO). Проверяем,
         // что последняя запись выигрывает, .tmp не остаётся, файл валиден.
-        var path = Path.Combine(_tmpDir, "predictions_history.json");
+        var path = Path.Combine(TempDir, "predictions_history.json");
         await SafeJsonIO.WriteAtomicAsync(path, "{}");
 
         var gate = new SemaphoreSlim(1, 1);
@@ -237,7 +205,7 @@ public class Round6PredictionRegressionTests : IDisposable
     [Fact]
     public void Bug1_PredictionResolvedAndCancelled_EventsFire()
     {
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+        var pts = new PointsService(Path.Combine(TempDir, "points.json"));
         var svc = new PredictionService(NewClient(), pts, "");
 
         var resolvedGuilds = new List<ulong>();

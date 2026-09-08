@@ -7,35 +7,15 @@ using Discord;
 using Discord.WebSocket;
 using RPBot.Predictions;
 using RPBot.Util;
+using SmokeTests;
 using Xunit;
 
 namespace RPBot.SmokeTests;
 
-/// <summary>
-/// Round 5 — PredictionService: баг 5 (сдвиг BetsCloseAtUtc при offline)
-/// и баг 6/7 (статус offline/online в embed'е и на кнопках).
-///
-/// PersistentPrediction — private, поэтому проверяем offline-поля через
-/// ActivePrediction (public) и JSON-формат файла predictions_state.json
-/// (пишем JSON руками и читаем обратно через System.Text.Json, чтобы
-/// убедиться, что SaveStateAsync/LoadStateAsync сохраняют наши поля).
-/// </summary>
-public class PredictionOfflineShiftTests : IDisposable
+[Collection("BotConfig")]
+public class PredictionOfflineShiftTests : IsolatedDataTestBase
 {
-    private readonly string _tmpDir;
-
-    public PredictionOfflineShiftTests()
-    {
-        _tmpDir = Path.Combine(Path.GetTempPath(), "rpbot_smoke_pred_offline_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tmpDir);
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", _tmpDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_tmpDir, true); } catch { }
-        Environment.SetEnvironmentVariable("RPBOT_DATA_DIR", null);
-    }
+    public PredictionOfflineShiftTests() : base("rpbot_smoke_pred_offline") { }
 
     private static DiscordSocketClient NewClient() => new DiscordSocketClient(new DiscordSocketConfig
     {
@@ -144,7 +124,7 @@ public class PredictionOfflineShiftTests : IDisposable
     [Fact]
     public void StateFile_AfterRound5_ContainsOfflineFields()
     {
-        var path = Path.Combine(_tmpDir, "predictions_state.json");
+        var path = Path.Combine(TempDir, "predictions_state.json");
         var nowUtc = DateTimeOffset.UtcNow;
         var offlineAt = nowUtc.AddMinutes(-3);
 
