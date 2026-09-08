@@ -261,6 +261,39 @@ namespace RPBot.VtM
         }
 
         /// <summary>
+        /// Стандартные фоны (Backgrounds) VtM V20 (стр. 119-125, 13 шт.).
+        /// Используются в Шаге 4.2 визарда (5 пунктов суммарно по рангам 1..5).
+        /// </summary>
+        public static readonly IReadOnlyList<string> Backgrounds = new[]
+        {
+            "Поколение",
+            "Спутники",
+            "Связи",
+            "Влияние",
+            "Союзники",
+            "Наставник",
+            "Ресурсы",
+            "Стадо",
+            "Наследие",
+            "Слухи",
+            "Оккультное",
+            "Известность",
+            "Секта",
+        };
+
+        /// <summary>
+        /// Является ли переданное имя стандартным фоном VtM V20.
+        /// </summary>
+        public static bool IsValidBackground(string? name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (var b in Backgrounds)
+                if (string.Equals(b, name, System.StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        /// <summary>
         /// Полный список дисциплин VtM V20 (все клановые, без Каитифа).
         /// Используется для автокомплита в /vampire_roll.
         /// </summary>

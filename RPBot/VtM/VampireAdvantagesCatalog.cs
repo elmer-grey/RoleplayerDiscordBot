@@ -79,4 +79,14 @@ public static class VampireAdvantagesCatalog
     /// <summary>Является ли клан Каитифом (свободный ввод имён дисциплин).</summary>
     public static bool IsCaitiff(string? clanName)
         => !string.IsNullOrEmpty(clanName) && clanName == "Каитиф";
+
+    /// <summary>
+    /// Стандартные имена фонов VtM V20 (13 шт., см. <see cref="VampireParameterCatalog.Backgrounds"/>).
+    /// Вынесено как алиас, чтобы визард Шага 4.2 мог ссылаться на «канон» из каталога параметров.
+    /// </summary>
+    public static IReadOnlyList<string> StandardBackgrounds => VampireParameterCatalog.Backgrounds;
+
+    /// <summary>Является ли имя стандартным фоном VtM V20.</summary>
+    public static bool IsStandardBackground(string? name)
+        => VampireParameterCatalog.IsValidBackground(name);
 }

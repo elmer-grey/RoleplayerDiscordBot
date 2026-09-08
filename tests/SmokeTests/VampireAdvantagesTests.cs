@@ -579,4 +579,69 @@ public class VampireAdvantagesTests
         var msg = VampireAdvantagesResolver.BuildDisciplinesStatusMessage(d);
         Assert.Contains("Шаге 1", msg);
     }
+
+    // ── Каталог: стандартные фоны VtM V20 (13 шт.) ────────────────────
+
+    [Fact]
+    public void Catalog_Backgrounds_HasAllThirteenStandardV20Backgrounds()
+    {
+        // VtM V20 стр. 119-125: 13 стандартных фонов.
+        var bgs = VampireParameterCatalog.Backgrounds;
+        Assert.Equal(13, bgs.Count);
+    }
+
+    [Fact]
+    public void Catalog_Backgrounds_ContainsExpectedNames()
+    {
+        var bgs = VampireParameterCatalog.Backgrounds;
+        // Обязательные пункты по книге (см. bg-step42-fix — Тремер-пример).
+        Assert.Contains("Связи", bgs);
+        Assert.Contains("Наставник", bgs);
+        Assert.Contains("Наследие", bgs);
+        Assert.Contains("Поколение", bgs);
+        Assert.Contains("Спутники", bgs);
+        Assert.Contains("Влияние", bgs);
+        Assert.Contains("Союзники", bgs);
+        Assert.Contains("Ресурсы", bgs);
+        Assert.Contains("Стадо", bgs);
+        Assert.Contains("Слухи", bgs);
+        Assert.Contains("Оккультное", bgs);
+        Assert.Contains("Известность", bgs);
+        Assert.Contains("Секта", bgs);
+    }
+
+    [Fact]
+    public void Catalog_Backgrounds_AreUnique()
+    {
+        var bgs = VampireParameterCatalog.Backgrounds;
+        var set = new System.Collections.Generic.HashSet<string>(bgs);
+        Assert.Equal(bgs.Count, set.Count);
+    }
+
+    [Fact]
+    public void Catalog_IsValidBackground_AcceptsCanonicalNames()
+    {
+        Assert.True(VampireParameterCatalog.IsValidBackground("Связи"));
+        Assert.True(VampireParameterCatalog.IsValidBackground("связи"));   // регистронезависимо
+        Assert.True(VampireParameterCatalog.IsValidBackground("Наследие"));
+    }
+
+    [Fact]
+    public void Catalog_IsValidBackground_RejectsUnknownAndEmpty()
+    {
+        Assert.False(VampireParameterCatalog.IsValidBackground(null));
+        Assert.False(VampireParameterCatalog.IsValidBackground(""));
+        Assert.False(VampireParameterCatalog.IsValidBackground("   "));
+        Assert.False(VampireParameterCatalog.IsValidBackground("Несуществующий"));
+    }
+
+    [Fact]
+    public void Catalog_AdvantagesAlias_MirrorsParameterCatalog()
+    {
+        Assert.Equal(
+            VampireParameterCatalog.Backgrounds,
+            VampireAdvantagesCatalog.StandardBackgrounds);
+        Assert.True(VampireAdvantagesCatalog.IsStandardBackground("Связи"));
+        Assert.False(VampireAdvantagesCatalog.IsStandardBackground(""));
+    }
 }
