@@ -9,8 +9,6 @@ namespace RPBot.VtM
     /// </summary>
     public enum MoralityAction
     {
-        /// <summary>Закрыть блок «Мораль».</summary>
-        Close,
         /// <summary>Начать выбор расстройства для добавления (показывает SelectMenu).</summary>
         StartAddDerangement,
         /// <summary>Удалить последнее расстройство из списка (для отмены ошибки/теста).</summary>
@@ -41,8 +39,8 @@ namespace RPBot.VtM
                 throw new ArgumentException("CharacterId обязателен", nameof(characterId));
 
             // Discord ограничивает 5 элементов в ActionRow.
-            // Базовая раскладка: 4 кнопки (Conscience / Add / Remove / Close). При показе
-            // SelectMenu расстройств — 3 кнопки (без Add, потому что SelectMenu его и открывает).
+            // Базовая раскладка: 3 кнопки (Conscience / Add / Remove). При показе
+            // SelectMenu расстройств — 2 кнопки (без Add, потому что SelectMenu его и открывает).
             if (withDerangementMenu)
             {
                 var cb = new ComponentBuilder()
@@ -51,9 +49,6 @@ namespace RPBot.VtM
                         ButtonStyle.Success)
                     .WithButton("Удалить последнее",
                         BuildId(MoralityAction.RemoveLastDerangement, characterId),
-                        ButtonStyle.Secondary)
-                    .WithButton("Скрыть",
-                        BuildId(MoralityAction.Close, characterId),
                         ButtonStyle.Secondary);
 
                 var menu = new SelectMenuBuilder()
@@ -81,9 +76,6 @@ namespace RPBot.VtM
                     ButtonStyle.Primary)
                 .WithButton("Удалить последнее",
                     BuildId(MoralityAction.RemoveLastDerangement, characterId),
-                    ButtonStyle.Secondary)
-                .WithButton("Скрыть",
-                    BuildId(MoralityAction.Close, characterId),
                     ButtonStyle.Secondary)
                 .Build();
         }
@@ -125,7 +117,6 @@ namespace RPBot.VtM
 
         private static string ActionToString(MoralityAction action) => action switch
         {
-            MoralityAction.Close                 => "close",
             MoralityAction.StartAddDerangement   => "add",
             MoralityAction.RemoveLastDerangement => "remove",
             MoralityAction.ConscienceCheck       => "conscience",
@@ -136,7 +127,6 @@ namespace RPBot.VtM
         {
             switch (s)
             {
-                case "close":     action = MoralityAction.Close;                 return true;
                 case "add":       action = MoralityAction.StartAddDerangement;   return true;
                 case "remove":    action = MoralityAction.RemoveLastDerangement; return true;
                 case "conscience":action = MoralityAction.ConscienceCheck;       return true;

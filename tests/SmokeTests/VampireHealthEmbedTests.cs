@@ -66,12 +66,12 @@ public class VampireHealthEmbedTests
     }
 
     [Fact]
-    public void Components_HasFiveButtons()
+    public void Components_HasFourButtons()
     {
         var c = WithHealth();
         var mc = VampireHealthEmbed.Components(c);
         var row = Assert.IsType<ActionRowComponent>(Assert.Single(mc.Components));
-        Assert.Equal(5, row.Components.OfType<ButtonComponent>().Count());
+        Assert.Equal(4, row.Components.OfType<ButtonComponent>().Count());
     }
 
     [Fact]

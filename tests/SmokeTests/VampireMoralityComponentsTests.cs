@@ -9,12 +9,12 @@ namespace SmokeTests;
 public class VampireMoralityComponentsTests
 {
     [Fact]
-    public void Build_HasFourButtons()
+    public void Build_HasThreeButtons()
     {
         var c = new VampireCharacter { CharacterId = Guid.NewGuid() };
         var mc = VampireMoralityComponents.Build(c.CharacterId);
         var row = Assert.IsType<ActionRowComponent>(Assert.Single(mc.Components));
-        Assert.Equal(4, row.Components.Count);
+        Assert.Equal(3, row.Components.Count);
         Assert.All(row.Components, x => Assert.IsType<ButtonComponent>(x));
     }
 
@@ -27,8 +27,8 @@ public class VampireMoralityComponentsTests
         Assert.Equal(2, mc.Components.Count);
         var rows = mc.Components.OfType<ActionRowComponent>().ToList();
         Assert.Equal(2, rows.Count);
-        // С меню расстройств: 3 кнопки (Conscience / Remove / Close) + SelectMenu.
-        Assert.Equal(3, rows[0].Components.OfType<ButtonComponent>().Count());
+        // С меню расстройств: 2 кнопки (Conscience / Remove) + SelectMenu.
+        Assert.Equal(2, rows[0].Components.OfType<ButtonComponent>().Count());
         var select = Assert.Single(rows[1].Components.OfType<SelectMenuComponent>());
         Assert.Equal(10, select.Options.Count);
     }
@@ -40,7 +40,6 @@ public class VampireMoralityComponentsTests
     }
 
     [Theory]
-    [InlineData(MoralityAction.Close)]
     [InlineData(MoralityAction.StartAddDerangement)]
     [InlineData(MoralityAction.RemoveLastDerangement)]
     [InlineData(MoralityAction.ConscienceCheck)]
@@ -66,7 +65,7 @@ public class VampireMoralityComponentsTests
     public void TryParseSelectedMenu_NonSelect_ReturnsNull()
     {
         var id = Guid.NewGuid();
-        var cid = VampireMoralityComponents.BuildId(MoralityAction.Close, id);
+        var cid = VampireMoralityComponents.BuildId(MoralityAction.StartAddDerangement, id);
         Assert.Null(VampireMoralityComponents.TryParseSelectedMenu(cid));
     }
 
@@ -74,8 +73,8 @@ public class VampireMoralityComponentsTests
     [InlineData("")]
     [InlineData("vtm_btn:close:abc")]
     [InlineData("vtm_moral:notanaction:abc123")]
-    [InlineData("vtm_moral:close:")]
-    [InlineData("vtm_moral:close:notaguid")]
+    [InlineData("vtm_moral:add:")]
+    [InlineData("vtm_moral:add:notaguid")]
     [InlineData("vtm_moral:sel:notaguid")]
     public void TryParse_ReturnsFalse_ForForeignInputs(string cid)
     {
@@ -86,7 +85,7 @@ public class VampireMoralityComponentsTests
     [Fact]
     public void IsOurs_OnlyOurPrefix()
     {
-        Assert.True(VampireMoralityComponents.IsOurs("vtm_moral:close:abc"));
+        Assert.True(VampireMoralityComponents.IsOurs("vtm_moral:add:abc"));
         Assert.False(VampireMoralityComponents.IsOurs("vtm_btn:close:abc"));
         Assert.False(VampireMoralityComponents.IsOurs(""));
     }

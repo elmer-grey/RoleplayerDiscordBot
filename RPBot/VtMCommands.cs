@@ -1541,15 +1541,6 @@ public sealed class VampireCommands
 
         switch (action)
         {
-            case MoralityAction.Close:
-                await component.UpdateAsync(msg =>
-                {
-                    msg.Embeds = Array.Empty<Embed>();
-                    msg.Content = "Блок «Мораль» закрыт.";
-                    msg.Components = new ComponentBuilder().Build();
-                });
-                return;
-
             case MoralityAction.RemoveLastDerangement:
                 if (character.Derangements == null || character.Derangements.Count == 0)
                 {

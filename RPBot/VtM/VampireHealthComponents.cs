@@ -17,8 +17,6 @@ namespace RPBot.VtM
         ApplyAggravated,
         /// <summary>Лечение на 1 (снимает правый нелетальный <c>/</c> или пустую ячейку).</summary>
         HealOne,
-        /// <summary>Закрыть блок (снимает сообщение).</summary>
-        Close,
     }
 
     /// <summary>
@@ -42,7 +40,6 @@ namespace RPBot.VtM
                 .WithButton("Летальный урон",   BuildId(HealthAction.ApplyLethal,     characterId), ButtonStyle.Danger)
                 .WithButton("Агравированный",   BuildId(HealthAction.ApplyAggravated, characterId), ButtonStyle.Danger)
                 .WithButton("Лечение 1",        BuildId(HealthAction.HealOne,        characterId), ButtonStyle.Success)
-                .WithButton("Скрыть",           BuildId(HealthAction.Close,          characterId), ButtonStyle.Secondary)
                 .Build();
         }
 
@@ -74,7 +71,6 @@ namespace RPBot.VtM
             HealthAction.ApplyLethal    => "lethal",
             HealthAction.ApplyAggravated=> "aggravated",
             HealthAction.HealOne        => "heal",
-            HealthAction.Close          => "close",
             _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(HealthAction)),
         };
 
@@ -86,7 +82,6 @@ namespace RPBot.VtM
                 case "lethal":    action = HealthAction.ApplyLethal;    return true;
                 case "aggravated":action = HealthAction.ApplyAggravated;return true;
                 case "heal":      action = HealthAction.HealOne;        return true;
-                case "close":     action = HealthAction.Close;          return true;
                 default:          action = default;                    return false;
             }
         }
