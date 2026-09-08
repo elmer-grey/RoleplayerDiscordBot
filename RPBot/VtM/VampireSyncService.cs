@@ -25,7 +25,7 @@ namespace RPBot.VtM;
 /// <see cref="IDiscordMessageAccessor"/>, при <see cref="MessageNotFoundException"/> —
 /// снимает регистрацию из индекса.</para>
 /// </remarks>
-public sealed class VampireSyncService
+public class VampireSyncService
 {
     private readonly VampireStorage _storage;
     private readonly VampireDisplayIndex _displayIndex;
@@ -230,8 +230,10 @@ public sealed class VampireSyncService
     /// Комбинированная синхронизация: главный лист (DM + public) И все открытые
     /// трейт-блоки конкретного игрока в DM. Вызывать из любого места, где
     /// состояние персонажа могло измениться.
+    /// <para>Метод <c>virtual</c> для подмены в тестах (например,
+    /// <see cref="VampireChangeDebouncerTests"/>).</para>
     /// </summary>
-    public async Task<SyncResult> SyncAllAsync(
+    public virtual async Task<SyncResult> SyncAllAsync(
         Guid characterId,
         ulong userId,
         CancellationToken ct = default)

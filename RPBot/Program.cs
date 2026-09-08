@@ -98,6 +98,7 @@ private MusicStats? _musicStats;
 private VampireCommands? _vampireCommands;
 private VampireRollButtonHandler? _vampireRollButtonHandler;
 private VampireRollRegistry? _vampireRollRegistry;
+private DiscordSocketMessageAccessor? _vampireMessageAccessor;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent?> _pendingBetUi = new();
 
@@ -992,6 +993,8 @@ private void SaveServerConfigs()
     catch { }
 
             _client = CreateDiscordClient();
+            VampireRollChannelPublisher.Configure(_client);
+            _vampireMessageAccessor = new DiscordSocketMessageAccessor(_client);
             _commandService = new CommandService();
 
     // Load persisted DM event-notification subscriptions BEFORE EventAnnouncer,
@@ -1288,6 +1291,7 @@ private void SaveServerConfigs()
                     SlashModuleRegistry.Register(new VampireTopLevelSlashModule(_vampireCommands));
                     SlashModuleRegistry.Register(new VampireCombatSlashModule());
                     SlashModuleRegistry.Register(new VampireRollSlashModule());
+                    SlashModuleRegistry.Register(new VampireStartSlashModule());
                     // DI-точка для handler'а бросков и slash-команды /vampire_roll.
                     RollContext.Configure(
                         _vampireRollRegistry,
@@ -1328,6 +1332,59 @@ private void SaveServerConfigs()
                 _bwonkCounts = LoadBwonkCounts();
             }
     catch { _bwonkCounts = new Dictionary<ulong, int>(); }
+        }
+
+        /// <summary>
+        /// Планирует debounced-пересинхронизацию всех VtM-блоков игрока, нажавшего
+        /// кнопку. Внутри пытается достать активного персонажа через
+        /// <see cref="VampireActiveRegistry"/> — если активного нет, то debouncer
+        /// не сработает, чтобы не разносить нерелевантные сообщения.
+        /// Это «лучшее усилие»: сим-блоки остаются источником правды, а
+        /// пересинхронизация делается мягко через 1.5 с после последнего действия.
+        /// </summary>
+        private async Task QueueVampireDebounceForGuildAsync(SocketMessageComponent component)
+        {
+            try
+            {
+                var guildId = component.GuildId;
+                if (!guildId.HasValue) return;
+
+                var debouncer = await GetVampireChangeDebouncerAsync(guildId.Value).ConfigureAwait(false);
+                if (debouncer == null) return;
+
+                var activeId = VampireActiveRegistry.Instance.GetActiveCharacterId(guildId.Value, component.User.Id);
+                if (activeId == null || activeId == Guid.Empty) return;
+
+                debouncer.Request(activeId.Value, component.User.Id);
+            }
+            catch (Exception ex)
+            {
+                // Никогда не поднимаем debouncer-ошибку наверх — кнопка уже отработала,
+                // сим-блок обновлён, а пропуск пересинхронизации не критичен.
+                try { BotLogger.Warn(LogCategory.Discord, $"[vtm-debounce] {ex.GetType().Name}: {ex.Message}"); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Возвращает (или лениво создаёт через <see cref="VampireSyncCache"/>) debouncer
+        /// синхронизации VtM-сообщений для конкретного сервера. Фабрика собирает
+        /// <see cref="VampireSyncService"/> с реальным <see cref="DiscordSocketMessageAccessor"/>,
+        /// <see cref="RPBot.VtM.VampireStorage"/> из <see cref="VampireStorageCache"/> и
+        /// свежим <see cref="VampireDisplayIndex"/>. Если клиент ещё не создан —
+        /// возвращает <c>null</c>, чтобы вызовы из кнопок тихо отвалились без sync
+        /// (сим-блоки всё равно останутся источником правды, а пересинхронизация
+        /// произойдёт позже по следующему действию).
+        /// </summary>
+        private async Task<VampireChangeDebouncer?> GetVampireChangeDebouncerAsync(ulong guildId)
+        {
+            if (_client == null || _vampireMessageAccessor == null)
+                return null;
+
+            var storage = await VampireStorageCache.GetAsync(guildId).ConfigureAwait(false);
+            var displayIndex = new VampireDisplayIndex(guildId);
+            await displayIndex.LoadAsync().ConfigureAwait(false);
+            return VampireSyncCache.Get(guildId, _ =>
+                new VampireSyncService(storage, displayIndex, _vampireMessageAccessor));
         }
 
         private DiscordSocketClient CreateDiscordClient()
@@ -1771,6 +1828,12 @@ public Task ReloadServerConfigsAsync()
                     {
                         var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
                         if (resolved.HasValue) sconfig.RollChannelID = resolved.Value;
+                    }
+                    break;
+                case "vtm_roll_channel":
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.VtMRollChannelID = resolved.Value;
                     }
                     break;
                 case "stats_channel":
@@ -2288,6 +2351,8 @@ private static BotUI? _ui;
                         // его ОТДЕЛЬНО от CleanupServices — там это делать поздно.
                         DisposeClientSafely(_client);
                         _client = CreateDiscordClient();
+                        VampireRollChannelPublisher.Configure(_client);
+                        _vampireMessageAccessor = new DiscordSocketMessageAccessor(_client);
 
                         CleanupServices();
 
@@ -5588,19 +5653,23 @@ await Task.CompletedTask;
 
                 default:
                     var cid = component.Data.CustomId;
+                    var vampire = _vampireCommands ??= new VampireCommands();
                     if (cid.StartsWith("vtm_btn:", StringComparison.Ordinal))
                     {
-                        await new VampireCommands().HandleSheetButtonAsync(component);
+                        await vampire.HandleSheetButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith("vtm_wiz:", StringComparison.Ordinal))
                     {
-                        await new VampireCommands().HandleWizardButtonAsync(component);
+                        await vampire.HandleWizardButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith(VampireExperienceComponents.Prefix, StringComparison.Ordinal))
                     {
-                        await new VampireCommands().HandleExperienceButtonAsync(component);
+                        await vampire.HandleExperienceButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith(VampireMoralityComponents.Prefix, StringComparison.Ordinal))
@@ -5609,19 +5678,22 @@ await Task.CompletedTask;
                         // отдельный метод.
                         var isSelectMenu = cid.Contains(":sel:", StringComparison.Ordinal);
                         if (isSelectMenu)
-                            await new VampireCommands().HandleMoralitySelectAsync(component);
+                            await vampire.HandleMoralitySelectAsync(component);
                         else
-                            await new VampireCommands().HandleMoralityButtonAsync(component);
+                            await vampire.HandleMoralityButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith(VampireWillpowerComponents.Prefix, StringComparison.Ordinal))
                     {
-                        await new VampireCommands().HandleWillpowerButtonAsync(component);
+                        await vampire.HandleWillpowerButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith(VampireHealthComponents.Prefix, StringComparison.Ordinal))
                     {
-                        await new VampireCommands().HandleHealthButtonAsync(component);
+                        await vampire.HandleHealthButtonAsync(component);
+                        await QueueVampireDebounceForGuildAsync(component);
                         return;
                     }
                     if (cid.StartsWith(VampireFrenzyComponents.Prefix, StringComparison.Ordinal))
@@ -5631,6 +5703,7 @@ await Task.CompletedTask;
                             var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
                             var rng = new SystemRandomAdapter();
                             await new VampireFrenzyButtonHandler(storage, rng).HandleAsync(component);
+                            await QueueVampireDebounceForGuildAsync(component);
                         }
                         return;
                     }
@@ -6874,6 +6947,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         sb.AppendLine($"moderation_channel: {sconfig.ModerateChannelID}");
         sb.AppendLine($"welcome_channel: {sconfig.WelcomeChannelID}");
         sb.AppendLine($"roll_channel: {sconfig.RollChannelID}");
+        sb.AppendLine($"vtm_roll_channel: {sconfig.VtMRollChannelID}");
         sb.AppendLine($"stats_channel: {sconfig.StatsChannelID}");
         sb.AppendLine($"record_channel: {sconfig.RecordChannelID}");
         sb.AppendLine($"general_rg_channel: {sconfig.GeneralRGChannelID}");
@@ -6905,6 +6979,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         "moderation_channel" => sconfig.ModerateChannelID.ToString(),
         "welcome_channel" => sconfig.WelcomeChannelID.ToString(),
         "roll_channel" => sconfig.RollChannelID.ToString(),
+        "vtm_roll_channel" => sconfig.VtMRollChannelID.ToString(),
         "stats_channel" => sconfig.StatsChannelID.ToString(),
         "record_channel" => sconfig.RecordChannelID.ToString(),
         "welcome_message" => sconfig.WelcomeMessage ?? "",
