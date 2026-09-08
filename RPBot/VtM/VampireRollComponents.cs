@@ -40,17 +40,44 @@ namespace RPBot.VtM
         /// <summary>Префикс кнопки «✅ Готово».</summary>
         public const string DoneAction = "vam_done";
 
+        /// <summary>Префикс кнопки «⭐ Специализация» (индикатор: «в листе есть спец.»).</summary>
+        public const string SpecAction = "vam_spec";
+
         /// <summary>
-        /// Собрать основной набор кнопок (2 ряда): «Переброс за волю | Готово», «Повторить».
+        /// Собрать основной набор кнопок: «Переброс за волю | Готово», «Повторить»,
+        /// и (если в листе / ad-hoc указана специализация) «⭐ Специализация: &lt;имя&gt;».
         /// </summary>
         /// <param name="originalUserId">Discord-ID автора броска. Используется в customId для авторизации.</param>
-        public static MessageComponent BuildRollButtons(ulong originalUserId)
+        /// <param name="specialization">
+        /// Название специализации из листа (или ad-hoc), если она указана для этого броска.
+        /// Если null/пустая — кнопка «⭐ Специализация» не показывается.
+        /// </param>
+        public static MessageComponent BuildRollButtons(ulong originalUserId, string? specialization = null)
         {
-            return new ComponentBuilder()
+            var cb = new ComponentBuilder()
                 .WithButton("🎲 Переброс за волю", $"{RerollPrefix}:{originalUserId}", ButtonStyle.Primary)
-                .WithButton("✅ Готово", $"{DoneAction}:{originalUserId}", ButtonStyle.Secondary)
-                .WithButton("🔁 Повторить", $"{RepeatAction}:{originalUserId}", ButtonStyle.Secondary)
-                .Build();
+                .WithButton("✅ Готово", $"{DoneAction}:{originalUserId}", ButtonStyle.Secondary);
+
+            if (!string.IsNullOrWhiteSpace(specialization))
+            {
+                // Показываем индикатор: «в этом броске применена специализация».
+                // Кнопка disabled — носит чисто информативный характер.
+                cb.WithButton(
+                    $"⭐ Спец.: {Truncate(specialization, 28)}",
+                    $"{SpecAction}:{originalUserId}",
+                    ButtonStyle.Secondary,
+                    disabled: true);
+            }
+
+            cb.WithButton("🔁 Повторить", $"{RepeatAction}:{originalUserId}", ButtonStyle.Secondary);
+            return cb.Build();
+        }
+
+        /// <summary>Усечение строки до заданной длины (с многоточием).</summary>
+        private static string Truncate(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            return s.Length <= max ? s : s.Substring(0, max - 1) + "…";
         }
 
         /// <summary>

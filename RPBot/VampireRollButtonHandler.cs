@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
+using RPBot.SlashModules;
 using RPBot.VtM;
 
 namespace RPBot;
@@ -18,6 +19,8 @@ namespace RPBot;
 /// <remarks>
 /// <para>Все кнопки авторизованы по <c>component.User.Id == originalUserId</c> —
 /// инициировать переброс/повтор может только автор броска.</para>
+/// <para>Доступ к <see cref="VampireRollRegistry"/> и активному чарнику —
+/// через <see cref="RollContext"/> (DI-точка).</para>
 /// </remarks>
 public sealed class VampireRollButtonHandler
 {
@@ -46,9 +49,9 @@ public sealed class VampireRollButtonHandler
         return false;
     }
 
-    private static async Task<bool> ReplyNotYoursAsync(SocketMessageComponent component)
+    private static async Task<bool> ReplyNotYoursAsync(SocketMessageComponent component, string text)
     {
-        await component.RespondAsync("Это не твой бросок.", ephemeral: true);
+        await component.RespondAsync(text, ephemeral: true);
         return true;
     }
 
@@ -59,7 +62,8 @@ public sealed class VampireRollButtonHandler
 
     private async Task<bool> HandleOpenPickerAsync(SocketMessageComponent component, ulong originalUserId)
     {
-        if (!Authorizes(component, originalUserId)) return await ReplyNotYoursAsync(component);
+        if (!Authorizes(component, originalUserId))
+            return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
         await component.Message.ModifyAsync(msg =>
         {
@@ -69,33 +73,157 @@ public sealed class VampireRollButtonHandler
         return true;
     }
 
+    /// <summary>
+    /// Пользователь выбрал 1/2/3 кубика — перебрасываем ВСЕ доступные (с лимитом),
+    /// списываем 1 пункт воли с активного чарника, перерисовываем embed с новым результатом.
+    /// </summary>
     private async Task<bool> HandleMenuAsync(SocketMessageComponent component, ulong originalUserId, string customId)
     {
-        if (!Authorizes(component, originalUserId)) return await ReplyNotYoursAsync(component);
+        if (!Authorizes(component, originalUserId))
+            return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
-        // Значение из SelectMenu приходит в component.Data.Values[0].
         var value = component.Data.Values?.FirstOrDefault();
-        if (!VampireRollComponents.TryParseRerollMenuValue(value, out var count))
+        if (!VampireRollComponents.TryParseRerollMenuValue(value, out var requestedCount))
         {
             await component.RespondAsync("Не удалось разобрать выбор количества кубиков.", ephemeral: true);
             return true;
         }
 
-        // На данном этапе у нас ещё нет инфраструктуры для боевой модификации персонажа
-        // (лист + Воля + WillpowerPoints) и нет источника снапшота броска — это закрывается
-        // отдельной задачей (подключение /rollV к VampireCharacter + VampireRollRegistry).
-        // Здесь лишь сообщаем автору выбор и оставляем кнопки исходного вида.
+        var registry = RollContext.Registry;
+        if (registry == null)
+        {
+            await component.RespondAsync("Реестр бросков не инициализирован.", ephemeral: true);
+            return true;
+        }
+        if (!registry.TryGet(originalUserId, out var snapshot) || snapshot == null)
+        {
+            await component.RespondAsync(
+                "Снапшот броска истёк или отсутствует. Кидай заново через /vampire_roll.",
+                ephemeral: true);
+            return true;
+        }
+        if (snapshot.MessageId != component.Message.Id)
+        {
+            await component.RespondAsync(
+                "Это не тот бросок (ID сообщения не совпадает). Кидай заново через /vampire_roll.",
+                ephemeral: true);
+            return true;
+        }
+
+        var activeLookup = RollContext.ActiveCharacterLookup;
+        if (activeLookup == null || component.GuildId == null)
+        {
+            await component.RespondAsync(
+                "Переброс за волю требует активного чарника на сервере. " +
+                "Сначала используй /vampire bind в канале.",
+                ephemeral: true);
+            return true;
+        }
+
+        var active = await activeLookup(component.GuildId.Value, originalUserId);
+        if (active == null)
+        {
+            await component.RespondAsync(
+                "Не нашёл активного персонажа. Используй /vampire bind на сервере.",
+                ephemeral: true);
+            return true;
+        }
+
+#pragma warning disable CS0618 // WillpowerPoints устарел для листа, но это runtime-хранилище для переброса.
+        if (active.Character.WillpowerPoints < 1)
+#pragma warning restore CS0618
+        {
+            await component.RespondAsync(
+                "Не хватает пунктов воли (нужен ≥ 1). " +
+                $"Сейчас {active.Character.WillpowerPoints}.",
+                ephemeral: true);
+            return true;
+        }
+
+        // V20+V5: перебрасываются худшие regular-кубы (V5-разбиение),
+        // hunger не трогаем; специализация (V20) применяется к regular.
+        var actualCount = WillpowerReroll.ActualRerollCount(snapshot.RegularCount, requestedCount);
+
+        var rng = new SystemRandomAdapter();
+        var newRegular = WillpowerReroll.RerollDice(snapshot.RegularDice, actualCount, rng);
+
+        // Списываем 1 пункт воли.
+#pragma warning disable CS0618
+        active.Character.WillpowerPoints -= 1;
+#pragma warning restore CS0618
+        await active.Storage.UpsertAsync(active.Character);
+
+        // Удаляем запись (1 переброс = одно списание).
+        registry.Forget(originalUserId);
+
+        // V20+V5: пересчёт через CountSuccessesHybrid (regular новый, hunger прежний).
+        int newSuccesses = VampireDicePool.CountSuccessesHybrid(
+            newRegular, snapshot.HungerDice, snapshot.Specialization);
+        var labelSuffix = actualCount < requestedCount
+            ? $"(запрошено {requestedCount}, доступно {snapshot.RegularCount})"
+            : "";
+        var embed = BuildRerollEmbed(newRegular, snapshot.HungerDice, snapshot.Specialization,
+            actualCount, newSuccesses, active.Character.WillpowerPoints, labelSuffix);
+
+        // Снимаем picker, рисуем исходные кнопки (повторить ещё раз уже нельзя —
+        // запись удалена, и попытка сообщит «снапшот истёк»).
+        // Без кнопки «Специализация»: после переброса новые действия недоступны,
+        // и индикатор специализации уже отображается в самом embed.
+        await component.Message.ModifyAsync(msg =>
+        {
+            msg.Embed = embed;
+            msg.Components = VampireRollComponents.BuildEmpty();
+        });
         await component.RespondAsync(
-            $"Принято: перебросить {count} худших regular-кубика (−1 воля). " +
-            "Применится после интеграции с листом персонажа.",
+            $"Переброс за волю: −1 WP (осталось {active.Character.WillpowerPoints}).",
             ephemeral: true);
         return true;
     }
 
+    /// <summary>Сборка embed'а после переброса (V20+V5: regular новый, hunger прежний).</summary>
+    private static Embed BuildRerollEmbed(
+        int[] newRegular,
+        int[] hungerDice,
+        string? specialization,
+        int rerolledCount,
+        int successes,
+        int willpowerPoints,
+        string labelSuffix)
+    {
+        var eb = new EmbedBuilder
+        {
+            Title = "🎲 Переброс за волю (−1 WP)",
+            Color = new Color(0x5B3A8C),
+        };
+        var regularStr = newRegular.Length == 0 ? "—" : string.Join(", ", newRegular);
+        var hungerStr = hungerDice == null || hungerDice.Length == 0 ? "—" : string.Join(", ", hungerDice);
+        eb.AddField(
+            "Кубы (regular — обновлены)",
+            $"regular ({newRegular.Length}): {regularStr}\nhunger ({hungerDice?.Length ?? 0}): {hungerStr}",
+            inline: false);
+        eb.AddField("Переброшено", $"{rerolledCount} худших regular {labelSuffix}", inline: true);
+        eb.AddField("Воли осталось", willpowerPoints.ToString(), inline: true);
+        int regTens = newRegular.Count(d => d == 10);
+        int regSixesToNines = newRegular.Count(d => d >= 6 && d < 10);
+        var breakdown = !string.IsNullOrEmpty(specialization)
+            ? $"regular: 6–9 × {regSixesToNines} + 10 × {regTens}×2 (спец.) = {regSixesToNines + regTens * 2}"
+            : $"regular: 6–9 × {regSixesToNines} + 10 × {regTens} = {regSixesToNines + regTens}";
+        eb.AddField("Подсчёт успехов", breakdown, inline: false);
+        eb.AddField("Итог", $"**{successes}** успехов", inline: true);
+        return eb.Build();
+    }
+
     private async Task<bool> HandleBackAsync(SocketMessageComponent component, ulong originalUserId)
     {
-        if (!Authorizes(component, originalUserId)) return await ReplyNotYoursAsync(component);
+        if (!Authorizes(component, originalUserId))
+            return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
+        // Возвращаемся с picker'а обратно к исходному embed.
+        // Кнопки не рисуем: до повтора/переброса пользователь должен снова
+        // видеть результат, а повторные действия применятся по исходным кнопкам
+        // (которые были показаны при первоначальном броске).
+        // На случай если embed был утерян — кнопки «Переброс / Готово / Повторить»
+        // можно отдать заново, без индикатора «Специализация» (его перебьёт embed).
         await component.Message.ModifyAsync(msg =>
         {
             msg.Components = VampireRollComponents.BuildRollButtons(originalUserId);
@@ -104,40 +232,85 @@ public sealed class VampireRollButtonHandler
         return true;
     }
 
+    /// <summary>
+    /// Повторный бросок по правилу V20: пул N-1, берётся новый результат.
+    /// </summary>
     private async Task<bool> HandleRepeatAsync(SocketMessageComponent component, ulong originalUserId)
     {
-        if (!Authorizes(component, originalUserId)) return await ReplyNotYoursAsync(component);
+        if (!Authorizes(component, originalUserId))
+            return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
-        // Демонстрация чистой логики: кидаём 5 → 4 куба (по правилу V20).
-        var rng = new SystemRandomAdapter();
-        VampireRepeatReroll.Repeat repeat;
-        try
+        var registry = RollContext.Registry;
+        if (registry == null)
         {
-            repeat = VampireRepeatReroll.RollRepeat(5, rng);
+            await component.RespondAsync("Реестр бросков не инициализирован.", ephemeral: true);
+            return true;
         }
-        catch (ArgumentException)
+        if (!registry.TryGet(originalUserId, out var snapshot) || snapshot == null)
         {
-            await component.RespondAsync("Повторный бросок недоступен (исходный пул < 1).",
+            await component.RespondAsync(
+                "Снапшот броска истёк или отсутствует. Кидай заново через /vampire_roll.",
+                ephemeral: true);
+            return true;
+        }
+        if (snapshot.MessageId != component.Message.Id)
+        {
+            await component.RespondAsync(
+                "Это не тот бросок (ID сообщения не совпадает). Кидай заново через /vampire_roll.",
                 ephemeral: true);
             return true;
         }
 
-        var diceStr = repeat.RepeatDice.Length == 0
-            ? "—"
-            : string.Join(", ", repeat.RepeatDice);
-        var label = repeat.IsBotch
-            ? $"🎲 Повторный пул: {repeat.RepeatPoolSize} | кубы: {diceStr} | **БОТЧ**"
-            : $"🎲 Повторный пул: {repeat.RepeatPoolSize} | кубы: {diceStr} | Успехов: **{repeat.Successes}**";
+        if (snapshot.PoolSize < VampireRepeatReroll.MinRepeatPool)
+        {
+            await component.RespondAsync(
+                "Пул < 1. Повторный бросок невозможен.",
+                ephemeral: true);
+            return true;
+        }
 
-        await component.RespondAsync(label +
-            "\n_Результат повторного броска — окончательный (не лучший из двух)._",
-            ephemeral: true);
+        var repeat = VampireRepeatReroll.RollRepeat(snapshot.PoolSize, new SystemRandomAdapter());
+
+        // Удаляем запись: 1 повтор = один бросок.
+        registry.Forget(originalUserId);
+
+        var diceStr = repeat.RepeatDice.Length == 0 ? "—" : string.Join(", ", repeat.RepeatDice);
+        var eb = new EmbedBuilder
+        {
+            Title = "🔁 Повторный бросок по V20 (пул N-1)",
+            Color = new Color(0x5B3A8C),
+        };
+        eb.AddField("Исходный пул", $"{snapshot.PoolSize}", inline: true);
+        eb.AddField("Новый пул", $"{repeat.RepeatPoolSize}", inline: true);
+        eb.AddField("Новые кубы", diceStr, inline: false);
+        int successes = VampireDicePool.CountSuccessesFor(
+            repeat.RepeatDice, snapshot.Specialization);
+        eb.AddField(
+            "Итог",
+            $"**{successes}** успехов" +
+            (!string.IsNullOrEmpty(snapshot.Specialization)
+                ? $" (с учётом специализации «{snapshot.Specialization}», 10 = 2)"
+                : ""),
+            inline: false);
+        eb.Footer = new EmbedFooterBuilder
+        {
+            Text = "V20 стр. 286/267: пул уменьшается на 1, берётся новый результат (не лучший из двух).",
+        };
+
+        // Снимаем кнопки — повторять уже нельзя.
+        await component.Message.ModifyAsync(msg =>
+        {
+            msg.Embed = eb.Build();
+            msg.Components = VampireRollComponents.BuildEmpty();
+        });
+        await component.RespondAsync("Повторный бросок применён.", ephemeral: true);
         return true;
     }
 
     private async Task<bool> HandleDoneAsync(SocketMessageComponent component, ulong originalUserId)
     {
-        if (!Authorizes(component, originalUserId)) return await ReplyNotYoursAsync(component);
+        if (!Authorizes(component, originalUserId))
+            return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
         await component.Message.ModifyAsync(msg =>
         {
@@ -147,4 +320,3 @@ public sealed class VampireRollButtonHandler
         return true;
     }
 }
-

@@ -35,22 +35,32 @@ namespace RPBot.VtM
         /// <summary>
         /// Сохранить результат броска для пользователя.
         /// </summary>
+        /// <remarks>
+        /// Гибрид V20 + V5: <paramref name="regularDice"/> — обычные кубы,
+        /// <paramref name="hungerDice"/> — голодные (V5). Специализация (V20)
+        /// удваивает десятки ТОЛЬКО в <paramref name="regularDice"/>.
+        /// </remarks>
         public void Record(
             ulong userId,
             ulong messageId,
             int[] regularDice,
             int[] hungerDice,
-            int? bonusDie)
+            string? specialization,
+            int poolSize,
+            int? bonusDie = null)
         {
             if (regularDice == null) throw new ArgumentNullException(nameof(regularDice));
             if (hungerDice == null) throw new ArgumentNullException(nameof(hungerDice));
-            if (regularDice.Length == 0) throw new ArgumentException("Regular пул пуст.", nameof(regularDice));
+            if (regularDice.Length == 0 && hungerDice.Length == 0)
+                throw new ArgumentException("Пул пуст.", nameof(regularDice));
 
             _byUser[userId] = new Entry(
                 messageId,
                 regularDice,
                 hungerDice,
                 bonusDie,
+                specialization,
+                poolSize,
                 DateTime.UtcNow);
         }
 
@@ -73,6 +83,8 @@ namespace RPBot.VtM
                 raw.RegularDice,
                 raw.HungerDice,
                 raw.BonusDie,
+                raw.Specialization,
+                raw.PoolSize,
                 raw.RecordedAt);
             return true;
         }
@@ -97,14 +109,19 @@ namespace RPBot.VtM
             public int[] RegularDice { get; }
             public int[] HungerDice { get; }
             public int? BonusDie { get; }
+            public string? Specialization { get; }
+            public int PoolSize { get; }
             public DateTime RecordedAt { get; }
 
-            public Entry(ulong messageId, int[] regularDice, int[] hungerDice, int? bonusDie, DateTime recordedAt)
+            public Entry(ulong messageId, int[] regularDice, int[] hungerDice,
+                int? bonusDie, string? specialization, int poolSize, DateTime recordedAt)
             {
                 MessageId = messageId;
                 RegularDice = regularDice;
                 HungerDice = hungerDice;
                 BonusDie = bonusDie;
+                Specialization = specialization;
+                PoolSize = poolSize;
                 RecordedAt = recordedAt;
             }
         }
@@ -114,17 +131,22 @@ namespace RPBot.VtM
     /// Снимок последнего броска для переброса по воле.
     /// </summary>
     /// <remarks>
-    /// Хранит regular и hunger раздельно: перебрасываются только regular-кубики,
-    /// hunger остаётся нетронутым. <see cref="BonusDie"/> тоже не перебрасывается.
+    /// Гибрид V20+V5: V5-разбиение на regular/hunger + V20-специализация.
+    /// Специализация действует только на regular-кубы (не на hunger).
     /// </remarks>
     public sealed record VampireRollSnapshot(
         ulong MessageId,
         int[] RegularDice,
         int[] HungerDice,
         int? BonusDie,
+        string? Specialization,
+        int PoolSize,
         DateTime RecordedAt)
     {
         /// <summary>Сколько regular-кубиков доступно для переброса.</summary>
         public int RegularCount => RegularDice?.Length ?? 0;
+
+        /// <summary>Сколько голодных кубиков (не перебрасываются за волю).</summary>
+        public int HungerCount => HungerDice?.Length ?? 0;
     }
 }

@@ -97,6 +97,7 @@ private MusicQueueStore? _musicQueueStore;
 private MusicStats? _musicStats;
 private VampireCommands? _vampireCommands;
 private VampireRollButtonHandler? _vampireRollButtonHandler;
+private VampireRollRegistry? _vampireRollRegistry;
 
         private readonly ConcurrentDictionary<string, SocketMessageComponent?> _pendingBetUi = new();
 
@@ -244,6 +245,7 @@ private Task? _dailyRestartTask;
                 _client.ModalSubmitted += HandleModalSubmitted;
                 _client.ButtonExecuted += HandleButtonExecuted;
                 _client.SelectMenuExecuted += HandleSelectMenuExecuted;
+                _client.AutocompleteExecuted += VampireRollAutocompleteHandler.HandleAsync;
                 _client.GuildScheduledEventCreated += OnGuildScheduledEventCreated;
                 _client.GuildScheduledEventUpdated += OnGuildScheduledEventUpdated;
                 _client.GuildScheduledEventStarted += OnGuildScheduledEventStarted;
@@ -1281,9 +1283,15 @@ private void SaveServerConfigs()
         {
             _vampireCommands ??= new VampireCommands();
             _vampireRollButtonHandler ??= new VampireRollButtonHandler();
-            SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
-            SlashModuleRegistry.Register(new VampireCombatSlashModule());
-        }
+                    _vampireRollRegistry ??= new VampireRollRegistry();
+                    SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
+                    SlashModuleRegistry.Register(new VampireCombatSlashModule());
+                    SlashModuleRegistry.Register(new VampireRollSlashModule());
+                    // DI-точка для handler'а бросков и slash-команды /vampire_roll.
+                    RollContext.Configure(
+                        _vampireRollRegistry,
+                        activeCharacterLookup: ActiveCharacterLookupAsync);
+                }
 
         // ПОДПИСКА НА СОБЫТИЯ СЕРВИСОВ
             _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
@@ -4700,9 +4708,47 @@ await Task.CompletedTask;
             }
         }
 
-                /// <summary>
-                /// Обработка выбора приоритета групп в SelectMenu (Шаг 2 «Характеристики» визарда).
-                /// </summary>
+                        /// <summary>
+                        /// Провайдер «активный чарник игрока на сервере» для <see cref="RollContext"/>.
+                        /// </summary>
+                        /// <remarks>
+                        /// Используется handler'ом переброса за волю, чтобы списать пункт воли
+                        /// с активного персонажа. Логика:
+                        /// <list type="number">
+                        ///   <item>Активный ID из <see cref="VampireActiveRegistry"/>.</item>
+                        ///   <item>Если нет — первый персонаж игрока в гильдии (любой, что бы не падало).</item>
+                        ///   <item>Если нет ни одного — null.</item>
+                        /// </list>
+                        /// </remarks>
+                        private static async Task<VampireActiveContext?> ActiveCharacterLookupAsync(ulong guildId, ulong playerId)
+                        {
+                            try
+                            {
+                                var storage = await VampireStorageCache.GetAsync(guildId).ConfigureAwait(false);
+                                var activeId = VampireActiveRegistry.Instance.GetActiveCharacterId(guildId, playerId);
+
+                                RPBot.VtM.VampireCharacter? character = null;
+                                if (activeId.HasValue)
+                                {
+                                    character = storage.GetByCharacterId(activeId.Value);
+                                }
+                                if (character == null)
+                                {
+                                    var playerCharacter = storage.GetByPlayerId(playerId);
+                                    character = playerCharacter;
+                                }
+                                if (character == null) return null;
+                                return new VampireActiveContext(storage, character);
+                            }
+                            catch
+                            {
+                                return null;
+                            }
+                        }
+
+                                /// <summary>
+                                /// Обработка выбора приоритета групп в SelectMenu (Шаг 2 «Характеристики» визарда).
+                                /// </summary>
                 private async Task HandleVampireWizardPriorityAsync(SocketMessageComponent component)
                 {
                     try
@@ -6210,6 +6256,19 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                 else
                                                 {
                                                     await command.RespondAsync("❌ VtM-модуль не зарегистрирован.", ephemeral: true);
+                                                }
+                                            }
+                                            break;
+                                        case "vampire_roll":
+                                            {
+                                                var module = SlashModuleRegistry.FindByCommand("vampire_roll");
+                                                if (module is not null)
+                                                {
+                                                    await module.DispatchAsync(command);
+                                                }
+                                                else
+                                                {
+                                                    await command.RespondAsync("❌ /vampire_roll — модуль не зарегистрирован.", ephemeral: true);
                                                 }
                                             }
                                             break;

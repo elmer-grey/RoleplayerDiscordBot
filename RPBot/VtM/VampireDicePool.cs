@@ -113,6 +113,76 @@ namespace RPBot.VtM
         }
 
         /// <summary>
+        /// V20: специализация удваивает десятки (каждая «10» = 2 успеха вместо 1).
+        /// Без специализации результат идентичен стандартному V20-подсчёту.
+        /// </summary>
+        /// <param name="dice">Уже брошенные кубы.</param>
+        /// <param name="hasSpecialization">
+        /// Если <c>true</c> — каждая 10 даёт 2 успеха (V20). Если <c>false</c> — обычный подсчёт.
+        /// </param>
+        /// <returns>Число успехов с учётом специализации.</returns>
+        public static int CountSuccessesWithSpecialization(
+            IReadOnlyList<int> dice, bool hasSpecialization)
+        {
+            if (dice == null) throw new ArgumentNullException(nameof(dice));
+            int tens = dice.Count(d => d == 10);
+            int sixesToNines = dice.Count(d => d >= 6 && d < 10);
+            if (hasSpecialization)
+            {
+                // каждая 10 = 2 успеха
+                return sixesToNines + (tens * 2);
+            }
+            // стандартный V20 (одна 10 = один успех)
+            return sixesToNines + tens;
+        }
+
+        /// <summary>
+        /// Гибридный подсчёт V20 + V5:
+        ///   • Regular: V5-правило «1 съедает один успех» (минус 1 за каждую 1-цу),
+        ///     плюс обычный V20-подсчёт (6–9 = 1, 10 = 1 или 2 при специализации).
+        ///   • Hunger: голодные 1-цы НЕ съедают успехи — они только триггерят
+        ///     Messy/Bestial Critical, который подсчитывается отдельно.
+        ///   • Специализация действует ТОЛЬКО на regular.
+        /// </summary>
+        /// <param name="regularDice">Regular-кубы (V5-разбиение).</param>
+        /// <param name="hungerDice">Hunger-кубы (V5-разбиение).</param>
+        /// <param name="specialization">Название специализации (пусто/пробелы = нет).</param>
+        public static int CountSuccessesHybrid(
+            IReadOnlyList<int> regularDice,
+            IReadOnlyList<int> hungerDice,
+            string? specialization)
+        {
+            if (regularDice == null) throw new ArgumentNullException(nameof(regularDice));
+            if (hungerDice == null) throw new ArgumentNullException(nameof(hungerDice));
+            bool hasSpec = !string.IsNullOrWhiteSpace(specialization);
+
+            int regTens = regularDice.Count(d => d == 10);
+            int regSixesToNines = regularDice.Count(d => d >= 6 && d < 10);
+            int regOnes = regularDice.Count(d => d == 1);
+            // V20: каждая 10 = 1 успех, либо 2 при специализации.
+            int regHits = regSixesToNines + (hasSpec ? regTens * 2 : regTens);
+            // V5: каждая 1-ца съедает один успех.
+            int regSuccesses = regHits - regOnes;
+
+            int hungTens = hungerDice.Count(d => d == 10);
+            int hungSixesToNines = hungerDice.Count(d => d >= 6 && d < 10);
+            int hungSuccesses = hungSixesToNines + hungTens;
+
+            return regSuccesses + hungSuccesses;
+        }
+
+        /// <summary>
+        /// Обёртка совместимости: пересчитать успехи для одного пула кубов с учётом
+        /// специализации. Используется в коде, который работает с единым пулом V20.
+        /// </summary>
+        public static int CountSuccessesFor(
+            IReadOnlyList<int> dice, string? specialization)
+        {
+            return CountSuccessesWithSpecialization(
+                dice, hasSpecialization: !string.IsNullOrWhiteSpace(specialization));
+        }
+
+        /// <summary>
         /// Чистая оценка уже брошенных кубов по правилам V5.
         /// </summary>
         /// <remarks>
