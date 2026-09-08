@@ -71,9 +71,9 @@ public static class VampireStartService
 
             if (StoppedAtVtMRollCheck)
             {
-                lines.Add("❌ Инициализация остановлена на шаге 1.");
+                lines.Add("❌ Инициализация остановлена на шаге 0.");
                 lines.Add("");
-                lines.Add("**Шаг 1 — задать канал для VtM-бросков:**");
+                lines.Add("**Шаг 0 — задать канал для VtM-бросков:**");
                 lines.Add("1. Создайте канал, куда бот будет публиковать броски.");
                 lines.Add("2. В Discord ПКМ по каналу → «Копировать ID канала».");
                 linesAddHelp(lines);
@@ -85,7 +85,7 @@ public static class VampireStartService
                 lines.Add($"❌ Ошибка: {Error}");
                 return string.Join("\n", lines);
             }
-            lines.Add($"✅ Шаг 1 — VtMRollChannel задан: <#{VtMRollChannelIdSnapshot}>.");
+            lines.Add($"✅ Шаг 0 — VtMRollChannel задан: <#{VtMRollChannelIdSnapshot}>.");
             if (WeaponsSeeded)
                 lines.Add($"✅ Шаг 2 — словарь оружия скопирован: `{WeaponsPath}`.");
             else
@@ -126,16 +126,10 @@ public static class VampireStartService
     {
         var result = new StartResult();
 
-        // ─── Шаг 0. Апгрейд JSON-справочников по schema_version. ─────
-        // Делаем ДО всех остальных шагов, чтобы данные в памяти (на
-        // следующих .Load()) были гарантированно актуальны. Не требует
-        // VtMRollChannel и Discord API — можно прогнать даже с битым
-        // конфигом.
-        result.Upgrades.Add(("derangements", VampireDerangementCatalog.UpgradeIfStale()));
-        result.Upgrades.Add(("clan_flaws", VampireClanFlawCatalog.UpgradeIfStale()));
-        result.Upgrades.Add(("weapons", VampireWeaponsCatalog.UpgradeIfStale()));
-
-        // ─── Шаг 1. Проверка VtMRollChannelID. ──────────────────────────
+        // ─── Шаг 0. Проверка VtMRollChannelID. ──────────────────────────
+        // Без канала бот не сможет публиковать тестовый бросок на шаге 4 —
+        // останавливаемся с подсказкой. Каталоги данных апгрейдим ПОСЛЕ
+        // этой проверки (нужен хоть какой-то валидный cfg).
         if (cfg.VtMRollChannelID == 0UL)
         {
             result.StoppedAtVtMRollCheck = true;
@@ -143,9 +137,17 @@ public static class VampireStartService
         }
         VtMRollChannelIdSnapshot = cfg.VtMRollChannelID;
 
+        // ─── Шаг 1. Апгрейд JSON-справочников по schema_version. ─────
+        // Делаем после Шага 0, но до Шага 2 (копирование оружия) —
+        // чтобы данные в памяти (на следующих .Load()) были гарантированно
+        // актуальны. Не требует Discord API — только диск.
+        result.Upgrades.Add(("derangements", VampireDerangementCatalog.UpgradeIfStale()));
+        result.Upgrades.Add(("clan_flaws", VampireClanFlawCatalog.UpgradeIfStale()));
+        result.Upgrades.Add(("weapons", VampireWeaponsCatalog.UpgradeIfStale()));
+
         // ─── Шаг 2. Копирование шаблона словаря оружия. ──────────────────
-        // Шаг 0 уже мог пересеять weapons.json — здесь делаем только
-        // первый запуск (когда файла ещё не было вовсе). После Шага 0
+        // Шаг 1 уже мог пересеять weapons.json — здесь делаем только
+        // первый запуск (когда файла ещё не было вовсе). После Шага 1
         // файл всегда существует → WeaponsSeeded = false, что и нужно
         // для повторных запусков.
         var (seedOk, weaponsPath) = VampireWeaponsCatalog.EnsureSeeded();
