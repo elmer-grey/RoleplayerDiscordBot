@@ -14,6 +14,13 @@
     <None Remove="Numbers\**" />
   </ItemGroup>
 
+  <!-- Словари VtM V20 упаковываются в сборку как embedded resources
+       и копируются в Data/vampire при первом запуске модуля
+       (/vampire_start). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.json" />
+  </ItemGroup>
+
   <!-- Lavalink: копируем application.yml в выходную папку при сборке.
        Lavalink.jar слишком большой для копирования — путь задаётся абсолютным в config.json.
 

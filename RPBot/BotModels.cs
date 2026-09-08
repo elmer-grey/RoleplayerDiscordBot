@@ -11,6 +11,12 @@ namespace RPBot
         public ulong WelcomeChannelID { get; set; }
         public ulong GeneralRGChannelID { get; set; }
         public ulong RollChannelID { get; set; }
+        /// <summary>
+        /// Канал для публикации VtM-бросков (обычные кубики вампира, проверка совести,
+        /// расчёт урона, бросок воли на сопротивление / игнорирование повреждений).
+        /// Если 0 — VtM-броски не публикуются (бот отвечает «не задан канал для таких бросков»).
+        /// </summary>
+        public ulong VtMRollChannelID { get; set; }
         public ulong StatsChannelID { get; set; }
         public ulong RecordChannelID { get; set; }
         public string WelcomeMessage { get; set; } = string.Empty;
