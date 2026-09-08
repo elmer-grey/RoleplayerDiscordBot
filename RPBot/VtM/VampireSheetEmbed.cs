@@ -389,11 +389,26 @@ public static class VampireSheetEmbed
     {
         var sb = new StringBuilder();
         sb.Append("`").Append(PadRight("Человечность", 13)).Append("` ");
-        sb.AppendLine(DotsString(VampireFinishingResolver.ComputeHumanity(c), 10));
-        sb.Append("`").Append(PadRight("Воля", 13)).Append("` ");
-        sb.AppendLine(DotsString(VampireFinishingResolver.ComputeWillpower(c), 10));
-        sb.Append("`").Append(PadRight("Голод", 13)).Append("` ");
-        sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
+            var humanity = VampireFinishingResolver.ComputeHumanity(c);
+            var rawHumanity = VampireFinishingResolver.ComputeRawHumanity(c);
+            sb.AppendLine(rawHumanity < humanity
+                ? $"{humanity} (сырое: {rawHumanity})"
+                : DotsString(humanity, 10));
+            sb.Append("`").Append(PadRight("Воля", 13)).Append("` ");
+            var will = VampireFinishingResolver.ComputeWillpower(c);
+            var rawWill = VampireFinishingResolver.ComputeRawWillpower(c);
+            sb.AppendLine(rawWill < will
+                ? $"{will} (сырое: {rawWill})"
+                : DotsString(will, 10));
+            // Статус персонажа: показываем только если отличается от нормального.
+            var status = VampireFinishingResolver.ComputeStatus(c);
+            if (status != VampireFinishingResolver.CharacterStatus.Normal)
+            {
+                sb.Append("`").Append(PadRight("Статус", 13)).Append("` ");
+                sb.AppendLine(VampireFinishingResolver.DescribeStatus(status));
+            }
+            sb.Append("`").Append(PadRight("Голод", 13)).Append("` ");
+            sb.AppendLine(DotsString(Math.Clamp(c.Hunger, 0, 5), 5));
         if (c.Hunger >= 5)
         {
             sb.AppendLine("**⚠ Зверь в ярости**");

@@ -66,22 +66,61 @@ public static partial class VampireFinishingResolver
 
     // ═══ Формулы производных ═══════════════════════════════════════
 
-    /// <summary>Человечность = Совесть + Самоконтроль + бонус freebie, кэп 10.</summary>
+    /// <summary>Человечность = Совесть + Самоконтроль + бонус freebie, кэп 1..10.
+    /// (Минимальный порог 1 — наше защитное ограничение: в чарнике пока нет NPC-режима
+    /// при Чел.=0, см. <see cref="VampireFinishingResolver.ComputeRawHumanity"/>.)</summary>
     public static int ComputeHumanity(VampireCharacter draft)
     {
         if (draft == null) return 0;
         var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
         var scl = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueSelfControl);
-        return Math.Min(10, Math.Max(1, con + scl + draft.HumanityBonus));
+        return ClampHumanity(con + scl + draft.HumanityBonus);
     }
 
-    /// <summary>Воля = Смелость + бонус freebie, кэп 10.</summary>
+    /// <summary>
+        /// Сырая Человечность БЕЗ искусственного floor=1 (V20 стр. 333-334: Чел.
+        /// может быть 0 → окоченение). Минимум 0, а не 1 — это и есть смысл метода:
+        /// возвращать нижнюю реальную границу V20, без нашей защитной обёртки.
+        /// </summary>
+        public static int ComputeRawHumanity(VampireCharacter draft)
+        {
+            if (draft == null) return 0;
+            var con = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueConscience);
+            var scl = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueSelfControl);
+            return ClampHumanityUpper(con + scl + draft.HumanityBonus);
+        }
+
+    /// <summary>Воля = Смелость + бонус freebie, кэп 1..10.</summary>
     public static int ComputeWillpower(VampireCharacter draft)
     {
         if (draft == null) return 0;
         var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
-        return Math.Min(10, Math.Max(1, cou + draft.WillpowerBonus));
+        return ClampWillpower(cou + draft.WillpowerBonus);
     }
+
+    /// <summary>Сырая Воля без искусственного кэпа снизу (В20: Воля может быть 0).</summary>
+    public static int ComputeRawWillpower(VampireCharacter draft)
+    {
+        if (draft == null) return 0;
+        var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
+        return ClampWillpowerUpper(cou + draft.WillpowerBonus);
+    }
+
+    /// <summary>Кэп Чел. сверху (1..10).</summary>
+    private static int ClampHumanity(int v)
+        => v < 1 ? 1 : (v > 10 ? 10 : v);
+
+    /// <summary>Кэп Чел. только сверху (0..10). Используется для статуса.</summary>
+    private static int ClampHumanityUpper(int v)
+        => v < 0 ? 0 : (v > 10 ? 10 : v);
+
+    /// <summary>Кэп Воли сверху (1..10).</summary>
+    private static int ClampWillpower(int v)
+        => v < 1 ? 1 : (v > 10 ? 10 : v);
+
+    /// <summary>Кэп Воли только сверху (0..10). Используется для статуса.</summary>
+    private static int ClampWillpowerUpper(int v)
+        => v < 0 ? 0 : (v > 10 ? 10 : v);
 
     /// <summary>Шкала здоровья загружена и готова к использованию (V20: 7 ячеек).</summary>
     public static void EnsureHealth(VampireCharacter draft)
@@ -108,5 +147,52 @@ public static partial class VampireFinishingResolver
         var cou = VampireAdvantagesResolver.GetVirtueValue(draft, VampireParameterCatalog.VirtueCourage);
         return $"{cou} (Смелость {cou})";
     }
+
+    /// <summary>
+    /// Состояние персонажа, зависящее от сырых значений Чел. и Воли
+    /// (без искусственного кэпа 1). V20 стр. 333-334: при Чел.=0 персонаж
+    /// перестаёт быть собой (NPC); при Воле=0 — безвольный.
+    /// </summary>
+    public enum CharacterStatus
+    {
+        /// <summary>Обычное состояние.</summary>
+        Normal,
+
+        /// <summary>Чел.=0 — окоченение (V20 стр. 334).</summary>
+        Withered,
+
+        /// <summary>Воля=0 — безвольный (по нашему решению, см. design).</summary>
+        Enervated,
+
+        /// <summary>Оба значения = 0 — финальное состояние.</summary>
+        Shattered,
+    }
+
+    /// <summary>
+    /// Вычислить статус персонажа на основе сырых значений Чел. и Воли
+    /// (без искусственного кэпа 1).
+    /// </summary>
+    public static CharacterStatus ComputeStatus(VampireCharacter draft)
+    {
+        if (draft == null) return CharacterStatus.Normal;
+        var h = ComputeRawHumanity(draft);
+        var w = ComputeRawWillpower(draft);
+        if (h <= 0 && w <= 0) return CharacterStatus.Shattered;
+        if (h <= 0) return CharacterStatus.Withered;
+        if (w <= 0) return CharacterStatus.Enervated;
+        return CharacterStatus.Normal;
+    }
+
+    /// <summary>
+    /// Текстовое описание статуса (для UI/embed).
+    /// </summary>
+    public static string DescribeStatus(CharacterStatus status) => status switch
+    {
+        CharacterStatus.Normal => "Норма",
+        CharacterStatus.Withered => "⚠ Окоченение (Чел.=0)",
+        CharacterStatus.Enervated => "⚠ Безвольный (Воля=0)",
+        CharacterStatus.Shattered => "🕱 Полное опустошение (Чел.=0 и Воля=0)",
+        _ => "",
+    };
 }
 

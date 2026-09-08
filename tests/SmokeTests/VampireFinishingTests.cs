@@ -400,6 +400,94 @@ public class VampireFinishingTests
         Assert.Equal(4, VampireFinishingResolver.ComputeHumanity(d));
     }
 
+        // ─── Raw / Status (аудит п. 3) ───────────────────────────────────────────
+
+        [Fact]
+        public void ComputeHumanity_HasFloorOf1_BackwardsCompatibility()
+        {
+            // Защитный кэп остаётся (для обратной совместимости с моральным кодексом).
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 1, selfControl: 1, courage: 1);
+            d.HumanityBonus = -10;
+            Assert.Equal(1, VampireFinishingResolver.ComputeHumanity(d));
+        }
+
+        [Fact]
+        public void ComputeRawHumanity_NoFloor_AllowsZero()
+        {
+            // Virtue не может быть меньше MinVirtue=1, но HumanityBonus может свести к 0.
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 1, selfControl: 1, courage: 1);
+            d.HumanityBonus = -2; // 1+1-2 = 0 — минимальная Чел. по V20.
+            Assert.Equal(0, VampireFinishingResolver.ComputeRawHumanity(d));
+
+            // Отрицательный HumanityBonus не приводит к отрицательной Чел.:
+            // V20 не определяет значений ниже 0 (это уже полное небытие по лору).
+            d.HumanityBonus = -10;
+            Assert.Equal(0, VampireFinishingResolver.ComputeRawHumanity(d));
+        }
+
+        [Fact]
+        public void ComputeRawWillpower_NoFloor_AllowsZero()
+        {
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 1, selfControl: 1, courage: 1);
+            d.WillpowerBonus = -1; // 1-1=0
+            Assert.Equal(0, VampireFinishingResolver.ComputeRawWillpower(d));
+
+            d.WillpowerBonus = -7;
+            Assert.Equal(0, VampireFinishingResolver.ComputeRawWillpower(d));
+        }
+
+        [Fact]
+        public void ComputeStatus_Normal_WhenBothPositive()
+        {
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 3, selfControl: 3, courage: 3);
+            Assert.Equal(VampireFinishingResolver.CharacterStatus.Normal,
+                VampireFinishingResolver.ComputeStatus(d));
+        }
+
+        [Fact]
+        public void ComputeStatus_Withered_WhenHumanityZeroOrBelow()
+        {
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 1, selfControl: 1, courage: 5);
+            d.HumanityBonus = -2; // 1+1-2 = 0
+            Assert.Equal(VampireFinishingResolver.CharacterStatus.Withered,
+                VampireFinishingResolver.ComputeStatus(d));
+        }
+
+        [Fact]
+        public void ComputeStatus_Enervated_WhenWillpowerZeroOrBelow()
+        {
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 5, selfControl: 5, courage: 1);
+            d.WillpowerBonus = -1; // 1-1 = 0
+            Assert.Equal(VampireFinishingResolver.CharacterStatus.Enervated,
+                VampireFinishingResolver.ComputeStatus(d));
+        }
+
+        [Fact]
+        public void ComputeStatus_Shattered_WhenBothZero()
+        {
+            var d = NewDraft();
+            SeedVirtues(d, conscience: 1, selfControl: 1, courage: 1);
+            d.HumanityBonus = -2;  // 1+1-2=0
+            d.WillpowerBonus = -1; // 1-1=0
+            Assert.Equal(VampireFinishingResolver.CharacterStatus.Shattered,
+                VampireFinishingResolver.ComputeStatus(d));
+        }
+
+        [Fact]
+        public void DescribeStatus_IncludesWarningGlyph()
+        {
+            var n = VampireFinishingResolver.DescribeStatus(VampireFinishingResolver.CharacterStatus.Normal);
+            Assert.Equal("Норма", n);
+            Assert.Contains("Окоченение", VampireFinishingResolver.DescribeStatus(VampireFinishingResolver.CharacterStatus.Withered));
+            Assert.Contains("Безвольный", VampireFinishingResolver.DescribeStatus(VampireFinishingResolver.CharacterStatus.Enervated));
+        }
+
     [Fact]
     public void AllocateHumanity_AfterVirtueSpend_BothCount()
     {
