@@ -6366,7 +6366,7 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                     //   • VampireRollSlashModule      — /vampire_roll.
                     //   • VampireStartSlashModule     — /vampire_start.
                     // Если ни один модуль не заявил эту команду — сообщаем пользователю.
-                    case _:
+                    default:
                         {
                             var module = SlashModuleRegistry.FindByCommand(name);
                             if (module is not null)
