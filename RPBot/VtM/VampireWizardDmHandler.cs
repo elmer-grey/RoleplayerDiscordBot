@@ -164,7 +164,7 @@ public static class VampireWizardDmHandler
                         /// </summary>
     public static string BuildCancelledMessage() =>
         "❌ Создание персонажа отменено. Все введённые данные сброшены. " +
-        "Чтобы начать заново — вызовите `/vampire action:create` в канале.";
+        "Чтобы начать заново — вызовите `/vampire_create` в канале.";
 
         /// <summary>
         /// Шаг 4.1 «Дисциплины» — рендер/правка DM-сообщения.

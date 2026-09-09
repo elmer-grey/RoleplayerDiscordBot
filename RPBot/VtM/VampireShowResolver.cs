@@ -3,7 +3,7 @@ using System;
 namespace RPBot.VtM;
 
 /// <summary>
-/// Резолвер для команды <c>/vampire show</c>. Чистая логика без Discord-зависимостей:
+/// Резолвер для команды <c>/vampire_show</c>. Чистая логика без Discord-зависимостей:
 /// на входе данные slash-опций и текущее состояние хранилища — на выходе намерение показать
 /// конкретного персонажа (или диагностическая ошибка).
 /// </summary>
@@ -84,7 +84,7 @@ public static class VampireShowResolver
                 var who = string.IsNullOrWhiteSpace(mention) ? "этот пользователь" : mention;
                         var hint = string.IsNullOrWhiteSpace(mention) ? "user" : mention;
                         return new Decision(null, Failure.UserHasNoCharacter,
-                            $"У {who} нет привязанного персонажа. Сначала `/vampire bind <имя> {hint}`.");
+                            $"У {who} нет привязанного персонажа. Сначала `/vampire_bind <имя> {hint}`.");
                     }
                     return new Decision(byUser, Failure.None, "");
                 }
@@ -115,12 +115,12 @@ public static class VampireShowResolver
             {
                 // Персонаж не привязан — @user в этом режиме бесполезен.
                 return new Decision(null, Failure.UserMismatch,
-                    $"«{name}» ещё не привязан к игроку. Сначала `/vampire bind {name}`.");
+                    $"«{name}» ещё не привязан к игроку. Сначала `/vampire_bind {name}`.");
             }
             if (byName.PlayerId != userId!.Value)
             {
                 return new Decision(null, Failure.UserMismatch,
-                    $"«{name}» привязан к другому игроку. Сначала `/vampire unbind {name}`.");
+                    $"«{name}» привязан к другому игроку. Сначала `/vampire_unbind {name}`.");
             }
         }
 

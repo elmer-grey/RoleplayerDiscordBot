@@ -13,8 +13,8 @@ namespace RPBot;
 /// <remarks>
 /// <para>Сейчас обрабатываются команды привязки плееров:</para>
 /// <list type="bullet">
-/// <item><c>/vampire bind &lt;name&gt; [user]</c> — назначить плеера персонажу (ST only).</item>
-/// <item><c>/vampire unbind &lt;name&gt;</c> — снять привязку (ST only).</item>
+/// <item><c>/vampire_bind &lt;name&gt; [user]</c> — назначить плеера персонажу (ST only).</item>
+/// <item><c>/vampire_unbind &lt;name&gt;</c> — снять привязку (ST only).</item>
 /// </list>
 /// <para>ST-only права задаются на уровне регистрации команды
 /// (<see cref="SlashCommandProperties.DefaultMemberPermissions"/>).</para>
@@ -35,19 +35,19 @@ public sealed class VampireCommands
     private readonly VampireSheetButtonHandler _sheet = new();
 
     /// <summary>
-    /// <c>/vampire bind &lt;name&gt; [user]</c>. Только рассказчик.
+    /// <c>/vampire_bind &lt;name&gt; [user]</c>. Только рассказчик.
     /// </summary>
     public Task HandleBindAsync(SocketSlashCommand command) => _characters.HandleBindAsync(command);
 
     /// <summary>
-    /// <c>/vampire unbind &lt;name&gt;</c>. Только рассказчик.
+    /// <c>/vampire_unbind &lt;name&gt;</c>. Только рассказчик.
     /// </summary>
     public Task HandleUnbindAsync(SocketSlashCommand command) => _characters.HandleUnbindAsync(command);
 
     // ── Хелперы ─────────────────────────────────────────────────────────
 
     /// <summary>
-    /// <c>/vampire show &lt;name|user&gt; [where]</c>. Доступно всем, кто видит команду.
+    /// <c>/vampire_show &lt;name|user&gt; [where]</c>. Доступно всем, кто видит команду.
     /// DM (default): лист с кнопками уходит получателю в личку; в канале — ephemeral «отправлено».
     /// Public: лист публикуется embed'ом в текущем канале (без кнопок).
     /// </summary>
@@ -58,7 +58,7 @@ public sealed class VampireCommands
     // ── Создание персонажа (визард, шаг 1) ─────────────────────────────
 
     /// <summary>
-    /// <c>/vampire create</c>. Доступно всем — игрок создаёт своего персонажа
+    /// <c>/vampire_create</c>. Доступно всем — игрок создаёт своего персонажа
     /// (или ST — NPC).
     /// </summary>
     /// <remarks>
@@ -74,7 +74,7 @@ public sealed class VampireCommands
     public Task HandleCreateAsync(SocketSlashCommand command) => _characters.HandleCreateAsync(command);
 
     /// <summary>
-    /// /vampire diablerie @attacker @victim gen:N hum:M [success:true|false]
+    /// /vampire_diablerie @attacker @victim gen:N hum:M [success:true|false]
     /// Справочный расчёт итогов диаблери по правилам V20.
     /// Не меняет листы — это решение рассказчика, который применяет результат вручную.
     /// </summary>
@@ -127,7 +127,7 @@ public sealed class VampireCommands
         {
             await component.RespondAsync(
                 "❌ Сессия создания персонажа не найдена. " +
-                "Запустите `/vampire action:create` в канале заново.",
+                "Запустите `/vampire_create` в канале заново.",
                 ephemeral: true);
             return;
         }
@@ -658,7 +658,7 @@ public sealed class VampireCommands
                         {
                             await component.RespondAsync(
                                 "❌ Сессия создания персонажа не найдена. " +
-                                "Запустите `/vampire action:create` в канале заново.",
+                                "Запустите `/vampire_create` в канале заново.",
                                 ephemeral: true);
                             return;
                         }

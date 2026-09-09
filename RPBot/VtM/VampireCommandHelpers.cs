@@ -70,7 +70,7 @@ internal static class VampireCommandHelpers
                 break;
             case VampireStorage.BindResultKind.AlreadyBoundToOther:
                 eb.Title = "⚠️ Другой игрок";
-                eb.Description = $"«{result.Character?.CharacterName}» уже привязан к <@{result.CurrentPlayerId}>.\nСначала выполните `/vampire unbind {result.Character?.CharacterName}`.";
+                eb.Description = $"«{result.Character?.CharacterName}» уже привязан к <@{result.CurrentPlayerId}>.\nСначала выполните `/vampire_unbind {result.Character?.CharacterName}`.";
                 eb.Color = Color.Orange;
                 break;
             case VampireStorage.BindResultKind.NotFound:

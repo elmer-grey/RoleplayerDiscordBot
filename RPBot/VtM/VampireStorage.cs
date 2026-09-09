@@ -257,7 +257,7 @@ namespace RPBot.VtM
                     if (string.IsNullOrEmpty(draft.CharacterName))
                     {
                         // На Этапе 1 имя персонажа не запрашивается отдельно — берём как PlayerName,
-                        // чтобы лист был виден в /vampire show. На Этапе 3 будет отдельное поле.
+                        // чтобы лист был виден в /vampire_show. На Этапе 3 будет отдельное поле.
                         draft.CharacterName = draft.PlayerName;
                     }
                     return UpsertAsync(draft, ct);
@@ -364,7 +364,7 @@ namespace RPBot.VtM
                         {
                             return new BindResult(
                                 BindResultKind.AlreadyBoundToOther, ch, ch.PlayerId,
-                                $"уже привязан к <@{ch.PlayerId}>; сначала /vampire unbind");
+                                $"уже привязан к <@{ch.PlayerId}>; сначала /vampire_unbind");
                         }
 
                         // Снимаем старый индекс, если был.

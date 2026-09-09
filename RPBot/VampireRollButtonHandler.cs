@@ -142,7 +142,7 @@ public sealed class VampireRollButtonHandler
         {
             await component.RespondAsync(
                 "Переброс за волю требует активного чарника на сервере. " +
-                "Сначала используй /vampire bind в канале.",
+                "Сначала используй /vampire_bind в канале.",
                 ephemeral: true);
             return true;
         }
@@ -151,7 +151,7 @@ public sealed class VampireRollButtonHandler
         if (active == null)
         {
             await component.RespondAsync(
-                "Не нашёл активного персонажа. Используй /vampire bind на сервере.",
+                "Не нашёл активного персонажа. Используй /vampire_bind на сервере.",
                 ephemeral: true);
             return true;
         }

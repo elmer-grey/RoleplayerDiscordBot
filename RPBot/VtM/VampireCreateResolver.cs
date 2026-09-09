@@ -71,7 +71,7 @@ public static class VampireCreateResolver
             case "clan":
                 if (string.IsNullOrEmpty(value))
                     return Fail(draft, VampireCreateConceptFailure.ClanRequired,
-                        "Укажите клан (см. /vampire — там подсказка со списком).");
+                        "Укажите клан (см. /vampire_create — там подсказка со списком).");
                 if (!VampireParameterCatalog.IsValidClan(value))
                     return Fail(draft, VampireCreateConceptFailure.ClanInvalid,
                         $"«{value}» — не валидный клан. Допустимые: {string.Join(", ", VampireParameterCatalog.Clans)}.");

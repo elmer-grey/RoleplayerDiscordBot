@@ -77,7 +77,7 @@ public class VampireAbilitiesDemoTest : IDisposable
     [Fact]
     public void Demo_FullWalkthrough()
     {
-        // 1) Игрок ввёл /vampire action:create и прошёл Шаг 1.
+        // 1) Игрок ввёл /vampire_create и прошёл Шаг 1.
         var draft = new VampireCharacter
         {
             CharacterId = Guid.NewGuid(),

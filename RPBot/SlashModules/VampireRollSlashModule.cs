@@ -156,7 +156,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
         {
             await command.RespondAsync(
                 "Бросок по листу работает только на сервере и требует активного чарника. " +
-                "Сначала используй /vampire bind в канале.",
+                "Сначала используй /vampire_bind в канале.",
                 ephemeral: true);
             return true;
         }
@@ -165,7 +165,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
         if (active == null)
         {
             await command.RespondAsync(
-                "Не нашёл активного персонажа. Используй /vampire bind на сервере.",
+                "Не нашёл активного персонажа. Используй /vampire_bind на сервере.",
                 ephemeral: true);
             return true;
         }

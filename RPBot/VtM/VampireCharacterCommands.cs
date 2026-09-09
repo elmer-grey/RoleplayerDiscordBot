@@ -20,7 +20,7 @@ namespace RPBot;
 /// </summary>
 internal sealed class VampireCharacterCommands
 {
-    /// <summary><c>/vampire bind</c>.</summary>
+    /// <summary><c>/vampire_bind</c>.</summary>
     public async Task HandleBindAsync(SocketSlashCommand command)
     {
         var guildId = command.GuildId;
@@ -57,7 +57,7 @@ internal sealed class VampireCharacterCommands
             ephemeral: true);
     }
 
-    /// <summary><c>/vampire unbind</c>.</summary>
+    /// <summary><c>/vampire_unbind</c>.</summary>
     public async Task HandleUnbindAsync(SocketSlashCommand command)
     {
         var guildId = command.GuildId;
@@ -92,7 +92,7 @@ internal sealed class VampireCharacterCommands
         await command.RespondAsync(text, ephemeral: true);
     }
 
-    /// <summary><c>/vampire show</c> (legacy — внутри <c>/vampire</c>).</summary>
+    /// <summary><c>/vampire_show</c> (DM-вариант; top-level <c>/vampire_show</c> показывает в канале).</summary>
     public async Task HandleShowAsync(SocketSlashCommand command)
     {
         var guildId = command.GuildId;
@@ -210,7 +210,7 @@ internal sealed class VampireCharacterCommands
         await SendSheetPublicAsync(command, decision.Character!, displayIndex, guildId.Value);
     }
 
-    /// <summary><c>/vampire create</c> — открыть визард в ЛС.</summary>
+    /// <summary><c>/vampire_create</c> — открыть визард в ЛС.</summary>
     public async Task HandleCreateAsync(SocketSlashCommand command)
     {
         var guildId = command.GuildId;

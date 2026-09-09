@@ -1287,7 +1287,6 @@ private void SaveServerConfigs()
             _vampireCommands ??= new VampireCommands();
             _vampireRollButtonHandler ??= new VampireRollButtonHandler();
                     _vampireRollRegistry ??= new VampireRollRegistry();
-                    SlashModuleRegistry.Register(new VampireSlashModule(_vampireCommands));
                     SlashModuleRegistry.Register(new VampireTopLevelSlashModule(_vampireCommands));
                     SlashModuleRegistry.Register(new VampireCombatSlashModule());
                     SlashModuleRegistry.Register(new VampireRollSlashModule());
@@ -4871,7 +4870,7 @@ await Task.CompletedTask;
                         if (session == null)
                         {
                             await component.RespondAsync(
-                                "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                 ephemeral: true);
                             return;
                         }
@@ -4962,7 +4961,7 @@ await Task.CompletedTask;
                                         if (session == null)
                                         {
                                             await component.RespondAsync(
-                                                "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                 ephemeral: true);
                                             return;
                                         }
@@ -5032,7 +5031,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5122,7 +5121,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5182,7 +5181,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5260,7 +5259,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5361,7 +5360,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5439,7 +5438,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }
@@ -5556,7 +5555,7 @@ await Task.CompletedTask;
                                                             if (session == null)
                                                             {
                                                                 await component.RespondAsync(
-                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire action:create` в канале заново.",
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
                                                                     ephemeral: true);
                                                                 return;
                                                             }

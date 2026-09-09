@@ -6,22 +6,23 @@ using Discord.WebSocket;
 namespace RPBot.SlashModules;
 
 /// <summary>
-/// Набор из 4 top-level slash-команд для работы с персонажами VtM:
-/// <c>/vampire_create</c>, <c>/vampire_bind</c>, <c>/vampire_send</c>, <c>/vampire_show</c>.
+/// Набор из 6 top-level slash-команд для работы с персонажами VtM:
+/// <c>/vampire_create</c>, <c>/vampire_bind</c>, <c>/vampire_unbind</c>,
+/// <c>/vampire_send</c>, <c>/vampire_show</c>, <c>/vampire_diablerie</c>.
 /// Делегируют обработку в <see cref="VampireCommands"/>.
 ///
-/// <para>Эти команды — это разнесённые по top-level (без перегруза одной
-/// <c>/vampire action:*</c>) версии под-команд, которые раньше жили под
-/// единой <c>/vampire</c>. Оставлены оба набора для удобства:
-/// top-level проще в автокомплите Discord и не превращаются в «выпадающее меню».</para>
+/// <para>Все эти команды — top-level; раньше часть из них жила под
+/// единой <c>/vampire action:*</c> (этот модуль был удалён).</para>
 /// </summary>
 /// <remarks>
 /// <para>Права доступа:</para>
 /// <list type="bullet">
 ///   <item><c>/vampire_create</c> — доступно всем (визард идёт в ЛС инициатора).</item>
-///   <item><c>/vampire_bind</c> — только ST (проверяется внутри <c>HandleBindAsync</c>).</item>
-///   <item><c>/vampire_send</c> — только ST (проверяется внутри <c>HandleSendAsync</c>).</item>
+///   <item><c>/vampire_bind</c> — только ST.</item>
+///   <item><c>/vampire_unbind</c> — только ST.</item>
+///   <item><c>/vampire_send</c> — только ST.</item>
 ///   <item><c>/vampire_show</c> — доступно всем (публичный embed).</item>
+///   <item><c>/vampire_diablerie</c> — справочный расчёт (доступно всем).</item>
 /// </list>
 /// </remarks>
 public sealed class VampireTopLevelSlashModule : ISlashCommandModule
@@ -42,8 +43,10 @@ public sealed class VampireTopLevelSlashModule : ISlashCommandModule
     {
         "vampire_create",
         "vampire_bind",
+        "vampire_unbind",
         "vampire_send",
         "vampire_show",
+        "vampire_diablerie",
     };
 
     public IReadOnlyList<SlashCommandBuilder> Register()
@@ -71,6 +74,17 @@ public sealed class VampireTopLevelSlashModule : ISlashCommandModule
                     .WithType(ApplicationCommandOptionType.User)
                     .WithRequired(false)),
 
+            // /vampire_unbind <name> — снять привязку (ST only).
+            new SlashCommandBuilder()
+                .WithName("vampire_unbind")
+                .WithDescription("Отвязать персонажа VtM от игрока (только для рассказчика).")
+                .WithDefaultMemberPermissions(StPermission)
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("name")
+                    .WithDescription("Имя персонажа (или часть имени для поиска).")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .WithRequired(true)),
+
             // /vampire_send <name> [user] — отправить лист с кнопками в ЛС игроку (ST only).
             new SlashCommandBuilder()
                 .WithName("vampire_send")
@@ -96,6 +110,39 @@ public sealed class VampireTopLevelSlashModule : ISlashCommandModule
                     .WithDescription("Имя персонажа (или часть имени для поиска).")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(true)),
+
+            // /vampire_diablerie @attacker @victim gen:N hum:M [success:true|false]
+            // Справочный расчёт итогов диаблери (V20, стр. 310-311).
+            new SlashCommandBuilder()
+                .WithName("vampire_diablerie")
+                .WithDescription("Справочный расчёт итогов диаблери (V20, стр. 310-311).")
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("attacker")
+                    .WithDescription("Кто совершает диаблери.")
+                    .WithType(ApplicationCommandOptionType.User)
+                    .WithRequired(true))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("victim")
+                    .WithDescription("Жертва диаблери.")
+                    .WithType(ApplicationCommandOptionType.User)
+                    .WithRequired(true))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("gen")
+                    .WithDescription("Поколение атакующего (3..15).")
+                    .WithType(ApplicationCommandOptionType.Integer)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("hum")
+                    .WithDescription("Человечность или PathRating атакующего (1..10).")
+                    .WithType(ApplicationCommandOptionType.Integer)
+                    .WithRequired(false))
+                .AddOption(new SlashCommandOptionBuilder()
+                    .WithName("success")
+                    .WithDescription("Диаблери удалось? По умолчанию — true.")
+                    .WithType(ApplicationCommandOptionType.String)
+                    .AddChoice("true", "true")
+                    .AddChoice("false", "false")
+                    .WithRequired(false)),
         };
     }
 
@@ -109,11 +156,17 @@ public sealed class VampireTopLevelSlashModule : ISlashCommandModule
             case "vampire_bind":
                 await _commands.HandleBindAsync(command);
                 return true;
+            case "vampire_unbind":
+                await _commands.HandleUnbindAsync(command);
+                return true;
             case "vampire_send":
                 await _commands.HandleSendAsync(command);
                 return true;
             case "vampire_show":
                 await _commands.HandleShowPublicAsync(command);
+                return true;
+            case "vampire_diablerie":
+                await _commands.HandleDiablerieAsync(command);
                 return true;
             default:
                 return false;
