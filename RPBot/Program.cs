@@ -6355,37 +6355,30 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                         else
                             await command.RespondAsync("❌ Музыкальный модуль отключён (Music.Enabled = false).", ephemeral: true);
                         break;
-                                        case "vampire":
-                                            {
-                                                // Поиск модуля через реестр; сегодня только VampireSlashModule,
-                                                // но архитектура уже модульная.
-                                                var module = SlashModuleRegistry.FindByCommand("vampire");
-                                                if (module is not null)
-                                                {
-                                                    await module.DispatchAsync(command);
-                                                }
-                                                else
-                                                {
-                                                    await command.RespondAsync("❌ VtM-модуль не зарегистрирован.", ephemeral: true);
-                                                }
-                                            }
-                                            break;
-                                        case "vampire_roll":
-                                            {
-                                                var module = SlashModuleRegistry.FindByCommand("vampire_roll");
-                                                if (module is not null)
-                                                {
-                                                    await module.DispatchAsync(command);
-                                                }
-                                                else
-                                                {
-                                                    await command.RespondAsync("❌ /vampire_roll — модуль не зарегистрирован.", ephemeral: true);
-                                                }
-                                            }
-                                            break;
-                                        default:
-                        await command.RespondAsync("Команда не распознана.");
-                        break;
+                    // Catch-all: команды, не прописанные явно выше (например, любые /vampire_*),
+                    // обслуживаются через реестр SlashModuleRegistry. Сегодня там:
+                    //   • VampireTopLevelSlashModule  — /vampire_create, /vampire_bind,
+                    //                                  /vampire_unbind, /vampire_send,
+                    //                                  /vampire_show, /vampire_diablerie.
+                    //   • VampireCombatSlashModule    — /vampire_damage, /vampire_combat_help,
+                    //                                  /vampire_maneuver, /vampire_weapon,
+                    //                                  /vampire_armor.
+                    //   • VampireRollSlashModule      — /vampire_roll.
+                    //   • VampireStartSlashModule     — /vampire_start.
+                    // Если ни один модуль не заявил эту команду — сообщаем пользователю.
+                    case _:
+                        {
+                            var module = SlashModuleRegistry.FindByCommand(name);
+                            if (module is not null)
+                            {
+                                await module.DispatchAsync(command);
+                            }
+                            else
+                            {
+                                await command.RespondAsync("Команда не распознана.", ephemeral: true);
+                            }
+                            break;
+                        }
                 }
             }
             catch (Exception ex)
