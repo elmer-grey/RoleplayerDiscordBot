@@ -37,8 +37,8 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         builder.Add(new SlashCommandBuilder()
             .WithName("vampire_damage")
             .WithDescription(
-                "Рассчитать пул урона по формуле V20 (стр. 301): база + max(0, успехи−1). " +
-                "Можно указать манёвр — бот сам подставит базу и тип урона.")
+                "Рассчитать урон V20: база + max(0, успехи−1). " +
+                "Манёвр подставит базу и тип автоматически.")
             .AddOption(new SlashCommandOptionBuilder()
                 .WithName("attack")
                 .WithDescription("Успехи проверки атаки (≥0).")
@@ -47,16 +47,16 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
             .AddOption(new SlashCommandOptionBuilder()
                 .WithName("манёвр")
                 .WithDescription(
-                    "Манёвр из справочника V20 (напр. «Укус», «Клинч», «Длинная очередь»). " +
-                    "Бот подставит базу и тип урона. Нельзя совмещать с base/damage_type.")
+                    "Манёвр V20 (напр. «Укус», «Клинч»). " +
+                    "Бот подставит базу и тип; нельзя с base/damage_type.")
                 .WithType(ApplicationCommandOptionType.String)
                 .WithRequired(false)
                 .WithAutocomplete(true))
             .AddOption(new SlashCommandOptionBuilder()
                 .WithName("оружие")
                 .WithDescription(
-                    "Оружие (нужно, если манёвр с формулой «Оружие» — напр. «Длинная очередь»). " +
-                    "Бот подставит фиксированную базу и тип.")
+                    "Оружие для манёвров с формулой «Оружие». " +
+                    "Бот подставит базу и тип.")
                 .WithType(ApplicationCommandOptionType.String)
                 .WithRequired(false)
                 .WithAutocomplete(true))
