@@ -476,11 +476,19 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         return false;
     }
 
-    /// <summary>Маппинг <see cref="DamageType"/> → ключ команды /vampire_damage.</summary>
+    /// <summary>
+    /// Маппинг <see cref="DamageType"/> → ключ команды <c>/vampire_damage</c>.
+    /// </summary>
+    /// <remarks>
+    /// В <c>/vampire_damage</c> ключи: <c>light</c> = лёгкие (/), <c>deadly</c> = тяжёлые (X),
+    /// <c>aggravated</c> = губительные (Ж). Внутренний <see cref="DamageType"/>
+    /// совпадает с этим разбиением по сути, но имена в нём: Bashing / Lethal / Aggravated.
+    /// </remarks>
     private static string MapDamageTypeToKey(DamageType t) => t switch
     {
-        DamageType.Lethal => "aggravated",
-        DamageType.Aggravated => "deadly",
+        DamageType.Bashing => "light",
+        DamageType.Lethal => "deadly",
+        DamageType.Aggravated => "aggravated",
         _ => "light",
     };
 

@@ -1366,6 +1366,25 @@ private void SaveServerConfigs()
         }
 
         /// <summary>
+        /// Планирует debounced-пересинхронизацию для конкретного чарника
+        /// (используется после модалок, в которых известен <c>characterId</c> —
+        /// например, модалка опыта).
+        /// </summary>
+        private async Task QueueVampireDebounceForCharacterAsync(
+            ulong guildId, Guid characterId, ulong userId)
+        {
+            try
+            {
+                var debouncer = await GetVampireChangeDebouncerAsync(guildId).ConfigureAwait(false);
+                debouncer?.Request(characterId, userId);
+            }
+            catch (Exception ex)
+            {
+                try { BotLogger.Warn(LogCategory.Discord, $"[vtm-debounce-modal] {ex.GetType().Name}: {ex.Message}"); } catch { }
+            }
+        }
+
+        /// <summary>
         /// Возвращает (или лениво создаёт через <see cref="VampireSyncCache"/>) debouncer
         /// синхронизации VtM-сообщений для конкретного сервера. Фабрика собирает
         /// <see cref="VampireSyncService"/> с реальным <see cref="DiscordSocketMessageAccessor"/>,
@@ -4266,6 +4285,15 @@ await Task.CompletedTask;
                 if (parts[0] == VampireExperienceModal.Prefix)
                 {
                     await _vampireCommands!.HandleExperienceModalAsync(modal);
+                    // Перепланировать debounce для конкретного чарника модалки —
+                    // чтобы лист/блоки в DM обновились после начисления/траты.
+                    if (modal.GuildId.HasValue &&
+                        VampireExperienceModal.TryParse(modal.Data.CustomId, out _, out var modalCharId) &&
+                        modalCharId != Guid.Empty)
+                    {
+                        await QueueVampireDebounceForCharacterAsync(
+                            modal.GuildId.Value, modalCharId, modal.User.Id);
+                    }
                     return;
                 }
 
