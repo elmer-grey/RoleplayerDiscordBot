@@ -45,37 +45,33 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
             new SlashCommandBuilder()
                 .WithName("vampire_roll")
                 .WithDescription(
-                    "Бросить кубы VtM: выбери характеристику и (опц.) навык и дисциплину. " +
-                    "Под сообщением появятся кнопки «Переброс за волю», «Повторить», «Готово».")
+                    "Бросить кубы VtM: характеристика + навык, штраф здоровья учитывается.")
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("характеристика")
                     .WithDescription(
-                        "Одна из характеристик (Сила / Ловкость / Выносливость / Обаяние / " +
-                        "Манипуляция / Привлекательность / Восприятие / Интеллект / Смекалка).")
+                        "Сила, Ловкость, Выносливость, Обаяние, Манипуляция, " +
+                        "Восприятие, Интеллект или Смекалка.")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(true)
                     .WithAutocomplete(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("навык")
                     .WithDescription(
-                        "Способность из листа (таланты / навыки / знания). " +
-                        "Без навыка — пул = одна характеристика, сложность +1.")
+                        "Способность из листа. Без навыка — пул = одна характеристика.")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(false)
                     .WithAutocomplete(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("дисциплина")
                     .WithDescription(
-                        "Дисциплина, увеличивающая пул (например, Стремительность, Стойкость). " +
-                        "Берётся уровень из листа персонажа.")
+                        "Дисциплина, увеличивающая пул. Уровень берётся из листа.")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(false)
                     .WithAutocomplete(true))
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("бонус")
                     .WithDescription(
-                        "Дополнительные / штрафные d10 (например, +2 за благоприятные условия, " +
-                        "-1 за травму). По умолчанию 0.")
+                        "Доп. d10 (например, +2 благоприятные, -1 травма). По умолчанию 0.")
                     .WithType(ApplicationCommandOptionType.Integer)
                     .WithRequired(false)
                     .AddChoice("-5", -5L)
@@ -110,9 +106,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("специализация")
                     .WithDescription(
-                        "Специализация ad-hoc для этого броска (свободный текст). " +
-                        "Если не указана — используется специализация из листа персонажа. " +
-                        "Специализация удваивает десятки: каждая выпавшая 10 = 2 успеха.")
+                        "Специализация ad-hoc (свободный текст). 10 = 2 успеха.")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(false))
         };
