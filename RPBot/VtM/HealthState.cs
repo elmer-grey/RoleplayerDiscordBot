@@ -27,17 +27,26 @@ public enum CellState
 /// Шкала здоровья VtM-персонажа с правилами заполнения.
 /// </summary>
 /// <remarks>
-/// <para>По правилам V20 (стр. 263) шкала фиксирована: 7 ячеек для всех персонажей
-/// (Bruised / Hurt / Injured / Wounded / Mauled / Crippled / Incapacitated).</para>
-/// <para>Штрафы по позиции последней заполненной ячейки (X или A):
+/// <para>Шкала фиксирована: 7 ячеек (V20 стр. 263). Направление:
+/// <b>яч.0 = «Помят» (самый лёгкий) сверху</b>, яч.6 = «Небоеспособен» (самый тяжёлый) снизу.</para>
+/// <para>Штрафы по строкам таблицы V20 (стр. 92):
 /// 0 Помят → −0, 1 Легко ранен → −1, 2 Ранен → −1, 3 Серьёзно → −2,
-/// 4 Тяжело → −2, 5 Совсем плох → −5, 6 Небоеспособен → небоеспособен.</para>
-/// <para>Ранние издания Storyteller использовали формулу «Стойкость + 3 ячейки» —
-/// V20 от неё отказался.</para>
-/// <para>Ячейки: 0..N-1 сверху вниз.</para>
-/// <para>Ячейка 0 — буфер «Помят» (штрафа не даёт).</para>
-/// <para>Инвариант: <c>[A…A][X…X][/…/][S…S]</c> — никаких других расположений быть не может.</para>
-/// <para>Правила зафиксированы по 21 примеру пользователя (2026-09-02).</para>
+/// 4 Тяжело → −2, 5 Совсем плох → −5, 6 Небоеспособен → небоеспособен (без штрафа).</para>
+/// <para>Штраф для броска определяется так:
+/// <list type="bullet">
+///   <item>если в шкале есть хотя бы один A: penaltyIndex = maxIndex(X/A) + 1 (но не больше 6);</item>
+///   <item>иначе если есть X: penaltyIndex = maxIndex(X);</item>
+///   <item>иначе штраф = 0.</item>
+/// </list>
+/// Это правило покрывает случай «A смещает штраф вниз» (пример пользователя 2026-09-09).</para>
+/// <para>Каскад при получении агравированного:
+/// <list type="number">
+///   <item>targetIdx = первая не-A ячейка сверху (наименьший индекс с Empty/NonLethal/Lethal);</item>
+///   <item>идём от targetIdx+1 вниз: каждая занятая ячейка заменяется значением предыдущей,
+///         сдвиг останавливается на первой пустой;</item>
+///   <item>в targetIdx ставится A.</item>
+/// </list></para>
+/// <para>Инвариант после любых операций: <c>[A…A][X…X][/…/][S…S]</c>.</para>
 /// </remarks>
 public sealed class HealthState
 {
@@ -51,25 +60,27 @@ public sealed class HealthState
     [JsonPropertyName("cells")]
     public IReadOnlyList<CellState> Cells => _cells;
 
-    /// <summary>Штраф по позиции последнего X или A (ячейка 0 = 0).</summary>
+    /// <summary>
+    /// Позиция последней X или A ячейки (наибольший индекс). Прокси для штрафа,
+    /// но для целей отображения лучше использовать <see cref="TablePenalty"/>.
+    /// </summary>
     [JsonPropertyName("penalty")]
     public int Penalty { get; private set; }
 
     /// <summary>
-    /// Штраф по таблице V20 (стр. 92):
-    /// Помят → -0, Легко ранен → -1, Ранен → -1, Серьёзно → -2, Тяжело → -2,
-    /// Совсем плох → -5, Небоеспособен → без штрафа (рассказчик решает).
-    /// null — шкала пуста.
+    /// Штраф по таблице V20 (стр. 92) с учётом правила «A сдвигает штраф вниз».
+    /// null — массив ячеек пустой или null.
     /// </summary>
     /// <remarks>
-    /// Это «логический» штраф по строкам таблицы, а не арифметический по индексу ячейки.
-    /// Может отличаться от <see cref="Penalty"/> в редких случаях
-    /// (например, оголённый X поверх S без /).
-    /// <para>
-    /// ⚠️ Для «Небоеспособен» штраф численно = 0, но по правилам V20 (стр. 274)
-    /// персонаж не может совершать действия — проверяйте <see cref="IsIncapacitated"/>
-    /// в логике бросков, не только <see cref="TablePenalty"/>.
-    /// </para>
+    /// <para>Логика:</para>
+    /// <list type="bullet">
+    ///   <item>если есть A: penaltyIndex = maxIndex(X/A) + 1;</item>
+    ///   <item>иначе если есть X: penaltyIndex = maxIndex(X);</item>
+    ///   <item>иначе 0 (без X/A штраф 0).</item>
+    /// </list>
+    /// <para>Пример пользователя (2026-09-09): A в яч.0, X в яч.1,2 → penaltyIndex = 3 → −2.</para>
+    /// <para>⚠️ Для «Небоеспособен» штраф численно = 0, но по правилам V20 (стр. 274)
+    /// персонаж не может совершать действия — проверяйте <see cref="IsIncapacitated"/>.</para>
     /// </remarks>
     [JsonPropertyName("tablePenalty")]
     public int? TablePenalty { get; private set; }
@@ -105,7 +116,6 @@ public sealed class HealthState
         if (size < 1) throw new ArgumentOutOfRangeException(nameof(size), size, "минимум 1 ячейка");
         _cells = Enumerable.Repeat(CellState.Empty, size).ToArray();
         RecomputePenalty();
-        TablePenalty = ComputeTablePenalty(_cells);
     }
 
     /// <summary>Конструктор для десериализации.</summary>
@@ -118,7 +128,6 @@ public sealed class HealthState
             : Enumerable.Repeat(CellState.Empty, size).ToArray();
         NormalizeInvariant();
         RecomputePenalty();
-        TablePenalty = ComputeTablePenalty(_cells);
     }
 
     // ─── Публичные API ───────────────────────────────────────────────────
@@ -137,7 +146,10 @@ public sealed class HealthState
         for (int i = 0; i < amount; i++) StepLethal();
     }
 
-    /// <summary>Применить <paramref name="amount"/> единиц агравированного урона.</summary>
+    /// <summary>
+    /// Применить <paramref name="amount"/> единиц агравированного урона.
+    /// Реализует каскад по правилам пользователя (2026-09-09).
+    /// </summary>
     public void ApplyAggravated(int amount)
     {
         if (amount <= 0 || IsDestroyed || IsDead) return;
@@ -251,19 +263,60 @@ public sealed class HealthState
         RecomputePenalty();
     }
 
+    /// <summary>
+    /// Агравированный урон с каскадом (правила пользователя 2026-09-09, пересмотр):
+    ///   1. targetIdx = первая не-A ячейка сверху (Empty/NonLethal/Lethal).
+    ///   2. Снимок состояния.
+    ///   3. Сдвиг ячеек targetIdx+1..Length-1 вправо на 1 по снимку —
+    ///      каждая ячейка получает значение предыдущей. Последний элемент снимка
+    ///      (яч. Length-1) «выпадает» за шкалу и теряется.
+    ///   4. В targetIdx ставится A.
+    ///   5. Если вся шкала заполнена A — «Торпор»
+    ///      (IsIncapacitated = true, Penalty = 0, TablePenalty = 0).
+    ///   Примеры пользователя 2026-09-09:
+    ///     «X,X,X,/,/,S,S + A → A,X,X,X,/,/,S» (Пример 3 → Пример 4).
+    ///     «/,/,/,/,/,S,S + A → A,/,/,/,/,/,S» (Пример 5).
+    ///     «/,/,/,/,S,S,S + A → A,/,/,/,/,S,S» (A4).
+    /// </summary>
     private void StepAggravated()
     {
-        // Первая не-A ячейка сверху становится A.
+        if (_cells.All(c => c == CellState.Aggravated))
+        {
+            return;
+        }
+
+        // 1. targetIdx.
+        int targetIdx = -1;
         for (int i = 0; i < _cells.Length; i++)
         {
             if (_cells[i] != CellState.Aggravated)
             {
-                _cells[i] = CellState.Aggravated;
-                RecomputePenalty();
-                return;
+                targetIdx = i;
+                break;
             }
         }
-        // Всё уже A — игнор.
+        if (targetIdx < 0) return;
+
+        // 2. Снимок и сдвиг.
+        var snapshot = (CellState[])_cells.Clone();
+        for (int i = targetIdx + 1; i < _cells.Length; i++)
+        {
+            _cells[i] = snapshot[i - 1];
+        }
+
+        // 3. A в targetIdx.
+        _cells[targetIdx] = CellState.Aggravated;
+
+        // 4. Торпор.
+        if (_cells.All(c => c == CellState.Aggravated))
+        {
+            IsIncapacitated = true;
+            Penalty = 0;
+            TablePenalty = 0;
+            return;
+        }
+
+        RecomputePenalty();
     }
 
     private void StepHeal()
@@ -290,24 +343,6 @@ public sealed class HealthState
         // A и S не лечатся.
     }
 
-    private void StepAsNonLethal()
-    {
-        // Подшаг для расщепления летального: одна операция /.
-        int idxS = IndexOfFirst(CellState.Empty);
-        if (idxS >= 0)
-        {
-            _cells[idxS] = CellState.NonLethal;
-            return;
-        }
-        int idxSlash = IndexOfFirst(CellState.NonLethal);
-        if (idxSlash >= 0)
-        {
-            _cells[idxSlash] = CellState.Lethal;
-            return;
-        }
-        // Негде — игнор.
-    }
-
     private int IndexOfFirst(CellState state)
     {
         for (int i = 0; i < _cells.Length; i++)
@@ -315,60 +350,89 @@ public sealed class HealthState
         return -1;
     }
 
-    private bool HasAny(CellState state)
-    {
-        for (int i = 0; i < _cells.Length; i++)
-            if (_cells[i] == state) return true;
-        return false;
-    }
-
     private void RecomputePenalty()
     {
-            // Позиция последнего X или A сверху (ячейка 0 = 0 = штраф 0).
+        // Позиция последнего X или A (наибольший индекс).
         int last = -1;
+        bool hasA = false;
+        bool hasX = false;
         for (int i = 0; i < _cells.Length; i++)
         {
-                if (_cells[i] == CellState.Lethal || _cells[i] == CellState.Aggravated)
+            if (_cells[i] == CellState.Lethal)
+            {
                 last = i;
+                hasX = true;
+            }
+            else if (_cells[i] == CellState.Aggravated)
+            {
+                last = i;
+                hasA = true;
+            }
         }
         Penalty = Math.Max(0, last);
-        TablePenalty = ComputeTablePenalty(_cells);
         IsIncapacitated = last == _cells.Length - 1 && last >= 0;
+
+        // Штраф по правилам пользователя (2026-09-09).
+        if (hasA)
+        {
+            int penaltyIdx = Math.Min(last + 1, _cells.Length - 1);
+            TablePenalty = PenaltyByIndex(penaltyIdx);
+        }
+        else if (hasX)
+        {
+            TablePenalty = PenaltyByIndex(last);
+        }
+        else
+        {
+            // Без X/A — штраф 0 по таблице (не null: нелетальные не дают штрафа,
+            // но шкала не «пустая»).
+            TablePenalty = 0;
+        }
     }
 
     /// <summary>
-    /// Штраф по таблице V20 (стр. 92) на основе количества заполненных ячеек.
-    /// Правило: индекс последней заполненной ячейки N → штраф по таблице.
-    /// Пустая шкала → null.
+    /// Штраф по таблице V20 (стр. 92) на основе индекса ячейки.
+    /// </summary>
+    public static int PenaltyByIndex(int idx) => idx switch
+    {
+        0 => 0,
+        1 => -1,
+        2 => -1,
+        3 => -2,
+        4 => -2,
+        5 => -5,
+        _ => 0, // 6+ — небоеспособен, без штрафа на броски
+    };
+
+    /// <summary>
+    /// Статический расчёт штрафа по массиву ячеек (для тестов и обратной совместимости).
     /// </summary>
     public static int? ComputeTablePenalty(CellState[] cells)
     {
         if (cells is null || cells.Length == 0) return null;
         int last = -1;
+        bool hasA = false;
+        bool hasX = false;
         for (int i = 0; i < cells.Length; i++)
         {
-                if (cells[i] == CellState.Lethal || cells[i] == CellState.Aggravated)
+            if (cells[i] == CellState.Lethal)
+            {
                 last = i;
+                hasX = true;
+            }
+            else if (cells[i] == CellState.Aggravated)
+            {
+                last = i;
+                hasA = true;
+            }
         }
-            if (last < 0) return 0; // без летального/агравированного — штраф 0 по таблице
-        // V20 стр. 92:
-        // 0  Помят       -0
-        // 1  Легко ранен -1
-        // 2  Ранен       -1
-        // 3  Серьёзно    -2
-        // 4  Тяжело      -2
-        // 5  Совсем плох -5
-        // 6  Небоеспос.  -0
-        return last switch
+        if (hasA)
         {
-            0 => 0,
-            1 => -1,
-            2 => -1,
-            3 => -2,
-            4 => -2,
-            5 => -5,
-            _ => 0, // 6+ — небоеспособен, без штрафа на броски
-        };
+            int penaltyIdx = Math.Min(last + 1, cells.Length - 1);
+            return PenaltyByIndex(penaltyIdx);
+        }
+        if (hasX) return PenaltyByIndex(last);
+        return 0; // без X/A — штраф 0
     }
 
     /// <summary>
@@ -377,16 +441,10 @@ public sealed class HealthState
     /// </summary>
     private void NormalizeInvariant()
     {
-        // 1. Все A остаются на месте (они уже сверху).
-        // 2. Все X должны быть после A.
-        // 3. Все / после X.
-        // Если порядок нарушен — переразложить.
         int aCount = _cells.Count(c => c == CellState.Aggravated);
         int xCount = _cells.Count(c => c == CellState.Lethal);
         int slashCount = _cells.Count(c => c == CellState.NonLethal);
         int sCount = _cells.Count(c => c == CellState.Empty);
-        // Если суммы сходятся, порядок уже инвариантен (валидация).
-        // Если нет — пересобираем.
         int total = aCount + xCount + slashCount + sCount;
         if (total != _cells.Length)
         {

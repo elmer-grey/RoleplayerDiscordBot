@@ -270,9 +270,14 @@ public class HealthStateTests
     // ─── Агравированный ──────────────────────────────────────────────────
 
     [Fact]
-    public void A1_AXSlash4S_Plus1_BecomesAAAXSlash3S()
+    public void A1_AXSlash4S_Plus1_BecomesAAXSlash4S_DropLastEmpty()
     {
-        // AX////S + A → AA////S (1-я не-A — яч.1 X → A)
+        // AX////S (1 A + 1 X + 4 / + 1 S) + A:
+        //   snapshot=[A,X,/,/,/,/,S], targetIdx=1.
+        //   Сдвиг яч.2..6 по снимку: яч.2←X, яч.3←/, яч.4←/, яч.5←/, яч.6←/ (snapshot[5]=/).
+        //   snapshot[6]=S «выпадает» за шкалу — S теряется.
+        //   яч.1 = A.
+        //   Итого: AAX//// (1 A + 1 X + 4 / + 0 S).
         var cells = new CellState[]
         {
             CellState.Aggravated, CellState.Lethal, CellState.NonLethal, CellState.NonLethal,
@@ -281,9 +286,7 @@ public class HealthStateTests
         var h = new HealthState(7, cells);
         Assert.Equal("AX////S", h.Render());
         h.ApplyAggravated(1);
-        Assert.Equal("AA////S", h.Render());
-        h.ApplyAggravated(1);
-        Assert.Equal("AAA///S", h.Render());
+        Assert.Equal("AAX////", h.Render());
     }
 
     [Fact]
@@ -320,8 +323,106 @@ public class HealthStateTests
         // //SSSSS + X = ////SSS.
         Assert.Equal("////SSS", h.Render());
         h.ApplyAggravated(1);
-        // Первая не-A — яч.0 → A.
-        Assert.Equal("A///SSS", h.Render());
+        // targetIdx=0. Сдвиг: яч.1=/→яч.2, яч.2=/→яч.3, яч.3=/→яч.4, яч.4=S → break.
+        // яч.0 = A.
+        // Итого: A////SS.
+        Assert.Equal("A////SS", h.Render());
+    }
+
+    // ─── Каскад агравированного по правилам пользователя (2026-09-09) ───
+
+    [Fact]
+    public void Cascade_EmptyToS_PutsAAtFirstEmpty()
+    {
+        // SSSSSSS + A → A в яч.0, остальное без изменений (всё S, сдвиг останавливается сразу).
+        var h = H();
+        h.ApplyAggravated(1);
+        Assert.Equal("ASSSSSS", h.Render());
+    }
+
+    [Fact]
+    public void Cascade_OnlyX_ShiftsAllDownByOne_DropsLastEmpty()
+    {
+        // Пример 3 пользователя 2026-09-09: X в яч.0..2, / в яч.3..4, S в яч.5..6.
+        // + A → A в яч.0, X в яч.1..3, / в яч.4..5, S в яч.6 (последний элемент
+        // сдвига, snapshot[6]=S, выпадает, и яч.6 получает snapshot[5]=S).
+        var cells = new CellState[]
+        {
+            CellState.Lethal, CellState.Lethal, CellState.Lethal,
+            CellState.NonLethal, CellState.NonLethal,
+            CellState.Empty, CellState.Empty
+        };
+        var h = new HealthState(7, cells);
+        Assert.Equal("XXX//SS", h.Render());
+        h.ApplyAggravated(1);
+        Assert.Equal("AXXX//S", h.Render());
+        Assert.Equal(-2, h.TablePenalty); // penaltyIndex = 3 = Серьёзно ранен
+    }
+
+    [Fact]
+    public void Cascade_PreservesEmptyCell_NoDropping()
+    {
+        // Дубль примера 3 пользователя.
+        var cells = new CellState[]
+        {
+            CellState.Lethal, CellState.Lethal, CellState.Lethal,
+            CellState.NonLethal, CellState.NonLethal,
+            CellState.Empty, CellState.Empty
+        };
+        var h = new HealthState(7, cells);
+        h.ApplyAggravated(1);
+        Assert.Equal("AXXX//S", h.Render());
+    }
+
+    [Fact]
+    public void Cascade_WithSlashInBuffer_ShiftsEverything()
+    {
+        // Пример 5 пользователя 2026-09-09: / в яч.0..4, S в яч.5..6 (5 / + 2 S = 7 ячеек).
+        // (Это «если бы в примере 3 вместо X был бы /»: X в 0..2 → / в 0..4, / в 3..4 → S в 5..6.)
+        // + A → A в яч.0, / в яч.1..5, S в яч.6.
+        var cells = new CellState[]
+        {
+            CellState.NonLethal, CellState.NonLethal, CellState.NonLethal,
+            CellState.NonLethal, CellState.NonLethal,
+            CellState.Empty, CellState.Empty
+        };
+        var h = new HealthState(7, cells);
+        Assert.Equal("/////SS", h.Render());
+        h.ApplyAggravated(1);
+        Assert.Equal("A/////S", h.Render());
+    }
+
+    [Fact]
+    public void Cascade_FullScale_ShiftsAllByOne()
+    {
+        // XXXXXXX + A → AXXXXXX (targetIdx=0, сдвиг проходит до конца).
+        var cells = new CellState[]
+        {
+            CellState.Lethal, CellState.Lethal, CellState.Lethal, CellState.Lethal,
+            CellState.Lethal, CellState.Lethal, CellState.Lethal
+        };
+        var h = new HealthState(7, cells);
+        h.ApplyAggravated(1);
+        Assert.Equal("AXXXXXX", h.Render());
+    }
+
+    [Fact]
+    public void Cascade_StopsAtFirstEmpty_DropsLastSnapshot()
+    {
+        // AAXXXXS + A: targetIdx=2 (X). Снимок: [A,A,X,X,X,X,S].
+        //   Сдвиг яч.3..6 по снимку: яч.3←X, яч.4←X, яч.5←X, яч.6←X (snapshot[5]=X).
+        //   snapshot[6]=S «выпадает» за шкалу.
+        //   яч.2 = A.
+        //   Итого: AAAXXXX (3 A + 4 X + 0 S).
+        var cells = new CellState[]
+        {
+            CellState.Aggravated, CellState.Aggravated, CellState.Lethal, CellState.Lethal,
+            CellState.Lethal, CellState.Lethal, CellState.Empty
+        };
+        var h = new HealthState(7, cells);
+        Assert.Equal("AAXXXXS", h.Render());
+        h.ApplyAggravated(1);
+        Assert.Equal("AAAXXXX", h.Render());
     }
 
     // ─── Лечение ────────────────────────────────────────────────────────
@@ -391,12 +492,12 @@ public class HealthStateTests
     public void Penalty_PositionOfLastXOrA()
     {
         var h = H();
-        h.ApplyAggravated(2); // AA.....
+        h.ApplyAggravated(2); // AA..... → lastXOrA=1, hasA=true → penaltyIndex=2 → -1 (Ранен)
         Assert.Equal(1, h.Penalty);
-        Assert.Equal(-1, h.TablePenalty); // Легко ранен
-        h.ApplyAggravated(1); // AAA....
+        Assert.Equal(-1, h.TablePenalty);
+        h.ApplyAggravated(1); // AAA.... → lastXOrA=2, hasA=true → penaltyIndex=3 → -2 (Серьёзно)
         Assert.Equal(2, h.Penalty);
-        Assert.Equal(-1, h.TablePenalty); // Ранен
+        Assert.Equal(-2, h.TablePenalty);
     }
 
     // ─── V20 таблица штрафов здоровья (стр. 92) ─────────────────────────
@@ -418,10 +519,29 @@ public class HealthStateTests
     }
 
     [Fact]
-    public void TablePenalty_AggravatedAlsoTriggers()
+    public void TablePenalty_AggravatedShiftsPenaltyDownByOne()
     {
-        var cells = new CellState[] { CellState.Aggravated, CellState.Aggravated, CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty };
-        Assert.Equal(-1, HealthState.ComputeTablePenalty(cells)); // Ранен
+        // Пример пользователя 2026-09-09: A в яч.0, X в яч.1,2.
+        // lastXOrA=2, hasA=true → penaltyIndex=3 → -2 (Серьёзно).
+        var cells = new CellState[]
+        {
+            CellState.Aggravated, CellState.Lethal, CellState.Lethal,
+            CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty
+        };
+        Assert.Equal(-2, HealthState.ComputeTablePenalty(cells));
+    }
+
+    [Fact]
+    public void TablePenalty_AggravatedOnly_StillShiftsDown()
+    {
+        // Только A, без X. lastXOrA=1, hasA=true → penaltyIndex=2 → -1 (Ранен).
+        // Правило «A сдвигает штраф вниз на 1» применяется, но не дальше 6 ячейки.
+        var cells = new CellState[]
+        {
+            CellState.Aggravated, CellState.Aggravated, CellState.Empty,
+            CellState.Empty, CellState.Empty, CellState.Empty, CellState.Empty
+        };
+        Assert.Equal(-1, HealthState.ComputeTablePenalty(cells));
     }
 
     [Fact]
@@ -553,31 +673,25 @@ public class HealthStateTests
     }
 
     // ─── Разные размеры шкалы (Стойкость 1..5 → 4..8 ячеек) ───────────
+    // В текущей версии шкала фиксирована = 7 ячеек (Стойкость 4 + 3). Старые
+    // тесты для size!=7 оставлены для обратной совместимости, но ожидания
+    // штрафа пересмотрены под текущую таблицу.
 
     [Theory]
-    [InlineData(4, "XSSS", 0, 0)]           // Стойкость 1, XSSS — штраф 0 (буфер).
-    [InlineData(4, "XXSS", 1, -1)]          // Стойкость 1, штраф 1.
-    [InlineData(4, "XXXS", 2, -1)]          // Стойкость 1, штраф 2.
-    [InlineData(4, "XXXX", 3, -2)]          // Стойкость 1, торпор, штраф 3.
-    [InlineData(5, "XXSSS", 1, -1)]         // Стойкость 2.
-    [InlineData(5, "//SSS", 0, 0)]          // Стойкость 2, только /.
-    [InlineData(5, "XXXSS", 2, -1)]         // Стойкость 2.
-    [InlineData(5, "AXXSS", 2, -1)]         // Стойкость 2, аграва не двигает штраф.
-    [InlineData(5, "XXXXX", 4, -5)]         // Стойкость 2, торпор, штраф 4.
-    [InlineData(6, "///SSS", 0, 0)]         // Стойкость 3, только /.
-    [InlineData(6, "XXXXSS", 3, -2)]        // Стойкость 3.
-    [InlineData(6, "AXXXSS", 3, -2)]        // Стойкость 3, аграва.
-    [InlineData(6, "XXXXXX", 5, -5)]        // Стойкость 3, торпор, штраф 5.
-    [InlineData(8, "XXXXXXSS", 5, -5)]      // Стойкость 5.
-    [InlineData(8, "AAXXXXXS", 6, -5)]      // Стойкость 5, аграва на 0,1; последний X = яч.6.
-    [InlineData(8, "XXXXXXXX", 7, -5)]      // Стойкость 5, торпор, штраф 7 (небоеспособен).
-    public void Penalty_ForVariousSizes(int size, string expectedRender, int expectedLastXOrA, int _)
+    [InlineData(7, "X/////S", 0, 0)]        // 1 X, штраф 0 (буфер).
+    [InlineData(7, "XX////S", 1, -1)]       // 2 X, штраф -1 (Легко ранен).
+    [InlineData(7, "XXX///S", 2, -1)]       // 3 X, штраф -1 (Ранен).
+    [InlineData(7, "AXX///S", 2, -2)]       // A в 0, X в 1..2; lastXOrA=2, +1=3 → -2 (Серьёзно).
+    [InlineData(7, "XXXXX/S", 4, -2)]       // 5 X, штраф -2 (Тяжело).
+    [InlineData(7, "XXXXXXS", 5, -5)]       // 6 X, штраф -5 (Совсем плох).
+    [InlineData(7, "XXXXXXX", 6, 0)]        // 7 X, штраф 0 (Небоеспособен, торпор).
+    public void Penalty_ForVariousSizes(int size, string expectedRender, int expectedLastXOrA, int expectedTablePenalty)
     {
-        // expectedRender — должно совпадать после постройки через прямой массив.
         var parsed = ParseRender(expectedRender, size);
         var h = new HealthState(size, parsed);
         Assert.Equal(expectedRender, h.Render());
         Assert.Equal(expectedLastXOrA, h.Penalty);
+        Assert.Equal(expectedTablePenalty, h.TablePenalty);
     }
 
     [Theory]
