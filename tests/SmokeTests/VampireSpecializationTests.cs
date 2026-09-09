@@ -176,4 +176,37 @@ public class VampireSpecializationTests
         Assert.Equal(2, VampireDicePool.CountSuccessesHybrid(regular, hunger, null));
         Assert.Equal(2, VampireDicePool.CountSuccessesHybrid(regular, hunger, "тени"));
     }
+
+    [Fact]
+    public void CountSuccessesHybrid_OneEatsTen_NotJustSixToNine()
+    {
+        // V20 стр. 286: «1 полностью и бесповоротно отменяет один полученный успех».
+        // 1-ка ест ЛЮБОЙ успех — десятку в том числе, в т.ч. удвоенную специализацией.
+        // regular: [1, 10] → gross=1 (без спец) / 2 (со спец), минус 1 → 0 / 1.
+        var regular = A(1, 10);
+        var hunger  = A();
+        Assert.Equal(0, VampireDicePool.CountSuccessesHybrid(regular, hunger, null));
+        Assert.Equal(1, VampireDicePool.CountSuccessesHybrid(regular, hunger, "тени"));
+    }
+
+    [Fact]
+    public void CountSuccessesHybrid_OneEatsSpecializedTen()
+    {
+        // V20 стр. 286 + специализация: специализированная 10 = 2 успеха,
+        // но 1-ка всё равно съедает ОДИН из них. [1, 10] со спец → 1, а не 2.
+        var regular = A(1, 10);
+        var hunger  = A();
+        Assert.Equal(1, VampireDicePool.CountSuccessesHybrid(regular, hunger, "тени"));
+    }
+
+    [Fact]
+    public void CountSuccessesHybrid_MoreOnesThanSuccesses_FloorsAtZero()
+    {
+        // V20: «повторяйте процедуру, пока 1 или успехи не закончатся».
+        // regular: [1, 1, 1, 6] — gross=1, 1-ц больше, чем успехов → floor 0.
+        var regular = A(1, 1, 1, 6);
+        var hunger  = A(10);
+        // hunger 10 → 1 успех. regular → 0. Итого 1.
+        Assert.Equal(1, VampireDicePool.CountSuccessesHybrid(regular, hunger, null));
+    }
 }

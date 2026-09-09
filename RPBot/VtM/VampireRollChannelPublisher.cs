@@ -72,11 +72,16 @@ public static class VampireRollChannelPublisher
     /// <param name="command">Slash-команда, инициировавшая бросок.</param>
     /// <param name="embed">Готовое embed-сообщение.</param>
     /// <param name="components">Кнопки под сообщением (например, переброс за волю).</param>
+    /// <param name="extraAttachments">
+    /// Доп. файлы для отправки отдельным сообщением сразу под embed'ом
+    /// (используется для PNG-кубиков d10 — один embed не вмещает несколько картинок).
+    /// </param>
     /// <returns>True, если удалось отправить в VtMRollChannel; false иначе.</returns>
     public static async Task<bool> PublishAsync(
         SocketSlashCommand command,
         Embed embed,
-        MessageComponent? components = null)
+        MessageComponent? components = null,
+        IReadOnlyList<FileAttachment>? extraAttachments = null)
     {
         if (command.GuildId is not { } guildId)
         {
@@ -110,6 +115,20 @@ public static class VampireRollChannelPublisher
         }
 
         await channel.SendMessageAsync(embed: embed, components: components);
+
+        // Отдельное сообщение с PNG-кубиками — сразу под embed'ом.
+        // Пустой список или null = не отправляем ничего.
+        if (extraAttachments != null && extraAttachments.Count > 0)
+        {
+            try
+            {
+                await channel.SendFilesAsync(extraAttachments);
+            }
+            catch (Exception)
+            {
+                // Сообщение с embed'ом уже ушло; картинки — best-effort.
+            }
+        }
 
         // Если slash-команда была вызвана прямо в VtMRollChannel — не плодим
         // дубль: ограничиваемся пустым эфемерным ack, чтобы Discord не ругался

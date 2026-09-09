@@ -247,9 +247,16 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
         var components = VampireRollComponents.BuildRollButtons(
             command.User.Id, build.Specialization);
 
+        // PNG-кубики d10 (regular + hunger). Если файлов нет — список пустой,
+        // и PublishAsync просто не отправит сообщение с картинками.
+        var images = VampireDiceImageProvider.Build(
+            result.RegularDice ?? Array.Empty<int>(),
+            result.HungerDice ?? Array.Empty<int>());
+
         // По дизайн-решению: VtM-броски публикуются в выделенный канал
         // ServerConfig.VtMRollChannelID, а не в канал вызова команды.
-        if (!await VampireRollChannelPublisher.PublishAsync(command, eb, components))
+        if (!await VampireRollChannelPublisher.PublishAsync(
+                command, eb, components, images.Files))
             return true;
 
         var botMessage = await command.GetOriginalResponseAsync();
@@ -261,6 +268,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
             hungerDice: result.HungerDice ?? Array.Empty<int>(),
             specialization: build.Specialization,
             poolSize: build.PoolSize,
+            difficulty: build.Difficulty,
             bonusDie: result.BonusDie);
         return true;
     }

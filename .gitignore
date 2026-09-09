@@ -370,9 +370,24 @@ Settings/
 Data/*.json
 Data/*.log
 
-# Картинки кубиков — НЕ игнорируем, передаются через git
-!Data/Numbers/
-!Data/Numbers/**
+# Картинки кубиков — runtime-артефакт из %LocalAppData%\RPBot\Data\Numbers,
+# который НЕ коммитим (генерируется на лету провайдером).
+RPBot/Resources/Numbers/
+
+# ─── Служебные каталоги, не относящиеся к боту ───────────────────────────
+# tools/ — вспомогательные .NET-консоли (HealthSandbox, pdfdump, VampireSheetPreview)
+tools/
+# rules-source/ — дампы PDF правил VtM V20/V5 для сверки
+rules-source/
+# files/ — рабочие заметки/диаграммы по модулю VtM, не для репо
+files/
+# .yt-cipher-patch-applied — маркер применения патча yt-cipher
+.yt-cipher-patch-applied
+
+# ─── Музыка (Lavalink) — модуль временно отключён ────────────────────────
+# Все Lavalink-артефакты и runtime-зависимости игнорируем до возврата модуля.
+Lavalink/
+yt-cipher/
 
 # Логи
 Logs/

@@ -8,18 +8,19 @@ namespace RPBot.VtM
     /// Хранилище «последний бросок кубов» по <c>userId</c>.
     /// </summary>
     /// <remarks>
-    /// Используется кнопками переброса по воле:
-    ///   • при броске кубов в <c>/rollV</c> сюда пишется regular/hunger/bonus и messageId;
+    /// Используется кнопками переброса по воле и повторной попытки:
+    ///   • при броске кубов в <c>/vampire_roll</c> сюда пишется regular/hunger/bundle и messageId;
     ///   • при нажатии на «Переброс 1/2/3» handler читает запись и применяет <see cref="WillpowerReroll"/>;
-    ///   • TTL — 60 секунд (после броска пользователь должен успеть нажать);
-    ///   • после первого переброса запись удаляется (1 бросок = 1 переброс).
+    ///   • при нажатии на «🔁 Повторить» handler читает запись и применяет <see cref="VampireRepeatReroll"/>;
+    ///   • TTL — 15 секунд (по согласованию 2026-09-09: кнопки не плодят UI, не висят минуту);
+    ///   • после первого переброса/повтора запись удаляется (1 бросок = 1 переброс).
     ///
     /// Класс не зависит от Discord и может быть покрыт юнит-тестами.
     /// </remarks>
     public sealed class VampireRollRegistry
     {
-        /// <summary>TTL последнего броска — 60 секунд по согласованию 2026-09-03.</summary>
-        public static readonly TimeSpan DefaultTtl = TimeSpan.FromSeconds(60);
+        /// <summary>TTL последнего броска — 15 секунд по согласованию 2026-09-09.</summary>
+        public static readonly TimeSpan DefaultTtl = TimeSpan.FromSeconds(15);
 
         private readonly TimeSpan _ttl;
         private readonly ConcurrentDictionary<ulong, Entry> _byUser = new();
@@ -39,6 +40,8 @@ namespace RPBot.VtM
         /// Гибрид V20 + V5: <paramref name="regularDice"/> — обычные кубы,
         /// <paramref name="hungerDice"/> — голодные (V5). Специализация (V20)
         /// удваивает десятки ТОЛЬКО в <paramref name="regularDice"/>.
+        /// <paramref name="difficulty"/> — сложность проверки; используется повторной
+        /// попыткой (V20 стр. 286: новая сложность = difficulty + 1).
         /// </remarks>
         public void Record(
             ulong userId,
@@ -47,12 +50,16 @@ namespace RPBot.VtM
             int[] hungerDice,
             string? specialization,
             int poolSize,
+            int difficulty,
             int? bonusDie = null)
         {
             if (regularDice == null) throw new ArgumentNullException(nameof(regularDice));
             if (hungerDice == null) throw new ArgumentNullException(nameof(hungerDice));
             if (regularDice.Length == 0 && hungerDice.Length == 0)
                 throw new ArgumentException("Пул пуст.", nameof(regularDice));
+            if (difficulty < 2)
+                throw new ArgumentOutOfRangeException(nameof(difficulty), difficulty,
+                    "Сложность должна быть ≥ 2.");
 
             _byUser[userId] = new Entry(
                 messageId,
@@ -61,6 +68,7 @@ namespace RPBot.VtM
                 bonusDie,
                 specialization,
                 poolSize,
+                difficulty,
                 DateTime.UtcNow);
         }
 
@@ -85,6 +93,7 @@ namespace RPBot.VtM
                 raw.BonusDie,
                 raw.Specialization,
                 raw.PoolSize,
+                raw.Difficulty,
                 raw.RecordedAt);
             return true;
         }
@@ -111,10 +120,11 @@ namespace RPBot.VtM
             public int? BonusDie { get; }
             public string? Specialization { get; }
             public int PoolSize { get; }
+            public int Difficulty { get; }
             public DateTime RecordedAt { get; }
 
             public Entry(ulong messageId, int[] regularDice, int[] hungerDice,
-                int? bonusDie, string? specialization, int poolSize, DateTime recordedAt)
+                int? bonusDie, string? specialization, int poolSize, int difficulty, DateTime recordedAt)
             {
                 MessageId = messageId;
                 RegularDice = regularDice;
@@ -122,17 +132,20 @@ namespace RPBot.VtM
                 BonusDie = bonusDie;
                 Specialization = specialization;
                 PoolSize = poolSize;
+                Difficulty = difficulty;
                 RecordedAt = recordedAt;
             }
         }
     }
 
     /// <summary>
-    /// Снимок последнего броска для переброса по воле.
+    /// Снимок последнего броска для переброса по воле и повторной попытки.
     /// </summary>
     /// <remarks>
     /// Гибрид V20+V5: V5-разбиение на regular/hunger + V20-специализация.
     /// Специализация действует только на regular-кубы (не на hunger).
+    /// <see cref="Difficulty"/> — сложность исходной проверки; повторная попытка
+    /// (V20 стр. 286) вычисляет новую сложность как <c>Difficulty + 1</c>.
     /// </remarks>
     public sealed record VampireRollSnapshot(
         ulong MessageId,
@@ -141,6 +154,7 @@ namespace RPBot.VtM
         int? BonusDie,
         string? Specialization,
         int PoolSize,
+        int Difficulty,
         DateTime RecordedAt)
     {
         /// <summary>Сколько regular-кубиков доступно для переброса.</summary>

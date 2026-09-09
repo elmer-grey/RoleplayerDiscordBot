@@ -112,6 +112,41 @@ namespace RPBot.VtM
         public static MessageComponent BuildEmpty() => new ComponentBuilder().Build();
 
         /// <summary>
+        /// Только «🔁 Повторить» + «✅ Готово» — после переброса за волю.
+        /// Повторная попытка (V20 стр. 286) — отдельная механика, она доступна.
+        /// </summary>
+        /// <remarks>
+        /// Используется после <see cref="WillpowerReroll"/>: переброс за волю уже сделан,
+        /// и второй переброс за волю в этом броске невозможен (запись удалена).
+        /// Повторить всё действие ещё раз — можно, со сложностью +1.
+        /// </remarks>
+        public static MessageComponent BuildRepeatOnlyButtons(ulong originalUserId)
+        {
+            return new ComponentBuilder()
+                .WithButton("🔁 Повторить", $"{RepeatAction}:{originalUserId}", ButtonStyle.Secondary)
+                .WithButton("✅ Готово", $"{DoneAction}:{originalUserId}", ButtonStyle.Secondary)
+                .Build();
+        }
+
+        /// <summary>
+        /// Только «🎲 Переброс за волю» + «✅ Готово» — после повторной попытки.
+        /// Повторять ещё раз уже нельзя (каждая попытка — отдельный бросок с растущей сложностью).
+        /// </summary>
+        /// <remarks>
+        /// Используется после <see cref="VampireRepeatReroll"/>: повторная попытка уже сделана,
+        /// и вторая повторная попытка была бы уже +2 к сложности — но по дизайн-решению мы
+        /// разрешаем только одну повторную попытку подряд (сложность растёт вручную дальше).
+        /// Зато переброс за волю на новом пуле — снова доступен.
+        /// </remarks>
+        public static MessageComponent BuildRerollOnlyButtons(ulong originalUserId)
+        {
+            return new ComponentBuilder()
+                .WithButton("🎲 Переброс за волю", $"{RerollPrefix}:{originalUserId}", ButtonStyle.Primary)
+                .WithButton("✅ Готово", $"{DoneAction}:{originalUserId}", ButtonStyle.Secondary)
+                .Build();
+        }
+
+        /// <summary>
         /// Это кнопка «Переброс за волю» (открыть picker)?
         /// </summary>
         public static bool IsRerollOpenButton(string customId, out ulong originalUserId)

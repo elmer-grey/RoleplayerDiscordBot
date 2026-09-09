@@ -69,6 +69,29 @@ public sealed class VampireRollButtonHandler
         {
             msg.Components = VampireRollComponents.BuildRerollAmountPicker(originalUserId);
         });
+
+        // 15-секундный автооткат: если пользователь не выберет 1/2/3,
+        // picker сам откатится к основному набору кнопок.
+        var messageId = component.Message.Id;
+        var message = component.Message;
+        VampireRollMenuAutoRollback.Schedule(
+            messageId,
+            VampireRollMenuAutoRollback.MenuState.RerollPicker(originalUserId),
+            async _ =>
+            {
+                try
+                {
+                    await message.ModifyAsync(msg =>
+                    {
+                        msg.Components = VampireRollComponents.BuildRollButtons(originalUserId);
+                    });
+                }
+                catch
+                {
+                    // Сообщение удалено / бот потерял доступ — тихо игнорируем.
+                }
+            });
+
         await component.DeferAsync(ephemeral: true);
         return true;
     }
@@ -109,6 +132,10 @@ public sealed class VampireRollButtonHandler
                 ephemeral: true);
             return true;
         }
+
+        // Пользователь успел выбрать число кубиков — отменяем 15-секундный
+        // автооткат picker'а, чтобы он не «дёргал» сообщение после переброса.
+        VampireRollMenuAutoRollback.Cancel(component.Message.Id);
 
         var activeLookup = RollContext.ActiveCharacterLookup;
         if (activeLookup == null || component.GuildId == null)
@@ -165,14 +192,15 @@ public sealed class VampireRollButtonHandler
         var embed = BuildRerollEmbed(newRegular, snapshot.HungerDice, snapshot.Specialization,
             actualCount, newSuccesses, active.Character.WillpowerPoints, labelSuffix);
 
-        // Снимаем picker, рисуем исходные кнопки (повторить ещё раз уже нельзя —
-        // запись удалена, и попытка сообщит «снапшот истёк»).
+        // Снимаем picker, рисуем кнопки «🔁 Повторить + Готово»:
+        // повторная попытка (V20 стр. 286) по-прежнему доступна,
+        // а переброс за волю повторно в этом броске уже невозможен (запись удалена).
         // Без кнопки «Специализация»: после переброса новые действия недоступны,
         // и индикатор специализации уже отображается в самом embed.
         await component.Message.ModifyAsync(msg =>
         {
             msg.Embed = embed;
-            msg.Components = VampireRollComponents.BuildEmpty();
+            msg.Components = VampireRollComponents.BuildRepeatOnlyButtons(originalUserId);
         });
         await component.RespondAsync(
             $"Переброс за волю: −1 WP (осталось {active.Character.WillpowerPoints}).",
@@ -218,6 +246,9 @@ public sealed class VampireRollButtonHandler
         if (!Authorizes(component, originalUserId))
             return await ReplyNotYoursAsync(component, "Это не твой бросок.");
 
+        // Пользователь сам нажал «Назад» — отменяем автооткат.
+        VampireRollMenuAutoRollback.Cancel(component.Message.Id);
+
         // Возвращаемся с picker'а обратно к исходному embed.
         // Кнопки не рисуем: до повтора/переброса пользователь должен снова
         // видеть результат, а повторные действия применятся по исходным кнопкам
@@ -233,7 +264,8 @@ public sealed class VampireRollButtonHandler
     }
 
     /// <summary>
-    /// Повторный бросок по правилу V20: пул N-1, берётся новый результат.
+    /// Повторный бросок по правилу V20 стр. 286: пул не меняется,
+    /// сложность возрастает на 1 пункт, берётся новый результат.
     /// </summary>
     private async Task<bool> HandleRepeatAsync(SocketMessageComponent component, ulong originalUserId)
     {
@@ -269,22 +301,37 @@ public sealed class VampireRollButtonHandler
             return true;
         }
 
-        var repeat = VampireRepeatReroll.RollRepeat(snapshot.PoolSize, new SystemRandomAdapter());
+        // V20 стр. 286: повторная попытка = тот же пул, новая сложность = старая + 1.
+        var repeat = VampireRepeatReroll.RollRepeat(
+            originalPoolSize: snapshot.PoolSize,
+            originalDifficulty: snapshot.Difficulty,
+            regularCount: snapshot.RegularCount,
+            hungerCount: snapshot.HungerCount,
+            rng: new SystemRandomAdapter());
 
         // Удаляем запись: 1 повтор = один бросок.
         registry.Forget(originalUserId);
 
-        var diceStr = repeat.RepeatDice.Length == 0 ? "—" : string.Join(", ", repeat.RepeatDice);
+        // V20+V5: пересчёт через CountSuccessesHybrid (regular + hunger раздельно).
+        int successes = VampireDicePool.CountSuccessesHybrid(
+            repeat.NewRegularDice, repeat.NewHungerDice, snapshot.Specialization);
+        var regStr = repeat.NewRegularDice.Length == 0 ? "—" : string.Join(", ", repeat.NewRegularDice);
+        var hunStr = repeat.NewHungerDice.Length == 0 ? "—" : string.Join(", ", repeat.NewHungerDice);
         var eb = new EmbedBuilder
         {
-            Title = "🔁 Повторный бросок по V20 (пул N-1)",
+            Title = "🔁 Повторная попытка по V20 (сложность +1)",
             Color = new Color(0x5B3A8C),
         };
-        eb.AddField("Исходный пул", $"{snapshot.PoolSize}", inline: true);
-        eb.AddField("Новый пул", $"{repeat.RepeatPoolSize}", inline: true);
-        eb.AddField("Новые кубы", diceStr, inline: false);
-        int successes = VampireDicePool.CountSuccessesFor(
-            repeat.RepeatDice, snapshot.Specialization);
+        eb.AddField("Сложность", $"{snapshot.Difficulty} → {repeat.NewDifficulty}", inline: true);
+        eb.AddField("Пул", $"{snapshot.PoolSize} (не изменился)", inline: true);
+        eb.AddField(
+            "Кубы (regular)",
+            $"{repeat.NewRegularDice.Length}: {regStr}",
+            inline: false);
+        eb.AddField(
+            "Кубы (hunger)",
+            $"{repeat.NewHungerDice.Length}: {hunStr}",
+            inline: false);
         eb.AddField(
             "Итог",
             $"**{successes}** успехов" +
@@ -294,16 +341,20 @@ public sealed class VampireRollButtonHandler
             inline: false);
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "V20 стр. 286/267: пул уменьшается на 1, берётся новый результат (не лучший из двух).",
+            Text = "V20 стр. 286: повторная попытка не меняет пул, повышает сложность на 1.",
         };
 
-        // Снимаем кнопки — повторять уже нельзя.
+        // Оставляем «🎲 Переброс за волю + Готово»: переброс на новом пуле снова доступен,
+        // но ещё одна повторная попытка подряд уже не предлагается (рассказчик решает,
+        // продолжать ли рост сложности дальше через ещё один «Повторить»).
         await component.Message.ModifyAsync(msg =>
         {
             msg.Embed = eb.Build();
-            msg.Components = VampireRollComponents.BuildEmpty();
+            msg.Components = VampireRollComponents.BuildRerollOnlyButtons(originalUserId);
         });
-        await component.RespondAsync("Повторный бросок применён.", ephemeral: true);
+        await component.RespondAsync(
+            $"Повторная попытка: сложность {snapshot.Difficulty} → {repeat.NewDifficulty}.",
+            ephemeral: true);
         return true;
     }
 

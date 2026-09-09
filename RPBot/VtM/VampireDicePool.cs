@@ -138,8 +138,11 @@ namespace RPBot.VtM
 
         /// <summary>
         /// Гибридный подсчёт V20 + V5:
-        ///   • Regular: V5-правило «1 съедает один успех» (минус 1 за каждую 1-цу),
-        ///     плюс обычный V20-подсчёт (6–9 = 1, 10 = 1 или 2 при специализации).
+        ///   • Regular: V20-правило «1 съедает один любой успех» — каждая 1-ца
+        ///     отменяет один полученный успех (6–9, 10, в т.ч. удвоенный от
+        ///     специализации). Если успехов меньше, чем 1-ц, проверка = провал
+        ///     (используется floor 0).
+        ///     Плюс обычный V20-подсчёт (6–9 = 1, 10 = 1 или 2 при специализации).
         ///   • Hunger: голодные 1-цы НЕ съедают успехи — они только триггерят
         ///     Messy/Bestial Critical, который подсчитывается отдельно.
         ///   • Специализация действует ТОЛЬКО на regular.
@@ -160,9 +163,14 @@ namespace RPBot.VtM
             int regSixesToNines = regularDice.Count(d => d >= 6 && d < 10);
             int regOnes = regularDice.Count(d => d == 1);
             // V20: каждая 10 = 1 успех, либо 2 при специализации.
-            int regHits = regSixesToNines + (hasSpec ? regTens * 2 : regTens);
-            // V5: каждая 1-ца съедает один успех.
-            int regSuccesses = regHits - regOnes;
+            int regTensHits = hasSpec ? regTens * 2 : regTens;
+            int regGrossSuccesses = regTensHits + regSixesToNines;
+            // V20 стр. 286: «1 полностью и бесповоротно отменяет один полученный
+            // успех; повторяйте, пока 1 или успехи не закончатся». Единицы едят
+            // ЛЮБОЙ успех — включая 10 и удвоенную специализацию. Если единиц
+            // больше, чем успехов — оставшиеся единицы «съедают» по нулю, итог
+            // не уходит в минус (проверка = провал).
+            int regSuccesses = Math.Max(0, regGrossSuccesses - regOnes);
 
             int hungTens = hungerDice.Count(d => d == 10);
             int hungSixesToNines = hungerDice.Count(d => d >= 6 && d < 10);

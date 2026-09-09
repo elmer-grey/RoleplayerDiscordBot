@@ -22,7 +22,8 @@ public class VampireRollRegistryTests
             regularDice: new[] { 1, 2, 3 },
             hungerDice: new[] { 7, 8 },
             specialization: "тени",
-            poolSize: 5);
+            poolSize: 5,
+            difficulty: 6);
 
         Assert.True(reg.TryGet(42, out var snap));
         Assert.NotNull(snap);
@@ -32,6 +33,7 @@ public class VampireRollRegistryTests
         Assert.Null(snap.BonusDie);
         Assert.Equal("тени", snap.Specialization);
         Assert.Equal(5, snap.PoolSize);
+        Assert.Equal(6, snap.Difficulty);
         Assert.Equal(3, snap.RegularCount);
         Assert.Equal(2, snap.HungerCount);
     }
@@ -48,7 +50,7 @@ public class VampireRollRegistryTests
     public void Forget_RemovesEntry()
     {
         var reg = new VampireRollRegistry();
-        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1);
+        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1, 6);
         Assert.True(reg.TryGet(1, out _));
         reg.Forget(1);
         Assert.False(reg.TryGet(1, out _));
@@ -58,8 +60,8 @@ public class VampireRollRegistryTests
     public void Record_OverwritesPrevious()
     {
         var reg = new VampireRollRegistry();
-        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1);
-        reg.Record(1, 20, new[] { 1, 2, 3 }, new[] { 4 }, "тени", 4, 7);
+        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1, 6);
+        reg.Record(1, 20, new[] { 1, 2, 3 }, new[] { 4 }, "тени", 4, 7, 7);
 
         Assert.True(reg.TryGet(1, out var snap));
         Assert.Equal(20UL, snap!.MessageId);
@@ -68,13 +70,14 @@ public class VampireRollRegistryTests
         Assert.Equal("тени", snap.Specialization);
         Assert.Equal(7, snap.BonusDie);
         Assert.Equal(4, snap.PoolSize);
+        Assert.Equal(7, snap.Difficulty);
     }
 
     [Fact]
     public void TTL_ExpiresAfterTimeout()
     {
         var reg = new VampireRollRegistry(TimeSpan.FromMilliseconds(10));
-        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1);
+        reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1, 6);
         Assert.True(reg.TryGet(1, out _));
 
         System.Threading.Thread.Sleep(50);
@@ -94,14 +97,14 @@ public class VampireRollRegistryTests
     {
         var reg = new VampireRollRegistry();
         Assert.Throws<ArgumentException>(() =>
-            reg.Record(1, 10, Array.Empty<int>(), Array.Empty<int>(), null, 0));
+            reg.Record(1, 10, Array.Empty<int>(), Array.Empty<int>(), null, 0, 6));
     }
 
     [Fact]
     public void Record_AllowsEmptyHunger()
     {
         var reg = new VampireRollRegistry();
-        reg.Record(1, 10, new[] { 5, 6 }, Array.Empty<int>(), null, 2);
+        reg.Record(1, 10, new[] { 5, 6 }, Array.Empty<int>(), null, 2, 6);
         Assert.True(reg.TryGet(1, out var snap));
         Assert.Empty(snap!.HungerDice);
         Assert.Equal(2, snap.RegularCount);
@@ -112,18 +115,26 @@ public class VampireRollRegistryTests
     {
         // Все кубы голодные: regular = 0, hunger = N.
         var reg = new VampireRollRegistry();
-        reg.Record(1, 10, Array.Empty<int>(), new[] { 1, 2, 3 }, null, 3);
+        reg.Record(1, 10, Array.Empty<int>(), new[] { 1, 2, 3 }, null, 3, 6);
         Assert.True(reg.TryGet(1, out var snap));
         Assert.Empty(snap!.RegularDice);
         Assert.Equal(3, snap.HungerCount);
     }
 
     [Fact]
+    public void Record_RejectsDifficultyBelow2()
+    {
+        var reg = new VampireRollRegistry();
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            reg.Record(1, 10, new[] { 5 }, Array.Empty<int>(), null, 1, 1));
+    }
+
+    [Fact]
     public void Clear_RemovesAllEntries()
     {
         var reg = new VampireRollRegistry();
-        reg.Record(1, 10, new[] { 1 }, Array.Empty<int>(), null, 1);
-        reg.Record(2, 20, new[] { 2 }, Array.Empty<int>(), null, 1);
+        reg.Record(1, 10, new[] { 1 }, Array.Empty<int>(), null, 1, 6);
+        reg.Record(2, 20, new[] { 2 }, Array.Empty<int>(), null, 1, 6);
         Assert.Equal(2, reg.Count);
 
         reg.Clear();
@@ -133,9 +144,9 @@ public class VampireRollRegistryTests
     }
 
     [Fact]
-    public void DefaultTtl_IsOneMinute()
+    public void DefaultTtl_IsFifteenSeconds()
     {
-        Assert.Equal(TimeSpan.FromSeconds(60), VampireRollRegistry.DefaultTtl);
+        Assert.Equal(TimeSpan.FromSeconds(15), VampireRollRegistry.DefaultTtl);
     }
 }
 
