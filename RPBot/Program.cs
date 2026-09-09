@@ -791,6 +791,10 @@ private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotC
                     ? overrides.RollChannelID
                     : defaults.RollChannelID,
 
+                VtMRollChannelID = overrides.VtMRollChannelID != 0
+                    ? overrides.VtMRollChannelID
+                    : defaults.VtMRollChannelID,
+
                 StatsChannelID = overrides.StatsChannelID != 0
                     ? overrides.StatsChannelID
                     : defaults.StatsChannelID,
@@ -7057,6 +7061,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                                             break;
                                         case "roll_channel":
                                             sconfig.RollChannelID = id.Value;
+                                            break;
+                                        case "vtm_roll_channel":
+                                            sconfig.VtMRollChannelID = id.Value;
                                             break;
                                         case "stats_channel":
                                             sconfig.StatsChannelID = id.Value;

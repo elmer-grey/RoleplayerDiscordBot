@@ -628,6 +628,7 @@ namespace RPBot
         AddCommandOutput($"Приветственный канал: {selectedGuild.GetTextChannel(cfg.WelcomeChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Основной РГ-канал: {selectedGuild.GetTextChannel(cfg.GeneralRGChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Канал бросков: {selectedGuild.GetTextChannel(cfg.RollChannelID)?.Name ?? "не задан"}");
+        AddCommandOutput($"Канал VtM-бросков: {selectedGuild.GetTextChannel(cfg.VtMRollChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Канал статистики: {selectedGuild.GetTextChannel(cfg.StatsChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Канал записей: {selectedGuild.GetTextChannel(cfg.RecordChannelID)?.Name ?? "не задан"}");
                         AddCommandOutput($"Event-голосовой канал: {selectedGuild.GetVoiceChannel(cfg.EventVoiceChannelID)?.Name ?? "не задан"}");
@@ -1792,6 +1793,7 @@ namespace RPBot
                                             AddCommandOutput($"welcome_channel: {cfg.WelcomeChannelID}");
                                             AddCommandOutput($"general_rg_channel: {cfg.GeneralRGChannelID}");
                                             AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
+                                            AddCommandOutput($"vtm_roll_channel: {cfg.VtMRollChannelID}");
                                             AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
                                             AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
                                             AddCommandOutput($"event_voice_channel: {cfg.EventVoiceChannelID}");
