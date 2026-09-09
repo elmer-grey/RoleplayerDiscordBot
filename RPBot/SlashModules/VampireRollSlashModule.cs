@@ -276,7 +276,6 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
     {
         var eb = new EmbedBuilder
         {
-            Title = "🎲 Бросок VtM (гибрид V20+V5)",
             Color = new Color(0xC41E3A),
         };
 
@@ -285,36 +284,58 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
             eb.AddField("Подпись", label, inline: false);
         }
 
-        var lines = new List<string>
-        {
-            $"• **{build.CharacteristicName}** ({build.CharacteristicValue})",
-        };
-        if (!string.IsNullOrEmpty(build.AbilityName))
+        // Разбиваем на три отдельных блока вместо общего «Пул».
+        var hasAbility = !string.IsNullOrEmpty(build.AbilityName);
+        var hasDiscipline = !string.IsNullOrEmpty(build.DisciplineName);
+
+        if (hasAbility)
         {
             var specSuffix = !string.IsNullOrEmpty(build.Specialization)
                 ? $" — специализация: «{build.Specialization}»"
                 : "";
-            lines.Add($"• **{build.AbilityName}** ({build.AbilityValue}){specSuffix}");
+            eb.AddField(
+                "Проверка навыка",
+                $"{build.AbilityName} ({build.AbilityValue}){specSuffix}\n" +
+                $"+ характеристика {build.CharacteristicName} ({build.CharacteristicValue})",
+                inline: false);
         }
         else
         {
-            lines.Add("• _навык не указан (пул = одна характеристика, сложность +1)_");
+            // Без навыка: пул = одна характеристика, сложность +1.
+            eb.AddField(
+                "Проверка характеристики",
+                $"{build.CharacteristicName} ({build.CharacteristicValue}) — без навыка, сложность +1",
+                inline: false);
         }
-        if (!string.IsNullOrEmpty(build.DisciplineName))
+
+        if (hasDiscipline)
         {
-            lines.Add($"• **{build.DisciplineName}** (дисциплина {build.DisciplineValue})");
+            eb.AddField(
+                "Проверка дисциплины",
+                $"{build.DisciplineName} (дисциплина {build.DisciplineValue})",
+                inline: false);
         }
+
+        // Итоговый пул + бонус/штраф отдельным блоком для наглядности.
+        var poolLines = new List<string>
+        {
+            $"**{build.PoolSize}** кубов " +
+            $"(regular {result.RegularDice?.Length ?? 0}, " +
+            $"hunger {result.HungerDice?.Length ?? 0}, " +
+            $"сложность {build.Difficulty})",
+        };
         if (build.BonusDice != 0)
         {
             var sign = build.BonusDice > 0 ? "+" : "";
-            lines.Add($"• Бонус/штраф: {sign}{build.BonusDice}");
+            poolLines.Add($"Бонус/штраф (явный): {sign}{build.BonusDice}");
         }
-        lines.Add($"Итого: **{build.PoolSize}** кубов " +
-                  $"(regular {result.RegularDice?.Length ?? 0}, " +
-                  $"hunger {result.HungerDice?.Length ?? 0}, " +
-                  $"сложность {build.Difficulty})");
-        eb.AddField("Пул", string.Join("\n", lines), inline: false);
+        if (build.HealthPenalty != 0)
+        {
+            poolLines.Add($"Штраф за здоровье: {build.HealthPenalty}");
+        }
+        eb.AddField("Пул", string.Join("\n", poolLines), inline: false);
 
+        // Кубики — обычной строкой. Картинки кубиков будут подключены отдельно.
         var regularStr = (result.RegularDice == null || result.RegularDice.Length == 0)
             ? "—"
             : string.Join(", ", result.RegularDice);
@@ -329,29 +350,9 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
             (result.BonusDie.HasValue ? $"\nБонусный куб: {result.BonusDie}" : ""),
             inline: false);
 
-        // V20: специализация удваивает десятки только в regular.
-        int regTens = result.RegularDice?.Count(d => d == 10) ?? 0;
-        int regSixesToNines = result.RegularDice?.Count(d => d >= 6 && d < 10) ?? 0;
-        int hungTens = result.HungerDice?.Count(d => d == 10) ?? 0;
-        int hungSixesToNines = result.HungerDice?.Count(d => d >= 6 && d < 10) ?? 0;
-        string breakdown =
-            !string.IsNullOrEmpty(build.Specialization)
-                ? $"regular: 6–9 × {regSixesToNines} + 10 × {regTens}×2 «{build.Specialization}» = {regSixesToNines + regTens * 2}\n" +
-                  $"hunger: 6–9 × {hungSixesToNines} + 10 × {hungTens} = {hungSixesToNines + hungTens}"
-                : $"regular: 6–9 × {regSixesToNines} + 10 × {regTens} = {regSixesToNines + regTens}\n" +
-                  $"hunger: 6–9 × {hungSixesToNines} + 10 × {hungTens} = {hungSixesToNines + hungTens}";
-
-        eb.AddField(
-            "Подсчёт успехов (V20+V5)",
-            breakdown,
-            inline: false);
-
         eb.AddField(
             "Итог",
             $"**{successes}** успехов" +
-            (successes >= build.Difficulty
-                ? $" — успех против сложности {build.Difficulty}"
-                : $" — провал против сложности {build.Difficulty}") +
             (result.IsMessyCritical ? "\n⚠ **Messy Critical** — есть успех + хотя бы одна 1-ца в hunger" : "") +
             (result.IsBestialFailure ? "\n⚠ **Bestial Failure** — нет успехов + хотя бы одна 1-ца в hunger" : ""),
             inline: true);
@@ -504,11 +505,20 @@ public static class RollContext
                     $"Дисциплина «{disciplineResolvedName}» не изучена персонажем.");
         }
 
-        int pool = characteristicValue + abilityValue + disciplineValue + bonusDice;
+        // V20 стр. 287: штраф за раны вычитается из пула автоматически.
+        // Используем TablePenalty (по V20 стр. 92): 0 для «помят», -1 для
+        // «легко ранен» / «ранен», -2 для «серьёзно» / «тяжело», -5 для
+        // «совсем плох», 0 для «небоеспособен» (там IsIncapacitated).
+        // Не путать с Health.Penalty — это индекс ячейки, а не штраф.
+        // TablePenalty по построению ≤ 0, поэтому просто складываем.
+        int healthPenalty = character.Health?.TablePenalty ?? 0;
+        int bonusWithPenalty = bonusDice + healthPenalty;
+
+        int pool = characteristicValue + abilityValue + disciplineValue + bonusWithPenalty;
         if (pool < 1)
             throw new ArgumentException(
                 $"Итоговый пул {pool} < 1 (хар-ка {characteristicValue}, навык {abilityValue}, " +
-                $"дисциплина {disciplineValue}, бонус {bonusDice}).");
+                $"дисциплина {disciplineValue}, бонус {bonusDice}, штраф за здоровье {healthPenalty}).");
 
         var hunger = Math.Clamp(character.Hunger, 0, VampireDicePool.MaxHunger);
 
@@ -524,7 +534,8 @@ public static class RollContext
             DisciplineName: disciplineResolvedName,
             DisciplineValue: disciplineValue,
             BonusDice: bonusDice,
-            AbilityMissingPenalty: !hasAbility);
+            AbilityMissingPenalty: !hasAbility,
+            HealthPenalty: healthPenalty);
     }
 
     /// <summary>
@@ -542,7 +553,8 @@ public static class RollContext
         string? DisciplineName,
         int DisciplineValue,
         int BonusDice,
-        bool AbilityMissingPenalty);
+        bool AbilityMissingPenalty,
+        int HealthPenalty);
 }
 
 /// <summary>

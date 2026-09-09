@@ -9,11 +9,16 @@ using RPBot.VtM;
 namespace RPBot.SlashModules;
 
 /// <summary>
-/// Обработчик автокомплита для <c>/vampire_roll</c>.
+/// Обработчик автокомплита для VtM slash-команд.
 /// <para>Discord жёстко ограничивает <c>SlashCommandOptionBuilder.Choices</c> до 25 элементов,
-/// а всего в VtM V20 — 9 характеристик + 30 навыков + 28+ дисциплин. Поэтому все
-/// текстовые опции зарегистрированы с <c>WithAutocomplete(true)</c> и подсказки
+/// поэтому все текстовые опции зарегистрированы с <c>WithAutocomplete(true)</c> и подсказки
 /// отдаются динамически через этот обработчик.</para>
+/// <para>Обслуживает команды:
+/// <list type="bullet">
+///   <item><c>/vampire_roll</c> — поля «характеристика», «навык», «дисциплина».</item>
+///   <item><c>/vampire_damage</c> — поля «манёвр», «оружие».</item>
+/// </list>
+/// </para>
 /// <para>Подключение: <c>Program.cs</c> подписывается на
 /// <c>DiscordSocketClient.AutocompleteExecuted</c> и делегирует событие сюда.</para>
 /// </summary>
@@ -25,9 +30,9 @@ public static class VampireRollAutocompleteHandler
     /// <summary>
     /// Вернуть до 25 подсказок для текущего поля.
     /// </summary>
-    public static IReadOnlyList<AutocompleteResult> Suggest(string focusedOption, string userInput)
+    public static IReadOnlyList<AutocompleteResult> Suggest(string commandName, string focusedOption, string userInput)
     {
-        var candidates = BuildCandidates(focusedOption);
+        var candidates = BuildCandidates(commandName, focusedOption);
         if (candidates == null) return Array.Empty<AutocompleteResult>();
 
         if (string.IsNullOrWhiteSpace(userInput))
@@ -48,19 +53,45 @@ public static class VampireRollAutocompleteHandler
     /// <summary>
     /// Возвращает список имён для указанного поля. Если поле неизвестно — <c>null</c>.
     /// </summary>
-    private static IReadOnlyList<string>? BuildCandidates(string focusedOption)
+    private static IReadOnlyList<string>? BuildCandidates(string commandName, string focusedOption)
     {
-        return focusedOption switch
+        return (commandName, focusedOption) switch
         {
-            "характеристика" => VampireParameterCatalog.Characteristics.ToList(),
-            "навык" => (IReadOnlyList<string>)VampireParameterCatalog
+            ("vampire_roll", "характеристика") => VampireParameterCatalog.Characteristics.ToList(),
+            ("vampire_roll", "навык") => (IReadOnlyList<string>)VampireParameterCatalog
                 .Talents
                 .Concat(VampireParameterCatalog.Skills)
                 .Concat(VampireParameterCatalog.Knowledges)
                 .ToArray(),
-            "дисциплина" => VampireParameterCatalog.AllDisciplines.ToList(),
+            ("vampire_roll", "дисциплина") => VampireParameterCatalog.AllDisciplines.ToList(),
+            ("vampire_damage", "манёвр") => BuildManeuverCandidates(),
+            ("vampire_damage", "оружие") => BuildWeaponCandidates(),
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Все манёвры из каталога (ближний + дистанционный бой), отсортированные по имени.
+    /// </summary>
+    private static IReadOnlyList<string> BuildManeuverCandidates()
+    {
+        var names = new List<string>();
+        foreach (var m in VampireManeuverCatalog.Melee) names.Add(m.Name);
+        foreach (var m in VampireManeuverCatalog.Ranged) names.Add(m.Name);
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names;
+    }
+
+    /// <summary>
+    /// Всё оружие из каталога, отсортированное по имени.
+    /// </summary>
+    private static IReadOnlyList<string> BuildWeaponCandidates()
+    {
+        var names = new List<string>();
+        foreach (var w in VampireManeuverCatalog.MeleeWeapons) names.Add(w.Name);
+        foreach (var w in VampireManeuverCatalog.RangedWeapons) names.Add(w.Name);
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names;
     }
 
     /// <summary>
@@ -71,13 +102,13 @@ public static class VampireRollAutocompleteHandler
     {
         try
         {
-            if (interaction?.Data?.CommandName != "vampire_roll")
+            if (interaction?.Data?.CommandName is not ("vampire_roll" or "vampire_damage"))
                 return; // нас не звали
 
             var focused = interaction.Data.Options.FirstOrDefault(o => o.Focused);
             if (focused == null) return;
 
-            var results = Suggest(focused.Name, focused.Value?.ToString() ?? "");
+            var results = Suggest(interaction.Data.CommandName, focused.Name, focused.Value?.ToString() ?? "");
             await interaction.RespondAsync(results);
         }
         catch (Exception ex)

@@ -37,20 +37,41 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         builder.Add(new SlashCommandBuilder()
             .WithName("vampire_damage")
             .WithDescription(
-                "Рассчитать пул урона по формуле V20 (стр. 301): база + max(0, успехи−1).")
-            .AddOption(new SlashCommandOptionBuilder()
-                .WithName("base")
-                .WithDescription("База манёвра или оружия. Напр.: 4 для револьвера .38, «Сила+1» для ножа.")
-                .WithType(ApplicationCommandOptionType.Integer)
-                .WithRequired(true))
+                "Рассчитать пул урона по формуле V20 (стр. 301): база + max(0, успехи−1). " +
+                "Можно указать манёвр — бот сам подставит базу и тип урона.")
             .AddOption(new SlashCommandOptionBuilder()
                 .WithName("attack")
                 .WithDescription("Успехи проверки атаки (≥0).")
                 .WithType(ApplicationCommandOptionType.Integer)
                 .WithRequired(true))
             .AddOption(new SlashCommandOptionBuilder()
+                .WithName("манёвр")
+                .WithDescription(
+                    "Манёвр из справочника V20 (напр. «Укус», «Клинч», «Длинная очередь»). " +
+                    "Бот подставит базу и тип урона. Нельзя совмещать с base/damage_type.")
+                .WithType(ApplicationCommandOptionType.String)
+                .WithRequired(false)
+                .WithAutocomplete(true))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("оружие")
+                .WithDescription(
+                    "Оружие (нужно, если манёвр с формулой «Оружие» — напр. «Длинная очередь»). " +
+                    "Бот подставит фиксированную базу и тип.")
+                .WithType(ApplicationCommandOptionType.String)
+                .WithRequired(false)
+                .WithAutocomplete(true))
+            .AddOption(new SlashCommandOptionBuilder()
+                .WithName("base")
+                .WithDescription(
+                    "База манёвра/оружия вручную (если манёвр не указан). " +
+                    "Напр.: 4 для револьвера .38, «Сила+1» для ножа.")
+                .WithType(ApplicationCommandOptionType.Integer)
+                .WithRequired(false))
+            .AddOption(new SlashCommandOptionBuilder()
                 .WithName("damage_type")
-                .WithDescription("Тип наносимого повреждения (влияет только на текст справки).")
+                .WithDescription(
+                    "Тип повреждения вручную (если манёвр не указан). " +
+                    "Влияет только на текст подписи.")
                 .WithType(ApplicationCommandOptionType.String)
                 .AddChoice("лёгкое", "light")
                 .AddChoice("тяжёлое", "aggravated")
@@ -122,19 +143,194 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
 
     private static async Task<bool> HandleDamageAsync(SocketSlashCommand command)
     {
-        if (!TryGetInt(command, "base", out var baseVal) ||
-            !TryGetInt(command, "attack", out var attack))
+        // attack всегда обязателен.
+        if (!TryGetInt(command, "attack", out var attack))
         {
             await command.RespondAsync(
-                "Все числовые параметры должны быть целыми числами.",
+                "Параметр `attack` должен быть целым числом.",
+                ephemeral: true);
+            return true;
+        }
+        if (attack < 0)
+        {
+            await command.RespondAsync(
+                "Параметр `attack` не может быть отрицательным.",
                 ephemeral: true);
             return true;
         }
 
-        if (baseVal < 0 || attack < 0)
+        var maneuverKey = TryGetString(command, "манёвр")?.Trim();
+        var weaponKey = TryGetString(command, "оружие")?.Trim();
+        var hasBase = TryGetInt(command, "base", out var baseVal);
+        var damageTypeRaw = TryGetString(command, "damage_type");
+        var label = TryGetString(command, "label");
+
+        // Конфликт: пользователь указал и манёвр, и (base / damage_type).
+        var hasManualOverride = hasBase || !string.IsNullOrWhiteSpace(damageTypeRaw);
+        if (!string.IsNullOrEmpty(maneuverKey) && hasManualOverride)
         {
             await command.RespondAsync(
-                "Параметры `base` и `attack` не могут быть отрицательными.",
+                "Указаны и `манёвр`, и `base`/`damage_type`. " +
+                "Выбери что-то одно: либо манёвр (бот сам подставит базу и тип), " +
+                "либо ручные `base`+`damage_type`.",
+                ephemeral: true);
+            return true;
+        }
+
+        // Резолвим источник базы и тип урона.
+        int resolvedBase;
+        string resolvedDamageTypeKey; // "light" | "aggravated" | "deadly"
+        Maneuver? resolvedManeuver = null;
+        Weapon? resolvedWeapon = null;
+
+        if (!string.IsNullOrEmpty(maneuverKey))
+        {
+            // Ищем манёвр в объединённом списке ближнего и дистанционного боя.
+            resolvedManeuver =
+                Maneuver.Find(VampireManeuverCatalog.Melee, maneuverKey)
+                ?? Maneuver.Find(VampireManeuverCatalog.Ranged, maneuverKey);
+
+            if (resolvedManeuver == null)
+            {
+                await command.RespondAsync(
+                    $"Манёвр «{maneuverKey}» не найден. Используй автокомплит.",
+                    ephemeral: true);
+                return true;
+            }
+
+            // Парсим формулу урона.
+            switch (resolvedManeuver.DamageFormula.Trim())
+            {
+                case "Сила":
+                    // «Сила» — чистая Сила активного персонажа.
+                    var str = await ResolveActiveStrengthAsync(command);
+                    if (str < 0)
+                    {
+                        await command.RespondAsync(
+                            "Манёвр «Сила» требует активного персонажа с заполненной Силой.",
+                            ephemeral: true);
+                        return true;
+                    }
+                    resolvedBase = str;
+                    break;
+
+                case "Оружие":
+                    // Требуется опция `оружие`.
+                    if (string.IsNullOrEmpty(weaponKey))
+                    {
+                    await command.RespondAsync(
+                        $"Манёвр «{resolvedManeuver.Name}» требует указания оружия. " +
+                        "Добавь опцию `оружие`.",
+                        ephemeral: true);
+                    return true;
+                    }
+                    resolvedWeapon = ResolveWeapon(weaponKey);
+                    if (resolvedWeapon == null)
+                    {
+                        await command.RespondAsync(
+                        $"Оружие «{weaponKey}» не найдено. Используй автокомплит.",
+                        ephemeral: true);
+                    return true;
+                    }
+                    resolvedBase = ResolveBaseFromWeapon(resolvedWeapon);
+                    if (resolvedWeapon.DamageFormulaKind == WeaponDamageKind.StrengthPlus)
+                    {
+                    var s2 = await ResolveActiveStrengthAsync(command);
+                    if (s2 < 0)
+                    {
+                        await command.RespondAsync(
+                            $"Оружие «{resolvedWeapon.Name}» требует активного персонажа.",
+                            ephemeral: true);
+                        return true;
+                    }
+                    resolvedBase += s2;
+                    }
+                    break;
+
+                case "—":
+                case "Особый":
+                    await command.RespondAsync(
+                    $"Манёвр «{resolvedManeuver.Name}» не наносит урона числом — " +
+                    "это защитное или особое действие.",
+                    ephemeral: true);
+                    return true;
+
+                default:
+                    // Пытаемся распарсить «Сила+N», «Сила + N», «N».
+                    if (!TryParseDamageFormula(resolvedManeuver.DamageFormula,
+                        out var fixedPart, out var usesStrength))
+                    {
+                    await command.RespondAsync(
+                        $"Не удалось разобрать формулу урона «{resolvedManeuver.DamageFormula}» " +
+                        $"для манёвра «{resolvedManeuver.Name}». " +
+                        "Укажи `base` и `damage_type` вручную.",
+                        ephemeral: true);
+                    return true;
+                    }
+
+                    if (usesStrength)
+                    {
+                    // «Сила + N»: база = Сила персонажа + N.
+                    var s = await ResolveActiveStrengthAsync(command);
+                    if (s < 0)
+                    {
+                        await command.RespondAsync(
+                            $"Манёвр «{resolvedManeuver.Name}» использует Силу, " +
+                            "но активный персонаж не привязан.",
+                            ephemeral: true);
+                        return true;
+                    }
+                    resolvedBase = s + (fixedPart ?? 0);
+                    }
+                    else
+                    {
+                    // Просто число.
+                    resolvedBase = fixedPart ?? 0;
+                    }
+                    break;
+            }
+
+            resolvedDamageTypeKey = MapDamageTypeToKey(resolvedManeuver.DamageKind);
+        }
+        else if (!string.IsNullOrEmpty(weaponKey) && !hasBase)
+        {
+            // Оружие без манёвра — фиксированная база.
+            resolvedWeapon = ResolveWeapon(weaponKey);
+            if (resolvedWeapon == null)
+            {
+                await command.RespondAsync(
+                    $"Оружие «{weaponKey}» не найдено. Используй автокомплит.",
+                    ephemeral: true);
+                return true;
+            }
+            resolvedBase = ResolveBaseFromWeapon(resolvedWeapon);
+            resolvedDamageTypeKey = MapDamageTypeToKey(resolvedWeapon.DamageType);
+        }
+        else if (hasBase)
+        {
+            // Ручной режим.
+            if (baseVal < 0)
+            {
+                await command.RespondAsync(
+                    "Параметр `base` не может быть отрицательным.",
+                    ephemeral: true);
+                return true;
+            }
+            resolvedBase = baseVal;
+            resolvedDamageTypeKey = string.IsNullOrWhiteSpace(damageTypeRaw) ? "light" : damageTypeRaw;
+        }
+        else
+        {
+            await command.RespondAsync(
+                "Укажи либо `манёвр` (и при необходимости `оружие`), либо `base` + `damage_type`.",
+                ephemeral: true);
+            return true;
+        }
+
+        if (resolvedBase < 0)
+        {
+            await command.RespondAsync(
+                "Итоговая база урона не может быть отрицательной.",
                 ephemeral: true);
             return true;
         }
@@ -142,16 +338,13 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         VampireCombatDamageResolver.Pool pool;
         try
         {
-            pool = VampireCombatDamageResolver.ComputePool(baseVal, attack);
+            pool = VampireCombatDamageResolver.ComputePool(resolvedBase, attack);
         }
         catch (ArgumentOutOfRangeException ex)
         {
             await command.RespondAsync($"Параметр вне диапазона: {ex.Message}", ephemeral: true);
             return true;
         }
-
-        var damageTypeRaw = TryGetString(command, "damage_type") ?? "light";
-        var label = TryGetString(command, "label");
 
         var rng = new SystemRandomAdapter();
         var dice = Enumerable.Range(0, pool.DamagePoolSize)
@@ -161,19 +354,22 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
 
         var eb = new EmbedBuilder
         {
-            Title = "⚔️ Урон по VtM V20",
             Color = new Color(0xC41E3A),
         };
+
+        // Название: либо манёвр, либо оружие, либо подпись.
+        var headerName = !string.IsNullOrWhiteSpace(label)
+            ? label
+            : resolvedManeuver?.Name
+              ?? resolvedWeapon?.Name
+              ?? "Нанесение урона";
+        eb.AddField("Нанесение урона", headerName, inline: false);
 
         eb.AddField(
             "Формула",
             $"база ({pool.BaseManeuver}) + max(0, успехи−1) ({pool.ExcessSuccesses}) = **{pool.DamagePoolSize}**",
             inline: false);
 
-        if (!string.IsNullOrWhiteSpace(label))
-        {
-            eb.AddField("Атака", label, inline: true);
-        }
         eb.AddField("Доп. успехи", pool.ExcessSuccesses.ToString(), inline: true);
 
         var diceStr = dice.Length == 0
@@ -181,32 +377,112 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
             : string.Join(", ", dice);
         eb.AddField("🎲 Пул урона", $"Бросок: {diceStr}\nСложность 6 → **{successes}** успех(ов)", inline: false);
 
-        var typeText = damageTypeRaw switch
+        var typeText = resolvedDamageTypeKey switch
         {
             "aggravated" => "Тяжёлое повреждение (Х)",
             "deadly" => "Губительное повреждение (Ж)",
             _ => "Лёгкое повреждение (/)",
         };
         eb.AddField("Тип повреждения", typeText, inline: true);
-        eb.AddField(
-            "Куда отмечать",
-            typeText switch
-            {
-                "Тяжёлое повреждение (Х)" => "В клетке «тяж. ранен» — крестик Х, остальные сдвигаются вниз.",
-                "Губительное повреждение (Ж)" => "В клетке «тяж. ранен» — перечёркнутый крестик Ж.",
-                _ => "В клетке «помят» — косая черта /, остальные сдвигаются вниз.",
-            },
-            inline: false);
 
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "Vampire: the Masquerade V20, стр. 301-302. Игрок сам вносит повреждения в свой лист.",
+            Text = "Vampire: the Masquerade V20, стр. 301-302.",
         };
 
         if (!await VampireRollChannelPublisher.PublishAsync(command, eb.Build()))
             return true;
         return true;
     }
+
+    /// <summary>
+    /// Достаёт Силу активного персонажа. Возвращает -1, если активного чарника нет
+    /// или Сила не заполнена.
+    /// </summary>
+    private static async Task<int> ResolveActiveStrengthAsync(SocketSlashCommand command)
+    {
+        var lookup = RollContext.ActiveCharacterLookup;
+        if (lookup == null || !command.GuildId.HasValue) return -1;
+        var active = await lookup(command.GuildId.Value, command.User.Id);
+        if (active == null || active.Character == null) return -1;
+        if (active.Character.Attributes == null) return -1;
+        if (!active.Character.Attributes.TryGetValue("Сила", out var v)) return -1;
+        return v;
+    }
+
+    /// <summary>
+    /// Ищет оружие по ключу в списке ближнего и дистанционного оружия.
+    /// </summary>
+    private static Weapon? ResolveWeapon(string key)
+    {
+        foreach (var w in VampireManeuverCatalog.MeleeWeapons)
+            if (w.Key == key) return w;
+        foreach (var w in VampireManeuverCatalog.RangedWeapons)
+            if (w.Key == key) return w;
+        return null;
+    }
+
+    /// <summary>
+    /// Возвращает числовую базу урона для оружия. Для StrengthPlus — N (без Силы,
+    /// потому что Сила прибавляется отдельно в формуле манёвра).
+    /// </summary>
+    private static int ResolveBaseFromWeapon(Weapon w)
+    {
+        // У оружия DamageBase уже содержит фиксированную часть: «Сила+2» → 2.
+        return w.DamageBase;
+    }
+
+    /// <summary>
+    /// Парсит формулу урона. Возвращает true, если получилось.
+    /// <list type="bullet">
+    ///   <item>«Сила» → fixedPart=null, usesStrength=true (но этот случай обработан отдельно).</item>
+    ///   <item>«Сила + N» → fixedPart=N, usesStrength=true.</item>
+    ///   <item>«N» → fixedPart=N, usesStrength=false.</item>
+    /// </list>
+    /// </summary>
+    private static bool TryParseDamageFormula(
+        string formula, out int? fixedPart, out bool usesStrength)
+    {
+        fixedPart = null;
+        usesStrength = false;
+        if (string.IsNullOrWhiteSpace(formula)) return false;
+        var f = formula.Trim();
+
+        // Только число.
+        if (int.TryParse(f, out var justNumber))
+        {
+            fixedPart = justNumber;
+            return true;
+        }
+
+        // «Сила» или «Сила+N» или «Сила + N».
+        if (f.StartsWith("Сила", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = f.Substring("Сила".Length).Trim();
+            if (string.IsNullOrEmpty(rest))
+            {
+                usesStrength = true;
+                return true;
+            }
+            rest = rest.TrimStart('+', ' ').Trim();
+            if (int.TryParse(rest, out var n))
+            {
+                fixedPart = n;
+                usesStrength = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Маппинг <see cref="DamageType"/> → ключ команды /vampire_damage.</summary>
+    private static string MapDamageTypeToKey(DamageType t) => t switch
+    {
+        DamageType.Lethal => "aggravated",
+        DamageType.Aggravated => "deadly",
+        _ => "light",
+    };
 
     private static async Task<bool> HandleHelpAsync(SocketSlashCommand command)
     {
