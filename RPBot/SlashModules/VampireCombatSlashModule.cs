@@ -105,27 +105,32 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
         return builder;
     }
 
+    /// <summary>
+    /// Построить команду-справочник: одно текстовое поле <c>name</c>,
+    /// которое handler ниже ищет в каталоге (<see cref="VampireManeuverCatalog"/>).
+    /// </summary>
+    /// <remarks>
+    /// Раньше здесь перечислялись <c>AddChoice</c> для всех записей каталога —
+    /// это ломалось на Discord: одна и та же опция <c>name</c> объявлялась
+    /// N+1 раз, и при регистрации приходил ответ
+    /// <c>APPLICATION_COMMAND_OPTIONS_NAME_INVALID: Option name name is already used</c>.
+    /// Сейчас поле одно, и игрок вводит название/ключ руками
+    /// (autocomplete можно добавить позже через <c>ISlashCommandModule</c>).
+    /// </remarks>
     private static SlashCommandBuilder BuildChoiceCommand(
-        string name, string description, IReadOnlyList<(string Label, string Value)> choices)
+        string name, string description,
+        IReadOnlyList<(string Label, string Value)> _choices)
     {
-        var b = new SlashCommandBuilder()
+        return new SlashCommandBuilder()
             .WithName(name)
             .WithDescription(description)
             .AddOption(new SlashCommandOptionBuilder()
                 .WithName("name")
-                .WithDescription("Название из справочника.")
+                .WithDescription(
+                    $"Название или ключ (доступно {_choices.Count} записей; " +
+                    "можно ввести по-русски или ключом).")
                 .WithType(ApplicationCommandOptionType.String)
                 .WithRequired(true));
-        foreach (var c in choices)
-        {
-            b.AddOption(new SlashCommandOptionBuilder()
-                .WithName("name")
-                .WithDescription(c.Label)
-                .WithType(ApplicationCommandOptionType.String)
-                .AddChoice(c.Label, c.Value)
-                .WithRequired(true));
-        }
-        return b;
     }
 
     public Task<bool> DispatchAsync(SocketSlashCommand command)
