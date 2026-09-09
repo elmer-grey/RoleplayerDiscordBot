@@ -165,4 +165,60 @@ public static class VampireRollChannelPublisher
         await channel.SendMessageAsync(embed: embed, components: components);
         return true;
     }
+
+    /// <summary>
+    /// Обновить embed + кнопки в существующем сообщении, и (если есть
+    /// <paramref name="extraAttachments"/>) отправить их отдельным
+    /// сообщением сразу под ним.
+    /// </summary>
+    /// <remarks>
+    /// Используется handler'ом переброса/повтора: после нажатия кнопки
+    /// меняется embed, и под ним публикуются PNG-кубы нового результата
+    /// (Discord embed не вмещает несколько картинок).
+    /// </remarks>
+    /// <param name="targetMessage">Сообщение, которое нужно обновить (в нём embed + кнопки).</param>
+    /// <param name="embed">Новый embed.</param>
+    /// <param name="components">Новые кнопки (например, после переброса — «Повторить» + «Готово»).</param>
+    /// <param name="extraAttachments">PNG-файлы нового броска. null/пусто = ничего не шлём.</param>
+    public static async Task<bool> ReplaceEmbedAndSendAttachmentsAsync(
+        IUserMessage targetMessage,
+        Embed embed,
+        MessageComponent? components = null,
+        IReadOnlyList<FileAttachment>? extraAttachments = null)
+    {
+        if (targetMessage == null) return false;
+        try
+        {
+            await targetMessage.ModifyAsync(msg =>
+            {
+                msg.Embed = embed;
+                msg.Components = components;
+            });
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (extraAttachments != null && extraAttachments.Count > 0)
+        {
+            try
+            {
+                var channel = targetMessage.Channel as ITextChannel;
+                if (channel != null)
+                {
+                    await channel.SendFilesAsync(extraAttachments,
+                        messageReference: new MessageReference(
+                            targetMessage.Id,
+                            failIfNotExists: false),
+                        allowedMentions: AllowedMentions.None);
+                }
+            }
+            catch
+            {
+                // embed уже обновлён; PNG — best-effort.
+            }
+        }
+        return true;
+    }
 }

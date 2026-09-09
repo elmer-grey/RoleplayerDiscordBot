@@ -45,7 +45,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
             new SlashCommandBuilder()
                 .WithName("vampire_roll")
                 .WithDescription(
-                    "Бросить кубы VtM V20: выбери характеристику и (опц.) навык и дисциплину. " +
+                    "Бросить кубы VtM: выбери характеристику и (опц.) навык и дисциплину. " +
                     "Под сообщением появятся кнопки «Переброс за волю», «Повторить», «Готово».")
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("характеристика")
@@ -90,7 +90,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
                 .AddOption(new SlashCommandOptionBuilder()
                     .WithName("сложность")
                     .WithDescription(
-                        "Сложность проверки (2..10). По умолчанию 6 — стандартная для V20.")
+                        "Сложность проверки (2..10). По умолчанию 6 — стандартная.")
                     .WithType(ApplicationCommandOptionType.Integer)
                     .WithRequired(false)
                     .AddChoice("2", 2L)
@@ -112,7 +112,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
                     .WithDescription(
                         "Специализация ad-hoc для этого броска (свободный текст). " +
                         "Если не указана — используется специализация из листа персонажа. " +
-                        "Специализация удваивает десятки: каждая выпавшая 10 = 2 успеха (V20).")
+                        "Специализация удваивает десятки: каждая выпавшая 10 = 2 успеха.")
                     .WithType(ApplicationCommandOptionType.String)
                     .WithRequired(false))
         };
@@ -367,9 +367,7 @@ public sealed class VampireRollSlashModule : ISlashCommandModule
 
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "V20: специализация удваивает десятки в regular. " +
-                   "V5: hunger-кубы не перебрасываются за волю. " +
-                   "Переброс за волю (−1 WP), повтор (N-1), готово — кнопки под сообщением.",
+            Text = "Переброс за волю (−1 WP), повтор, готово — кнопки под сообщением.",
         };
 
         return eb.Build();

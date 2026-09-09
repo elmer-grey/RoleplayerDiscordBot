@@ -197,11 +197,14 @@ public sealed class VampireRollButtonHandler
         // а переброс за волю повторно в этом броске уже невозможен (запись удалена).
         // Без кнопки «Специализация»: после переброса новые действия недоступны,
         // и индикатор специализации уже отображается в самом embed.
-        await component.Message.ModifyAsync(msg =>
-        {
-            msg.Embed = embed;
-            msg.Components = VampireRollComponents.BuildRepeatOnlyButtons(originalUserId);
-        });
+        //
+        // Сразу под обновлённым embed'ом публикуем PNG-кубы нового результата —
+        // иначе пользователь не увидит, что изменилось после переброса.
+        var attachments = VampireDiceImageProvider.Build(newRegular, snapshot.HungerDice).Files;
+        await VampireRollChannelPublisher.ReplaceEmbedAndSendAttachmentsAsync(
+            component.Message, embed,
+            components: VampireRollComponents.BuildRepeatOnlyButtons(originalUserId),
+            extraAttachments: attachments);
         await component.RespondAsync(
             $"Переброс за волю: −1 WP (осталось {active.Character.WillpowerPoints}).",
             ephemeral: true);
@@ -319,7 +322,7 @@ public sealed class VampireRollButtonHandler
         var hunStr = repeat.NewHungerDice.Length == 0 ? "—" : string.Join(", ", repeat.NewHungerDice);
         var eb = new EmbedBuilder
         {
-            Title = "🔁 Повторная попытка по V20 (сложность +1)",
+            Title = "🔁 Повторная попытка (сложность +1)",
             Color = new Color(0x5B3A8C),
         };
         eb.AddField("Сложность", $"{snapshot.Difficulty} → {repeat.NewDifficulty}", inline: true);
@@ -341,17 +344,20 @@ public sealed class VampireRollButtonHandler
             inline: false);
         eb.Footer = new EmbedFooterBuilder
         {
-            Text = "V20 стр. 286: повторная попытка не меняет пул, повышает сложность на 1.",
+            Text = "Повторная попытка не меняет пул, повышает сложность на 1.",
         };
 
         // Оставляем «🎲 Переброс за волю + Готово»: переброс на новом пуле снова доступен,
         // но ещё одна повторная попытка подряд уже не предлагается (рассказчик решает,
         // продолжать ли рост сложности дальше через ещё один «Повторить»).
-        await component.Message.ModifyAsync(msg =>
-        {
-            msg.Embed = eb.Build();
-            msg.Components = VampireRollComponents.BuildRerollOnlyButtons(originalUserId);
-        });
+        //
+        // Сразу под обновлённым embed'ом публикуем PNG-кубы нового результата —
+        // иначе пользователь не увидит, что изменилось после повтора.
+        var attachments = VampireDiceImageProvider.Build(repeat.NewRegularDice, repeat.NewHungerDice).Files;
+        await VampireRollChannelPublisher.ReplaceEmbedAndSendAttachmentsAsync(
+            component.Message, eb.Build(),
+            components: VampireRollComponents.BuildRerollOnlyButtons(originalUserId),
+            extraAttachments: attachments);
         await component.RespondAsync(
             $"Повторная попытка: сложность {snapshot.Difficulty} → {repeat.NewDifficulty}.",
             ephemeral: true);
