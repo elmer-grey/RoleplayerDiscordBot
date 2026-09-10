@@ -79,7 +79,7 @@ public static class VampireSheetEmbed
         {
             eb.AddField(new EmbedFieldBuilder
             {
-                Name = "════════ Идентификация ════════",
+                Name = "**Идентификация**",
                 Value = string.Join("\n", headerLines),
                 IsInline = false,
             });
@@ -88,7 +88,7 @@ public static class VampireSheetEmbed
         // Характеристики — три inline-колонки (Физ / Соц / Мент), как у Способностей.
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Характеристики ────────",
+            Name = "**Характеристики**",
             Value = BuildCharacteristicColumn(character, VampireParameterCatalog.Physical, "Физические"),
             IsInline = true,
         });
@@ -108,7 +108,7 @@ public static class VampireSheetEmbed
         // Способности: три колонки (Таланты / Навыки / Знания) со специализациями при value ≥ 4.
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Способности ────────",
+            Name = "**Способности**",
             Value = BuildAbilityColumn(character, VampireParameterCatalog.Talents),
             IsInline = true,
         });
@@ -128,7 +128,7 @@ public static class VampireSheetEmbed
         // Преимущества: три колонки (Дисциплины / Факты биографии / Добродетели).
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Преимущества ────────",
+            Name = "**Преимущества**",
             Value = BuildAdvantagesColumn(character),
             IsInline = true,
         });
@@ -148,25 +148,25 @@ public static class VampireSheetEmbed
         // Нижний ряд: Достоинства-Недостатки / Суть / Мораль / Здоровье-Изъян-Опыт.
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Достоинства и недостатки ────────",
+            Name = "**Достоинства и недостатки**",
             Value = BuildMeritsFlawsBlock(character),
             IsInline = true,
         });
         eb.AddField(new EmbedFieldBuilder
         {
-            Name = "──────── Суть ────────",
+            Name = "**Суть**",
             Value = BuildEssenceBlock(character),
             IsInline = true,
         });
         eb.AddField(new EmbedFieldBuilder
         {
-                    Name = "──────── Мораль ────────",
+                    Name = "**Мораль**",
                     Value = VampireMoralityEmbed.BuildBlock(character),
             IsInline = true,
         });
                 eb.AddField(new EmbedFieldBuilder
                 {
-                    Name = "──────── Здоровье и опыт ────────",
+                    Name = "**Здоровье и опыт**",
                     Value = BuildHealthExperienceBlock(character),
                     IsInline = true,
                 });
