@@ -329,7 +329,11 @@ public static class VampireWizardDmHandler
             session.DmChannelId = dmChannel.Id;
 
             var text = VampireFinishingResolver.BuildStatusMessage(session.Draft);
-            var components = VampireWizardComponents.BuildForFinishingStep(session.Draft);
+            var components = VampireWizardComponents.BuildForFinishingStep(
+                session.Draft,
+                session.FreebieCascadeStep,
+                session.FinishingTarget,
+                session.FinishingSubgroup);
             await RenderIntoAsync(dmChannel, session, text, components);
         }
 

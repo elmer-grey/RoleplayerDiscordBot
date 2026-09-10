@@ -147,6 +147,16 @@ public enum VampireWizardAction
 
                                 /// <summary>SelectMenu свободных пунктов: target+field+sign. Action-arg = "{sign}:{target}:{field}".</summary>
                                 FinishingInc,
+                                /// <summary>Шаг 5 каскад: выбор категории свободного пункта (Step 1).</summary>
+                                FinishingPickTarget,
+                                /// <summary>Шаг 5 каскад: выбор подгруппы (Step 2, только Attribute/Ability). Action-arg = target.</summary>
+                                FinishingPickSubgroup,
+                                /// <summary>Шаг 5 каскад: применить +/− к выбранному полю (Step 3). Action-arg = "{sign}:{target}:{subgroup}:{field}".</summary>
+                                FinishingApplyField,
+                                /// <summary>Шаг 5 каскад: вернуться с подгруппы (Step 2) на категории (Step 1).</summary>
+                                FinishingBackFromSubgroup,
+                                /// <summary>Шаг 5 каскад: вернуться с поля (Step 3) на подгруппу (Step 2).</summary>
+                                FinishingBackFromField,
                                 /// <summary>Кнопка «Сбросить всё» на Шаге 5 (откатить все траты).</summary>
                                 FinishingReset,
                                 /// <summary>Завершить Шаг 5 и перейти к Шагу 6 (или показать лист).</summary>
@@ -661,17 +671,47 @@ public static class VampireWizardComponents
                                 }
 
                                                                     /// <summary>
-                                                                    /// UI Шага 5 «Последние штрихи»: производные (read-only) +
-                                                                    /// SelectMenu для свободных пунктов 15 (target×field×sign).
+                                                                    /// UI Шага 5 «Последние штрихи» в виде 3-шагового каскада:
+                                                                    /// (1) категория → (2) подгруппа (для Attribute/Ability) → (3) поле.
                                                                     /// </summary>
-                                                                    public static MessageComponent BuildForFinishingStep(VampireCharacter draft)
+                                                                    /// <param name="draft">Текущий черновик.</param>
+                                                                    /// <param name="step">Текущий шаг каскада.</param>
+                                                                    /// <param name="target">Выбранный target (если step = Subgroup или Field).</param>
+                                                                    /// <param name="subgroup">Выбранная подгруппа (если step = Field).</param>
+                                                                    public static MessageComponent BuildForFinishingStep(
+                                                                        VampireCharacter draft,
+                                                                        VampireFreebieCascadeStep step = VampireFreebieCascadeStep.Target,
+                                                                        VampireFinishingResolver.FreebieTarget? target = null,
+                                                                        string? subgroup = null)
                                                                     {
                                                                         if (draft == null) throw new ArgumentNullException(nameof(draft));
                                                                         if (draft.CharacterId == Guid.Empty)
                                                                             throw new ArgumentException("CharacterId обязателен", nameof(draft));
 
                                                                         var cb = new ComponentBuilder();
-                                                                        cb.WithSelectMenu(BuildFinishingSelect(draft));
+
+                                                                        // Step 1 (Target) и Step 2 (Subgroup) — в любом случае
+                                                                        // показываем SelectMenu с 6 категориями.
+                                                                        // Step 3 (Field) — показываем поля выбранной подгруппы.
+                                                                        switch (step)
+                                                                        {
+                                                                            case VampireFreebieCascadeStep.None:
+                                                                            case VampireFreebieCascadeStep.Target:
+                                                                                BuildFinishingTargetSelect(cb, draft);
+                                                                                break;
+                                                                            case VampireFreebieCascadeStep.Subgroup:
+                                                                                if (target.HasValue && !BuildFinishingSubgroupSelect(cb, draft, target.Value))
+                                                                                    BuildFinishingTargetSelect(cb, draft);
+                                                                                else if (!target.HasValue)
+                                                                                    BuildFinishingTargetSelect(cb, draft);
+                                                                                break;
+                                                                            case VampireFreebieCascadeStep.Field:
+                                                                                if (target.HasValue)
+                                                                                    BuildFinishingFieldSelect(cb, draft, target.Value, subgroup);
+                                                                                else
+                                                                                    BuildFinishingTargetSelect(cb, draft);
+                                                                                break;
+                                                                        }
 
                                                                         // Специализации доступны только после завершения Шага 5.
                                                                         // V20 стр. 101: специализация требуется при значении ≥ 4; Шаг 2/3 дают
@@ -693,6 +733,20 @@ public static class VampireWizardComponents
                                                                                 ButtonStyle.Danger);
                                                                         }
 
+                                                                        // Кнопка «⬅ Назад к предыдущему шагу каскада» (только на Step 2/3).
+                                                                        if (step == VampireFreebieCascadeStep.Subgroup)
+                                                                        {
+                                                                            cb.WithButton("⬅ Назад к категориям",
+                                                                                BuildCustomId(VampireWizardAction.FinishingBackFromSubgroup, draft.CharacterId),
+                                                                                ButtonStyle.Secondary);
+                                                                        }
+                                                                        else if (step == VampireFreebieCascadeStep.Field)
+                                                                        {
+                                                                            cb.WithButton("⬅ Назад к подгруппам",
+                                                                                BuildCustomId(VampireWizardAction.FinishingBackFromField, draft.CharacterId),
+                                                                                ButtonStyle.Secondary);
+                                                                        }
+
                                                                         cb.WithButton("⬅ Назад (4.3)", BuildCustomId(VampireWizardAction.BackToAdvantages, draft.CharacterId), ButtonStyle.Secondary)
                                                                           .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.FinishingReset, draft.CharacterId), ButtonStyle.Danger);
 
@@ -712,25 +766,249 @@ public static class VampireWizardComponents
                                                                     }
 
                                                                     /// <summary>
-                                                                    /// SelectMenu Шага 5: каждая опция соответствует одной ячейке и знаку.
-                                                                    /// Формат value: "{sign}:{target}:{field}".
+                                                                    /// Step 1 каскада Шага 5: 6 категорий свободных пунктов.
+                                                                    /// В лейбле — категория и цена одного пункта. Текущие вложения НЕ показываем.
                                                                     /// </summary>
-                                                                    private static SelectMenuBuilder BuildFinishingSelect(VampireCharacter draft)
+                                                                    private static void BuildFinishingTargetSelect(
+                                                                        ComponentBuilder cb,
+                                                                        VampireCharacter draft)
                                                                     {
                                                                         var remaining = VampireFinishingResolver.RemainingFreebies(draft);
                                                                         var menu = new SelectMenuBuilder()
-                                                                            .WithCustomId(BuildCustomId(VampireWizardAction.FinishingInc, draft.CharacterId))
-                                                                            .WithPlaceholder($"Свободные пункты (+): ост. {remaining}");
+                                                                            .WithCustomId(BuildCustomId(VampireWizardAction.FinishingPickTarget, draft.CharacterId))
+                                                                            .WithPlaceholder($"Куда потратить? (ост. {remaining} свободных)");
 
-                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Attribute,  draft.Attributes,   null);
-                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Ability,    null,                draft.AbilitiesStruct);
-                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Discipline, draft.Disciplines,   null);
-                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Background, draft.Backgrounds,   null);
-                                                                        AddOptionsFor(menu, draft, VampireFinishingResolver.FreebieTarget.Virtue,      draft.Virtues,       null);
-                                                                        AddHumanityWillpowerOptions(menu, draft);
+                                                                        // 7 категорий: Attribute, Ability, Discipline, Background, Virtue, Humanity, Willpower.
+                                                                        // Для Attribute и Ability после выбора покажем подгруппу.
+                                                                        var targets = new (VampireFinishingResolver.FreebieTarget Target, string Label, bool HasSubgroup)[]
+                                                                        {
+                                                                            (VampireFinishingResolver.FreebieTarget.Attribute,  "Характеристика", true),
+                                                                            (VampireFinishingResolver.FreebieTarget.Ability,    "Способность",    true),
+                                                                            (VampireFinishingResolver.FreebieTarget.Discipline, "Дисциплина",     false),
+                                                                            (VampireFinishingResolver.FreebieTarget.Background, "Факт",           false),
+                                                                            (VampireFinishingResolver.FreebieTarget.Virtue,     "Добродетель",    false),
+                                                                            (VampireFinishingResolver.FreebieTarget.Humanity,   "Человечность",   false),
+                                                                            (VampireFinishingResolver.FreebieTarget.Willpower,  "Воля",           false),
+                                                                        };
 
-                                                                        return menu;
+                                                                        foreach (var t in targets)
+                                                                        {
+                                                                            var cost = VampireFinishingResolver.CostOf(t.Target);
+                                                                            var label = $"{t.Label} (-{cost})";
+                                                                            var desc = t.HasSubgroup
+                                                                                ? $"выбрать подгруппу (Физ/Соц/Мент или Таланты/Навыки/Знания)"
+                                                                                : $"выбрать поле";
+                                                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                .WithLabel(TruncateLabel(label, 25))
+                                                                                .WithValue(((int)t.Target).ToString())
+                                                                                .WithDescription(TruncateLabel(desc, 50)));
+                                                                        }
+
+                                                                        cb.WithSelectMenu(menu);
                                                                     }
+
+                                                                    /// <summary>
+                                                                    /// Step 2 каскада Шага 5: подгруппы для Attribute (Physical/Social/Mental)
+                                                                    /// и Ability (Talents/Skills/Knowledges). Для остальных категорий возвращает false —
+                                                                    /// вызывающий код должен показать Step 1.
+                                                                    /// </summary>
+                                                                    /// <returns>true, если SelectMenu добавлен; false, если для target нет подгрупп.</returns>
+                                                                    private static bool BuildFinishingSubgroupSelect(
+                                                                        ComponentBuilder cb,
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target)
+                                                                    {
+                                                                        if (target != VampireFinishingResolver.FreebieTarget.Attribute
+                                                                            && target != VampireFinishingResolver.FreebieTarget.Ability)
+                                                                        {
+                                                                            return false;
+                                                                        }
+
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var menu = new SelectMenuBuilder()
+                                                                            .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.FinishingPickSubgroup, draft.CharacterId, ((int)target).ToString()))
+                                                                            .WithPlaceholder($"Подгруппа? (ост. {remaining} свободных)");
+
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Attribute)
+                                                                        {
+                                                                            foreach (var group in new[] { "Physical", "Social", "Mental" })
+                                                                            {
+                                                                                menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                    .WithLabel(TruncateLabel(GroupLabel(group), 25))
+                                                                                    .WithValue(group)
+                                                                                    .WithDescription("3 характеристики этой группы"));
+                                                                            }
+                                                                        }
+                                                                        else // Ability
+                                                                        {
+                                                                            foreach (var group in new[] { "Talents", "Skills", "Knowledges" })
+                                                                            {
+                                                                                menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                    .WithLabel(TruncateLabel(GroupLabel(group), 25))
+                                                                                    .WithValue(group)
+                                                                                    .WithDescription("10 способностей этой группы"));
+                                                                            }
+                                                                        }
+
+                                                                        cb.WithSelectMenu(menu);
+                                                                        return true;
+                                                                    }
+
+                                                                    /// <summary>
+                                                                    /// Step 3 каскада Шага 5: поля выбранной подгруппы с текущими значениями и ценой.
+                                                                    /// </summary>
+                                                                    private static void BuildFinishingFieldSelect(
+                                                                        ComponentBuilder cb,
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        string? subgroup)
+                                                                    {
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var cost = VampireFinishingResolver.CostOf(target);
+                                                                        var menu = new SelectMenuBuilder()
+                                                                            .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.FinishingApplyField, draft.CharacterId, ((int)target).ToString()))
+                                                                            .WithPlaceholder($"Поле? (ост. {remaining}, цена -{cost})");
+
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Humanity)
+                                                                        {
+                                                                            AppendHumanityWillpowerOptions(menu, draft);
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            // Список полей зависит от target и subgroup.
+                                                                            var fields = ResolveFinishingFields(draft, target, subgroup);
+                                                                            foreach (var field in fields)
+                                                                            {
+                                                                                var cur = ReadFinishingFieldValue(draft, target, field);
+                                                                                var hardCap = TargetHardCap(target);
+                                                                                var canAdd = remaining >= cost && cur + 1 <= hardCap;
+                                                                                var canDec = cur > 0;
+                                                                                if (canAdd)
+                                                                                {
+                                                                                    var incValue = $"+:{target}:{field}";
+                                                                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                        .WithLabel($"+ {Truncate(field, 18)} ({cur}→{cur + 1})")
+                                                                                        .WithValue(incValue)
+                                                                                        .WithDescription($"-{cost} свободных"));
+                                                                                }
+                                                                                if (canDec)
+                                                                                {
+                                                                                    var decValue = $"−:{target}:{field}";
+                                                                                    menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                        .WithLabel($"− {Truncate(field, 18)} ({cur}→{cur - 1})")
+                                                                                        .WithValue(decValue)
+                                                                                        .WithDescription($"+{cost} свободных"));
+                                                                                }
+                                                                            }
+                                                                        }
+
+                                                                        cb.WithSelectMenu(menu);
+                                                                    }
+
+                                                                    private static void AppendHumanityWillpowerOptions(
+                                                                        SelectMenuBuilder menu,
+                                                                        VampireCharacter draft)
+                                                                    {
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        foreach (var label in new[] { "Человечность", "Воля" })
+                                                                        {
+                                                                            var target = label == "Человечность"
+                                                                                ? VampireFinishingResolver.FreebieTarget.Humanity
+                                                                                : VampireFinishingResolver.FreebieTarget.Willpower;
+                                                                            var cost = VampireFinishingResolver.CostOf(target);
+                                                                            var cur = label == "Человечность"
+                                                                                ? Math.Max(0, draft.HumanityBonus)
+                                                                                : Math.Max(0, draft.WillpowerBonus);
+                                                                            var (hardCap, _) = VampireFinishingResolver.GetCaps(target, draft);
+                                                                            var canAdd = remaining >= cost && cur + 1 <= hardCap;
+                                                                            var canDec = cur > 0;
+                                                                            if (canAdd)
+                                                                            {
+                                                                                menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                    .WithLabel($"+ {Truncate(label, 18)} ({cur}→{cur + 1})")
+                                                                                    .WithValue($"+:{target}:{label}")
+                                                                                    .WithDescription($"-{cost} свободных"));
+                                                                            }
+                                                                            if (canDec)
+                                                                            {
+                                                                                menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                    .WithLabel($"− {Truncate(label, 18)} ({cur}→{cur - 1})")
+                                                                                    .WithValue($"−:{target}:{label}")
+                                                                                    .WithDescription($"+{cost} свободных"));
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    /// <summary>Получить список имён полей для target+subgroup.</summary>
+                                                                    private static IEnumerable<string> ResolveFinishingFields(
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        string? subgroup)
+                                                                    {
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Attribute)
+                                                                        {
+                                                                            if (subgroup == "Physical") return new[] { "Сила", "Ловкость", "Выносливость" };
+                                                                            if (subgroup == "Social")   return new[] { "Обаяние", "Манипуляция", "Привлекательность" };
+                                                                            if (subgroup == "Mental")   return new[] { "Восприятие", "Интеллект", "Смекалка" };
+                                                                            return AttributeFieldNames();
+                                                                        }
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Ability)
+                                                                        {
+                                                                            if (subgroup == "Talents")    return FilterAbilityGroup(VampireAbilityGroup.Talents);
+                                                                            if (subgroup == "Skills")     return FilterAbilityGroup(VampireAbilityGroup.Skills);
+                                                                            if (subgroup == "Knowledges") return FilterAbilityGroup(VampireAbilityGroup.Knowledges);
+                                                                            return AbilityFieldNames();
+                                                                        }
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Discipline)
+                                                                            return VampireAdvantagesResolver.EffectiveDisciplineSlots(draft);
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Background)
+                                                                            return draft.Backgrounds?.Keys.ToList() ?? new List<string>();
+                                                                        if (target == VampireFinishingResolver.FreebieTarget.Virtue)
+                                                                            return VampireParameterCatalog.Virtues;
+                                                                        return System.Array.Empty<string>();
+                                                                    }
+
+                                                                    private static string[] FilterAbilityGroup(VampireAbilityGroup group)
+                                                                        => VampireAbilitiesCatalog.NamesInGroup(group).ToArray();
+
+                                                                    private static int ReadFinishingFieldValue(
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target,
+                                                                        string field)
+                                                                    {
+                                                                        return target switch
+                                                                        {
+                                                                            VampireFinishingResolver.FreebieTarget.Attribute  => VampireFinishingResolver.ReadFieldValue(draft, target, field),
+                                                                            VampireFinishingResolver.FreebieTarget.Ability    => VampireFinishingResolver.ReadFieldValue(draft, target, field),
+                                                                            VampireFinishingResolver.FreebieTarget.Discipline => VampireAdvantagesResolver.GetDisciplineValue(draft, field),
+                                                                            VampireFinishingResolver.FreebieTarget.Background => VampireAdvantagesResolver.GetBackgroundRank(draft, field),
+                                                                            VampireFinishingResolver.FreebieTarget.Virtue     => VampireAdvantagesResolver.GetVirtueValue(draft, field),
+                                                                            _ => 0,
+                                                                        };
+                                                                    }
+
+                                                                    private static int TargetHardCap(VampireFinishingResolver.FreebieTarget target) => target switch
+                                                                    {
+                                                                        VampireFinishingResolver.FreebieTarget.Attribute  => 5,
+                                                                        VampireFinishingResolver.FreebieTarget.Ability    => 5,
+                                                                        VampireFinishingResolver.FreebieTarget.Discipline => 5,
+                                                                        VampireFinishingResolver.FreebieTarget.Background => 5,
+                                                                        VampireFinishingResolver.FreebieTarget.Virtue     => 5,
+                                                                        VampireFinishingResolver.FreebieTarget.Humanity   => 10,
+                                                                        VampireFinishingResolver.FreebieTarget.Willpower  => 10,
+                                                                        _ => 5,
+                                                                    };
+
+                                                                    private static string GroupLabel(string en) => en switch
+                                                                    {
+                                                                        "Physical"   => "Физические (Сила/Лов/Вын)",
+                                                                        "Social"     => "Социальные (Обаяние/Манип/Привл)",
+                                                                        "Mental"     => "Ментальные (Восп/Инт/Смек)",
+                                                                        "Talents"    => "Таланты",
+                                                                        "Skills"     => "Навыки",
+                                                                        "Knowledges" => "Знания",
+                                                                        _ => en,
+                                                                    };
 
                                                                     /// <summary>
                                                                     /// SelectMenu специализаций Шага 5: показывает характеристики и способности
@@ -785,126 +1063,6 @@ public static class VampireWizardComponents
                                                                                 .WithDescription(TruncateLabel(desc, 50)));
                                                                         }
                                                                         return menu;
-                                                                    }
-
-                                                                    /// <summary>
-                                                                    /// Добавить две одиночные опции: «+ Человечность» и «+ Воля».
-                                                                    /// Для этих целей нет словаря/структуры — каждая цель представлена ровно одной опцией.
-                                                                    /// </summary>
-                                                                    private static void AddHumanityWillpowerOptions(
-                                                                        SelectMenuBuilder menu,
-                                                                        VampireCharacter draft)
-                                                                    {
-                                                                        AddHumanityWillpowerOne(menu, draft, VampireFinishingResolver.FreebieTarget.Humanity,  "Человечность");
-                                                                        AddHumanityWillpowerOne(menu, draft, VampireFinishingResolver.FreebieTarget.Willpower, "Воля");
-                                                                    }
-
-                                                                    private static void AddHumanityWillpowerOne(
-                                                                        SelectMenuBuilder menu,
-                                                                        VampireCharacter draft,
-                                                                        VampireFinishingResolver.FreebieTarget target,
-                                                                        string label)
-                                                                    {
-                                                                        var cost = VampireFinishingResolver.CostOf(target);
-                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
-                                                                        var cur = VampireFinishingResolver.ReadFieldValue(draft, target, label);
-                                                                        var (hardCap, _) = VampireFinishingResolver.GetCaps(target, draft);
-                                                                        var canAdd = remaining >= cost && cur + 1 <= hardCap;
-
-                                                                        var value = $"+:{target}:{label}";
-                                                                        var desc = $"+1 → {cur + 1}, -{cost}";
-                                                                        if (!canAdd)
-                                                                        {
-                                                                            desc = cur >= hardCap
-                                                                                ? $"уже на кэпе {hardCap}"
-                                                                                : $"нужно {cost} свободных";
-                                                                        }
-                                                                        menu.AddOption(new SelectMenuOptionBuilder()
-                                                                            .WithLabel($"+ {Truncate(label, 28)} ({cur}→{cur + 1})")
-                                                                            .WithValue(value)
-                                                                            .WithDescription(desc));
-                                                                    }
-
-                                                                    /// <summary>
-                                                                    /// Добавить опции SelectMenu: для каждого имени в категории — одну опцию «+».
-                                                                    /// </summary>
-                                                                    private static void AddOptionsFor(
-                                                                        SelectMenuBuilder menu,
-                                                                        VampireCharacter draft,
-                                                                        VampireFinishingResolver.FreebieTarget target,
-                                                                        Dictionary<string, int>? dict,
-                                                                        object? abilityStruct)
-                                                                    {
-                                                                        var targetName = VampireFinishingResolver.TargetName(target, draft);
-                                                                        var cost = VampireFinishingResolver.CostOf(target);
-                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
-                                                                        var cap = 5;
-
-                                                                        if (abilityStruct != null)
-                                                                        {
-                                                                            foreach (var name in AbilityFieldNames())
-                                                                            {
-                                                                                var cur = VampireFinishingResolver.ReadFieldValue(draft, target, name);
-                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
-                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
-                                                                            }
-                                                                            return;
-                                                                        }
-
-                                                                        if (dict != null && dict.Count > 0)
-                                                                        {
-                                                                            foreach (var (name, val) in dict)
-                                                                            {
-                                                                                var cur = val;
-                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
-                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
-                                                                            }
-                                                                            return;
-                                                                        }
-
-                                                                        // Словарь пуст — отрисовать все имена для атрибутов и способностей,
-                                                                        // и три стандартные добродетели для Virtue.
-                                                                        if (target == VampireFinishingResolver.FreebieTarget.Attribute)
-                                                                        {
-                                                                            foreach (var name in AttributeFieldNames())
-                                                                            {
-                                                                                var cur = VampireFinishingResolver.ReadFieldValue(draft, target, name);
-                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
-                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
-                                                                            }
-                                                                            return;
-                                                                        }
-
-                                                                        if (target == VampireFinishingResolver.FreebieTarget.Virtue)
-                                                                        {
-                                                                            foreach (var name in VampireParameterCatalog.Virtues)
-                                                                            {
-                                                                                var cur = VampireAdvantagesResolver.GetVirtueValue(draft, name);
-                                                                                var canAdd = remaining >= cost && cur + 1 <= cap;
-                                                                                AppendOneOption(menu, target, name, cur, cost, canAdd, targetName);
-                                                                            }
-                                                                        }
-                                                                    }
-
-                                                                    private static void AppendOneOption(
-                                                                        SelectMenuBuilder menu,
-                                                                        VampireFinishingResolver.FreebieTarget target,
-                                                                        string field,
-                                                                        int current,
-                                                                        int cost,
-                                                                        bool enabled,
-                                                                        string targetName)
-                                                                    {
-                                                                        var value = $"+:{target}:{field}";
-                                                                        var desc = $"сейчас {current}, -{cost}";
-                                                                        if (!enabled)
-                                                                        {
-                                                                            desc = current >= 5 ? "уже на кэпе 5" : $"нужно {cost} свободных";
-                                                                        }
-                                                                        menu.AddOption(new SelectMenuOptionBuilder()
-                                                                            .WithLabel($"+ {Truncate(targetName + ": " + field, 28)} ({current})")
-                                                                            .WithValue(value)
-                                                                            .WithDescription(desc));
                                                                     }
 
                                                                     private static IEnumerable<string> AttributeFieldNames() => new[]
@@ -1275,6 +1433,11 @@ public static class VampireWizardComponents
                                                 VampireWizardAction.FinishingReset      => "finishing_reset",
                                                 VampireWizardAction.FinishingDone       => "finishing_done",
                                                 VampireWizardAction.FinishingFinalize   => "finishing_finalize",
+                                                VampireWizardAction.FinishingPickTarget   => "finishing_pick_target",
+                                                VampireWizardAction.FinishingPickSubgroup => "finishing_pick_subgroup",
+                                                VampireWizardAction.FinishingApplyField   => "finishing_apply_field",
+                                                VampireWizardAction.FinishingBackFromSubgroup => "finishing_back_from_subgroup",
+                                                VampireWizardAction.FinishingBackFromField   => "finishing_back_from_field",
                                                 VampireWizardAction.BackToAdvantages    => "back_to_advantages",
                                                 _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
@@ -1346,6 +1509,11 @@ public static class VampireWizardComponents
                                     case "finishing_reset":        action = VampireWizardAction.FinishingReset;        return true;
                                     case "finishing_done":         action = VampireWizardAction.FinishingDone;         return true;
                                     case "finishing_finalize":     action = VampireWizardAction.FinishingFinalize;     return true;
+                                    case "finishing_pick_target":   action = VampireWizardAction.FinishingPickTarget;   return true;
+                                    case "finishing_pick_subgroup": action = VampireWizardAction.FinishingPickSubgroup; return true;
+                                    case "finishing_apply_field":   action = VampireWizardAction.FinishingApplyField;   return true;
+                                    case "finishing_back_from_subgroup": action = VampireWizardAction.FinishingBackFromSubgroup; return true;
+                                    case "finishing_back_from_field":   action = VampireWizardAction.FinishingBackFromField;   return true;
                                     case "back_to_advantages":     action = VampireWizardAction.BackToAdvantages;     return true;
                                                 default:               action = default;                         return false;
         }

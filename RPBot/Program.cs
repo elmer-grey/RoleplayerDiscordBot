@@ -4793,6 +4793,12 @@ await Task.CompletedTask;
                                             await HandleVampireWizardVirtueSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:finishing_inc:"))
                                             await HandleVampireWizardFinishingSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:finishing_pick_target:"))
+                                            await HandleVampireWizardFinishingPickTargetAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:finishing_pick_subgroup:"))
+                                            await HandleVampireWizardFinishingPickSubgroupAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:finishing_apply_field:"))
+                                            await HandleVampireWizardFinishingApplyFieldAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:spec_choice:"))
                                             await HandleVampireWizardSpecializationChoiceAsync(component);
                                     }
@@ -5625,6 +5631,249 @@ await Task.CompletedTask;
                                                         catch (Exception ex)
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardFinishingSelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при трате свободного пункта.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Шаг 5 каскад, Step 1: игрок выбрал категорию свободного пункта.
+                                                    /// CustomId: <c>vtm_wiz:finishing_pick_target:{cid}</c>, value: <c>{targetNum}</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardFinishingPickTargetAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.FinishingTouches)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 5 (последние штрихи).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрана категория.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (!int.TryParse(selected.First(), out var targetNum))
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректная категория: {selected.First()}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var target = (VampireFinishingResolver.FreebieTarget)targetNum;
+                                                            session.FinishingTarget = target;
+                                                            session.FinishingSubgroup = null;
+
+                                                            // Attribute и Ability имеют подгруппы → Step 2.
+                                                            // Остальные → сразу Step 3.
+                                                            session.FreebieCascadeStep = (target == VampireFinishingResolver.FreebieTarget.Attribute
+                                                                || target == VampireFinishingResolver.FreebieTarget.Ability)
+                                                                ? VampireFreebieCascadeStep.Subgroup
+                                                                : VampireFreebieCascadeStep.Field;
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 5 после pick target: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ Категория выбрана: {VampireFinishingResolver.TargetName(target, session.Draft)}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardFinishingPickTargetAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе категории.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Шаг 5 каскад, Step 2: игрок выбрал подгруппу.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardFinishingPickSubgroupAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.FinishingTouches)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 5 (последние штрихи).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!VampireWizardComponents.TryParseWithArg(
+                                                                component.Data.CustomId, out _, out _, out var targetStr)
+                                                                || !int.TryParse(targetStr, out var targetNum))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId подгруппы.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            session.FinishingTarget = (VampireFinishingResolver.FreebieTarget)targetNum;
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрана подгруппа.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            session.FinishingSubgroup = selected.First();
+                                                            session.FreebieCascadeStep = VampireFreebieCascadeStep.Field;
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 5 после pick subgroup: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"✅ Подгруппа: {session.FinishingSubgroup}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardFinishingPickSubgroupAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе подгруппы.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Шаг 5 каскад, Step 3: игрок применил +/− к полю.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardFinishingApplyFieldAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.FinishingTouches)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 5 (последние штрихи).",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!VampireWizardComponents.TryParseWithArg(
+                                                                component.Data.CustomId, out _, out _, out var targetStr)
+                                                                || !int.TryParse(targetStr, out var targetNum))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId поля.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var target = (VampireFinishingResolver.FreebieTarget)targetNum;
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не выбрано поле.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            // value формат: "{sign}:{target}:{field}". sign = '+' или '−'.
+                                                            var raw = selected.First();
+                                                            var sep1 = raw.IndexOf(':');
+                                                            if (sep1 < 0 || sep1 >= raw.Length - 1)
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректный формат: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var sign = raw[0];
+                                                            var rest = raw.Substring(sep1 + 1);
+                                                            var sep2 = rest.IndexOf(':');
+                                                            if (sep2 < 0)
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректный формат: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var field = rest.Substring(sep2 + 1);
+
+                                                            VampireFinishingResolver.Decision dec;
+                                                            string verb;
+                                                            if (sign == '+')
+                                                            {
+                                                                dec = VampireFinishingResolver.AllocateFreebie(session.Draft, target, field, out var appliedHumanity);
+                                                                verb = appliedHumanity
+                                                                    ? $"✅ {field}: трата успешна. Чел и Воля пересчитаны."
+                                                                    : $"✅ {field}: трата успешна.";
+                                                            }
+                                                            else if (sign == '−' || sign == '-')
+                                                            {
+                                                                dec = VampireFinishingResolver.DeallocateFreebie(session.Draft, target, field);
+                                                                verb = "↩ Возврат траты";
+                                                            }
+                                                            else
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестный знак: {sign}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            if (!dec.IsSuccess)
+                                                            {
+                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            // После успешной траты сбрасываем каскад на Step 1.
+                                                            session.FreebieCascadeStep = VampireFreebieCascadeStep.None;
+                                                            session.FinishingTarget = null;
+                                                            session.FinishingSubgroup = null;
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 5 после apply field: {ex.Message}");
+                                                            }
+                                                            await component.RespondAsync($"{verb} {dec.Message}", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardFinishingApplyFieldAsync: {ex.Message}");
                                                             try
                                                             {
                                                                 if (!component.HasResponded)

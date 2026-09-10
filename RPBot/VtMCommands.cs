@@ -598,6 +598,9 @@ public sealed class VampireCommands
                                                             return;
                                                         }
                                                         VampireFinishingResolver.ResetFreebies(session.Draft);
+                                                        session.FreebieCascadeStep = VampireFreebieCascadeStep.None;
+                                                        session.FinishingTarget = null;
+                                                        session.FinishingSubgroup = null;
                                                         await CommitDraftAsync(component, session);
 
                                                         try
@@ -669,6 +672,9 @@ public sealed class VampireCommands
                                                             await component.RespondEphemeralAsync("⚠️ Возврат к 4.3 доступен только из Шага 5.");
                                                             return;
                                                         }
+                                                        session.FreebieCascadeStep = VampireFreebieCascadeStep.None;
+                                                        session.FinishingTarget = null;
+                                                        session.FinishingSubgroup = null;
                                                         await CommitDraftAsync(component, session);
 
                                                         try
@@ -684,10 +690,74 @@ public sealed class VampireCommands
                                                         return;
                                                     }
 
+                                                case VampireWizardAction.FinishingBackFromSubgroup:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Возврат в каскаде Шага 5 доступен только из Шага 5.");
+                                                            return;
+                                                        }
+                                                        session.FreebieCascadeStep = VampireFreebieCascadeStep.Target;
+                                                        session.FinishingTarget = null;
+                                                        session.FinishingSubgroup = null;
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате каскада Шага 5: {ex.Message}");
+                                                        }
+                                                        await component.RespondEphemeralAsync("↩️ Возврат к выбору категории.");
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.FinishingBackFromField:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.FinishingTouches)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Возврат в каскаде Шага 5 доступен только из Шага 5.");
+                                                            return;
+                                                        }
+                                                        // Возврат с поля (Step 3) на подгруппу (Step 2) — только для Attribute/Ability.
+                                                        if (session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Attribute
+                                                            || session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Ability)
+                                                        {
+                                                            session.FreebieCascadeStep = VampireFreebieCascadeStep.Subgroup;
+                                                            session.FinishingSubgroup = null;
+                                                        }
+                                                        else
+                                                        {
+                                                            session.FreebieCascadeStep = VampireFreebieCascadeStep.Target;
+                                                            session.FinishingTarget = null;
+                                                        }
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате каскада Шага 5: {ex.Message}");
+                                                        }
+                                                        await component.RespondEphemeralAsync("↩️ Возврат к выбору подгруппы.");
+                                                        return;
+                                                    }
+
                                                 case VampireWizardAction.FinishingInc:
                                                     {
                                                         // Шаг 5 — SelectMenu; основная обработка идёт в HandleWizardSelectAsync.
                                                         await component.RespondEphemeralAsync("⚠️ Шаг 5 работает через меню выбора, а не через кнопки.");
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.FinishingPickTarget:
+                                                case VampireWizardAction.FinishingPickSubgroup:
+                                                case VampireWizardAction.FinishingApplyField:
+                                                    {
+                                                        // Каскад Шага 5 — SelectMenu; обработка идёт в Program.cs:HandleSelectMenuExecuted.
+                                                        await component.RespondEphemeralAsync("⚠️ Каскад Шага 5 работает через меню выбора, а не через кнопки.");
                                                         return;
                                                     }
 

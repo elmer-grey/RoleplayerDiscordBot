@@ -47,6 +47,30 @@ public enum VampireWizardAdvantagesSubStep
 }
 
 /// <summary>
+/// Шаги каскада распределения свободных пунктов на Шаге 5 «Последние штрихи».
+/// </summary>
+/// <remarks>
+/// Шаг 5 имеет 6 категорий (target) и до 30+ полей (Attribute/Ability) — это
+/// превышает лимит Discord на 25 опций в одном SelectMenu. Решение — каскад:
+/// <list type="number">
+///   <item><see cref="None"/> или <see cref="Target"/> — выбор категории (Attribute/Ability/Discipline/Background/Virtue/HumanityWillpower).</item>
+///   <item><see cref="Subgroup"/> — выбор подгруппы (для Attribute: Physical/Social/Mental; для Ability: Talents/Skills/Knowledges; для остальных категорий шаг пропускается).</item>
+///   <item><see cref="Field"/> — выбор конкретного поля и знака (+/−).</item>
+/// </list>
+/// </remarks>
+public enum VampireFreebieCascadeStep
+{
+    /// <summary>Не в каскаде: показываем Step 1 (выбор категории). Начальное состояние.</summary>
+    None = 0,
+    /// <summary>Показываем Step 1 (выбор категории). Синоним <see cref="None"/> для семантики.</summary>
+    Target = 1,
+    /// <summary>Показываем Step 2 (выбор подгруппы).</summary>
+    Subgroup = 2,
+    /// <summary>Показываем Step 3 (выбор поля).</summary>
+    Field = 3,
+}
+
+/// <summary>
 /// Состояние визарда создания персонажа в памяти.
 ///
 /// <para>Сессия живёт, пока игрок проходит визард; при выходе из бота
@@ -130,6 +154,15 @@ public sealed class VampireWizardSession
     /// (через SelectMenu) для редактирования кнопками −/+. null — ничего не выбрано.
     /// </summary>
     public string? AbilitySelected { get; set; }
+
+    /// <summary>Шаг 5: текущий шаг каскада распределения свободных пунктов.</summary>
+    public VampireFreebieCascadeStep FreebieCascadeStep { get; set; } = VampireFreebieCascadeStep.None;
+
+    /// <summary>Шаг 5: выбранный target (категория свободного пункта). null = не выбран.</summary>
+    public VampireFinishingResolver.FreebieTarget? FinishingTarget { get; set; }
+
+    /// <summary>Шаг 5: выбранная подгруппа (например, "Physical" для Attribute, "Talents" для Ability). null = не выбрана.</summary>
+    public string? FinishingSubgroup { get; set; }
 }
 
 /// <summary>
