@@ -801,8 +801,8 @@ namespace RPBot.EventOps
             var sb = new System.Text.StringBuilder();
             for (int i = 0; i < changes.Count; i++)
             {
-            if (i > 0) sb.Append("\n- ");
-            else sb.Append("- ");
+            if (i > 0) sb.Append("\n• ");
+            else sb.Append("• ");
             sb.Append(ConvertLocalTimesToMsk(changes[i]));
             }
             return sb.ToString();
