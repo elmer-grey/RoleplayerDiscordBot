@@ -85,10 +85,19 @@ public static class VampireSheetEmbed
             });
         }
 
-        // Характеристики — три inline-колонки (Физ / Соц / Мент), как у Способностей.
+        // Характеристики — full-width заголовок секции, затем три inline-колонки
+        // (Физ / Соц / Мент). Без full-width заголовка Discord ставит имя
+        // первой колонки в одну строку с двумя ZWSP, и визуально оно
+        // «слипается» с содержимым. Схема одинакова для всех секций листа.
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "**Характеристики**",
+            Value = "\u200B",
+            IsInline = false,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
             Value = BuildCharacteristicColumn(character, VampireParameterCatalog.Physical, "Физические"),
             IsInline = true,
         });
@@ -105,10 +114,17 @@ public static class VampireSheetEmbed
             IsInline = true,
         });
 
-        // Способности: три колонки (Таланты / Навыки / Знания) со специализациями при value ≥ 4.
+        // Способности — full-width заголовок, затем три inline-колонки
+        // (Таланты / Навыки / Знания) со специализациями при value ≥ 4.
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "**Способности**",
+            Value = "\u200B",
+            IsInline = false,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
             Value = BuildAbilityColumn(character, VampireParameterCatalog.Talents),
             IsInline = true,
         });
@@ -125,10 +141,17 @@ public static class VampireSheetEmbed
             IsInline = true,
         });
 
-        // Преимущества: три колонки (Дисциплины / Факты биографии / Добродетели).
+        // Преимущества — full-width заголовок, затем три inline-колонки
+        // (Дисциплины / Факты биографии / Добродетели).
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "**Преимущества**",
+            Value = "\u200B",
+            IsInline = false,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
             Value = BuildAdvantagesColumn(character),
             IsInline = true,
         });
@@ -145,7 +168,15 @@ public static class VampireSheetEmbed
             IsInline = true,
         });
 
-        // Нижний ряд: Достоинства-Недостатки / Суть / Мораль / Здоровье-Изъян-Опыт.
+        // Нижний ряд: четыре inline-колонки. Объединяем их общим full-width
+        // заголовком «Дополнительно», чтобы шапки колонок не «слипались»
+        // с шапками секции «Преимущества» выше.
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "**Дополнительно**",
+            Value = "\u200B",
+            IsInline = false,
+        });
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "**Достоинства и недостатки**",
