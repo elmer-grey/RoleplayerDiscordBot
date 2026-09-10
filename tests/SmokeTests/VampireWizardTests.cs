@@ -538,6 +538,7 @@ public class VampireWizardTests : IsolatedDataTestBase
             public void BuildAttributesStep_HasAttrSelectAndPaginationButtons()
             {
                 var draft = NewDraft();
+                draft.AttributesPriority = "PhysicalFirst"; // с приоритетом
                 var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 1, selectedAttribute: "Обаяние");
                 var menus = GetRows(comp)
                     .SelectMany(r => r.Components)
@@ -548,7 +549,7 @@ public class VampireWizardTests : IsolatedDataTestBase
                 Assert.Contains("attr_select", menus[1].CustomId);
 
                 var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
-                // Кнопки ± по выбранному атрибуту.
+                // Кнопки ± по выбранному атрибуту (с приоритетом).
                 Assert.Contains(buttons, b => b.CustomId.Contains("attr_inc:") && b.CustomId.Contains("Обаяние"));
                 Assert.Contains(buttons, b => b.CustomId.Contains("attr_dec:") && b.CustomId.Contains("Обаяние"));
                 // Кнопки навигации по группам.
@@ -556,6 +557,19 @@ public class VampireWizardTests : IsolatedDataTestBase
                 Assert.Contains(buttons, b => b.CustomId.Contains("attr_page_prev:"));
                 // Кнопка «Сбросить всё».
                 Assert.Contains(buttons, b => b.CustomId.Contains("reset_attr_all:"));
+            }
+
+            [Fact]
+            public void BuildAttributesStep_NoPriority_ShowsNoopHint()
+            {
+                var draft = NewDraft();
+                // Без приоритета — даже если атрибут выбран, ± кнопок быть не должно.
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 1, selectedAttribute: "Обаяние");
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("attr_inc:"));
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("attr_dec:"));
+                // И должна быть подсказка «сначала выберите приоритет».
+                Assert.Contains(buttons, b => b.Label.Contains("Сначала выберите приоритет") && b.IsDisabled);
             }
 
             [Fact]

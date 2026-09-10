@@ -314,10 +314,13 @@ public static class VampireWizardComponents
                 cb.WithSelectMenu(menu);
 
                 // Ряд 3: кнопки −/+. Активны только если selectedAttribute != null и
-                // он в текущей группе.
+                // он в текущей группе. Если приоритет не выбран — обе кнопки
+                // заблокированы, и показываем подсказку «сначала выберите
+                // приоритет» (защита от случайных кликов и интуитивный сигнал,
+                // что сначала нужно выбрать приоритет в SelectMenu выше).
                 var selInGroup = !string.IsNullOrEmpty(selectedAttribute) &&
                                  groupNames.Contains(selectedAttribute);
-                if (selInGroup)
+                if (selInGroup && HasPriority(draft))
                 {
                     var cur = GetAttrValue(draft, selectedAttribute!);
                     var baseVal = GetBaseValue(draft, selectedAttribute!);
@@ -333,6 +336,16 @@ public static class VampireWizardComponents
                     cb.WithButton($"+ {selectedAttribute} ({cur})",
                         BuildCustomIdWithArg(VampireWizardAction.AttrInc, draft.CharacterId, selectedAttribute!),
                         incDisabled ? ButtonStyle.Secondary : ButtonStyle.Primary, disabled: incDisabled);
+                }
+                else if (selInGroup && !HasPriority(draft))
+                {
+                    // Атрибут выбран, но приоритет групп ещё не задан — кнопки
+                    // −/+ выключены, показываем noop с подсказкой.
+                    cb.WithButton("− …", "vtm_wiz:noop:" + draft.CharacterId.ToString("N"),
+                        ButtonStyle.Secondary, disabled: true);
+                    cb.WithButton("Сначала выберите приоритет (выпадающее меню выше)",
+                        "vtm_wiz:noop:" + draft.CharacterId.ToString("N"),
+                        ButtonStyle.Secondary, disabled: true);
                 }
                 else
                 {
