@@ -4850,25 +4850,37 @@ await Task.CompletedTask;
                 {
                     try
                     {
-                        if (!VampireWizardComponents.TryParseWithArg(
-                                component.Data.CustomId, out var action, out var _, out var _))
+                                        // customId для этого SelectMenu собирается через
+                                        // BuildCustomId (3 части: vtm_wiz:attr_priority:<guid>),
+                                        // а не BuildCustomIdWithArg — аргумента нет, значение
+                                        // приоритета берётся из component.Data.Values.
+                                        // Раньше здесь стоял TryParseWithArg, который ждал 4
+                                        // части и всегда возвращал false → юзер видел
+                                        // "Не удалось разобрать customId приоритета" и весь
+                                        // шаг 2 был заблокирован.
+                                        if (!VampireWizardComponents.TryParse(
+                                                component.Data.CustomId, out var action, out var _))
                         {
-                            await component.RespondAsync("⚠️ Не удалось разобрать customId приоритета.", ephemeral: true);
+                                            await component.RespondAsync("⚠️ Не удалось разобрать customId приоритета.", ephemeral: true);
                             return;
                         }
-                        // action здесь всегда attr_priority, но enum-маппинг всё равно нужен.
-                        // Само значение приоритета берём из первого option.
-                        var selected = component.Data.Values;
-                        if (selected == null || selected.Count == 0)
+                                        if (action != VampireWizardAction.AttrPriority)
                         {
-                            await component.RespondAsync("⚠️ Не выбран приоритет.", ephemeral: true);
+                                            await component.RespondAsync("⚠️ Неожиданное действие для приоритета.", ephemeral: true);
                             return;
                         }
-                        if (!System.Enum.TryParse<VampireAttributePriority>(selected.First(), out var priority))
-                        {
-                            await component.RespondAsync($"⚠️ Неизвестный приоритет: {selected.First()}", ephemeral: true);
-                            return;
-                        }
+                                        // Само значение приоритета берём из первого option.
+                                        var selected = component.Data.Values;
+                                        if (selected == null || selected.Count == 0)
+                                        {
+                                            await component.RespondAsync("⚠️ Не выбран приоритет.", ephemeral: true);
+                                            return;
+                                        }
+                                        if (!System.Enum.TryParse<VampireAttributePriority>(selected.First(), out var priority))
+                                        {
+                                            await component.RespondAsync($"⚠️ Неизвестный приоритет: {selected.First()}", ephemeral: true);
+                                            return;
+                                        }
 
                         var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
                         if (session == null)
@@ -5019,6 +5031,22 @@ await Task.CompletedTask;
                                                     {
                                                         try
                                                         {
+                                                            // Защита: customId должен быть нашего формата vtm_wiz:...
+                                                            // Сам action не используем — значение приоритета берём из Values.
+                                                            // Если кто-то поменяет BuildForAbilitiesStep так, что customId
+                                                            // перестанет быть нашим, мы тут узнаем сразу, а не через NRE ниже.
+                                                            if (!VampireWizardComponents.TryParse(
+                                                                    component.Data.CustomId, out var action, out var _))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId приоритета способностей.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (action != VampireWizardAction.AbilityPriority)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Неожиданное действие для приоритета способностей.", ephemeral: true);
+                                                                return;
+                                                            }
+
                                                             var selected = component.Data.Values;
                                                             if (selected == null || selected.Count == 0)
                                                             {
