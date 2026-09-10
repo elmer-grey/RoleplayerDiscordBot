@@ -131,10 +131,10 @@ public static class VampireManeuverCatalog
     // ─── Поисковые хелперы ─────────────────────────────────────────
 
     public static Maneuver? FindMelee(string key) =>
-        Maneuver.Find(Melee, key);
+        Maneuver.Find(Melee, key) ?? Maneuver.FindByName(Melee, key);
 
     public static Maneuver? FindRanged(string key) =>
-        Maneuver.Find(Ranged, key);
+        Maneuver.Find(Ranged, key) ?? Maneuver.FindByName(Ranged, key);
 
     public static Weapon? FindWeapon(string key)
     {
@@ -146,11 +146,20 @@ public static class VampireManeuverCatalog
         {
             if (w.Key == key) return w;
         }
+        // Фоллбэк: пользователь мог ввести русское название из автокомплита.
+        foreach (var w in MeleeWeapons)
+        {
+            if (string.Equals(w.Name, key, StringComparison.OrdinalIgnoreCase)) return w;
+        }
+        foreach (var w in RangedWeapons)
+        {
+            if (string.Equals(w.Name, key, StringComparison.OrdinalIgnoreCase)) return w;
+        }
         return null;
     }
 
     public static ArmorClass? FindArmor(string key) =>
-        ArmorClass.Find(Armor, key);
+        ArmorClass.Find(Armor, key) ?? ArmorClass.FindByName(Armor, key);
 
     /// <summary>Все ключи манёвров и оружия для выпадающих списков slash-команд.</summary>
     public static IEnumerable<string> AllKeys()
@@ -212,6 +221,21 @@ public sealed record Maneuver(
         }
         return null;
     }
+
+    /// <summary>
+    /// Ищет манёвр по русскому имени (без учёта регистра).
+    /// Используется как фоллбэк, когда пользователь ввёл название из
+    /// автокомплита, а не slug.
+    /// </summary>
+    public static Maneuver? FindByName(IReadOnlyList<Maneuver> list, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        foreach (var m in list)
+        {
+            if (string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) return m;
+        }
+        return null;
+    }
 }
 
 /// <summary>Общий боевой модификатор (V20, стр. 303-304).</summary>
@@ -226,6 +250,21 @@ public sealed record ArmorClass(string Key, string Name, int Protection, int Com
         foreach (var a in list)
         {
             if (a.Key == key) return a;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Ищет класс брони по русскому имени (без учёта регистра).
+    /// Фоллбэк для автокомплита: пользователь мог выбрать из подсказки
+    /// русское название, а не slug.
+    /// </summary>
+    public static ArmorClass? FindByName(IReadOnlyList<ArmorClass> list, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        foreach (var a in list)
+        {
+            if (string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)) return a;
         }
         return null;
     }

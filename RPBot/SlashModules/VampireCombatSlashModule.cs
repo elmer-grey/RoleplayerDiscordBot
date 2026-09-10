@@ -16,6 +16,12 @@ namespace RPBot.SlashModules;
 /// <para>Логика расчёта вынесена в <see cref="VampireCombatDamageResolver"/>
 /// и <see cref="VampireManeuverCatalog"/>. Здесь только сбор параметров
 /// и вывод embed.</para>
+/// <para>Справочные команды <c>/vampire_maneuver</c>, <c>/vampire_weapon</c>,
+/// <c>/vampire_armor</c> используют одно текстовое поле <c>name</c> с
+/// <c>WithAutocomplete(true)</c>. Реальные подсказки (>25) отдаются
+/// динамически через <see cref="VampireRollAutocompleteHandler"/>;
+/// пользователь видит русское название, а в обработчик уходит <c>Key</c>
+/// (slug) записи.</para>
 /// </remarks>
 public sealed class VampireCombatSlashModule : ISlashCommandModule
 {
@@ -106,16 +112,18 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
     }
 
     /// <summary>
-    /// Построить команду-справочник: одно текстовое поле <c>name</c>,
-    /// которое handler ниже ищет в каталоге (<see cref="VampireManeuverCatalog"/>).
+    /// Построить команду-справочник: одно текстовое поле <c>name</c> с
+    /// автокомплитом, handler ниже ищет в каталоге по <c>Key</c>
+    /// (<see cref="VampireManeuverCatalog.FindMelee"/> и т. п.).
     /// </summary>
     /// <remarks>
-    /// Раньше здесь перечислялись <c>AddChoice</c> для всех записей каталога —
-    /// это ломалось на Discord: одна и та же опция <c>name</c> объявлялась
-    /// N+1 раз, и при регистрации приходил ответ
+    /// Раньше здесь перечислялись <c>AddChoice</c> для всех записей каталога — это
+    /// ломалось на Discord: одна и та же опция <c>name</c> объявлялась N+1 раз,
+    /// и при регистрации приходил ответ
     /// <c>APPLICATION_COMMAND_OPTIONS_NAME_INVALID: Option name name is already used</c>.
-    /// Сейчас поле одно, и игрок вводит название/ключ руками
-    /// (autocomplete можно добавить позже через <c>ISlashCommandModule</c>).
+    /// Сейчас используется <c>WithAutocomplete(true)</c> + динамические подсказки
+    /// в <see cref="VampireRollAutocompleteHandler"/>: пользователь видит русское
+    /// название, а в обработчик приходит <c>Key</c> записи.
     /// </remarks>
     private static SlashCommandBuilder BuildChoiceCommand(
         string name, string description,
@@ -128,9 +136,10 @@ public sealed class VampireCombatSlashModule : ISlashCommandModule
                 .WithName("name")
                 .WithDescription(
                     $"Название или ключ (доступно {_choices.Count} записей; " +
-                    "можно ввести по-русски или ключом).")
+                    "можно начать вводить — бот покажет подсказки).")
                 .WithType(ApplicationCommandOptionType.String)
-                .WithRequired(true));
+                .WithRequired(true)
+                .WithAutocomplete(true));
     }
 
     public Task<bool> DispatchAsync(SocketSlashCommand command)
