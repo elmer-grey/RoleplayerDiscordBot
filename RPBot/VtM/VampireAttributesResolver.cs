@@ -266,7 +266,10 @@ public static class VampireAttributesResolver
 
             var budget = TryParsePriority(draft.AttributesPriority, out var p) ? p.PointsFor(group) : 0;
             var spent = GetGroupSpent(draft.AttributesStruct, group, draft.Clan);
-            sb.AppendLine($"**{groupNames}** (потрачено {spent}/{budget}):");
+            if (budget > 0)
+                sb.AppendLine($"**{groupNames}** (потрачено {spent}/{budget}):");
+            else
+                sb.AppendLine($"**{groupNames}** (бюджет неизвестен — выберите приоритет выше):");
 
             foreach (var name in VampireAttributeCatalog.NamesInGroup(group))
             {
@@ -282,12 +285,26 @@ public static class VampireAttributesResolver
         }
 
         var totalSpent = GetTotalSpent(draft);
-        sb.AppendLine($"**Итого потрачено:** {totalSpent}/15");
+        var priorityPicked = TryParsePriority(draft.AttributesPriority, out _);
+        if (priorityPicked)
+            sb.AppendLine($"**Итого потрачено:** {totalSpent}/15");
+        else
+            sb.AppendLine("**Итого потрачено:** 0/15 _(после выбора приоритета бюджеты по группам появятся)_");
         sb.AppendLine();
 
-        sb.AppendLine(IsAttributesComplete(draft)
-            ? "✅ Все 15 пунктов распределены по приоритету. Нажмите «Далее», чтобы перейти к Шагу 3 (способности)."
-            : "⏳ Распределите все пункты. Когда все группы будут потрачены полностью — появится кнопка «Далее».");
+        if (!priorityPicked)
+        {
+            sb.AppendLine("⚠️ Сначала выберите приоритет групп 7/5/3 в выпадающем меню выше. " +
+                "Кнопки ± атрибутов включатся только после этого.");
+        }
+        else if (IsAttributesComplete(draft))
+        {
+            sb.AppendLine("✅ Все 15 пунктов распределены по приоритету. Нажмите «Далее», чтобы перейти к Шагу 3 (способности).");
+        }
+        else
+        {
+            sb.AppendLine("⏳ Распределите все пункты. Когда все группы будут потрачены полностью — появится кнопка «Далее».");
+        }
         return sb.ToString();
     }
 

@@ -391,6 +391,44 @@ public class VampireAttributesTests
     }
 
     [Fact]
+    public void BuildStatus_WithoutPriority_ShowsBudgetUnknownPerGroupAndPickPriorityHint()
+    {
+        // Замечание после первого теста: пока приоритет не выбран, у каждой
+        // группы показывалось «(потрачено 0/0)» — это выглядело так, будто
+        // очков нет в принципе, а не как сигнал «сначала выбери приоритет».
+        // Сейчас статус-сообщение должно явно подсвечивать эту проблему.
+        var draft = NewDraft();
+        var msg = VampireAttributesResolver.BuildAttributesStatusMessage(draft);
+        // В каждой группе — «бюджет неизвестен» (вместо 0/0).
+        Assert.Contains("Физические** (бюджет неизвестен", msg);
+        Assert.Contains("Социальные** (бюджет неизвестен", msg);
+        Assert.Contains("Ментальные** (бюджет неизвестен", msg);
+        // Нет больше ни одной «0/0» у шапки группы.
+        Assert.DoesNotContain("потрачено 0/0", msg);
+        // Внизу — отдельная подсказка «сначала выберите приоритет».
+        Assert.Contains("Сначала выберите приоритет", msg);
+        // И итог тоже явно говорит, что бюджеты появятся после выбора приоритета.
+        Assert.Contains("после выбора приоритета бюджеты по группам появятся", msg);
+    }
+
+    [Fact]
+    public void BuildStatus_WithPriority_ShowsNumericBudgets()
+    {
+        // Когда приоритет выбран, должно вернуться старое поведение:
+        // числовые «(потрачено X/Y)» и итог «X/15» без оговорок.
+        var draft = NewDraft();
+        VampireAttributesResolver.SetPriority(draft, VampireAttributePriority.PhysicalPrimary);
+        var msg = VampireAttributesResolver.BuildAttributesStatusMessage(draft);
+        // В каждой группе должны быть числовые потрачено/бюджет.
+        Assert.Contains("(потрачено 0/7)", msg); // Физ=7
+        Assert.Contains("(потрачено 0/5)", msg); // Соц=5
+        Assert.Contains("(потрачено 0/3)", msg); // Мент=3
+        // Итог без оговорки.
+        Assert.Contains("**Итого потрачено:** 0/15", msg);
+        Assert.DoesNotContain("после выбора приоритета", msg);
+    }
+
+    [Fact]
     public void BuildStatus_NosferatuMentionsAppearanceZero()
     {
         var draft = NewDraft(clan: "Носферату");
