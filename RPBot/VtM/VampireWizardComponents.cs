@@ -47,8 +47,12 @@ public enum VampireWizardAction
     ResetGeneration,
     /// <summary>Перейти к следующему шагу (доступно, когда все обязательные поля заполнены).</summary>
     Next,
-    /// <summary>Отменить визард и закрыть DM.</summary>
+    /// <summary>Первый шаг отмены: показать сводку draft и попросить подтверждение.</summary>
     Cancel,
+    /// <summary>Подтвердить отмену визарда после сводки (второй шаг).</summary>
+    ConfirmCancel,
+    /// <summary>Передумал отменять — вернуться к текущему шагу визарда.</summary>
+    ResumeWizard,
 
         // ── Шаг 2 «Характеристики 7/5/3» ─────────────────────────────────────
 
@@ -231,6 +235,27 @@ public static class VampireWizardComponents
                     throw new ArgumentException("CharacterId обязателен", nameof(draft));
 
                 return BuildForAttributesStep(draft, 0, null);
+            }
+
+            /// <summary>
+            /// Шаг «Подтверждение отмены»: две кнопки — «Продолжить визард» (нейтральная)
+            /// и «Подтвердить отмену» (опасная). Показывается вместо обычного UI шага,
+            /// когда игрок нажал «Отмена». draft не должен быть пустым — characterId
+            /// нужен для customId кнопок.
+            /// </summary>
+            public static MessageComponent BuildForCancelConfirm(VampireCharacter draft)
+            {
+                if (draft == null) throw new ArgumentNullException(nameof(draft));
+                if (draft.CharacterId == Guid.Empty)
+                    throw new ArgumentException("CharacterId обязателен", nameof(draft));
+                var cb = new ComponentBuilder();
+                cb.WithButton("✅ Продолжить визард",
+                    BuildCustomId(VampireWizardAction.ResumeWizard, draft.CharacterId),
+                    ButtonStyle.Primary);
+                cb.WithButton("❌ Подтвердить отмену",
+                    BuildCustomId(VampireWizardAction.ConfirmCancel, draft.CharacterId),
+                    ButtonStyle.Danger);
+                return cb.Build();
             }
 
             /// <summary>
@@ -1118,6 +1143,8 @@ public static class VampireWizardComponents
         VampireWizardAction.ResetGeneration => "reset_generation",
         VampireWizardAction.Next        => "next",
         VampireWizardAction.Cancel      => "cancel",
+        VampireWizardAction.ConfirmCancel => "confirm_cancel",
+        VampireWizardAction.ResumeWizard  => "resume_wizard",
                 VampireWizardAction.AttrInc     => "attr_inc",
                 VampireWizardAction.AttrDec     => "attr_dec",
                                 VampireWizardAction.AttrPriority => "attr_priority",
@@ -1180,6 +1207,8 @@ public static class VampireWizardComponents
             case "reset_generation": action = VampireWizardAction.ResetGeneration; return true;
             case "next":           action = VampireWizardAction.Next;         return true;
             case "cancel":         action = VampireWizardAction.Cancel;       return true;
+            case "confirm_cancel": action = VampireWizardAction.ConfirmCancel; return true;
+            case "resume_wizard":  action = VampireWizardAction.ResumeWizard;  return true;
                         case "attr_inc":       action = VampireWizardAction.AttrInc;       return true;
                         case "attr_dec":       action = VampireWizardAction.AttrDec;       return true;
                                                 case "attr_priority":  action = VampireWizardAction.AttrPriority;  return true;

@@ -605,23 +605,59 @@ public sealed class VampireCommands
                             }
 
                         case VampireWizardAction.Cancel:
-                VampireWizardRegistry.Instance.RemoveByUser(component.User.Id);
-                try
-                {
-                    var dm = await component.User.CreateDMChannelAsync();
-                    var msg = await dm.GetMessageAsync(session.DmMessageId ?? 0);
-                    if (msg is IUserMessage um)
-                    {
-                        await um.ModifyAsync(m =>
-                        {
-                            m.Content = VampireWizardDmHandler.BuildCancelledMessage();
-                            m.Components = null;
-                        });
-                    }
-                }
-                catch { /* swallow — главное что сессия снята */ }
-                await component.RespondEphemeralAsync("❌ Визард отменён.");
-                return;
+                            // Шаг 1 отмены: НЕ стираем сессию и draft, а показываем
+                            // сводку всего, что игрок уже ввёл, и просим подтвердить
+                            // отмену. Если он передумает — кнопка «Продолжить визард»
+                            // просто перерисует текущий шаг.
+                            try
+                            {
+                                var dmCancel = await component.User.CreateDMChannelAsync();
+                                var msgCancel = await dmCancel.GetMessageAsync(session.DmMessageId ?? 0);
+                                if (msgCancel is IUserMessage umCancel)
+                                {
+                                    var summaryEb = VampireWizardDmHandler.BuildCancelSummary(session.Draft);
+                                    var confirmComp = VampireWizardComponents.BuildForCancelConfirm(session.Draft);
+                                    await umCancel.ModifyAsync(m =>
+                                    {
+                                        m.Embed = summaryEb.Build();
+                                        m.Components = confirmComp;
+                                    });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                BotLogger.Error(LogCategory.Discord, $"Ошибка при показе сводки отмены: {ex.Message}");
+                            }
+                            await component.RespondEphemeralAsync("⚠️ Вы уверены, что хотите отменить визард? Подтвердите в сообщении выше.");
+                            return;
+
+                        case VampireWizardAction.ConfirmCancel:
+                            // Шаг 2 отмены: игрок подтвердил. Снимаем сессию, в DM
+                            // пишем финальное сообщение об отмене.
+                            VampireWizardRegistry.Instance.RemoveByUser(component.User.Id);
+                            try
+                            {
+                                var dmConfirm = await component.User.CreateDMChannelAsync();
+                                var msgConfirm = await dmConfirm.GetMessageAsync(session.DmMessageId ?? 0);
+                                if (msgConfirm is IUserMessage umConfirm)
+                                {
+                                    await umConfirm.ModifyAsync(m =>
+                                    {
+                                        m.Content = VampireWizardDmHandler.BuildCancelledMessage();
+                                        m.Embed = null;
+                                        m.Components = null;
+                                    });
+                                }
+                            }
+                            catch { /* swallow — главное что сессия снята */ }
+                            await component.RespondEphemeralAsync("❌ Визард отменён. Все введённые данные сброшены.");
+                            return;
+
+                        case VampireWizardAction.ResumeWizard:
+                            // Игрок передумал отменять — перерисовываем текущий шаг
+                            // визарда как обычно.
+                            await RerenderWizardAsync(component, session);
+                            return;
 
             default:
                 await component.RespondEphemeralAsync("⚠️ Неизвестное действие визарда.");

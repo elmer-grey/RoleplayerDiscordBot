@@ -166,6 +166,95 @@ public static class VampireWizardDmHandler
         "❌ Создание персонажа отменено. Все введённые данные сброшены. " +
         "Чтобы начать заново — вызовите `/vampire_create` в канале.";
 
+                        /// <summary>
+                        /// Сводка draft, показываемая при нажатии «Отмена».
+                        /// Содержит то, что игрок уже ввёл (concept, clan, generation, атрибуты
+                        /// и т. п.), чтобы он мог убедиться, что отменяет не случайно.
+                        /// </summary>
+                        public static EmbedBuilder BuildCancelSummary(VampireCharacter c)
+                        {
+                            if (c == null) throw new ArgumentNullException(nameof(c));
+                            var eb = new EmbedBuilder
+                            {
+                                Title = "⚠️ Вы уверены, что хотите отменить визард?",
+                                Description = "Ниже — всё, что вы уже ввели. " +
+                                    "Если нажмёте «❌ Подтвердить отмену», **эти данные будут удалены безвозвратно**. " +
+                                    "Если передумали — нажмите «✅ Продолжить визард».",
+                                Color = new Color(0xE6, 0x7E, 0x22), // оранжевый — предупреждение
+                            };
+                            // Имя.
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Имя",
+                                Value = string.IsNullOrWhiteSpace(c.CharacterName) ? "_(не задано)_" : c.CharacterName,
+                                IsInline = true,
+                            });
+                            // Клан.
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Клан",
+                                Value = string.IsNullOrWhiteSpace(c.Clan) ? "_(не задан)_" : c.Clan,
+                                IsInline = true,
+                            });
+                            // Поколение.
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Поколение",
+                                Value = c.Generation > 0 ? c.Generation.ToString() : "_(по умолчанию)_",
+                                IsInline = true,
+                            });
+                            // Амплуа / натура / маска.
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Амплуа",
+                                Value = string.IsNullOrWhiteSpace(c.Concept) ? "_(не задано)_" : c.Concept,
+                                IsInline = true,
+                            });
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Натура",
+                                Value = string.IsNullOrWhiteSpace(c.Nature) ? "_(не задана)_" : c.Nature,
+                                IsInline = true,
+                            });
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Маска",
+                                Value = string.IsNullOrWhiteSpace(c.Demeanor) ? "_(не задана)_" : c.Demeanor,
+                                IsInline = true,
+                            });
+                            // Приоритеты.
+                            var prio = string.IsNullOrWhiteSpace(c.AttributesPriority) ? "_(не задан)_" : c.AttributesPriority;
+                            var abPrio = string.IsNullOrWhiteSpace(c.AbilitiesPriority) ? "_(не задан)_" : c.AbilitiesPriority;
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Приоритет характеристик (7/5/3)",
+                                Value = prio,
+                                IsInline = true,
+                            });
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Приоритет способностей (13/9/5)",
+                                Value = abPrio,
+                                IsInline = true,
+                            });
+                            // Очки/свободные.
+                            int bgCount = (c.Backgrounds?.Count ?? 0) + (c.FreebieBackgrounds?.Count ?? 0);
+                            int discCount = (c.Disciplines?.Count ?? 0) + (c.FreebieDisciplines?.Count ?? 0);
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Дисциплины / Факты",
+                                Value = $"Дисциплин: {discCount} · Фактов: {bgCount}",
+                                IsInline = true,
+                            });
+                            eb.AddField(new EmbedFieldBuilder
+                            {
+                                Name = "Голод",
+                                Value = c.Hunger > 0 ? c.Hunger.ToString() : "_(не задан)_",
+                                IsInline = true,
+                            });
+                            return eb;
+                        }
+
         /// <summary>
         /// Шаг 4.1 «Дисциплины» — рендер/правка DM-сообщения.
         /// </summary>
