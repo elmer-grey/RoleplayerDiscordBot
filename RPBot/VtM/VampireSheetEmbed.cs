@@ -85,15 +85,25 @@ public static class VampireSheetEmbed
             });
         }
 
-        // Характеристики — три inline-колонки (заголовок + два пустых для колоночной вёрстки).
+        // Характеристики — три inline-колонки (Физ / Соц / Мент), как у Способностей.
         eb.AddField(new EmbedFieldBuilder
         {
             Name = "──────── Характеристики ────────",
-            Value = BuildCharacteristicsBlock(character),
+            Value = BuildCharacteristicColumn(character, VampireParameterCatalog.Physical, "Физические"),
             IsInline = true,
         });
-        eb.AddField(new EmbedFieldBuilder { Name = "\u200B", Value = "\u200B", IsInline = true });
-        eb.AddField(new EmbedFieldBuilder { Name = "\u200B", Value = "\u200B", IsInline = true });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
+            Value = BuildCharacteristicColumn(character, VampireParameterCatalog.Social, "Социальные"),
+            IsInline = true,
+        });
+        eb.AddField(new EmbedFieldBuilder
+        {
+            Name = "\u200B",
+            Value = BuildCharacteristicColumn(character, VampireParameterCatalog.Mental, "Ментальные"),
+            IsInline = true,
+        });
 
         // Способности: три колонки (Таланты / Навыки / Знания) со специализациями при value ≥ 4.
         eb.AddField(new EmbedFieldBuilder
@@ -199,18 +209,10 @@ public static class VampireSheetEmbed
         return lines;
     }
 
-    /// <summary>Сводный блок «Характеристики» — 9 строк.</summary>
-    public static string BuildCharacteristicsBlock(VampireCharacter c)
+    /// <summary>Колонка «Характеристики» для одной группы (Физ / Соц / Мент). Используется в листе тремя inline-колонками, как у Способностей.</summary>
+    public static string BuildCharacteristicColumn(VampireCharacter c, IReadOnlyList<string> names, string title)
     {
         var sb = new StringBuilder();
-        AppendCategorySection(sb, "Физические", VampireParameterCatalog.Physical, c, isCharacteristic: true);
-        AppendCategorySection(sb, "Социальные", VampireParameterCatalog.Social, c, isCharacteristic: true);
-        AppendCategorySection(sb, "Ментальные", VampireParameterCatalog.Mental, c, isCharacteristic: true);
-        return sb.ToString();
-    }
-
-    private static void AppendCategorySection(StringBuilder sb, string title, IReadOnlyList<string> names, VampireCharacter c, bool isCharacteristic)
-    {
         sb.Append("**").Append(title).AppendLine(":**");
         foreach (var name in names)
         {
@@ -220,27 +222,28 @@ public static class VampireSheetEmbed
             if (name == "Привлекательность"
                 && (c.Clan == "Носферату" || c.Clan == "Последователь Сета"))
             {
-                    sb.Append("̶○̶○̶○̶○̶○̶ (зачёркнуто изъяном)");
+                sb.Append("̶○̶○̶○̶○̶○̶ (зачёркнуто изъяном)");
             }
             else
             {
-                    int dots = Math.Min(value, 5);
-                    string dotsStr = DotsString(dots, 5);
-                    if (dots >= 4
-                        && c.Specializations != null
-                        && c.Specializations.TryGetValue(name, out var spec)
-                        && !string.IsNullOrWhiteSpace(spec))
-                    {
-                        sb.Append(dotsStr).Append(" (").Append(spec).Append(')');
-                    }
-                    else
-                    {
-                        sb.Append(dotsStr);
-                    }
+                int dots = Math.Min(value, 5);
+                string dotsStr = DotsString(dots, 5);
+                if (dots >= 4
+                    && c.Specializations != null
+                    && c.Specializations.TryGetValue(name, out var spec)
+                    && !string.IsNullOrWhiteSpace(spec))
+                {
+                    sb.Append(dotsStr).Append(" (").Append(spec).Append(')');
                 }
-                sb.AppendLine();
+                else
+                {
+                    sb.Append(dotsStr);
+                }
             }
+            sb.AppendLine();
         }
+        return sb.ToString();
+    }
 
     /// <summary>Столбец способностей (Таланты / Навыки / Знания) со специализациями при value ≥ 4.</summary>
     public static string BuildAbilityColumn(VampireCharacter c, IReadOnlyList<string> names)

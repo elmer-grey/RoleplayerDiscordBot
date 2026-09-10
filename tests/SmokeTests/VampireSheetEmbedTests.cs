@@ -206,25 +206,26 @@ public class VampireSheetEmbedTests
     [Fact]
     public void Build_Characteristics_ContainsAllThreeGroups()
     {
+        // Характеристики разнесены по трём inline-колонкам (Физ/Соц/Мент),
+        // как у Способностей. Заголовки групп ищутся во всех полях embed-а.
         var embed = VampireSheetEmbed.Build(NewCharacter());
-        var charsField = embed.Fields.First(f => f.Name.Contains("Характеристики"));
-        var body = charsField.Value.ToString()!;
-        Assert.Contains("Физические", body);
-        Assert.Contains("Социальные", body);
-        Assert.Contains("Ментальные", body);
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
+        Assert.Contains("Физические", allText);
+        Assert.Contains("Социальные", allText);
+        Assert.Contains("Ментальные", allText);
     }
 
     [Fact]
     public void Build_Characteristics_ContainsAllNine()
     {
+        // Проверяем, что все 9 атрибутов присутствуют в embed-е (в любой колонке).
         var embed = VampireSheetEmbed.Build(NewCharacter());
-        var charsField = embed.Fields.First(f => f.Name.Contains("Характеристики"));
-        var body = charsField.Value.ToString()!;
+        var allText = string.Join("\n", embed.Fields.Select(f => f.Value.ToString() ?? ""));
         foreach (var cat in VampireParameterCatalog.Physical
             .Concat(VampireParameterCatalog.Social)
             .Concat(VampireParameterCatalog.Mental))
         {
-            Assert.Contains(cat, body);
+            Assert.Contains(cat, allText);
         }
     }
 
