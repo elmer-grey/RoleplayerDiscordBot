@@ -620,6 +620,14 @@ public sealed class VampireCommands
                                                             await component.RespondEphemeralAsync("⚠️ Завершение Шага 5 доступно только из Шага 5.");
                                                             return;
                                                         }
+                                                        if (!VampireFinishingResolver.IsFinishingComplete(session.Draft))
+                                                        {
+                                                            var remaining = VampireFinishingResolver.RemainingFreebies(session.Draft);
+                                                            await component.RespondEphemeralAsync(
+                                                                $"❌ Шаг 5 ещё не завершён. Осталось {remaining} свободных пунктов. " +
+                                                                "Сначала потратьте их или подтвердите завершение через «⚠ Подтвердить и заморозить».");
+                                                            return;
+                                                        }
                                                         await CommitDraftAsync(component, session);
                                                         await component.RespondEphemeralAsync(
                                                             "✅ Шаг 5 сохранён. Финальный лист персонажа появится в Шаге 6 (следующее обновление).");

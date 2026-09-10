@@ -178,6 +178,15 @@ public static partial class VampireFinishingResolver
         public static bool SpecializationsAllowed(VampireCharacter draft)
             => draft != null && (FreebiesExhausted(draft) || IsStep5Finalized(draft));
 
+        /// <summary>Шаг 5 можно завершить (для кнопки «Готово → лист»).</summary>
+        /// <remarks>
+        /// Семантически совпадает с <see cref="SpecializationsAllowed"/>:
+        /// либо все freebie потрачены, либо игрок явно подтвердил Шаг 5.
+        /// Выделено в отдельный метод для читаемости в обработчике кнопки.
+        /// </remarks>
+        public static bool IsFinishingComplete(VampireCharacter draft)
+            => SpecializationsAllowed(draft);
+
         /// <summary>
         /// Пометить все freebie как потраченные (без фактической траты на параметры).
         /// Используется юнит-тестами для перевода черновика в состояние «пост-Шаг-5»,

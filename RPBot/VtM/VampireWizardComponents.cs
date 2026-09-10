@@ -685,7 +685,17 @@ public static class VampireWizardComponents
                                                                         cb.WithButton("⬅ Назад (4.3)", BuildCustomId(VampireWizardAction.BackToAdvantages, draft.CharacterId), ButtonStyle.Secondary)
                                                                           .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.FinishingReset, draft.CharacterId), ButtonStyle.Danger);
 
-                                                                        cb.WithButton("Готово → лист", BuildCustomId(VampireWizardAction.FinishingDone, draft.CharacterId), ButtonStyle.Success);
+                                                                        // Кнопка «Готово → лист» доступна только если Шаг 5 завершён
+                                                                        // (либо пул = 0, либо игрок явно подтвердил).
+                                                                        var finishingComplete = VampireFinishingResolver.IsFinishingComplete(draft);
+                                                                        var doneButton = new ButtonBuilder()
+                                                                            .WithLabel(finishingComplete
+                                                                                ? "Готово → лист"
+                                                                                : $"Готово → лист (сначала распределите или подтвердите, ост. {remaining})")
+                                                                            .WithCustomId(BuildCustomId(VampireWizardAction.FinishingDone, draft.CharacterId))
+                                                                            .WithStyle(ButtonStyle.Success)
+                                                                            .WithDisabled(!finishingComplete);
+                                                                        cb.WithButton(doneButton);
 
                                                                         return cb.Build();
                                                                     }

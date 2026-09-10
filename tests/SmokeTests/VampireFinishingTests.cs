@@ -131,6 +131,36 @@ public class VampireFinishingTests
     }
 
     [Fact]
+    public void IsFinishingComplete_EmptyDraft_IsFalse()
+    {
+        var d = NewDraft();
+        // Пул полный, ничего не потрачено, не подтверждено — Шаг 5 не завершён.
+        Assert.False(VampireFinishingResolver.IsFinishingComplete(d));
+    }
+
+    [Fact]
+    public void IsFinishingComplete_AfterExhaustedPool_IsTrue()
+    {
+        var d = NewDraft();
+        SeedVirtues(d, conscience: 2, selfControl: 2, courage: 2);
+        // 3 раза тратим 5 очков на 3 разных атрибута → пул = 15/15 → 0
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _).IsSuccess);
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Ловкость", out _).IsSuccess);
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Выносливость", out _).IsSuccess);
+        Assert.Equal(0, VampireFinishingResolver.RemainingFreebies(d));
+        Assert.True(VampireFinishingResolver.IsFinishingComplete(d));
+    }
+
+    [Fact]
+    public void IsFinishingComplete_AfterUserConfirm_IsTrue()
+    {
+        var d = NewDraft();
+        // Пул полный, ничего не потрачено, но игрок явно подтвердил.
+        VampireFinishingResolver.ConfirmStep5(d);
+        Assert.True(VampireFinishingResolver.IsFinishingComplete(d));
+    }
+
+    [Fact]
     public void Allocations_DecreaseRemainingPool()
     {
         var d = NewDraft();
