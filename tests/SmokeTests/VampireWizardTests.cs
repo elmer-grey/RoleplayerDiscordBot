@@ -794,4 +794,59 @@ public class VampireWizardTests : IsolatedDataTestBase
             {
                 return comp.Components.OfType<ActionRowComponent>();
             }
+
+            // ── Навигация Шагов 4.2/4.3: «Назад» ведёт на предыдущий под-экран ─
+
+            [Fact]
+            public void BuildBackgroundsStep_BackButton_GoesToDisciplines()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                draft.Disciplines = new System.Collections.Generic.Dictionary<string, int>(StringComparer.Ordinal);
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var buttons = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .ToList();
+                var back = buttons.FirstOrDefault(b => b.Label != null && b.Label.Contains("4.1"));
+                Assert.NotNull(back);
+                Assert.True(VampireWizardComponents.TryParse(back!.CustomId, out var action, out _));
+                Assert.Equal(VampireWizardAction.BackToDisciplines, action);
+            }
+
+            [Fact]
+            public void BuildVirtuesStep_BackButton_GoesToBackgrounds()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                var comp = VampireWizardComponents.BuildForVirtuesStep(draft);
+                var buttons = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .ToList();
+                var back = buttons.FirstOrDefault(b => b.Label != null && b.Label.Contains("4.2"));
+                Assert.NotNull(back);
+                Assert.True(VampireWizardComponents.TryParse(back!.CustomId, out var action, out _));
+                Assert.Equal(VampireWizardAction.BackToBackgrounds, action);
+            }
+
+            [Fact]
+            public void WizardActions_BackToDisciplines_RoundTrip()
+            {
+                var id = Guid.NewGuid();
+                var cid = VampireWizardComponents.BuildCustomId(VampireWizardAction.BackToDisciplines, id);
+                Assert.True(VampireWizardComponents.TryParse(cid, out var a, out var rid));
+                Assert.Equal(VampireWizardAction.BackToDisciplines, a);
+                Assert.Equal(id, rid);
+            }
+
+            [Fact]
+            public void WizardActions_BackToBackgrounds_RoundTrip()
+            {
+                var id = Guid.NewGuid();
+                var cid = VampireWizardComponents.BuildCustomId(VampireWizardAction.BackToBackgrounds, id);
+                Assert.True(VampireWizardComponents.TryParse(cid, out var a, out var rid));
+                Assert.Equal(VampireWizardAction.BackToBackgrounds, a);
+                Assert.Equal(id, rid);
+            }
         }

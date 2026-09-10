@@ -434,6 +434,47 @@ public sealed class VampireCommands
                                                         return;
                                                     }
 
+                                                case VampireWizardAction.BackToDisciplines:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Возврат на 4.1 доступен только с под-экранов Шага 4.");
+                                                            return;
+                                                        }
+                                                        await component.RespondEphemeralAsync("⬅ Возврат на Шаг 4.1 (дисциплины).");
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderDisciplinesStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 4.2/4.3→4.1: {ex.Message}");
+                                                        }
+                                                        return;
+                                                    }
+
+                                                case VampireWizardAction.BackToBackgrounds:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages
+                                                            || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Virtues)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Возврат на 4.2 доступен только с Шага 4.3.");
+                                                            return;
+                                                        }
+                                                        await component.RespondEphemeralAsync("⬅ Возврат на Шаг 4.2 (факты).");
+                                                        try
+                                                        {
+                                                            var dm = await component.User.CreateDMChannelAsync();
+                                                            await VampireWizardDmHandler.RenderBackgroundsStepAsync(dm, session);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 4.3→4.2: {ex.Message}");
+                                                        }
+                                                        return;
+                                                    }
+
                                                 case VampireWizardAction.NextAdvToBackgrounds:
                                                     {
                                                         if (session.Step != VampireWizardStep.Advantages

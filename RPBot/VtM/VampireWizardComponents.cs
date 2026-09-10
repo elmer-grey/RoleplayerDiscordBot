@@ -126,6 +126,10 @@ public enum VampireWizardAction
                 ResetAdvAll,
                 /// <summary>Вернуться на Шаг 3 (Способности).</summary>
                 BackToAbilities,
+                /// <summary>Вернуться на Шаг 4.1 (Дисциплины) — с под-экранов 4.2/4.3.</summary>
+                BackToDisciplines,
+                /// <summary>Вернуться на Шаг 4.2 (Факты биографии) — с под-экрана 4.3.</summary>
+                BackToBackgrounds,
                 /// <summary>Перейти к Шагу 4.2 (Факты биографии).</summary>
                 NextAdvToBackgrounds,
                 /// <summary>Перейти к Шагу 4.3 (Добродетели).</summary>
@@ -603,7 +607,7 @@ public static class VampireWizardComponents
                                         }
                                     }
 
-                                    cb.WithButton("⬅ Назад (4.1)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
+                                    cb.WithButton("⬅ Назад (4.1)", BuildCustomId(VampireWizardAction.BackToDisciplines, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
 
@@ -627,7 +631,7 @@ public static class VampireWizardComponents
                                     var cb = new ComponentBuilder();
                                     cb.WithSelectMenu(BuildVirtueSelect(draft));
 
-                                    cb.WithButton("⬅ Назад (4.2)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
+                                    cb.WithButton("⬅ Назад (4.2)", BuildCustomId(VampireWizardAction.BackToBackgrounds, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
 
@@ -1224,6 +1228,8 @@ public static class VampireWizardComponents
                         VampireWizardAction.ResetAdvProgress     => "reset_adv_progress",
                         VampireWizardAction.ResetAdvAll          => "reset_adv_all",
                         VampireWizardAction.BackToAbilities      => "back_to_abilities",
+                        VampireWizardAction.BackToDisciplines    => "back_to_disciplines",
+                        VampireWizardAction.BackToBackgrounds    => "back_to_backgrounds",
                         VampireWizardAction.NextAdvToBackgrounds => "next_adv_to_backgrounds",
                         VampireWizardAction.NextAdvToVirtues     => "next_adv_to_virtues",
                         VampireWizardAction.NextAdvToFinishing   => "next_adv_to_finishing",
@@ -1290,6 +1296,8 @@ public static class VampireWizardComponents
                                     case "reset_adv_progress":  action = VampireWizardAction.ResetAdvProgress;  return true;
                                     case "reset_adv_all":       action = VampireWizardAction.ResetAdvAll;       return true;
                                     case "back_to_abilities":   action = VampireWizardAction.BackToAbilities;   return true;
+                                    case "back_to_disciplines": action = VampireWizardAction.BackToDisciplines; return true;
+                                    case "back_to_backgrounds": action = VampireWizardAction.BackToBackgrounds; return true;
                                     case "next_adv_to_backgrounds": action = VampireWizardAction.NextAdvToBackgrounds; return true;
                                     case "next_adv_to_virtues":     action = VampireWizardAction.NextAdvToVirtues;     return true;
                                     case "next_adv_to_finishing":   action = VampireWizardAction.NextAdvToFinishing;   return true;
