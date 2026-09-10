@@ -143,30 +143,30 @@ public enum VampireWizardAction
                 /// <summary>Перейти к Шагу 5 (Последние штрихи).</summary>
                 NextAdvToFinishing,
 
-                                // ── Шаг 5 «Последние штрихи» ────────────────────────────────
+                // ── Шаг 5 «Последние штрихи» ────────────────────────────────
 
-                                /// <summary>SelectMenu свободных пунктов: target+field+sign. Action-arg = "{sign}:{target}:{field}".</summary>
-                                FinishingInc,
-                                /// <summary>Шаг 5 каскад: выбор категории свободного пункта (Step 1).</summary>
-                                FinishingPickTarget,
-                                /// <summary>Шаг 5 каскад: выбор подгруппы (Step 2, только Attribute/Ability). Action-arg = target.</summary>
-                                FinishingPickSubgroup,
-                                /// <summary>Шаг 5 каскад: применить +/− к выбранному полю (Step 3). Action-arg = "{sign}:{target}:{field}".</summary>
-                                FinishingApplyField,
-                                /// <summary>Шаг 5 каскад: вернуться с подгруппы (Step 2) на категории (Step 1).</summary>
-                                FinishingBackFromSubgroup,
-                                /// <summary>Шаг 5 каскад: вернуться с поля (Step 3) на подгруппу (Step 2).</summary>
-                                FinishingBackFromField,
-                                /// <summary>Кнопка «Сбросить всё» на Шаге 5 (откатить все траты).</summary>
-                                FinishingReset,
-                                /// <summary>Завершить Шаг 5 и перейти к Шагу 6 (или показать лист).</summary>
-                                FinishingDone,
-                                /// <summary>Подтвердить завершение Шага 5 через диалог (когда пул ещё не пуст).
-                                /// После этого специализации разрешены, а траты freebie заморожены.</summary>
-                                FinishingFinalize,
-                                /// <summary>Вернуться на Шаг 4.3 (Добродетели).</summary>
-                                BackToAdvantages,
-                    }
+                /// <summary>SelectMenu свободных пунктов: target+field+sign. Action-arg = "{sign}:{target}:{field}".</summary>
+                FinishingInc,
+                /// <summary>Шаг 5 каскад: выбор категории свободного пункта (Step 1).</summary>
+                FinishingPickTarget,
+                /// <summary>Шаг 5 каскад: выбор подгруппы (Step 2, только Attribute/Ability). Action-arg = target.</summary>
+                FinishingPickSubgroup,
+                /// <summary>Шаг 5 каскад: применить +/− к выбранному полю (Step 3). Action-arg = "{sign}:{target}:{field}".</summary>
+                FinishingApplyField,
+                /// <summary>Шаг 5 каскад: вернуться с подгруппы (Step 2) на категории (Step 1).</summary>
+                FinishingBackFromSubgroup,
+                /// <summary>Шаг 5 каскад: вернуться с поля (Step 3) на подгруппу (Step 2).</summary>
+                FinishingBackFromField,
+                /// <summary>Кнопка «Сбросить всё» на Шаге 5 (откатить все траты).</summary>
+                FinishingReset,
+                /// <summary>Завершить Шаг 5 и перейти к Шагу 6 (или показать лист).</summary>
+                FinishingDone,
+                /// <summary>Подтвердить завершение Шага 5 через диалог (когда пул ещё не пуст).
+                /// После этого специализации разрешены, а траты freebie заморожены.</summary>
+                FinishingFinalize,
+                /// <summary>Вернуться на Шаг 4.3 (Добродетели).</summary>
+                BackToAdvantages,
+            }
 
 /// <summary>
 /// Кнопки визарда создания персонажа для DM-сообщения.
@@ -1409,48 +1409,48 @@ public static class VampireWizardComponents
                 VampireWizardAction.ResetAttrProgress => "reset_attr_progress",
                 VampireWizardAction.ResetAttrAll      => "reset_attr_all",
                 VampireWizardAction.BackToConcept     => "back_to_concept",
-                        VampireWizardAction.AbilityPriority     => "ability_priority",
-                        VampireWizardAction.AbilityGroupSelect  => "ability_group_select",
-                        VampireWizardAction.AbilitySelect       => "ability_select",
-                        VampireWizardAction.AbilityInc          => "ability_inc",
-                        VampireWizardAction.AbilityDec          => "ability_dec",
-                        VampireWizardAction.SpecChoice          => "spec_choice",
-                        VampireWizardAction.SpecSet             => "spec_set",
-                        VampireWizardAction.ResetAbilityProgress => "reset_ability_progress",
-                        VampireWizardAction.ResetAbilityAll      => "reset_ability_all",
-                        VampireWizardAction.BackToAttributes     => "back_to_attributes",
-                        VampireWizardAction.DisciplineInc        => "discipline_inc",
-                        VampireWizardAction.DisciplineDec        => "discipline_dec",
-                        VampireWizardAction.DisciplineRename     => "discipline_rename",
-                        VampireWizardAction.BackgroundAdd        => "background_add",
-                        VampireWizardAction.BackgroundRemove     => "background_remove",
-                        VampireWizardAction.BackgroundRename     => "background_rename",
-                        VampireWizardAction.BackgroundInc        => "background_inc",
-                        VampireWizardAction.BackgroundDec        => "background_dec",
-                        VampireWizardAction.VirtueInc            => "virtue_inc",
-                        VampireWizardAction.VirtueDec            => "virtue_dec",
-                        VampireWizardAction.ResetAdvDisciplines => "reset_adv_disciplines",
-                        VampireWizardAction.ResetAdvBackgrounds => "reset_adv_backgrounds",
-                        VampireWizardAction.ResetAdvVirtues    => "reset_adv_virtues",
-                        VampireWizardAction.ResetAdvProgress   => "reset_adv_progress",
-                        VampireWizardAction.ResetAdvAll        => "reset_adv_all",
-                        VampireWizardAction.BackToAbilities      => "back_to_abilities",
-                        VampireWizardAction.BackToDisciplines    => "back_to_disciplines",
-                        VampireWizardAction.BackToBackgrounds    => "back_to_backgrounds",
-                        VampireWizardAction.NextAdvToBackgrounds => "next_adv_to_backgrounds",
-                        VampireWizardAction.NextAdvToVirtues     => "next_adv_to_virtues",
-                        VampireWizardAction.NextAdvToFinishing   => "next_adv_to_finishing",
-                                                VampireWizardAction.FinishingInc        => "finishing_inc",
-                                                VampireWizardAction.FinishingReset      => "finishing_reset",
-                                                VampireWizardAction.FinishingDone       => "finishing_done",
-                                                VampireWizardAction.FinishingFinalize   => "finishing_finalize",
-                                                VampireWizardAction.FinishingPickTarget   => "finishing_pick_target",
-                                                VampireWizardAction.FinishingPickSubgroup => "finishing_pick_subgroup",
-                                                VampireWizardAction.FinishingApplyField   => "finishing_apply_field",
-                                                VampireWizardAction.FinishingBackFromSubgroup => "finishing_back_from_subgroup",
-                                                VampireWizardAction.FinishingBackFromField   => "finishing_back_from_field",
-                                                VampireWizardAction.BackToAdvantages    => "back_to_advantages",
-                                                _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
+            VampireWizardAction.AbilityPriority     => "ability_priority",
+            VampireWizardAction.AbilityGroupSelect  => "ability_group_select",
+            VampireWizardAction.AbilitySelect       => "ability_select",
+            VampireWizardAction.AbilityInc          => "ability_inc",
+            VampireWizardAction.AbilityDec          => "ability_dec",
+            VampireWizardAction.SpecChoice          => "spec_choice",
+            VampireWizardAction.SpecSet             => "spec_set",
+            VampireWizardAction.ResetAbilityProgress => "reset_ability_progress",
+            VampireWizardAction.ResetAbilityAll      => "reset_ability_all",
+            VampireWizardAction.BackToAttributes     => "back_to_attributes",
+            VampireWizardAction.DisciplineInc        => "discipline_inc",
+            VampireWizardAction.DisciplineDec        => "discipline_dec",
+            VampireWizardAction.DisciplineRename     => "discipline_rename",
+            VampireWizardAction.BackgroundAdd        => "background_add",
+            VampireWizardAction.BackgroundRemove     => "background_remove",
+            VampireWizardAction.BackgroundRename     => "background_rename",
+            VampireWizardAction.BackgroundInc        => "background_inc",
+            VampireWizardAction.BackgroundDec        => "background_dec",
+            VampireWizardAction.VirtueInc            => "virtue_inc",
+            VampireWizardAction.VirtueDec            => "virtue_dec",
+            VampireWizardAction.ResetAdvDisciplines  => "reset_adv_disciplines",
+            VampireWizardAction.ResetAdvBackgrounds  => "reset_adv_backgrounds",
+            VampireWizardAction.ResetAdvVirtues      => "reset_adv_virtues",
+            VampireWizardAction.ResetAdvProgress     => "reset_adv_progress",
+            VampireWizardAction.ResetAdvAll          => "reset_adv_all",
+            VampireWizardAction.BackToAbilities      => "back_to_abilities",
+            VampireWizardAction.BackToDisciplines    => "back_to_disciplines",
+            VampireWizardAction.BackToBackgrounds    => "back_to_backgrounds",
+            VampireWizardAction.NextAdvToBackgrounds => "next_adv_to_backgrounds",
+            VampireWizardAction.NextAdvToVirtues     => "next_adv_to_virtues",
+            VampireWizardAction.NextAdvToFinishing   => "next_adv_to_finishing",
+            VampireWizardAction.FinishingInc         => "finishing_inc",
+            VampireWizardAction.FinishingReset       => "finishing_reset",
+            VampireWizardAction.FinishingDone        => "finishing_done",
+            VampireWizardAction.FinishingFinalize    => "finishing_finalize",
+            VampireWizardAction.FinishingPickTarget   => "finishing_pick_target",
+            VampireWizardAction.FinishingPickSubgroup => "finishing_pick_subgroup",
+            VampireWizardAction.FinishingApplyField   => "finishing_apply_field",
+            VampireWizardAction.FinishingBackFromSubgroup => "finishing_back_from_subgroup",
+            VampireWizardAction.FinishingBackFromField   => "finishing_back_from_field",
+            VampireWizardAction.BackToAdvantages     => "back_to_advantages",
+            _ => throw new InvalidEnumArgumentException(nameof(action), (int)action, typeof(VampireWizardAction)),
     };
 
     private static bool TryParseAction(string s, out VampireWizardAction action)
@@ -1476,57 +1476,57 @@ public static class VampireWizardComponents
             case "cancel":         action = VampireWizardAction.Cancel;       return true;
             case "confirm_cancel": action = VampireWizardAction.ConfirmCancel; return true;
             case "resume_wizard":  action = VampireWizardAction.ResumeWizard;  return true;
-                        case "attr_inc":       action = VampireWizardAction.AttrInc;       return true;
-                        case "attr_dec":       action = VampireWizardAction.AttrDec;       return true;
-                                                case "attr_priority":  action = VampireWizardAction.AttrPriority;  return true;
-                                                case "attr_select":    action = VampireWizardAction.AttrSelect;    return true;
-                                                case "attr_page_next": action = VampireWizardAction.AttrPageNext; return true;
-                                                case "attr_page_prev": action = VampireWizardAction.AttrPagePrev; return true;
-                        case "reset_attr_progress": action = VampireWizardAction.ResetAttrProgress; return true;
-                        case "reset_attr_all": action = VampireWizardAction.ResetAttrAll;  return true;
-                        case "back_to_concept": action = VampireWizardAction.BackToConcept; return true;
-                                    case "ability_priority":    action = VampireWizardAction.AbilityPriority;    return true;
-                                    case "ability_group_select": action = VampireWizardAction.AbilityGroupSelect; return true;
-                                    case "ability_select":      action = VampireWizardAction.AbilitySelect;      return true;
-                                    case "ability_inc":         action = VampireWizardAction.AbilityInc;         return true;
-                                    case "ability_dec":         action = VampireWizardAction.AbilityDec;         return true;
-                                    case "spec_choice":         action = VampireWizardAction.SpecChoice;         return true;
-                                    case "spec_set":            action = VampireWizardAction.SpecSet;            return true;
-                                    case "reset_ability_progress": action = VampireWizardAction.ResetAbilityProgress; return true;
-                                    case "reset_ability_all":   action = VampireWizardAction.ResetAbilityAll;    return true;
-                                    case "back_to_attributes":  action = VampireWizardAction.BackToAttributes;   return true;
-                                    case "discipline_inc":      action = VampireWizardAction.DisciplineInc;      return true;
-                                    case "discipline_dec":      action = VampireWizardAction.DisciplineDec;      return true;
-                                    case "discipline_rename":   action = VampireWizardAction.DisciplineRename;   return true;
-                                    case "background_add":      action = VampireWizardAction.BackgroundAdd;      return true;
-                                    case "background_remove":   action = VampireWizardAction.BackgroundRemove;   return true;
-                                    case "background_rename":   action = VampireWizardAction.BackgroundRename;   return true;
-                                    case "background_inc":      action = VampireWizardAction.BackgroundInc;      return true;
-                                    case "background_dec":      action = VampireWizardAction.BackgroundDec;      return true;
-                                    case "virtue_inc":          action = VampireWizardAction.VirtueInc;          return true;
-                                    case "virtue_dec":          action = VampireWizardAction.VirtueDec;          return true;
-                                    case "reset_adv_disciplines": action = VampireWizardAction.ResetAdvDisciplines; return true;
-                                    case "reset_adv_backgrounds": action = VampireWizardAction.ResetAdvBackgrounds; return true;
-                                    case "reset_adv_virtues":     action = VampireWizardAction.ResetAdvVirtues;     return true;
-                                    case "reset_adv_progress":    action = VampireWizardAction.ResetAdvProgress;    return true;
-                                    case "reset_adv_all":         action = VampireWizardAction.ResetAdvAll;         return true;
-                                    case "back_to_abilities":   action = VampireWizardAction.BackToAbilities;   return true;
-                                    case "back_to_disciplines": action = VampireWizardAction.BackToDisciplines; return true;
-                                    case "back_to_backgrounds": action = VampireWizardAction.BackToBackgrounds; return true;
-                                    case "next_adv_to_backgrounds": action = VampireWizardAction.NextAdvToBackgrounds; return true;
-                                    case "next_adv_to_virtues":     action = VampireWizardAction.NextAdvToVirtues;     return true;
-                                    case "next_adv_to_finishing":   action = VampireWizardAction.NextAdvToFinishing;   return true;
-                                    case "finishing_inc":          action = VampireWizardAction.FinishingInc;          return true;
-                                    case "finishing_reset":        action = VampireWizardAction.FinishingReset;        return true;
-                                    case "finishing_done":         action = VampireWizardAction.FinishingDone;         return true;
-                                    case "finishing_finalize":     action = VampireWizardAction.FinishingFinalize;     return true;
-                                    case "finishing_pick_target":   action = VampireWizardAction.FinishingPickTarget;   return true;
-                                    case "finishing_pick_subgroup": action = VampireWizardAction.FinishingPickSubgroup; return true;
-                                    case "finishing_apply_field":   action = VampireWizardAction.FinishingApplyField;   return true;
-                                    case "finishing_back_from_subgroup": action = VampireWizardAction.FinishingBackFromSubgroup; return true;
-                                    case "finishing_back_from_field":   action = VampireWizardAction.FinishingBackFromField;   return true;
-                                    case "back_to_advantages":     action = VampireWizardAction.BackToAdvantages;     return true;
-                                                default:               action = default;                         return false;
+            case "attr_inc":       action = VampireWizardAction.AttrInc;       return true;
+            case "attr_dec":       action = VampireWizardAction.AttrDec;       return true;
+            case "attr_priority":  action = VampireWizardAction.AttrPriority;  return true;
+            case "attr_select":    action = VampireWizardAction.AttrSelect;    return true;
+            case "attr_page_next": action = VampireWizardAction.AttrPageNext; return true;
+            case "attr_page_prev": action = VampireWizardAction.AttrPagePrev; return true;
+            case "reset_attr_progress": action = VampireWizardAction.ResetAttrProgress; return true;
+            case "reset_attr_all": action = VampireWizardAction.ResetAttrAll;  return true;
+            case "back_to_concept": action = VampireWizardAction.BackToConcept; return true;
+            case "ability_priority":      action = VampireWizardAction.AbilityPriority;      return true;
+            case "ability_group_select":  action = VampireWizardAction.AbilityGroupSelect;  return true;
+            case "ability_select":        action = VampireWizardAction.AbilitySelect;        return true;
+            case "ability_inc":           action = VampireWizardAction.AbilityInc;           return true;
+            case "ability_dec":           action = VampireWizardAction.AbilityDec;           return true;
+            case "spec_choice":           action = VampireWizardAction.SpecChoice;           return true;
+            case "spec_set":              action = VampireWizardAction.SpecSet;              return true;
+            case "reset_ability_progress": action = VampireWizardAction.ResetAbilityProgress; return true;
+            case "reset_ability_all":     action = VampireWizardAction.ResetAbilityAll;     return true;
+            case "back_to_attributes":    action = VampireWizardAction.BackToAttributes;    return true;
+            case "discipline_inc":        action = VampireWizardAction.DisciplineInc;        return true;
+            case "discipline_dec":        action = VampireWizardAction.DisciplineDec;        return true;
+            case "discipline_rename":     action = VampireWizardAction.DisciplineRename;     return true;
+            case "background_add":        action = VampireWizardAction.BackgroundAdd;        return true;
+            case "background_remove":     action = VampireWizardAction.BackgroundRemove;     return true;
+            case "background_rename":     action = VampireWizardAction.BackgroundRename;     return true;
+            case "background_inc":        action = VampireWizardAction.BackgroundInc;        return true;
+            case "background_dec":        action = VampireWizardAction.BackgroundDec;        return true;
+            case "virtue_inc":            action = VampireWizardAction.VirtueInc;            return true;
+            case "virtue_dec":            action = VampireWizardAction.VirtueDec;            return true;
+            case "reset_adv_disciplines": action = VampireWizardAction.ResetAdvDisciplines; return true;
+            case "reset_adv_backgrounds": action = VampireWizardAction.ResetAdvBackgrounds; return true;
+            case "reset_adv_virtues":     action = VampireWizardAction.ResetAdvVirtues;     return true;
+            case "reset_adv_progress":    action = VampireWizardAction.ResetAdvProgress;    return true;
+            case "reset_adv_all":         action = VampireWizardAction.ResetAdvAll;         return true;
+            case "back_to_abilities":     action = VampireWizardAction.BackToAbilities;     return true;
+            case "back_to_disciplines":   action = VampireWizardAction.BackToDisciplines;   return true;
+            case "back_to_backgrounds":   action = VampireWizardAction.BackToBackgrounds;   return true;
+            case "next_adv_to_backgrounds": action = VampireWizardAction.NextAdvToBackgrounds; return true;
+            case "next_adv_to_virtues":   action = VampireWizardAction.NextAdvToVirtues;     return true;
+            case "next_adv_to_finishing": action = VampireWizardAction.NextAdvToFinishing;   return true;
+            case "finishing_inc":          action = VampireWizardAction.FinishingInc;          return true;
+            case "finishing_reset":        action = VampireWizardAction.FinishingReset;        return true;
+            case "finishing_done":         action = VampireWizardAction.FinishingDone;         return true;
+            case "finishing_finalize":     action = VampireWizardAction.FinishingFinalize;     return true;
+            case "finishing_pick_target":   action = VampireWizardAction.FinishingPickTarget;   return true;
+            case "finishing_pick_subgroup": action = VampireWizardAction.FinishingPickSubgroup; return true;
+            case "finishing_apply_field":   action = VampireWizardAction.FinishingApplyField;   return true;
+            case "finishing_back_from_subgroup": action = VampireWizardAction.FinishingBackFromSubgroup; return true;
+            case "finishing_back_from_field":   action = VampireWizardAction.FinishingBackFromField;   return true;
+            case "back_to_advantages":     action = VampireWizardAction.BackToAdvantages;     return true;
+            default:               action = default;                         return false;
         }
     }
 }

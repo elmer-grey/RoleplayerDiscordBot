@@ -759,8 +759,12 @@ public sealed class VampireCommands
                                                 case VampireWizardAction.FinishingPickSubgroup:
                                                 case VampireWizardAction.FinishingApplyField:
                                                     {
-                                                        // Каскад Шага 5 — SelectMenu; обработка идёт в Program.cs:HandleSelectMenuExecuted.
-                                                        await component.RespondEphemeralAsync("⚠️ Каскад Шага 5 работает через меню выбора, а не через кнопки.");
+                                                        // Защитный case: эти action приходят только из SelectMenu (обрабатываются
+                                                        // в Program.cs:HandleSelectMenuExecuted). Если событие пришло как кнопка —
+                                                        // значит, кто-то подделал customId.
+                                                        BotLogger.Warn(LogCategory.Discord,
+                                                            $"Неожиданный action {action} как кнопка (customId={component.Data.CustomId}).");
+                                                        await component.RespondEphemeralAsync("⚠️ Этот action ожидается из SelectMenu, а не из кнопки.");
                                                         return;
                                                     }
 
