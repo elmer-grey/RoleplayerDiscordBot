@@ -849,4 +849,52 @@ public class VampireWizardTests : IsolatedDataTestBase
                 Assert.Equal(VampireWizardAction.BackToBackgrounds, a);
                 Assert.Equal(id, rid);
             }
+
+            [Fact]
+            public void BuildDisciplinesStep_ResetButton_UsesResetAdvDisciplines()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                var comp = VampireWizardComponents.BuildForDisciplinesStep(draft);
+                var buttons = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .ToList();
+                var reset = buttons.FirstOrDefault(b => b.Label != null && b.Label.Contains("Сбросить экран"));
+                Assert.NotNull(reset);
+                Assert.True(VampireWizardComponents.TryParse(reset!.CustomId, out var action, out _));
+                Assert.Equal(VampireWizardAction.ResetAdvDisciplines, action);
+            }
+
+            [Fact]
+            public void BuildBackgroundsStep_ResetButton_UsesResetAdvBackgrounds()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var buttons = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .ToList();
+                var reset = buttons.FirstOrDefault(b => b.Label != null && b.Label.Contains("Сбросить экран"));
+                Assert.NotNull(reset);
+                Assert.True(VampireWizardComponents.TryParse(reset!.CustomId, out var action, out _));
+                Assert.Equal(VampireWizardAction.ResetAdvBackgrounds, action);
+            }
+
+            [Fact]
+            public void BuildVirtuesStep_ResetButton_UsesResetAdvVirtues()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                var comp = VampireWizardComponents.BuildForVirtuesStep(draft);
+                var buttons = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .ToList();
+                var reset = buttons.FirstOrDefault(b => b.Label != null && b.Label.Contains("Сбросить экран"));
+                Assert.NotNull(reset);
+                Assert.True(VampireWizardComponents.TryParse(reset!.CustomId, out var action, out _));
+                Assert.Equal(VampireWizardAction.ResetAdvVirtues, action);
+            }
         }

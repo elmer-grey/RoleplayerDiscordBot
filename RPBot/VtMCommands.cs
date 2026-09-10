@@ -406,6 +406,34 @@ public sealed class VampireCommands
                                                         return;
                                                     }
 
+                                                case VampireWizardAction.ResetAdvDisciplines:
+                                                case VampireWizardAction.ResetAdvBackgrounds:
+                                                case VampireWizardAction.ResetAdvVirtues:
+                                                    {
+                                                        if (session.Step != VampireWizardStep.Advantages)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Сброс экрана доступен только на Шаге 4.");
+                                                            return;
+                                                        }
+                                                        if (action == VampireWizardAction.ResetAdvDisciplines)
+                                                        {
+                                                            VampireAdvantagesResolver.ResetDisciplines(session.Draft);
+                                                            await component.RespondEphemeralAsync("🧹 Дисциплины сброшены (значения = 0).");
+                                                        }
+                                                        else if (action == VampireWizardAction.ResetAdvBackgrounds)
+                                                        {
+                                                            VampireAdvantagesResolver.ResetBackgrounds(session.Draft);
+                                                            await component.RespondEphemeralAsync("🧹 Факты биографии удалены.");
+                                                        }
+                                                        else
+                                                        {
+                                                            VampireAdvantagesResolver.ResetVirtues(session.Draft);
+                                                            await component.RespondEphemeralAsync("🧹 Добродетели сброшены к 1/1/1.");
+                                                        }
+                                                        await RerenderAdvantagesAsync(component, session);
+                                                        return;
+                                                    }
+
                                                 case VampireWizardAction.ResetAdvProgress:
                                                 case VampireWizardAction.ResetAdvAll:
                                                     {

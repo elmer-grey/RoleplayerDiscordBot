@@ -526,6 +526,61 @@ public class VampireAdvantagesTests
         Assert.Empty(d.Disciplines);
     }
 
+    [Fact]
+    public void ResetDisciplines_OnlyZeroesDisciplineValues()
+    {
+        var d = NewDraft("Вентру");
+        VampireAdvantagesResolver.IncrementDiscipline(d, "Доминирование");
+        VampireAdvantagesResolver.AddBackground(d, "Стая");
+        // После AddBackground ранг уже = 1, дополнительных инкрементов не делаем.
+        VampireAdvantagesResolver.IncrementVirtue(d, VampireParameterCatalog.VirtueCourage);
+
+        VampireAdvantagesResolver.ResetDisciplines(d);
+
+        // Все дисциплины = 0 (ключи могут сохраниться для не-Каитиф)
+        Assert.All(d.Disciplines.Values, v => Assert.Equal(0, v));
+        // Факты и добродетели не тронуты
+        Assert.Equal(1, d.Backgrounds["Стая"]);
+        Assert.Equal(2, d.Virtues[VampireParameterCatalog.VirtueCourage]);
+    }
+
+    [Fact]
+    public void ResetBackgrounds_OnlyClearsBackgrounds()
+    {
+        var d = NewDraft("Вентру");
+        VampireAdvantagesResolver.IncrementDiscipline(d, "Доминирование");
+        VampireAdvantagesResolver.AddBackground(d, "Стая");
+        VampireAdvantagesResolver.IncrementVirtue(d, VampireParameterCatalog.VirtueCourage);
+
+        VampireAdvantagesResolver.ResetBackgrounds(d);
+
+        Assert.Empty(d.Backgrounds);
+        // Дисциплины и добродетели не тронуты
+        Assert.Equal(1, d.Disciplines["Доминирование"]);
+        Assert.Equal(2, d.Virtues[VampireParameterCatalog.VirtueCourage]);
+    }
+
+    [Fact]
+    public void ResetVirtues_OnlyResetsVirtuesToBase()
+    {
+        var d = NewDraft("Вентру");
+        VampireAdvantagesResolver.IncrementDiscipline(d, "Доминирование");
+        VampireAdvantagesResolver.AddBackground(d, "Стая");
+        // Два инкремента добродетели = 3 (1 база + 2).
+        VampireAdvantagesResolver.IncrementVirtue(d, VampireParameterCatalog.VirtueCourage);
+        VampireAdvantagesResolver.IncrementVirtue(d, VampireParameterCatalog.VirtueCourage);
+
+        VampireAdvantagesResolver.ResetVirtues(d);
+
+        // Все добродетели = 1
+        Assert.Equal(1, d.Virtues[VampireParameterCatalog.VirtueConscience]);
+        Assert.Equal(1, d.Virtues[VampireParameterCatalog.VirtueSelfControl]);
+        Assert.Equal(1, d.Virtues[VampireParameterCatalog.VirtueCourage]);
+        // Дисциплины и факты не тронуты
+        Assert.Equal(1, d.Disciplines["Доминирование"]);
+        Assert.Equal(1, d.Backgrounds["Стая"]);
+    }
+
     // ── Статус-сообщения ────────────────────────────────────────────────
 
     [Fact]

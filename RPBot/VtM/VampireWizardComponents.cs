@@ -120,6 +120,12 @@ public enum VampireWizardAction
                 VirtueInc,
                 /// <summary>Уменьшить добродетель на 1 (Шаг 4.3).</summary>
                 VirtueDec,
+                /// <summary>Сбросить только дисциплины (Шаг 4.1).</summary>
+                ResetAdvDisciplines,
+                /// <summary>Сбросить только факты биографии (Шаг 4.2).</summary>
+                ResetAdvBackgrounds,
+                /// <summary>Сбросить только добродетели (Шаг 4.3).</summary>
+                ResetAdvVirtues,
                 /// <summary>Сбросить прогресс всего Шага 4 (дисциплины/факты/добродетели).</summary>
                 ResetAdvProgress,
                 /// <summary>Сбросить всё на Шаге 4 (то же, что и <see cref="ResetAdvProgress"/>).</summary>
@@ -572,7 +578,7 @@ public static class VampireWizardComponents
                                     }
 
                                     cb.WithButton("⬅ Назад (Шаг 3)", BuildCustomId(VampireWizardAction.BackToAbilities, draft.CharacterId), ButtonStyle.Secondary)
-                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить экран", BuildCustomId(VampireWizardAction.ResetAdvDisciplines, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
 
                                     if (VampireAdvantagesResolver.IsDisciplinesComplete(draft))
@@ -608,7 +614,7 @@ public static class VampireWizardComponents
                                     }
 
                                     cb.WithButton("⬅ Назад (4.1)", BuildCustomId(VampireWizardAction.BackToDisciplines, draft.CharacterId), ButtonStyle.Secondary)
-                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить экран", BuildCustomId(VampireWizardAction.ResetAdvBackgrounds, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
 
                                     if (VampireAdvantagesResolver.IsBackgroundsComplete(draft))
@@ -632,7 +638,7 @@ public static class VampireWizardComponents
                                     cb.WithSelectMenu(BuildVirtueSelect(draft));
 
                                     cb.WithButton("⬅ Назад (4.2)", BuildCustomId(VampireWizardAction.BackToBackgrounds, draft.CharacterId), ButtonStyle.Secondary)
-                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAdvProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить экран", BuildCustomId(VampireWizardAction.ResetAdvVirtues, draft.CharacterId), ButtonStyle.Secondary)
                                       .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAdvAll, draft.CharacterId), ButtonStyle.Danger);
 
                                     if (VampireAdvantagesResolver.IsVirtuesComplete(draft))
@@ -1225,8 +1231,11 @@ public static class VampireWizardComponents
                         VampireWizardAction.BackgroundDec        => "background_dec",
                         VampireWizardAction.VirtueInc            => "virtue_inc",
                         VampireWizardAction.VirtueDec            => "virtue_dec",
-                        VampireWizardAction.ResetAdvProgress     => "reset_adv_progress",
-                        VampireWizardAction.ResetAdvAll          => "reset_adv_all",
+                        VampireWizardAction.ResetAdvDisciplines => "reset_adv_disciplines",
+                        VampireWizardAction.ResetAdvBackgrounds => "reset_adv_backgrounds",
+                        VampireWizardAction.ResetAdvVirtues    => "reset_adv_virtues",
+                        VampireWizardAction.ResetAdvProgress   => "reset_adv_progress",
+                        VampireWizardAction.ResetAdvAll        => "reset_adv_all",
                         VampireWizardAction.BackToAbilities      => "back_to_abilities",
                         VampireWizardAction.BackToDisciplines    => "back_to_disciplines",
                         VampireWizardAction.BackToBackgrounds    => "back_to_backgrounds",
@@ -1293,8 +1302,11 @@ public static class VampireWizardComponents
                                     case "background_dec":      action = VampireWizardAction.BackgroundDec;      return true;
                                     case "virtue_inc":          action = VampireWizardAction.VirtueInc;          return true;
                                     case "virtue_dec":          action = VampireWizardAction.VirtueDec;          return true;
-                                    case "reset_adv_progress":  action = VampireWizardAction.ResetAdvProgress;  return true;
-                                    case "reset_adv_all":       action = VampireWizardAction.ResetAdvAll;       return true;
+                                    case "reset_adv_disciplines": action = VampireWizardAction.ResetAdvDisciplines; return true;
+                                    case "reset_adv_backgrounds": action = VampireWizardAction.ResetAdvBackgrounds; return true;
+                                    case "reset_adv_virtues":     action = VampireWizardAction.ResetAdvVirtues;     return true;
+                                    case "reset_adv_progress":    action = VampireWizardAction.ResetAdvProgress;    return true;
+                                    case "reset_adv_all":         action = VampireWizardAction.ResetAdvAll;         return true;
                                     case "back_to_abilities":   action = VampireWizardAction.BackToAbilities;   return true;
                                     case "back_to_disciplines": action = VampireWizardAction.BackToDisciplines; return true;
                                     case "back_to_backgrounds": action = VampireWizardAction.BackToBackgrounds; return true;

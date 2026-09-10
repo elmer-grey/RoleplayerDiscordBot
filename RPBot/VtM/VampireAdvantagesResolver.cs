@@ -430,8 +430,48 @@ public static class VampireAdvantagesResolver
         if (draft == null) throw new ArgumentNullException(nameof(draft));
         draft.Disciplines = new Dictionary<string, int>(StringComparer.Ordinal);
         draft.Backgrounds = new Dictionary<string, int>(StringComparer.Ordinal);
-        SeedVirtues(draft);
+        ResetVirtues(draft);
         return Decision.Ok("Прогресс Шага 4 сброшен.");
+    }
+
+    /// <summary>Сбросить только дисциплины (Шаг 4.1). Клановые слоты Каитифа остаются, значения = 0.</summary>
+    public static Decision ResetDisciplines(VampireCharacter draft)
+    {
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        // Если клан не Каитиф — обнуляем все значения, ключи оставляем
+        // (для не-Каитиф ключи выставляются заново при следующем рендере).
+        if (draft.Disciplines == null)
+        {
+            draft.Disciplines = new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+        else
+        {
+            foreach (var key in draft.Disciplines.Keys.ToList())
+            {
+                draft.Disciplines[key] = 0;
+            }
+        }
+        return Decision.Ok("Дисциплины сброшены (значения = 0).");
+    }
+
+    /// <summary>Сбросить только факты биографии (Шаг 4.2). Удаляет все добавленные факты.</summary>
+    public static Decision ResetBackgrounds(VampireCharacter draft)
+    {
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        draft.Backgrounds = new Dictionary<string, int>(StringComparer.Ordinal);
+        return Decision.Ok("Факты биографии сброшены.");
+    }
+
+    /// <summary>Сбросить только добродетели (Шаг 4.3) к базовому состоянию 1/1/1.</summary>
+    public static Decision ResetVirtues(VampireCharacter draft)
+    {
+        if (draft == null) throw new ArgumentNullException(nameof(draft));
+        // SeedVirtues не перезаписывает уже засеянные ключи, поэтому здесь ставим значения принудительно.
+        if (draft.Virtues == null) draft.Virtues = new Dictionary<string, int>(StringComparer.Ordinal);
+        draft.Virtues[VampireParameterCatalog.VirtueConscience]  = VampireAdvantagesCatalog.VirtueBaseConscience;
+        draft.Virtues[VampireParameterCatalog.VirtueSelfControl] = VampireAdvantagesCatalog.VirtueBaseSelfControl;
+        draft.Virtues[VampireParameterCatalog.VirtueCourage]      = VampireAdvantagesCatalog.VirtueBaseCourage;
+        return Decision.Ok("Добродетели сброшены к 1/1/1.");
     }
 
     /// <summary>Сбросить вообще всё (для команды «Сбросить всё» — возврат к Шагу 4).</summary>
