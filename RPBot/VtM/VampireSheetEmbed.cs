@@ -486,7 +486,14 @@ public static class VampireSheetEmbed
         }
         else
         {
-            sb.AppendLine("`Здоровье не инициализировано`");
+            // Фоллбэк для устаревших чарников (Health == null после десериализации).
+            // Миграция в VampireStorage.EnsureHealthOnLoad проинициализирует Health
+            // при следующей загрузке, но на случай холодного кеша всё равно
+            // показываем полноценную пустую шкалу из 7 ячеек — без страшной
+            // надписи «не инициализировано», которая создаёт впечатление, что
+            // модуль сломан.
+            var fallback = new HealthState(VampireFinishingResolver.HealthTrackSize);
+            sb.AppendLine(BuildHealthTableV20(fallback));
         }
         if (!string.IsNullOrWhiteSpace(c.Weakness))
         {

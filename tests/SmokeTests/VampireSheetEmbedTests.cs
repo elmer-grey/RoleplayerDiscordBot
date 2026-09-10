@@ -400,7 +400,12 @@ public class VampireSheetEmbedTests
         c.Health = null;
         var embed = VampireSheetEmbed.Build(c);
         var h = embed.Fields.First(f => f.Name.Contains("Здоровье и опыт"));
-        Assert.Contains("не инициализировано", h.Value.ToString());
+        // При Health == null показываем полноценную пустую шкалу из 7 ячеек
+        // (а не страшное "не инициализировано", как раньше).
+        Assert.Contains("**Здоровье:**", h.Value.ToString());
+        Assert.DoesNotContain("не инициализировано", h.Value.ToString());
+        // 7 пустых ячеек = 7 букв "S" (CellState.Empty) в Render().
+        Assert.Contains("SSSSSSS", h.Value.ToString());
     }
 
     [Fact]

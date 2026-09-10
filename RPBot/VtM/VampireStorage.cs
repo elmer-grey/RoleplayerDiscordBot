@@ -72,11 +72,13 @@ namespace RPBot.VtM
                                         : new Dictionary<string, VampireCharacter>(StringComparer.Ordinal);
                                     var migrated = RebuildCharacterIds();
                                     var freebieMigrated = VampireFreebieSplitMigration.Migrate(_characters);
+                                    var healthMigrated = EnsureHealthOnLoad(_characters);
                                     RebuildPlayerIdIndex();
-                                    if (migrated > 0 || freebieMigrated > 0)
+                                    if (migrated > 0 || freebieMigrated > 0 || healthMigrated > 0)
                                     {
-                                        // Сохраняем, чтобы UUID'ы и/или freebie-разделение попали на диск,
-                                        // а жили только в RAM.
+                                        // Сохраняем, чтобы UUID'ы и/или freebie-разделение и/или
+                                        // проинициализированное здоровье попали на диск, а жили
+                                        // только в RAM.
                                         var json = JsonSerializer.Serialize(_characters, _json);
                                         await SafeJsonIO.WriteAtomicAsync(_filePath, json, ct).ConfigureAwait(false);
                                     }
@@ -185,6 +187,31 @@ namespace RPBot.VtM
                                         if (c.CharacterId != Guid.Empty)
                                         {
                                             _byCharacterId[c.CharacterId] = c.PlayerName;
+                                        }
+                                    }
+                                    return migrated;
+                                }
+
+                                /// <summary>
+                                /// Миграция: для всех загруженных с диска персонажей
+                                /// проинициализировать шкалу здоровья, если её нет.
+                                /// Нужно для чарников, сохранённых до того, как
+                                /// <c>BuildTestCharacter</c> и <c>EnsureHealth</c>
+                                /// стали задавать <c>Health</c> явно.
+                                /// Возвращает количество персонажей, получивших
+                                /// свежую шкалу.
+                                /// </summary>
+                                public int EnsureHealthOnLoad(Dictionary<string, VampireCharacter> characters)
+                                {
+                                    if (characters == null) return 0;
+                                    int migrated = 0;
+                                    foreach (var c in characters.Values)
+                                    {
+                                        if (c == null) continue;
+                                        if (c.Health == null)
+                                        {
+                                            VampireFinishingResolver.EnsureHealth(c);
+                                            migrated++;
                                         }
                                     }
                                     return migrated;
