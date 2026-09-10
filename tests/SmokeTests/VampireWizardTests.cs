@@ -529,33 +529,68 @@ public class VampireWizardTests : IsolatedDataTestBase
                     .OfType<SelectMenuComponent>()
                     .ToList();
                 Assert.NotEmpty(menus);
+                // Первый SelectMenu — приоритет 7/5/3 (6 опций).
                 Assert.Equal(6, menus[0].Options.Count);
                 Assert.Contains("attr_priority", menus[0].CustomId);
             }
 
             [Fact]
-            public void BuildAttributesStep_HasThreeGroupSelectMenus()
+            public void BuildAttributesStep_HasAttrSelectAndPaginationButtons()
             {
                 var draft = NewDraft();
-                var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 1, selectedAttribute: "Обаяние");
                 var menus = GetRows(comp)
                     .SelectMany(r => r.Components)
                     .OfType<SelectMenuComponent>()
                     .ToList();
-                // 1 (приоритет) + 3 (группы) = 4 SelectMenu.
-                Assert.Equal(4, menus.Count);
-                var groupMenus = menus.Skip(1).ToList();
-                Assert.All(groupMenus, m => Assert.Equal(6, m.Options.Count));
-                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Сила"));
-                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Ловкость"));
-                Assert.Contains(groupMenus[0].Options, o => o.Label.Contains("Выносливость"));
-                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Обаяние"));
-                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Манипуляция"));
-                Assert.Contains(groupMenus[1].Options, o => o.Label.Contains("Привлекательность"));
-                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Восприятие"));
-                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Интеллект"));
-                Assert.Contains(groupMenus[2].Options, o => o.Label.Contains("Смекалка"));
-                        }
+                // 2 SelectMenu: приоритет + атрибут текущей группы.
+                Assert.Equal(2, menus.Count);
+                Assert.Contains("attr_select", menus[1].CustomId);
+
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                // Кнопки ± по выбранному атрибуту.
+                Assert.Contains(buttons, b => b.CustomId.Contains("attr_inc:") && b.CustomId.Contains("Обаяние"));
+                Assert.Contains(buttons, b => b.CustomId.Contains("attr_dec:") && b.CustomId.Contains("Обаяние"));
+                // Кнопки навигации по группам.
+                Assert.Contains(buttons, b => b.CustomId.Contains("attr_page_next:"));
+                Assert.Contains(buttons, b => b.CustomId.Contains("attr_page_prev:"));
+                // Кнопка «Сбросить всё».
+                Assert.Contains(buttons, b => b.CustomId.Contains("reset_attr_all:"));
+            }
+
+            [Fact]
+            public void BuildAttributesStep_DisablesButtonsWhenNothingSelected()
+            {
+                var draft = NewDraft();
+                // Без selectedAttribute — ряд ± плейсхолдер «Выберите атрибут в меню выше».
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 0, selectedAttribute: null);
+                var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                // Не должно быть ни одной кнопки attr_inc / attr_dec для конкретного атрибута.
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("attr_inc:") &&
+                                                    !b.CustomId.Contains("attr_inc_:") &&
+                                                    b.Label != null && b.Label.StartsWith("+"));
+                Assert.DoesNotContain(buttons, b => b.CustomId.Contains("attr_dec:") &&
+                                                    !b.CustomId.Contains("attr_dec_:") &&
+                                                    b.Label != null && b.Label.StartsWith("−"));
+            }
+
+            [Fact]
+            public void BuildAttributesStep_AttrSelectMenuRespectsGroup()
+            {
+                var draft = NewDraft();
+                // pageIndex 2 = Mental.
+                var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 2, selectedAttribute: null);
+                var menus = GetRows(comp)
+                    .SelectMany(r => r.Components)
+                    .OfType<SelectMenuComponent>()
+                    .ToList();
+                Assert.Equal(2, menus.Count);
+                var attrMenu = menus[1];
+                Assert.Contains(attrMenu.Options, o => o.Label.Contains("Восприятие"));
+                Assert.Contains(attrMenu.Options, o => o.Label.Contains("Интеллект"));
+                Assert.Contains(attrMenu.Options, o => o.Label.Contains("Смекалка"));
+                Assert.DoesNotContain(attrMenu.Options, o => o.Label.Contains("Сила"));
+            }
 
                         [Fact]
                         public void BuildAttributesStep_NextButtonHiddenUntilComplete()
@@ -600,7 +635,7 @@ public class VampireWizardTests : IsolatedDataTestBase
                         public void BuildAttributesStep_RowsWithinDiscordLimit()
                         {
                             var draft = NewDraft();
-                            var comp = VampireWizardComponents.BuildForAttributesStep(draft);
+                            var comp = VampireWizardComponents.BuildForAttributesStep(draft, pageIndex: 0, selectedAttribute: "Сила");
                             // Discord: 5 ActionRows max.
                                                         var rowCount = GetRows(comp).Count();
                                                         Assert.True(rowCount <= 5,

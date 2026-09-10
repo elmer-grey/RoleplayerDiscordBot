@@ -4773,8 +4773,8 @@ await Task.CompletedTask;
                     await _musicCommands.HandleButtonAsync(component);
                         else if (cid.StartsWith("vtm_wiz:attr_priority:"))
                             await HandleVampireWizardPriorityAsync(component);
-                                        else if (cid.StartsWith("vtm_wiz:attr_inc:"))
-                                            await HandleVampireWizardAttrGroupSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:attr_select:"))
+                                            await HandleVampireWizardAttrSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:ability_priority:"))
                             await HandleVampireWizardAbilityPriorityAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:ability_inc:"))
@@ -4929,49 +4929,32 @@ await Task.CompletedTask;
                 }
 
                                 /// <summary>
-                                /// Обработка SelectMenu изменения атрибута в группе (Шаг 2).
-                                /// CustomId: <c>vtm_wiz:attr_inc:{cid}:{GroupName}</c>, value: <c>{sign}:{AttributeName}</c>.
+                                /// Обработка выбора атрибута в SelectMenu текущей группы (Шаг 2).
+                                /// CustomId: <c>vtm_wiz:attr_select:{cid}:{GroupName}</c>, value = имя атрибута.
                                 /// </summary>
-                                private async Task HandleVampireWizardAttrGroupSelectAsync(SocketMessageComponent component)
+                                private async Task HandleVampireWizardAttrSelectAsync(SocketMessageComponent component)
                                 {
                                     try
                                     {
                                         if (!VampireWizardComponents.TryParseWithArg(
-                                            component.Data.CustomId, out _, out _, out var groupArg))
+                                                component.Data.CustomId, out var action, out var _, out var groupArg))
                                         {
-                                            await component.RespondAsync("⚠️ Не удалось разобрать customId группы.", ephemeral: true);
+                                            await component.RespondAsync("⚠️ Не удалось разобрать customId выбора атрибута.", ephemeral: true);
                                             return;
                                         }
-
-                                        if (!System.Enum.TryParse<VampireAttributeGroup>(groupArg, out var group))
+                                        if (action != VampireWizardAction.AttrSelect)
                                         {
-                                            await component.RespondAsync($"⚠️ Неизвестная группа: {groupArg}", ephemeral: true);
+                                            await component.RespondAsync("⚠️ Неожиданное действие для выбора атрибута.", ephemeral: true);
                                             return;
                                         }
 
                                         var selected = component.Data.Values;
                                         if (selected == null || selected.Count == 0)
                                         {
-                                            await component.RespondAsync("⚠️ Не выбрано значение.", ephemeral: true);
+                                            await component.RespondAsync("⚠️ Атрибут не выбран.", ephemeral: true);
                                             return;
                                         }
-
-                                        var first = selected.First();
-                                        var colonIdx = first.IndexOf(':');
-                                        if (colonIdx <= 0 || colonIdx >= first.Length - 1)
-                                        {
-                                            await component.RespondAsync("⚠️ Неверный формат value.", ephemeral: true);
-                                            return;
-                                        }
-
-                                        var sign = first.Substring(0, colonIdx);
-                                        var attrName = first.Substring(colonIdx + 1);
-
-                                        if (sign != "+" && sign != "−")
-                                        {
-                                            await component.RespondAsync($"⚠️ Неизвестный знак: {sign}", ephemeral: true);
-                                            return;
-                                        }
+                                        var attrName = selected.First();
 
                                         var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
                                         if (session == null)
@@ -4981,19 +4964,24 @@ await Task.CompletedTask;
                                                 ephemeral: true);
                                             return;
                                         }
-
-                                        VampireAttributesDecision dec;
-                                        if (sign == "+")
-                                            dec = VampireAttributesResolver.Increment(session.Draft, group, attrName);
-                                        else
-                                            dec = VampireAttributesResolver.Decrement(session.Draft, group, attrName);
-
-                                        if (!dec.IsSuccess && dec.Failure != VampireAttributesFailure.None)
+                                        if (session.Step != VampireWizardStep.Attributes)
                                         {
-                                            await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                            await component.RespondAsync(
+                                                "⚠️ Эта кнопка доступна только на Шаге 2 (характеристики). " +
+                                                $"Текущий шаг: {session.Step}.",
+                                                ephemeral: true);
                                             return;
                                         }
 
+                                        session.AttrSelected = attrName;
+                                        // Если выбран атрибут из другой группы, чем текущая страница — переключаемся.
+                                        var grp = VampireAttributeCatalog.FindGroup(attrName);
+                                        if (grp.HasValue)
+                                        {
+                                            session.AttrPageIndex = (int)grp.Value;
+                                        }
+
+                                        // Перерисовать DM.
                                         try
                                         {
                                             var dm = await component.User.CreateDMChannelAsync();
@@ -5001,24 +4989,24 @@ await Task.CompletedTask;
                                             if (msg is IUserMessage um)
                                             {
                                                 var text = VampireAttributesResolver.BuildAttributesStatusMessage(session.Draft);
-                                                var comp = VampireWizardComponents.BuildForAttributesStep(session.Draft);
+                                                var comp = VampireWizardComponents.BuildForAttributesStep(
+                                                    session.Draft, session.AttrPageIndex, session.AttrSelected);
                                                 await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
                                             }
                                         }
                                         catch (Exception ex)
                                         {
-                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 2 после изменения: {ex.Message}");
+                                            BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 2 после выбора атрибута: {ex.Message}");
                                         }
-                                        var opLabel = (sign == "+") ? "+1" : "−1";
-                                        await component.RespondAsync($"✅ {attrName}: {opLabel} применено.", ephemeral: true);
+                                        await component.RespondAsync($"✅ Выбран атрибут: {attrName}.", ephemeral: true);
                                     }
                                     catch (Exception ex)
                                     {
-                                        BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardAttrGroupSelectAsync: {ex.Message}");
+                                        BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardAttrSelectAsync: {ex.Message}");
                                         try
                                         {
                                             if (!component.HasResponded)
-                                                await component.RespondAsync("⚠️ Ошибка при изменении характеристики.", ephemeral: true);
+                                                await component.RespondAsync("⚠️ Ошибка при выборе атрибута.", ephemeral: true);
                                         }
                                         catch { }
                                     }

@@ -696,6 +696,47 @@ public sealed class VampireCommands
                                     await RerenderWizardAsync(component, session);
                                     return;
                                 }
+                            case VampireWizardAction.AttrSelect:
+                                {
+                                    // arg = имя группы (Physical/Social/Mental).
+                                    // Запоминаем выбранный атрибут — это первый
+                                    // (и единственный) элемент Values SelectMenu.
+                                    var selected = component.Data.Values;
+                                    if (selected == null || selected.Count == 0)
+                                    {
+                                        await component.RespondAsync("⚠️ Атрибут не выбран.", ephemeral: true);
+                                        return;
+                                    }
+                                    session.AttrSelected = selected.First();
+                                    // Синхронизируем страницу с группой выбранного атрибута,
+                                    // если он не из текущей.
+                                    var grp = VampireAttributeCatalog.FindGroup(session.AttrSelected);
+                                    if (grp.HasValue)
+                                    {
+                                        session.AttrPageIndex = (int)grp.Value;
+                                    }
+                                    await RerenderWizardAsync(component, session);
+                                    return;
+                                }
+                            case VampireWizardAction.AttrPageNext:
+                            case VampireWizardAction.AttrPagePrev:
+                                {
+                                    // arg = текущая группа (для контроля).
+                                    var delta = action == VampireWizardAction.AttrPageNext ? +1 : -1;
+                                    var newIdx = (session.AttrPageIndex + delta + 3) % 3;
+                                    session.AttrPageIndex = newIdx;
+                                    // Сбрасываем выбранный атрибут, если он не в новой группе.
+                                    if (!string.IsNullOrEmpty(session.AttrSelected))
+                                    {
+                                        var grp = VampireAttributeCatalog.FindGroup(session.AttrSelected);
+                                        if (!grp.HasValue || (int)grp.Value != newIdx)
+                                        {
+                                            session.AttrSelected = null;
+                                        }
+                                    }
+                                    await RerenderWizardAsync(component, session);
+                                    return;
+                                }
                             default:
                                 await component.RespondAsync("⚠️ Неизвестное действие с аргументом: " + action, ephemeral: true);
                                 return;
@@ -727,7 +768,8 @@ public sealed class VampireCommands
                     if (session.Step == VampireWizardStep.Attributes)
                     {
                         var text = VampireAttributesResolver.BuildAttributesStatusMessage(session.Draft);
-                        var components = VampireWizardComponents.BuildForAttributesStep(session.Draft);
+                        var components = VampireWizardComponents.BuildForAttributesStep(
+                            session.Draft, session.AttrPageIndex, session.AttrSelected);
                         await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
                     }
                     else if (session.Step == VampireWizardStep.Abilities)

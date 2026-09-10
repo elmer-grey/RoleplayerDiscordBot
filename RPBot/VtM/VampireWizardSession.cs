@@ -106,6 +106,18 @@ public sealed class VampireWizardSession
 
     /// <summary>Ключ сессии (GuildId, PlayerId).</summary>
     public (ulong Guild, ulong Player) Key => (GuildId, PlayerId);
+
+    /// <summary>
+    /// Шаг 2: индекс «страницы» (группы) атрибутов: 0=Физ, 1=Соц, 2=Мент.
+    /// По умолчанию 0 (Физ). Сбрасывается только при сбросе прогресса шага.
+    /// </summary>
+    public int AttrPageIndex { get; set; } = 0;
+
+    /// <summary>
+    /// Шаг 2: имя атрибута, который сейчас «выбран» (через SelectMenu) для
+    /// редактирования кнопками −/+. null — ничего не выбрано.
+    /// </summary>
+    public string? AttrSelected { get; set; }
 }
 
 /// <summary>
