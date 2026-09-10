@@ -247,6 +247,32 @@ public class VampireFinishingCascadeTests
         Assert.Contains(fieldMenu.Options, o => o.Value.Contains("Доминирование"));
     }
 
+    [Theory]
+    [InlineData(VampireFinishingResolver.FreebieTarget.Humanity, "Человечность")]
+    [InlineData(VampireFinishingResolver.FreebieTarget.Willpower, "Воля")]
+    public void Step_Field_HumanityOrWillpower_ShowsOnlySelected(
+        VampireFinishingResolver.FreebieTarget target,
+        string expectedLabel)
+    {
+        // Регрессия ревью: раньше AppendHumanityWillpowerOptions итерировал оба варианта
+        // независимо от выбранного target. Теперь — только выбранный.
+        var d = NewDraft();
+        SeedVirtues(d);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(
+            d,
+            VampireFreebieCascadeStep.Field,
+            target,
+            subgroup: null);
+
+        var fieldMenu = Assert.Single(SelectMenus(comp));
+        var labels = fieldMenu.Options.Select(o => o.Label).ToList();
+        Assert.Contains(labels, l => l.Contains(expectedLabel));
+        // Другая категория не должна присутствовать.
+        var other = target == VampireFinishingResolver.FreebieTarget.Humanity ? "Воля" : "Человечность";
+        Assert.DoesNotContain(labels, l => l.Contains(other));
+    }
+
     [Fact]
     public void Step_Target_HumanityAndWillpowerAreSeparate()
     {

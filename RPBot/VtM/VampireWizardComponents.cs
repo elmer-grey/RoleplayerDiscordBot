@@ -151,7 +151,7 @@ public enum VampireWizardAction
                                 FinishingPickTarget,
                                 /// <summary>Шаг 5 каскад: выбор подгруппы (Step 2, только Attribute/Ability). Action-arg = target.</summary>
                                 FinishingPickSubgroup,
-                                /// <summary>Шаг 5 каскад: применить +/− к выбранному полю (Step 3). Action-arg = "{sign}:{target}:{subgroup}:{field}".</summary>
+                                /// <summary>Шаг 5 каскад: применить +/− к выбранному полю (Step 3). Action-arg = "{sign}:{target}:{field}".</summary>
                                 FinishingApplyField,
                                 /// <summary>Шаг 5 каскад: вернуться с подгруппы (Step 2) на категории (Step 1).</summary>
                                 FinishingBackFromSubgroup,
@@ -691,7 +691,7 @@ public static class VampireWizardComponents
                                                                         var cb = new ComponentBuilder();
 
                                                                         // Step 1 (Target) и Step 2 (Subgroup) — в любом случае
-                                                                        // показываем SelectMenu с 6 категориями.
+                                                                        // показываем SelectMenu с 7 категориями.
                                                                         // Step 3 (Field) — показываем поля выбранной подгруппы.
                                                                         switch (step)
                                                                         {
@@ -871,7 +871,11 @@ public static class VampireWizardComponents
 
                                                                         if (target == VampireFinishingResolver.FreebieTarget.Humanity)
                                                                         {
-                                                                            AppendHumanityWillpowerOptions(menu, draft);
+                                                                            AppendHumanityWillpowerOptions(menu, draft, target);
+                                                                        }
+                                                                        else if (target == VampireFinishingResolver.FreebieTarget.Willpower)
+                                                                        {
+                                                                            AppendHumanityWillpowerOptions(menu, draft, target);
                                                                         }
                                                                         else
                                                                         {
@@ -907,35 +911,39 @@ public static class VampireWizardComponents
 
                                                                     private static void AppendHumanityWillpowerOptions(
                                                                         SelectMenuBuilder menu,
-                                                                        VampireCharacter draft)
+                                                                        VampireCharacter draft,
+                                                                        VampireFinishingResolver.FreebieTarget target)
                                                                     {
-                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
-                                                                        foreach (var label in new[] { "Человечность", "Воля" })
+                                                                        if (target != VampireFinishingResolver.FreebieTarget.Humanity
+                                                                            && target != VampireFinishingResolver.FreebieTarget.Willpower)
                                                                         {
-                                                                            var target = label == "Человечность"
-                                                                                ? VampireFinishingResolver.FreebieTarget.Humanity
-                                                                                : VampireFinishingResolver.FreebieTarget.Willpower;
-                                                                            var cost = VampireFinishingResolver.CostOf(target);
-                                                                            var cur = label == "Человечность"
-                                                                                ? Math.Max(0, draft.HumanityBonus)
-                                                                                : Math.Max(0, draft.WillpowerBonus);
-                                                                            var (hardCap, _) = VampireFinishingResolver.GetCaps(target, draft);
-                                                                            var canAdd = remaining >= cost && cur + 1 <= hardCap;
-                                                                            var canDec = cur > 0;
-                                                                            if (canAdd)
-                                                                            {
-                                                                                menu.AddOption(new SelectMenuOptionBuilder()
-                                                                                    .WithLabel($"+ {Truncate(label, 18)} ({cur}→{cur + 1})")
-                                                                                    .WithValue($"+:{target}:{label}")
-                                                                                    .WithDescription($"-{cost} свободных"));
-                                                                            }
-                                                                            if (canDec)
-                                                                            {
-                                                                                menu.AddOption(new SelectMenuOptionBuilder()
-                                                                                    .WithLabel($"− {Truncate(label, 18)} ({cur}→{cur - 1})")
-                                                                                    .WithValue($"−:{target}:{label}")
-                                                                                    .WithDescription($"+{cost} свободных"));
-                                                                            }
+                                                                            return;
+                                                                        }
+
+                                                                        var label = target == VampireFinishingResolver.FreebieTarget.Humanity
+                                                                            ? "Человечность"
+                                                                            : "Воля";
+                                                                        var remaining = VampireFinishingResolver.RemainingFreebies(draft);
+                                                                        var cost = VampireFinishingResolver.CostOf(target);
+                                                                        var cur = target == VampireFinishingResolver.FreebieTarget.Humanity
+                                                                            ? Math.Max(0, draft.HumanityBonus)
+                                                                            : Math.Max(0, draft.WillpowerBonus);
+                                                                        var (hardCap, _) = VampireFinishingResolver.GetCaps(target, draft);
+                                                                        var canAdd = remaining >= cost && cur + 1 <= hardCap;
+                                                                        var canDec = cur > 0;
+                                                                        if (canAdd)
+                                                                        {
+                                                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                .WithLabel($"+ {Truncate(label, 18)} ({cur}→{cur + 1})")
+                                                                                .WithValue($"+:{target}:{label}")
+                                                                                .WithDescription($"-{cost} свободных"));
+                                                                        }
+                                                                        if (canDec)
+                                                                        {
+                                                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                                                .WithLabel($"− {Truncate(label, 18)} ({cur}→{cur - 1})")
+                                                                                .WithValue($"−:{target}:{label}")
+                                                                                .WithDescription($"+{cost} свободных"));
                                                                         }
                                                                     }
 
@@ -1137,10 +1145,13 @@ public static class VampireWizardComponents
                                         var rank = kv.Value;
                                         var nameShort = Truncate(name, 18);
 
+                                        var incDesc = rank >= VampireAdvantagesCatalog.PerFieldCap
+                                            ? $"уже на кэпе {VampireAdvantagesCatalog.PerFieldCap}"
+                                            : $"поднять ранг «{nameShort}» на 1";
                                         menu.AddOption(new SelectMenuOptionBuilder()
                                             .WithLabel($"+ ранг «{nameShort}» ({rank})")
                                             .WithValue($"+:rank:{name}")
-                                            .WithDescription($"поднять ранг «{nameShort}» на 1"));
+                                            .WithDescription(incDesc));
 
                                         if (rank > 1)
                                         {

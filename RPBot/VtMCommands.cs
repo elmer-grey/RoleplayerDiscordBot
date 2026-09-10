@@ -721,8 +721,9 @@ public sealed class VampireCommands
                                                             return;
                                                         }
                                                         // Возврат с поля (Step 3) на подгруппу (Step 2) — только для Attribute/Ability.
-                                                        if (session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Attribute
-                                                            || session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Ability)
+                                                        bool hasSubgroup = session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Attribute
+                                                            || session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Ability;
+                                                        if (hasSubgroup)
                                                         {
                                                             session.FreebieCascadeStep = VampireFreebieCascadeStep.Subgroup;
                                                             session.FinishingSubgroup = null;
@@ -741,7 +742,9 @@ public sealed class VampireCommands
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате каскада Шага 5: {ex.Message}");
                                                         }
-                                                        await component.RespondEphemeralAsync("↩️ Возврат к выбору подгруппы.");
+                                                        await component.RespondEphemeralAsync(hasSubgroup
+                                                            ? "↩️ Возврат к выбору подгруппы."
+                                                            : "↩️ Возврат к выбору категории.");
                                                         return;
                                                     }
 

@@ -5747,7 +5747,19 @@ await Task.CompletedTask;
                                                                 await component.RespondAsync("⚠️ Не выбрана подгруппа.", ephemeral: true);
                                                                 return;
                                                             }
-                                                            session.FinishingSubgroup = selected.First();
+                                                            var subgroup = selected.First();
+                                                            // Whitelist: подгруппа допустима только для Attribute/Ability и ограничена 6 значениями.
+                                                            var allowedSubgroups = session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Attribute
+                                                                ? new[] { "Physical", "Social", "Mental" }
+                                                                : session.FinishingTarget == VampireFinishingResolver.FreebieTarget.Ability
+                                                                    ? new[] { "Talents", "Skills", "Knowledges" }
+                                                                    : System.Array.Empty<string>();
+                                                            if (System.Array.IndexOf(allowedSubgroups, subgroup) < 0)
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Некорректная подгруппа: {subgroup}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            session.FinishingSubgroup = subgroup;
                                                             session.FreebieCascadeStep = VampireFreebieCascadeStep.Field;
 
                                                             try

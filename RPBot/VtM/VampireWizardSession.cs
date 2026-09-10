@@ -53,7 +53,7 @@ public enum VampireWizardAdvantagesSubStep
 /// Шаг 5 имеет 6 категорий (target) и до 30+ полей (Attribute/Ability) — это
 /// превышает лимит Discord на 25 опций в одном SelectMenu. Решение — каскад:
 /// <list type="number">
-///   <item><see cref="None"/> или <see cref="Target"/> — выбор категории (Attribute/Ability/Discipline/Background/Virtue/HumanityWillpower).</item>
+///   <item><see cref="None"/> или <see cref="Target"/> — выбор категории (Attribute/Ability/Discipline/Background/Virtue/Humanity/Willpower).</item>
 ///   <item><see cref="Subgroup"/> — выбор подгруппы (для Attribute: Physical/Social/Mental; для Ability: Talents/Skills/Knowledges; для остальных категорий шаг пропускается).</item>
 ///   <item><see cref="Field"/> — выбор конкретного поля и знака (+/−).</item>
 /// </list>
