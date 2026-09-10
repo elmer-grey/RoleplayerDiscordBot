@@ -581,6 +581,24 @@ public class VampireAdvantagesTests
         Assert.Equal(1, d.Backgrounds["Стая"]);
     }
 
+    [Fact]
+    public void ResetDisciplines_PreservesCaitiffRenamedSlots()
+    {
+        var d = NewDraft("Каитиф");
+        // Каитифу разрешено переименовывать слоты.
+        VampireAdvantagesResolver.RenameCaitiffDiscipline(d, "Дисциплина 1", "Анимализм");
+        VampireAdvantagesResolver.IncrementDiscipline(d, "Анимализм");
+        VampireAdvantagesResolver.IncrementDiscipline(d, "Анимализм");
+
+        VampireAdvantagesResolver.ResetDisciplines(d);
+
+        // Ключ переименованного слота сохранён, значение = 0.
+        Assert.True(d.Disciplines.ContainsKey("Анимализм"));
+        Assert.Equal(0, d.Disciplines["Анимализм"]);
+        // Слоты с дефолтным именем тоже обнулены.
+        Assert.All(d.Disciplines.Values, v => Assert.Equal(0, v));
+    }
+
     // ── Статус-сообщения ────────────────────────────────────────────────
 
     [Fact]

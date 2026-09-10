@@ -602,7 +602,21 @@ public static class VampireWizardComponents
                                     var cb = new ComponentBuilder();
 
                                     // Ряд 1: «Добавить факт» (открывает текстовый ввод).
-                                    cb.WithButton("Добавить факт", BuildCustomId(VampireWizardAction.BackgroundAdd, draft.CharacterId), ButtonStyle.Secondary);
+                                    // ВАЖНО: реальный UI-лимит количества фактов — меньше MaxBackgroundsPerCharacter,
+                                    // потому что каждому факту соответствует отдельный SelectMenu в отдельной ActionRow,
+                                    // а Discord ограничивает 5 ActionRow на сообщение. На текущий момент
+                                    // актуальный лимит зафиксирован как 2 (3 фиксированных ряда + 2 SelectMenu = 5).
+                                    // TODO(vtm-bg-ui-limits): перейти на единый SelectMenu со всеми фактами,
+                                    // чтобы UI мог вместить все 6 канонических фонов.
+                                    var addFactDisabled = draft.Backgrounds != null
+                                        && draft.Backgrounds.Count >= VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep;
+                                    cb.WithButton(
+                                        addFactDisabled
+                                            ? $"Добавить факт (лимит {VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep})"
+                                            : "Добавить факт",
+                                        BuildCustomId(VampireWizardAction.BackgroundAdd, draft.CharacterId),
+                                        ButtonStyle.Secondary,
+                                        disabled: addFactDisabled);
 
                                     // По ряду на каждый факт с опциями ±/Удалить/Переименовать.
                                     if (draft.Backgrounds != null && draft.Backgrounds.Count > 0)

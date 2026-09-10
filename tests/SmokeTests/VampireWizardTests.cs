@@ -897,4 +897,39 @@ public class VampireWizardTests : IsolatedDataTestBase
                 Assert.True(VampireWizardComponents.TryParse(reset!.CustomId, out var action, out _));
                 Assert.Equal(VampireWizardAction.ResetAdvVirtues, action);
             }
+
+            [Fact]
+            public void BuildBackgroundsStep_AddFactButton_EnabledAtStart()
+            {
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var add = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .FirstOrDefault(b => b.CustomId.Contains("background_add"));
+                Assert.NotNull(add);
+                Assert.False(add!.IsDisabled, "Кнопка «Добавить факт» должна быть enabled на пустом списке");
+            }
+
+            [Fact]
+            public void BuildBackgroundsStep_AddFactButton_DisabledAtLimit()
+            {
+                // Реальный лимит UI = MaxUiFactsOnBackgroundStep (2) — он меньше
+                // канонического MaxBackgroundsPerCharacter (6) из-за ограничения Discord
+                // на 5 ActionRow в одном сообщении.
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                for (int i = 0; i < VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep; i++)
+                {
+                    VampireAdvantagesResolver.AddBackground(draft, $"Факт{i}");
+                }
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var add = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<ButtonComponent>()
+                    .FirstOrDefault(b => b.CustomId.Contains("background_add"));
+                Assert.NotNull(add);
+                Assert.True(add!.IsDisabled, "Кнопка «Добавить факт» должна быть disabled при достижении UI-лимита");
+            }
         }
