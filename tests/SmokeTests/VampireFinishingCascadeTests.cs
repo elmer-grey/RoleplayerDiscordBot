@@ -341,4 +341,89 @@ public class VampireFinishingCascadeTests
         var labels = menu.Options.Select(o => o.Label).ToList();
         Assert.Equal(labels.Count, labels.Distinct().Count());
     }
+
+    // ── Защита UI: «Готово → лист» disabled пока Шаг 5 не завершён ───
+
+    [Fact]
+    public void Step_Target_DoneButtonDisabled_WhenPoolNotEmpty()
+    {
+        // B4: кнопка «Готово → лист» должна быть disabled, пока пул не пуст.
+        var d = NewDraft();
+        SeedVirtues(d);
+        // Пул полный (15/15), ни одна трата не сделана → done button disabled.
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var buttons = Buttons(comp);
+        var done = Assert.Single(buttons, b => b.CustomId.Contains("finishing_done"));
+        Assert.True(done.IsDisabled, "«Готово → лист» должен быть disabled при ост. 15 свободных.");
+    }
+
+    [Fact]
+    public void Step_Target_DoneButtonDisabled_AfterPartialSpend()
+    {
+        // Потратили 5 из 15 → кнопка всё ещё disabled.
+        var d = NewDraft();
+        SeedVirtues(d);
+        Assert.True(VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _).IsSuccess);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var done = Buttons(comp).Single(b => b.CustomId.Contains("finishing_done"));
+        Assert.True(done.IsDisabled);
+    }
+
+    [Fact]
+    public void Step_Target_DoneButtonEnabled_AfterPoolExhausted()
+    {
+        // Пул исчерпан → кнопка активна.
+        var d = NewDraft();
+        SeedVirtues(d);
+        // 3 × Attribute по 5 = 15, пул = 0.
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Ловкость", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Выносливость", out _);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var done = Buttons(comp).Single(b => b.CustomId.Contains("finishing_done"));
+        Assert.False(done.IsDisabled);
+    }
+
+    [Fact]
+    public void Step_Target_DoneButtonEnabled_AfterUserConfirm()
+    {
+        // Игрок явно подтвердил, не потратив всё → кнопка активна.
+        var d = NewDraft();
+        SeedVirtues(d);
+        VampireFinishingResolver.ConfirmStep5(d);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var done = Buttons(comp).Single(b => b.CustomId.Contains("finishing_done"));
+        Assert.False(done.IsDisabled);
+    }
+
+    [Fact]
+    public void Step_Target_FinalizeButtonVisible_WhenPoolNotEmptyAndNotFinalized()
+    {
+        // Кнопка «⚠ Подтвердить и заморозить» появляется только когда пул не пуст и Шаг 5 не подтверждён.
+        var d = NewDraft();
+        SeedVirtues(d);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var buttons = Buttons(comp);
+        Assert.Contains(buttons, b => b.CustomId.Contains("finishing_finalize") && !b.IsDisabled);
+    }
+
+    [Fact]
+    public void Step_Target_FinalizeButtonHidden_WhenPoolExhausted()
+    {
+        // Пул исчерпан — кнопка «Подтвердить и заморозить» не нужна.
+        var d = NewDraft();
+        SeedVirtues(d);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Сила", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Ловкость", out _);
+        VampireFinishingResolver.AllocateFreebie(d, VampireFinishingResolver.FreebieTarget.Attribute, "Выносливость", out _);
+
+        var comp = VampireWizardComponents.BuildForFinishingStep(d, VampireFreebieCascadeStep.Target);
+        var buttons = Buttons(comp);
+        Assert.DoesNotContain(buttons, b => b.CustomId.Contains("finishing_finalize"));
+    }
 }
