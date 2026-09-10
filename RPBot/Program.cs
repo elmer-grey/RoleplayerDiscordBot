@@ -5365,8 +5365,9 @@ await Task.CompletedTask;
                                                                 return;
                                                             }
 
-                                                            if (!VampireWizardComponents.TryParseWithArg(
-                                                                component.Data.CustomId, out _, out _, out var bgName))
+                                                            if (!VampireWizardComponents.TryParse(
+                                                                component.Data.CustomId, out var action, out _)
+                                                                || action != VampireWizardAction.BackgroundInc)
                                                             {
                                                                 await component.RespondAsync("⚠️ Не удалось разобрать customId факта.", ephemeral: true);
                                                                 return;
@@ -5378,26 +5379,36 @@ await Task.CompletedTask;
                                                                 await component.RespondAsync("⚠️ Не выбрано действие.", ephemeral: true);
                                                                 return;
                                                             }
+                                                            // Формат value: "{operation}:{name}", где operation ∈
+                                                            // "+:rank", "−:rank", "rename", "remove".
                                                             var raw = selected.First();
+                                                            var sepIdx = raw.IndexOf(':');
+                                                            if (sepIdx <= 0 || sepIdx >= raw.Length - 1)
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестное действие: {raw}", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var op = raw.Substring(0, sepIdx);
+                                                            var bgName = raw.Substring(sepIdx + 1);
 
                                                             VampireAdvantagesResolver.Decision dec;
                                                             string okLabel;
-                                                            if (raw == "+:rank")
+                                                            if (op == "+:rank")
                                                             {
                                                                 dec = VampireAdvantagesResolver.IncrementBackground(session.Draft, bgName);
                                                                 okLabel = $"+ ранг «{bgName}»";
                                                             }
-                                                            else if (raw == "−:rank" || raw == "-:rank")
+                                                            else if (op == "−:rank" || op == "-:rank")
                                                             {
                                                                 dec = VampireAdvantagesResolver.DecrementBackground(session.Draft, bgName);
                                                                 okLabel = $"− ранг «{bgName}»";
                                                             }
-                                                            else if (raw == "remove")
+                                                            else if (op == "remove")
                                                             {
                                                                 dec = VampireAdvantagesResolver.RemoveBackground(session.Draft, bgName);
                                                                 okLabel = $"удалён «{bgName}»";
                                                             }
-                                                            else if (raw == "rename")
+                                                            else if (op == "rename")
                                                             {
                                                                 // Открываем текстовый ввод для нового имени.
                                                                 session.PendingBackgroundOp = bgName;

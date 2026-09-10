@@ -590,9 +590,14 @@ public static class VampireWizardComponents
                                 }
 
                                 /// <summary>
-                                /// UI Шага 4.2 «Факты биографии»: кнопка «Добавить факт» (открывает текстовый ввод)
-                                /// + ряд SelectMenu на каждый имеющийся факт (± по 1 ранг, удалить, переименовать).
+                                /// UI Шага 4.2 «Факты биографии»: кнопка «Добавить факт» + один SelectMenu
+                                /// со всеми фактами (по 4 опции на факт: + ранг, − ранг, Переименовать, Удалить).
                                 /// </summary>
+                                /// <remarks>
+                                /// Раньше каждому факту соответствовал отдельный SelectMenu в отдельной ActionRow,
+                                /// что ограничивало UI 2 фактами из-за лимита Discord (5 ActionRow на сообщение).
+                                /// Сейчас все факты в одном SelectMenu: 6 × 4 = 24 опции, влезает в лимит 25.
+                                /// </remarks>
                                 public static MessageComponent BuildForBackgroundsStep(VampireCharacter draft)
                                 {
                                     if (draft == null) throw new ArgumentNullException(nameof(draft));
@@ -602,29 +607,21 @@ public static class VampireWizardComponents
                                     var cb = new ComponentBuilder();
 
                                     // Ряд 1: «Добавить факт» (открывает текстовый ввод).
-                                    // ВАЖНО: реальный UI-лимит количества фактов — меньше MaxBackgroundsPerCharacter,
-                                    // потому что каждому факту соответствует отдельный SelectMenu в отдельной ActionRow,
-                                    // а Discord ограничивает 5 ActionRow на сообщение. На текущий момент
-                                    // актуальный лимит зафиксирован как 2 (3 фиксированных ряда + 2 SelectMenu = 5).
-                                    // TODO(vtm-bg-ui-limits): перейти на единый SelectMenu со всеми фактами,
-                                    // чтобы UI мог вместить все 6 канонических фонов.
                                     var addFactDisabled = draft.Backgrounds != null
-                                        && draft.Backgrounds.Count >= VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep;
+                                        && draft.Backgrounds.Count >= VampireAdvantagesCatalog.MaxBackgroundsPerCharacter;
                                     cb.WithButton(
                                         addFactDisabled
-                                            ? $"Добавить факт (лимит {VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep})"
+                                            ? $"Добавить факт (лимит {VampireAdvantagesCatalog.MaxBackgroundsPerCharacter})"
                                             : "Добавить факт",
                                         BuildCustomId(VampireWizardAction.BackgroundAdd, draft.CharacterId),
                                         ButtonStyle.Secondary,
                                         disabled: addFactDisabled);
 
-                                    // По ряду на каждый факт с опциями ±/Удалить/Переименовать.
+                                    // Ряд 2 (опционально): один SelectMenu со всеми фактами.
                                     if (draft.Backgrounds != null && draft.Backgrounds.Count > 0)
                                     {
-                                        foreach (var kv in draft.Backgrounds)
-                                        {
-                                            cb.WithSelectMenu(BuildBackgroundSelect(draft, kv.Key, kv.Value));
-                                        }
+                                        var allMenu = BuildBackgroundSelect(draft);
+                                        if (allMenu != null) cb.WithSelectMenu(allMenu);
                                     }
 
                                     cb.WithButton("⬅ Назад (4.1)", BuildCustomId(VampireWizardAction.BackToDisciplines, draft.CharacterId), ButtonStyle.Secondary)
@@ -964,39 +961,47 @@ public static class VampireWizardComponents
                                 }
 
                                 /// <summary>
-                                /// SelectMenu Шага 4.2: 5 опций на факт (+ранг / −ранг / Удалить / Переименовать / [Каитиф]).
+                                /// SelectMenu Шага 4.2: все факты в одном меню (6 × 4 = 24 опции максимум).
+                                /// Каждая опция: <c>value = "{operation}:{name}"</c>, где operation ∈
+                                /// <c>+:rank</c>, <c>−:rank</c>, <c>rename</c>, <c>remove</c>.
                                 /// </summary>
-                                private static SelectMenuBuilder BuildBackgroundSelect(
-                                    VampireCharacter draft,
-                                    string name,
-                                    int rank)
+                                private static SelectMenuBuilder? BuildBackgroundSelect(VampireCharacter draft)
                                 {
+                                    if (draft.Backgrounds == null || draft.Backgrounds.Count == 0) return null;
+
                                     var menu = new SelectMenuBuilder()
-                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.BackgroundInc, draft.CharacterId, name))
-                                        .WithPlaceholder($"«{Truncate(name, 22)}» (ранг {rank})");
+                                        .WithCustomId(BuildCustomId(VampireWizardAction.BackgroundInc, draft.CharacterId))
+                                        .WithPlaceholder($"Факты биографии ({draft.Backgrounds.Count} шт.)");
 
-                                    menu.AddOption(new SelectMenuOptionBuilder()
-                                        .WithLabel($"+ ранг ({rank})")
-                                        .WithValue("+:rank")
-                                        .WithDescription("поднять ранг на 1"));
-
-                                    if (rank > 1)
+                                    foreach (var kv in draft.Backgrounds)
                                     {
+                                        var name = kv.Key;
+                                        var rank = kv.Value;
+                                        var nameShort = Truncate(name, 18);
+
                                         menu.AddOption(new SelectMenuOptionBuilder()
-                                            .WithLabel($"− ранг ({rank})")
-                                            .WithValue("−:rank")
-                                            .WithDescription("опустить ранг на 1"));
+                                            .WithLabel($"+ ранг «{nameShort}» ({rank})")
+                                            .WithValue($"+:rank:{name}")
+                                            .WithDescription($"поднять ранг «{nameShort}» на 1"));
+
+                                        if (rank > 1)
+                                        {
+                                            menu.AddOption(new SelectMenuOptionBuilder()
+                                                .WithLabel($"− ранг «{nameShort}» ({rank})")
+                                                .WithValue($"−:rank:{name}")
+                                                .WithDescription($"опустить ранг «{nameShort}» на 1"));
+                                        }
+
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"✎ Переименовать «{nameShort}»")
+                                            .WithValue($"rename:{name}")
+                                            .WithDescription($"ввести новое имя для «{nameShort}» в ЛС"));
+
+                                        menu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel($"🗑 Удалить «{nameShort}»")
+                                            .WithValue($"remove:{name}")
+                                            .WithDescription($"полностью убрать «{nameShort}»"));
                                     }
-
-                                    menu.AddOption(new SelectMenuOptionBuilder()
-                                        .WithLabel("Переименовать")
-                                        .WithValue("rename")
-                                        .WithDescription("ввести новое имя в ЛС"));
-
-                                    menu.AddOption(new SelectMenuOptionBuilder()
-                                        .WithLabel("Удалить")
-                                        .WithValue("remove")
-                                        .WithDescription("полностью убрать факт"));
 
                                     return menu;
                                 }

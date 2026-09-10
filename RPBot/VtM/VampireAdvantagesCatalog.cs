@@ -36,15 +36,8 @@ public static class VampireAdvantagesCatalog
     /// <summary>Максимум разных дисциплин у одного персонажа (V20: канонически не больше 6).</summary>
     public const int MaxDisciplinesPerCharacter = 6;
 
-    /// <summary>Максимум разных фактов биографии у одного персонажа (V20: канонически не больше 6).</summary>
-    public const int MaxBackgroundsPerCharacter = 6;
-
-    /// <summary>
-    /// Реальный лимит количества фактов, которые можно показать в UI Шага 4.2.
-    /// Связан с лимитом Discord на 5 ActionRow на сообщение:
-    /// 3 фиксированных ряда (добавить, навигация, [далее]) + N рядов SelectMenu по фактам.
-    /// </summary>
-    public const int MaxUiFactsOnBackgroundStep = 2;
+    /// <summary>Максимум разных фактов биографии у одного персонажа (V20: пул 5, минимум 1 ранг у каждого).</summary>
+    public const int MaxBackgroundsPerCharacter = 5;
 
     /// <summary>Минимальное значение любой ячейки: 0 для дисциплин/фактов, 1 для добродетелей.</summary>
     public const int MinDiscipline = 0;

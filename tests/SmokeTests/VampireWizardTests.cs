@@ -915,12 +915,11 @@ public class VampireWizardTests : IsolatedDataTestBase
             [Fact]
             public void BuildBackgroundsStep_AddFactButton_DisabledAtLimit()
             {
-                // Реальный лимит UI = MaxUiFactsOnBackgroundStep (2) — он меньше
-                // канонического MaxBackgroundsPerCharacter (6) из-за ограничения Discord
-                // на 5 ActionRow в одном сообщении.
+                // Лимит = MaxBackgroundsPerCharacter (6) — после рефактора UI
+                // вмещает все 6 фактов в одном SelectMenu (6 × 4 = 24 опции, влезает в 25).
                 var draft = NewDraft();
                 draft.Clan = "Вентру";
-                for (int i = 0; i < VampireAdvantagesCatalog.MaxUiFactsOnBackgroundStep; i++)
+                for (int i = 0; i < VampireAdvantagesCatalog.MaxBackgroundsPerCharacter; i++)
                 {
                     VampireAdvantagesResolver.AddBackground(draft, $"Факт{i}");
                 }
@@ -930,6 +929,48 @@ public class VampireWizardTests : IsolatedDataTestBase
                     .OfType<ButtonComponent>()
                     .FirstOrDefault(b => b.CustomId.Contains("background_add"));
                 Assert.NotNull(add);
-                Assert.True(add!.IsDisabled, "Кнопка «Добавить факт» должна быть disabled при достижении UI-лимита");
+                Assert.True(add!.IsDisabled, "Кнопка «Добавить факт» должна быть disabled при MaxBackgroundsPerCharacter фактах");
+            }
+
+            [Fact]
+            public void BuildBackgroundsStep_AllFactsVisibleInOneMenu()
+            {
+                // После рефактора все факты показываются в одном SelectMenu.
+                // При 5 фактах (MaxBackgroundsPerCharacter) все с рангом 1 —
+                // опции: + ранг, Переименовать, Удалить (без − ранг, т.к. rank == 1)
+                // = 5 × 3 = 15 опций.
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                for (int i = 0; i < VampireAdvantagesCatalog.MaxBackgroundsPerCharacter; i++)
+                {
+                    VampireAdvantagesResolver.AddBackground(draft, $"Факт{i}");
+                }
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var menus = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<SelectMenuComponent>()
+                    .ToList();
+                // До рефактора было 5 меню (по одному на факт). Сейчас — 1.
+                Assert.Single(menus);
+                // 5 фактов × 3 опции (без − ранг для rank==1) = 15
+                Assert.Equal(VampireAdvantagesCatalog.MaxBackgroundsPerCharacter * 3, menus[0].Options.Count);
+            }
+
+            [Fact]
+            public void BuildBackgroundsStep_AllFactsOptionsWithRankIncrease()
+            {
+                // При инкременте ранга у одного факта появляется 4-я опция − ранг.
+                var draft = NewDraft();
+                draft.Clan = "Вентру";
+                VampireAdvantagesResolver.AddBackground(draft, "Стая");
+                VampireAdvantagesResolver.IncrementBackground(draft, "Стая"); // ранг = 2
+                var comp = VampireWizardComponents.BuildForBackgroundsStep(draft);
+                var menus = comp.Components.OfType<ActionRowComponent>()
+                    .SelectMany(r => r.Components)
+                    .OfType<SelectMenuComponent>()
+                    .ToList();
+                Assert.Single(menus);
+                // 1 фактов × 4 опции (rank > 1, есть − ранг) = 4
+                Assert.Equal(4, menus[0].Options.Count);
             }
         }
