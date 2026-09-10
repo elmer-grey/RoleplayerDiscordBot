@@ -161,7 +161,7 @@ public static class VampireStartService
 
         // ─── Шаг 3. Тестовый персонаж в DM. ──────────────────────────────
         var dm = await command.User.CreateDMChannelAsync();
-        var testChar = BuildTestCharacter(command.User.Id);
+        var testChar = BuildTestCharacter(command.User);
         var eb = VampireSheetEmbed.Build(testChar);
         try
         {
@@ -203,16 +203,137 @@ public static class VampireStartService
         return result;
     }
 
-    private static VampireCharacter BuildTestCharacter(ulong ownerId) => new()
+    /// <summary>
+    /// Собрать полностью заполненного тестового персонажа по правилам V20.
+    /// Используется только для <c>/vampire_start</c> — игрок видит, как
+    /// выглядит «настоящий» лист (атрибуты 7/5/3, способности 13/9/5,
+    /// дисциплина, добродетели, факты, воля, человечность, здоровье).
+    /// </summary>
+    /// <remarks>
+    /// <para>Стартовый набор (пример):</para>
+    /// <list type="bullet">
+    ///   <item>Клан Ventrue, поколение 9, природа/маска «Архитектор».</item>
+    ///   <item>Атрибуты 7/5/3: Физ=7 (Сила 4, Ловкость 2, Стойкость 1),
+    ///         Соц=5 (Харизма 2, Манипулирование 2, Внешность 1),
+    ///         Мент=3 (Восприятие 1, Интеллект 1, Сообразительность 1).</item>
+    ///   <item>Способности 13/9/5: Таланты=13 (по 4 в Атлетике, Бдительности,
+    ///         Лидерстве; 1 в Запугивании), Навыки=9 (по 3 в Скрытности и
+    ///         Этикете; по 1 в Вождении, Фехтовании, Ремесле),
+    ///         Знания=5 (по 2 в Оккультизме и Расследовании; 1 в Политике).</item>
+    ///   <item>Дисциплина: Доминирование 1 (клановый).</item>
+    ///   <item>Добродетели: Совесть 2, Самоконтроль 2, Смелость 2.</item>
+    ///   <item>Факты (5/5): Стая 2, Ресурсы 1, Союзники 1, Влияние 1.</item>
+    ///   <item>Специализация: Ремесло → кузнечное дело.</item>
+    ///   <item>Воля = Смелость = 2. Человечность = Совесть + Самоконтроль = 4.</item>
+    ///   <item>Здоровье: 7 пустых ячеек (V20 шкала фиксирована).</item>
+    ///   <item>Клановый изъян Ventrue: утончённый вкус.</item>
+    /// </list>
+    /// </remarks>
+    private static VampireCharacter BuildTestCharacter(IUser owner) => new()
     {
         CharacterId = Guid.NewGuid(),
-        PlayerId = ownerId,
+        PlayerId = owner.Id,
+        PlayerName = owner.Username ?? "",
         CharacterName = "Тестовый вампир",
-        Clan = "Ventrue",
+        Clan = "Вентру",
         Generation = 9,
         Nature = "Архитектор",
         Demeanor = "Архитектор",
-        Concept = "Демонстрация листа",
+        Concept = "Демонстрация листа VtM V20",
+        Archetype = "Архитектор",
+        Sire = "Сэр Арчибальд Монтегю",
+        Weakness = "Утончённый вкус — Вентру не способен питаться кровью людей низкого социального положения.",
+
+        // Атрибуты 7/5/3 (Физические/Социальные/Ментальные).
+        AttributesStruct = new VampireAttributes
+        {
+            Strength = 4,
+            Dexterity = 2,
+            Stamina = 1,
+            Charisma = 2,
+            Manipulation = 2,
+            Appearance = 1,
+            Perception = 1,
+            Intelligence = 1,
+            Wits = 1,
+        },
+        AttributesPriority = "PhysicalFirst",
+
+        // Способности 13/9/5 (Таланты/Навыки/Знания).
+        AbilitiesStruct = new VampireAbilities
+        {
+            // Таланты (13): Атлетика 4, Бдительность 4, Лидерство 4, Запугивание 1.
+            Атлетика = 4,
+            Бдительность = 4,
+            Драка = 0,
+            Запугивание = 1,
+            Красноречие = 0,
+            Лидерство = 4,
+            УличноеЧутьё = 0,
+            Хитрость = 0,
+            ШестоеЧувство = 0,
+            Эмпатия = 0,
+            // Навыки (9): Скрытность 3, Этикет 3, Вождение 1, Фехтование 1, Ремесло 1.
+            Вождение = 1,
+            Воровство = 0,
+            Выживание = 0,
+            Исполнение = 0,
+            ОбращениеСЖивотными = 0,
+            Ремесло = 1,
+            Скрытность = 3,
+            Стрельба = 0,
+            Фехтование = 1,
+            Этикет = 3,
+            // Знания (5): Оккультизм 2, Расследование 2, Политика 1.
+            ГуманитарныеНауки = 0,
+            ЕстественныеНауки = 0,
+            Информатика = 0,
+            Медицина = 0,
+            Оккультизм = 2,
+            Политика = 1,
+            Расследование = 2,
+            Финансы = 0,
+            Электроника = 0,
+            Юриспруденция = 0,
+        },
+        AbilitiesPriority = "TalentsFirst",
+
+        // Клановая дисциплина — Доминирование 1.
+        Disciplines = new System.Collections.Generic.Dictionary<string, int>
+        {
+            ["Доминирование"] = 1,
+        },
+
+        // Добродетели (база 1/1/1 + 1 за приоритет поколения = 2/2/2).
+        Virtues = new System.Collections.Generic.Dictionary<string, int>
+        {
+            [VampireParameterCatalog.VirtueConscience] = 2,
+            [VampireParameterCatalog.VirtueSelfControl] = 2,
+            [VampireParameterCatalog.VirtueCourage] = 2,
+        },
+
+        // Факты биографии (5 пунктов): Стая 2 + Ресурсы 1 + Союзники 1 + Влияние 1.
+        Backgrounds = new System.Collections.Generic.Dictionary<string, int>
+        {
+            ["Стая"] = 2,
+            ["Ресурсы"] = 1,
+            ["Союзники"] = 1,
+            ["Влияние"] = 1,
+        },
+
+        // Одна специализация, чтобы в листе был виден формат «способность: сфера».
+        Specializations = new System.Collections.Generic.Dictionary<string, string>
+        {
+            ["Ремесло"] = "кузнечное дело",
+        },
+
+        // Hunger (V20): стартует с 1; на Шаге 5 не редактируется.
+        Hunger = 1,
+
+        // Здоровье: V20 шкала фиксирована на 7 ячеек. Инициализируем явно,
+        // чтобы первый же бросок (/vampire_roll и т. п.) не падал с
+        // "здоровье не инициализировано".
+        Health = new HealthState(VampireFinishingResolver.HealthTrackSize),
     };
 
     private static Embed BuildTestRollEmbed(IUser user)
