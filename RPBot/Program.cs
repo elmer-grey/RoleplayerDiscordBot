@@ -253,6 +253,10 @@ private Task? _dailyRestartTask;
                 _client.GuildScheduledEventCancelled += OnGuildScheduledEventCancelled;
                 _client.GuildScheduledEventCompleted += OnGuildScheduledEventCompleted;
                 _client.GuildMemberUpdated += OnGuildMemberUpdated;
+
+                // Фоновый воркер для автоудаления ephemeral-сообщений визарда.
+                // Идемпотентно — повторный Start() не создаёт второй поток.
+                RPBot.VtM.WizardMessageCleaner.Start();
             }
 
             return LogStartup("События Discord настроены");
@@ -5621,7 +5625,9 @@ await Task.CompletedTask;
                                                                 : $"Введите **специализацию** для «{paramName}» (например: «бег», «клинки», «Тёмные ритуалы»).";
 
                                                             session.PendingField = $"spec:{paramName}";
-                                                            await component.RespondAsync(prompt + "\n\n_(Ответьте текстом в этом же ЛС — я подставлю значение в draft.)_", ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                prompt + "\n\n_(Ответьте текстом в этом же ЛС — я подставлю значение в draft.)_",
+                                                                delaySeconds: 30);
                                                         }
                                                         catch (Exception ex)
                                                         {
@@ -5798,7 +5804,11 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
         var dec = VampireAdvantagesResolver.RenameCaitiffDiscipline(session.Draft, oldName, text);
         if (!dec.IsSuccess)
         {
-            await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            var err = await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            // Ошибка живёт 5 секунд, чтобы игрок прочитал, потом автоудаление.
+            WizardMessageCleaner.ScheduleAsync(err, 5);
+            await message.AddReactionAsync(new Emoji("❌"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
             session.PendingDisciplineRename = oldName; // повторить попытку
             return true;
         }
@@ -5812,6 +5822,7 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
             BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.1 после rename: {ex.Message}");
         }
         await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
         return true;
     }
 
@@ -5826,7 +5837,10 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
             : VampireAdvantagesResolver.RenameBackground(session.Draft, op, text);
         if (!dec.IsSuccess)
         {
-            await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            var err = await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+            WizardMessageCleaner.ScheduleAsync(err, 5);
+            await message.AddReactionAsync(new Emoji("❌"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
             session.PendingBackgroundOp = op; // повторить попытку
             return true;
         }
@@ -5840,6 +5854,7 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
             BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке 4.2 после text-input: {ex.Message}");
         }
         await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
         return true;
     }
 
@@ -5871,7 +5886,10 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
             var dec = VampireAbilitiesResolver.SetSpecialization(session.Draft, paramName, newSpec);
             if (!dec.IsSuccess)
             {
-                await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+                var err = await message.Channel.SendMessageAsync($"❌ {dec.Message}");
+                WizardMessageCleaner.ScheduleAsync(err, 5);
+                await message.AddReactionAsync(new Emoji("❌"));
+                WizardMessageCleaner.ScheduleAsync(message, 5);
                 session.PendingField = field; // повторить попытку
                 return true;
             }
@@ -5886,6 +5904,7 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
                 BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 5 после spec_set: {ex.Message}");
             }
             await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
             return true;
         }
 
@@ -5902,13 +5921,19 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
         }
     catch (Exception ex)
     {
-        await message.Channel.SendMessageAsync($"⚠️ Ошибка при сохранении: {ex.Message}");
+        var err = await message.Channel.SendMessageAsync($"⚠️ Ошибка при сохранении: {ex.Message}");
+        WizardMessageCleaner.ScheduleAsync(err, 5);
+        await message.AddReactionAsync(new Emoji("❌"));
+        WizardMessageCleaner.ScheduleAsync(message, 5);
         return true;
     }
 
     if (decision.Failure != VampireCreateConceptFailure.None)
     {
-        await message.Channel.SendMessageAsync($"❌ {decision.Message}\nПопробуйте ввести значение заново:");
+        var err = await message.Channel.SendMessageAsync($"❌ {decision.Message}\nПопробуйте ввести значение заново:");
+        WizardMessageCleaner.ScheduleAsync(err, 5);
+        await message.AddReactionAsync(new Emoji("❌"));
+        WizardMessageCleaner.ScheduleAsync(message, 5);
         session.PendingField = field; // повторить
         return true;
     }
@@ -5916,6 +5941,7 @@ private async Task<bool> TryHandleWizardDirectMessageAsync(SocketUserMessage mes
     // Успех — перерисуем экран.
     await VampireWizardDmHandler.RenderConceptStepAsync((IDMChannel)message.Channel, session);
     await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
     return true;
 }
 
@@ -5936,6 +5962,7 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
     {
     _eventNotifications.Pause(userId);
     await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
     await message.Channel.SendMessageAsync("[Сохранено] Отключил личные уведомления о новых событиях. Чтобы включить обратно — напиши мне «хочу» или подпишись заново через /event_notify subscribe на сервере.");
     return true;
     }
@@ -5944,6 +5971,7 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
     {
     _eventNotifications.Unpause(userId);
     await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
     await message.Channel.SendMessageAsync("[Сохранено] Личные уведомления снова включены (если ты был подписан на сервере). Проверить/подписаться: /event_notify status или /event_notify subscribe в нужном сервере.");
     return true;
     }
@@ -5952,6 +5980,7 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
     {
     var paused = _eventNotifications.IsPaused(userId);
     await message.AddReactionAsync(new Emoji("✅"));
+            WizardMessageCleaner.ScheduleAsync(message, 5);
     await message.Channel.SendMessageAsync(paused
     ? "[Статус] Сейчас личные уведомления поставлены на паузу. Чтобы вернуть — напиши «хочу»."
     : "[Статус] Сейчас личные уведомления не на паузе. Подписка на конкретный сервер проверяется командой /event_notify status на сервере.");
@@ -7670,3 +7699,5 @@ private Task LogStartup(string message)
         }
     }
 }
+
+

@@ -116,7 +116,7 @@ public sealed class VampireCommands
 
             if (!VampireWizardComponents.TryParse(component.Data.CustomId, out var action, out var _))
             {
-                await component.RespondAsync("⚠️ Не удалось разобрать кнопку визарда.", ephemeral: true);
+                await component.RespondEphemeralAsync("⚠️ Не удалось разобрать кнопку визарда.");
                 return;
             }
 
@@ -125,10 +125,9 @@ public sealed class VampireCommands
         var session = FindActiveSessionForUser(component.User.Id);
         if (session == null)
         {
-            await component.RespondAsync(
+            await component.RespondEphemeralAsync(
                 "❌ Сессия создания персонажа не найдена. " +
-                "Запустите `/vampire_create` в канале заново.",
-                ephemeral: true);
+                "Запустите `/vampire_create` в канале заново.");
             return;
         }
 
@@ -217,15 +216,13 @@ public sealed class VampireCommands
                             {
                                             if (!VampireAbilitiesResolver.IsAbilitiesComplete(session.Draft))
                                 {
-                                    await component.RespondAsync(
-                                                    "❌ Шаг 3 ещё не завершён. Распределите все 27 пунктов по приоритету 13/9/5.",
-                                        ephemeral: true);
+                                    await component.RespondEphemeralAsync(
+                                                    "❌ Шаг 3 ещё не завершён. Распределите все 27 пунктов по приоритету 13/9/5.");
                                     return;
                                 }
                                             await CommitDraftAsync(component, session);
-                                            await component.RespondAsync(
-                                                "✅ Шаг 3 (способности) сохранён. Переходим к Шагу 4 (преимущества).",
-                                                ephemeral: true);
+                                            await component.RespondEphemeralAsync(
+                                                "✅ Шаг 3 (способности) сохранён. Переходим к Шагу 4 (преимущества).");
                                             try
                                             {
                                                 var dm = await component.User.CreateDMChannelAsync();
@@ -241,14 +238,12 @@ public sealed class VampireCommands
                                         {
                                             if (!VampireAttributesResolver.IsAttributesComplete(session.Draft))
                                             {
-                                                await component.RespondAsync(
-                                                    "❌ Шаг 2 ещё не завершён. Распределите все 15 пунктов по приоритету 7/5/3.",
-                                                    ephemeral: true);
+                                                await component.RespondEphemeralAsync(
+                                                    "❌ Шаг 2 ещё не завершён. Распределите все 15 пунктов по приоритету 7/5/3.");
                                                 return;
                                             }
-                                            await component.RespondAsync(
-                                                "✅ Шаг 2 (характеристики) сохранён. Переходим к Шагу 3 (способности).",
-                                                ephemeral: true);
+                                            await component.RespondEphemeralAsync(
+                                                "✅ Шаг 2 (характеристики) сохранён. Переходим к Шагу 3 (способности).");
                                             await CommitDraftAsync(component, session);
                                             try
                                             {
@@ -271,13 +266,12 @@ public sealed class VampireCommands
                                 if (string.IsNullOrWhiteSpace(d.Clan))     missing.Add("Клан");
                                 if (string.IsNullOrWhiteSpace(d.Nature))   missing.Add("Натура");
                                 if (string.IsNullOrWhiteSpace(d.Demeanor)) missing.Add("Маска");
-                                await component.RespondAsync(
-                                    "❌ Концепция ещё не заполнена. Не хватает: " + string.Join(", ", missing) + ".",
-                                    ephemeral: true);
+                                await component.RespondEphemeralAsync(
+                                    "❌ Концепция ещё не заполнена. Не хватает: " + string.Join(", ", missing) + ".");
                                 return;
                             }
                             // Переход 1 → 2: рендерим Шаг 2 в DM.
-                            await component.RespondAsync("✅ Шаг 1 сохранён. Переходим к Шагу 2 (характеристики).", ephemeral: true);
+                            await component.RespondEphemeralAsync("✅ Шаг 1 сохранён. Переходим к Шагу 2 (характеристики).");
                             await CommitDraftAsync(component, session);
                             try
                             {
@@ -291,7 +285,7 @@ public sealed class VampireCommands
                             return;
 
                         case VampireWizardAction.BackToConcept:
-                            await component.RespondAsync("⬅ Возврат на Шаг 1 (Концепция).", ephemeral: true);
+                            await component.RespondEphemeralAsync("⬅ Возврат на Шаг 1 (Концепция).");
                             try
                             {
                                 var dm = await component.User.CreateDMChannelAsync();
@@ -304,7 +298,7 @@ public sealed class VampireCommands
                             return;
 
                                                 case VampireWizardAction.BackToAttributes:
-                                                    await component.RespondAsync("⬅ Возврат на Шаг 2 (характеристики).", ephemeral: true);
+                                                    await component.RespondEphemeralAsync("⬅ Возврат на Шаг 2 (характеристики).");
                                                     try
                                                     {
                                                         var dm = await component.User.CreateDMChannelAsync();
@@ -332,7 +326,7 @@ public sealed class VampireCommands
                                                     {
                                                         // Эти actions несут аргументы в customId-arg и обрабатываются
                                                         // отдельным entry-point (HandleWizardSelectMenuWithArgAsync).
-                                                        await component.RespondAsync("⚠️ Внутренняя ошибка визарда (ability без аргумента).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("⚠️ Внутренняя ошибка визарда (ability без аргумента).");
                                                         return;
                                                     }
 
@@ -348,7 +342,7 @@ public sealed class VampireCommands
                                                 case VampireWizardAction.VirtueDec:
                                                     {
                                                         // Эти actions несут аргументы и обрабатываются отдельным selectmenu-entry-point.
-                                                        await component.RespondAsync("⚠️ Внутренняя ошибка визарда (adv без аргумента).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("⚠️ Внутренняя ошибка визарда (adv без аргумента).");
                                                         return;
                                                     }
 
@@ -356,9 +350,8 @@ public sealed class VampireCommands
                                                     {
                                                         // Открываем текстовый ввод для имени нового факта.
                                                         session.PendingBackgroundOp = "add";
-                                                        await component.RespondAsync(
-                                                            "✏️ Введите имя нового факта биографии (например, `Стая`, `Ресурсы`, `Союзники 3`).",
-                                                            ephemeral: true);
+                                                        await component.RespondEphemeralAsync(
+                                                            "✏️ Введите имя нового факта биографии (например, `Стая`, `Ресурсы`, `Союзники 3`).");
                                                         return;
                                                     }
 
@@ -367,23 +360,20 @@ public sealed class VampireCommands
                                                         // Открываем текстовый ввод для нового имени дисциплины Каитифа.
                                                         if (!VampireAdvantagesCatalog.IsCaitiff(session.Draft.Clan))
                                                         {
-                                                            await component.RespondAsync(
-                                                                "⚠️ Переименовывать можно только дисциплины Каитифа.",
-                                                                ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                "⚠️ Переименовывать можно только дисциплины Каитифа.");
                                                             return;
                                                         }
                                                         var disciplineName = VampireCommandHelpers.ExtractCustomIdArg(component.Data.CustomId);
                                                         if (string.IsNullOrWhiteSpace(disciplineName))
                                                         {
-                                                            await component.RespondAsync(
-                                                                "⚠️ Не указано имя переименовываемой дисциплины.",
-                                                                ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                "⚠️ Не указано имя переименовываемой дисциплины.");
                                                             return;
                                                         }
                                                         session.PendingDisciplineRename = disciplineName;
-                                                        await component.RespondAsync(
-                                                            $"✏️ Введите новое имя для «{disciplineName}» (например, `Анимализм`, `Прорицание`, `Воздействие`).",
-                                                            ephemeral: true);
+                                                        await component.RespondEphemeralAsync(
+                                                            $"✏️ Введите новое имя для «{disciplineName}» (например, `Анимализм`, `Прорицание`, `Воздействие`).");
                                                         return;
                                                     }
 
@@ -392,7 +382,7 @@ public sealed class VampireCommands
                                                     {
                                                         if (session.Step != VampireWizardStep.Advantages)
                                                         {
-                                                            await component.RespondAsync("⚠️ Сброс доступен только на Шаге 4.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Сброс доступен только на Шаге 4.");
                                                             return;
                                                         }
                                                         VampireAdvantagesResolver.ResetProgress(session.Draft);
@@ -402,7 +392,7 @@ public sealed class VampireCommands
 
                                                 case VampireWizardAction.BackToAbilities:
                                                     {
-                                                        await component.RespondAsync("⬅ Возврат на Шаг 3 (способности).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("⬅ Возврат на Шаг 3 (способности).");
                                                         try
                                                         {
                                                             var dm = await component.User.CreateDMChannelAsync();
@@ -420,18 +410,17 @@ public sealed class VampireCommands
                                                         if (session.Step != VampireWizardStep.Advantages
                                                             || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Disciplines)
                                                         {
-                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.1.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Этот переход доступен только с Шага 4.1.");
                                                             return;
                                                         }
                                                         if (!VampireAdvantagesResolver.IsDisciplinesComplete(session.Draft))
                                                         {
-                                                            await component.RespondAsync(
-                                                                $"❌ Шаг 4.1 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingDisciplinePool(session.Draft)} очков дисциплин.",
-                                                                ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                $"❌ Шаг 4.1 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingDisciplinePool(session.Draft)} очков дисциплин.");
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
-                                                        await component.RespondAsync("✅ Шаг 4.1 (дисциплины) сохранён. Переходим к Шагу 4.2 (факты).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("✅ Шаг 4.1 (дисциплины) сохранён. Переходим к Шагу 4.2 (факты).");
                                                         try
                                                         {
                                                             var dm = await component.User.CreateDMChannelAsync();
@@ -449,18 +438,17 @@ public sealed class VampireCommands
                                                         if (session.Step != VampireWizardStep.Advantages
                                                             || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Backgrounds)
                                                         {
-                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.2.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Этот переход доступен только с Шага 4.2.");
                                                             return;
                                                         }
                                                         if (!VampireAdvantagesResolver.IsBackgroundsComplete(session.Draft))
                                                         {
-                                                            await component.RespondAsync(
-                                                                $"❌ Шаг 4.2 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingBackgroundPool(session.Draft)} очков фактов.",
-                                                                ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                $"❌ Шаг 4.2 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingBackgroundPool(session.Draft)} очков фактов.");
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
-                                                        await component.RespondAsync("✅ Шаг 4.2 (факты) сохранён. Переходим к Шагу 4.3 (добродетели).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("✅ Шаг 4.2 (факты) сохранён. Переходим к Шагу 4.3 (добродетели).");
                                                         try
                                                         {
                                                             var dm = await component.User.CreateDMChannelAsync();
@@ -478,14 +466,13 @@ public sealed class VampireCommands
                                                         if (session.Step != VampireWizardStep.Advantages
                                                             || session.AdvantagesSubStep != VampireWizardAdvantagesSubStep.Virtues)
                                                         {
-                                                            await component.RespondAsync("⚠️ Этот переход доступен только с Шага 4.3.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Этот переход доступен только с Шага 4.3.");
                                                             return;
                                                         }
                                                         if (!VampireAdvantagesResolver.IsVirtuesComplete(session.Draft))
                                                         {
-                                                            await component.RespondAsync(
-                                                                $"❌ Шаг 4.3 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingVirtuePool(session.Draft)} очков добродетелей.",
-                                                                ephemeral: true);
+                                                            await component.RespondEphemeralAsync(
+                                                                $"❌ Шаг 4.3 ещё не завершён. Осталось {VampireAdvantagesResolver.RemainingVirtuePool(session.Draft)} очков добродетелей.");
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
@@ -495,12 +482,12 @@ public sealed class VampireCommands
                                                             await component.DeferAsync(ephemeral: true);
                                                             var dm = await component.User.CreateDMChannelAsync();
                                                             await VampireWizardDmHandler.RenderFinishingStepAsync(dm, session);
-                                                            await component.FollowupAsync("✅ Шаг 4 сохранён. Открыт Шаг 5 «Последние штрихи».", ephemeral: true);
+                                                            await component.FollowupEphemeralAsync("✅ Шаг 4 сохранён. Открыт Шаг 5 «Последние штрихи».");
                                                         }
                                                         catch (Exception ex)
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"Ошибка при переходе 4.3→5: {ex.Message}");
-                                                            await component.FollowupAsync("❌ Не удалось открыть Шаг 5.", ephemeral: true);
+                                                            await component.FollowupEphemeralAsync("❌ Не удалось открыть Шаг 5.");
                                                         }
                                                         return;
                                                     }
@@ -509,7 +496,7 @@ public sealed class VampireCommands
                                                     {
                                                         if (session.Step != VampireWizardStep.FinishingTouches)
                                                         {
-                                                            await component.RespondAsync("⚠️ Сброс Шага 5 доступен только из Шага 5.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Сброс Шага 5 доступен только из Шага 5.");
                                                             return;
                                                         }
                                                         VampireFinishingResolver.ResetFreebies(session.Draft);
@@ -524,7 +511,7 @@ public sealed class VampireCommands
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"Ошибка при сбросе Шага 5: {ex.Message}");
                                                         }
-                                                        await component.RespondAsync("🧹 Свободные пункты возвращены в пул (15/15).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("🧹 Свободные пункты возвращены в пул (15/15).");
                                                         return;
                                                     }
 
@@ -532,13 +519,12 @@ public sealed class VampireCommands
                                                     {
                                                         if (session.Step != VampireWizardStep.FinishingTouches)
                                                         {
-                                                            await component.RespondAsync("⚠️ Завершение Шага 5 доступно только из Шага 5.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Завершение Шага 5 доступно только из Шага 5.");
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
-                                                        await component.RespondAsync(
-                                                            "✅ Шаг 5 сохранён. Финальный лист персонажа появится в Шаге 6 (следующее обновление).",
-                                                            ephemeral: true);
+                                                        await component.RespondEphemeralAsync(
+                                                            "✅ Шаг 5 сохранён. Финальный лист персонажа появится в Шаге 6 (следующее обновление).");
                                                         return;
                                                     }
 
@@ -546,7 +532,7 @@ public sealed class VampireCommands
                                                     {
                                                         if (session.Step != VampireWizardStep.FinishingTouches)
                                                         {
-                                                            await component.RespondAsync("⚠️ Подтверждение Шага 5 доступно только из Шага 5.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Подтверждение Шага 5 доступно только из Шага 5.");
                                                             return;
                                                         }
 
@@ -565,9 +551,8 @@ public sealed class VampireCommands
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"Ошибка при подтверждении Шага 5: {ex.Message}");
                                                         }
-                                                        await component.RespondAsync(
-                                                            "⚠ Шаг 5 заморожен. Свободные пункты больше нельзя тратить; специализации теперь доступны.",
-                                                            ephemeral: true);
+                                                        await component.RespondEphemeralAsync(
+                                                            "⚠ Шаг 5 заморожен. Свободные пункты больше нельзя тратить; специализации теперь доступны.");
                                                         return;
                                                     }
 
@@ -575,7 +560,7 @@ public sealed class VampireCommands
                                                     {
                                                         if (session.Step != VampireWizardStep.FinishingTouches)
                                                         {
-                                                            await component.RespondAsync("⚠️ Возврат к 4.3 доступен только из Шага 5.", ephemeral: true);
+                                                            await component.RespondEphemeralAsync("⚠️ Возврат к 4.3 доступен только из Шага 5.");
                                                             return;
                                                         }
                                                         await CommitDraftAsync(component, session);
@@ -589,14 +574,14 @@ public sealed class VampireCommands
                                                         {
                                                             BotLogger.Error(LogCategory.Discord, $"Ошибка при возврате 5→4.3: {ex.Message}");
                                                         }
-                                                        await component.RespondAsync("↩️ Возврат к Шагу 4.3 (добродетели).", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("↩️ Возврат к Шагу 4.3 (добродетели).");
                                                         return;
                                                     }
 
                                                 case VampireWizardAction.FinishingInc:
                                                     {
                                                         // Шаг 5 — SelectMenu; основная обработка идёт в HandleWizardSelectAsync.
-                                                        await component.RespondAsync("⚠️ Шаг 5 работает через меню выбора, а не через кнопки.", ephemeral: true);
+                                                        await component.RespondEphemeralAsync("⚠️ Шаг 5 работает через меню выбора, а не через кнопки.");
                                                         return;
                                                     }
 
@@ -615,7 +600,7 @@ public sealed class VampireCommands
                             {
                                 // Эти actions на Шаге 2 несут имя атрибута в customId-arg.
                                 // Парсинг и обработка делаются через отдельный entry-point из HandleWizardButtonWithArgAsync.
-                                await component.RespondAsync("⚠️ Внутренняя ошибка визарда (attr без аргумента).", ephemeral: true);
+                                await component.RespondEphemeralAsync("⚠️ Внутренняя ошибка визарда (attr без аргумента).");
                                 return;
                             }
 
@@ -635,11 +620,11 @@ public sealed class VampireCommands
                     }
                 }
                 catch { /* swallow — главное что сессия снята */ }
-                await component.RespondAsync("❌ Визард отменён.", ephemeral: true);
+                await component.RespondEphemeralAsync("❌ Визард отменён.");
                 return;
 
             default:
-                await component.RespondAsync("⚠️ Неизвестное действие визарда.", ephemeral: true);
+                await component.RespondEphemeralAsync("⚠️ Неизвестное действие визарда.");
                 return;
         }
     }
@@ -656,19 +641,17 @@ public sealed class VampireCommands
                         var session = FindActiveSessionForUser(component.User.Id);
                         if (session == null)
                         {
-                            await component.RespondAsync(
+                            await component.RespondEphemeralAsync(
                                 "❌ Сессия создания персонажа не найдена. " +
-                                "Запустите `/vampire_create` в канале заново.",
-                                ephemeral: true);
+                                "Запустите `/vampire_create` в канале заново.");
                             return;
                         }
 
                         if (session.Step != VampireWizardStep.Attributes)
                         {
-                            await component.RespondAsync(
+                            await component.RespondEphemeralAsync(
                                 "⚠️ Эта кнопка доступна только на Шаге 2 (характеристики). " +
-                                $"Текущий шаг: {session.Step}.",
-                                ephemeral: true);
+                                $"Текущий шаг: {session.Step}.");
                             return;
                         }
 
@@ -679,7 +662,7 @@ public sealed class VampireCommands
                                     var dec = VampireAttributesResolver.Increment(session.Draft, arg);
                                     if (!dec.IsSuccess)
                                     {
-                                        await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                        await component.RespondEphemeralAsync("❌ " + dec.Message);
                                         return;
                                     }
                                     await RerenderWizardAsync(component, session);
@@ -690,7 +673,7 @@ public sealed class VampireCommands
                                     var dec = VampireAttributesResolver.Decrement(session.Draft, arg);
                                     if (!dec.IsSuccess)
                                     {
-                                        await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                        await component.RespondEphemeralAsync("❌ " + dec.Message);
                                         return;
                                     }
                                     await RerenderWizardAsync(component, session);
@@ -704,7 +687,7 @@ public sealed class VampireCommands
                                     var selected = component.Data.Values;
                                     if (selected == null || selected.Count == 0)
                                     {
-                                        await component.RespondAsync("⚠️ Атрибут не выбран.", ephemeral: true);
+                                        await component.RespondEphemeralAsync("⚠️ Атрибут не выбран.");
                                         return;
                                     }
                                     session.AttrSelected = selected.First();
@@ -738,7 +721,7 @@ public sealed class VampireCommands
                                     return;
                                 }
                             default:
-                                await component.RespondAsync("⚠️ Неизвестное действие с аргументом: " + action, ephemeral: true);
+                                await component.RespondEphemeralAsync("⚠️ Неизвестное действие с аргументом: " + action);
                                 return;
                         }
                     }
@@ -750,8 +733,9 @@ public sealed class VampireCommands
         string prompt)
     {
         session.PendingField = field;
-        await component.RespondAsync(prompt + "\n\n_(Ответьте текстом в этом же ЛС — я подставлю значение в draft.)_",
-            ephemeral: true);
+        await component.RespondEphemeralAsync(
+            prompt + "\n\n_(Ответьте текстом в этом же ЛС — я подставлю значение в draft.)_",
+            delaySeconds: 30);
     }
 
     private static async Task RerenderWizardAsync(
@@ -791,7 +775,7 @@ public sealed class VampireCommands
                 }
             }
             catch { /* не критично */ }
-            await component.RespondAsync("✅ Обновлено.", ephemeral: true);
+            await component.RespondEphemeralAsync("✅ Обновлено.");
         }
 
         /// <summary>
@@ -812,7 +796,7 @@ public sealed class VampireCommands
                 }
             }
             catch { /* не критично */ }
-            await component.RespondAsync("✅ Обновлено.", ephemeral: true);
+            await component.RespondEphemeralAsync("✅ Обновлено.");
         }
 
         private static async Task RerenderAdvantagesInternal(IUserMessage um, VampireWizardSession session)
@@ -901,24 +885,24 @@ public sealed class VampireCommands
     {
         if (!VampireWillpowerComponents.TryParse(component.Data.CustomId, out var action, out var charId))
         {
-            await component.RespondAsync("⚠️ Не удалось разобрать кнопку воли.", ephemeral: true);
+            await component.RespondEphemeralAsync("⚠️ Не удалось разобрать кнопку воли.");
             return;
         }
         if (!component.GuildId.HasValue)
         {
-            await component.RespondAsync("Кнопки воли работают только на сервере.", ephemeral: true);
+            await component.RespondEphemeralAsync("Кнопки воли работают только на сервере.");
             return;
         }
         var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
         var character = storage.GetByCharacterId(charId);
         if (character == null)
         {
-            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            await component.RespondEphemeralAsync("❌ Чарник не найден.");
             return;
         }
         if (character.PlayerId != component.User.Id)
         {
-            await component.RespondAsync("⚠️ Только владелец чарника может менять волю.", ephemeral: true);
+            await component.RespondEphemeralAsync("⚠️ Только владелец чарника может менять волю.");
             return;
         }
 
@@ -932,35 +916,32 @@ public sealed class VampireCommands
             case WillpowerAction.SpendOne:
                 if (current <= 0)
                 {
-                    await component.RespondAsync("ℹ️ Нечего тратить — запас воли пуст.", ephemeral: true);
+                    await component.RespondEphemeralAsync("ℹ️ Нечего тратить — запас воли пуст.");
                     return;
                 }
                 character.WillpowerPoints = current - 1;
                 await storage.UpsertAsync(character);
-                await component.RespondAsync(
+                await component.RespondEphemeralAsync(
                     $"✅ Потрачен 1 пункт воли. Остаток: **{character.WillpowerPoints}** / {ceiling}.",
-                    components: VampireWillpowerComponents.Build(charId),
-                    ephemeral: true);
+                    components: VampireWillpowerComponents.Build(charId));
                 return;
 
             case WillpowerAction.RestoreOne:
                 if (current >= ceiling)
                 {
-                    await component.RespondAsync(
-                        $"ℹ️ Запас воли уже полный: {current} / {ceiling}.",
-                        ephemeral: true);
+                    await component.RespondEphemeralAsync(
+                        $"ℹ️ Запас воли уже полный: {current} / {ceiling}.");
                     return;
                 }
                 character.WillpowerPoints = current + 1;
                 await storage.UpsertAsync(character);
-                await component.RespondAsync(
+                await component.RespondEphemeralAsync(
                     $"✅ Восстановлен 1 пункт воли. Запас: **{character.WillpowerPoints}** / {ceiling}.",
-                    components: VampireWillpowerComponents.Build(charId),
-                    ephemeral: true);
+                    components: VampireWillpowerComponents.Build(charId));
                 return;
 
             default:
-                await component.RespondAsync("⚠️ Неизвестное действие воли.", ephemeral: true);
+                await component.RespondEphemeralAsync("⚠️ Неизвестное действие воли.");
                 return;
         }
 #pragma warning restore CS0618
@@ -975,24 +956,24 @@ public sealed class VampireCommands
     {
         if (!VampireHealthComponents.TryParse(component.Data.CustomId, out var action, out var charId))
         {
-            await component.RespondAsync("⚠️ Не удалось разобрать кнопку здоровья.", ephemeral: true);
+            await component.RespondEphemeralAsync("⚠️ Не удалось разобрать кнопку здоровья.");
             return;
         }
         if (!component.GuildId.HasValue)
         {
-            await component.RespondAsync("Кнопки здоровья работают только на сервере.", ephemeral: true);
+            await component.RespondEphemeralAsync("Кнопки здоровья работают только на сервере.");
             return;
         }
         var storage = await VampireStorageCache.GetAsync(component.GuildId.Value);
         var character = storage.GetByCharacterId(charId);
         if (character == null)
         {
-            await component.RespondAsync("❌ Чарник не найден.", ephemeral: true);
+            await component.RespondEphemeralAsync("❌ Чарник не найден.");
             return;
         }
         if (character.PlayerId != component.User.Id)
         {
-            await component.RespondAsync("⚠️ Только владелец чарника может менять здоровье.", ephemeral: true);
+            await component.RespondEphemeralAsync("⚠️ Только владелец чарника может менять здоровье.");
             return;
         }
 
@@ -1004,7 +985,7 @@ public sealed class VampireCommands
             case HealthAction.ApplyNonLethal:
                 if (h.IsDead)
                 {
-                    await component.RespondAsync("☠️ Персонаж мёртв.", ephemeral: true);
+                    await component.RespondEphemeralAsync("☠️ Персонаж мёртв.");
                     return;
                 }
                 h.ApplyNonLethal(1);
@@ -1012,7 +993,7 @@ public sealed class VampireCommands
             case HealthAction.ApplyLethal:
                 if (h.IsDead)
                 {
-                    await component.RespondAsync("☠️ Персонаж уже мёртв.", ephemeral: true);
+                    await component.RespondEphemeralAsync("☠️ Персонаж уже мёртв.");
                     return;
                 }
                 h.ApplyLethal(1);
@@ -1020,7 +1001,7 @@ public sealed class VampireCommands
             case HealthAction.ApplyAggravated:
                 if (h.IsDead)
                 {
-                    await component.RespondAsync("☠️ Персонаж уже мёртв.", ephemeral: true);
+                    await component.RespondEphemeralAsync("☠️ Персонаж уже мёртв.");
                     return;
                 }
                 h.ApplyAggravated(1);
@@ -1029,16 +1010,15 @@ public sealed class VampireCommands
                 h.Heal(1);
                 break;
             default:
-                await component.RespondAsync("⚠️ Неизвестное действие здоровья.", ephemeral: true);
+                await component.RespondEphemeralAsync("⚠️ Неизвестное действие здоровья.");
                 return;
         }
 
         await storage.UpsertAsync(character);
         var status = h.IsDead ? "☠️ Персонаж мёртв." : h.IsDestroyed ? "💀 Небоеспособен." : "✅ Состояние обновлено.";
-        await component.RespondAsync(
+        await component.RespondEphemeralAsync(
             $"{status}\n{VampireHealthEmbed.Build(character).Description}",
-            components: VampireHealthComponents.Build(charId),
-            ephemeral: true);
+            components: VampireHealthComponents.Build(charId));
     }
 }
 
@@ -1074,3 +1054,4 @@ internal static class VampireStorageCache
         lock (_gate) _byGuild.Remove(guildId);
     }
 }
+
