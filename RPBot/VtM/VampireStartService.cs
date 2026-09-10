@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text;
 using System.Threading.Tasks;
 using Discord;
 using Discord.WebSocket;
@@ -336,16 +338,82 @@ public static class VampireStartService
         Health = new HealthState(VampireFinishingResolver.HealthTrackSize),
     };
 
+    /// <summary>
+    /// Собрать embed «тестового броска» для Шага 4 <c>/vampire_start</c>.
+    ///
+    /// Бросаем 5 кубов по правилам V5: 3 regular + 2 hunger. Учитываем
+    /// специализацию: каждая regular-десятка считается за 2 успеха.
+    /// Голодные десятки дают один обычный успех (без удвоения) и
+    /// триггерят Messy Critical, если regular без «+» после поедания
+    /// X→6–9, но содержит крит. Голодная 1-ца — Bestial Failure при
+    /// тех же условиях.
+    /// </summary>
+    /// <remarks>
+    /// Этот бросок выполняется на каждый <c>/vampire_start</c> — служит
+    /// наглядной проверкой, что VtM-модуль живой, кубики кидаются и
+    /// канал VtMRollChannelID работает. Параметр «специализация» —
+    /// константа «тест», чтобы продемонстрировать удвоение 10.
+    /// </remarks>
     private static Embed BuildTestRollEmbed(IUser user)
     {
+        const string Specialization = "тест";
+        const int RegularCount = 3;
+        const int HungerCount = 2;
+
+        var rng = new SystemRandomAdapter();
+        var roll = VampireDicePool.RollV5(
+            poolSize: RegularCount + HungerCount,
+            hunger: HungerCount,
+            rng: rng);
+
+        int successes = VampireDicePool.CountSuccessesHybrid(
+            roll.RegularDice, roll.HungerDice, Specialization);
+
         var eb = new EmbedBuilder
         {
-            Title = "🎲 Тестовый бросок",
+            Title = "🎲 Тестовый бросок (5d10)",
             Color = new Color(0x808080),
             Description =
-                $"Это автоматический тестовый бросок, отправленный {user.Mention} " +
-                $"через `/vampire_start`. Если ты это видишь — VtM-модуль успешно инициализирован.",
+                $"Автоматический тестовый бросок, отправленный {user.Mention} " +
+                $"через `/vampire_start`. Если ты это видишь — VtM-модуль живой, " +
+                $"кубики кидаются, канал VtMRollChannelID работает.",
         };
+
+        // Кубики regular.
+        eb.AddField(
+            "⚪ Regular",
+            FormatDice(roll.RegularDice),
+            inline: false);
+
+        // Кубики hunger.
+        eb.AddField(
+            "🩸 Hunger",
+            FormatDice(roll.HungerDice),
+            inline: false);
+
+        // Специализация: каждая regular-10 = 2 успеха.
+        var regTens = 0;
+        for (int i = 0; i < roll.RegularDice.Length; i++)
+            if (roll.RegularDice[i] == 10) regTens++;
+        eb.AddField(
+            "🎯 Специализация",
+            $"«{Specialization}» → каждая 10 на regular = 2 успеха (×{regTens} шт.)",
+            inline: false);
+
+        // Результат с гибридным подсчётом.
+        var flags = new List<string>();
+        if (roll.IsMessyCritical) flags.Add("🩸 Messy Critical");
+        if (roll.IsBestialFailure) flags.Add("🩸 Bestial Failure");
+        if (roll.IsBotch) flags.Add("☠️ Ботч");
+
+        var resultValue = new StringBuilder();
+        if (successes > 0) resultValue.Append("✅ Успех: **").Append(successes).Append("**");
+        else if (roll.IsBotch) resultValue.Append("☠️ Ботч: 0 успехов");
+        else resultValue.Append("⚪ Провал: 0 успехов");
+        if (flags.Count > 0) resultValue.Append(" (").Append(string.Join(", ", flags)).Append(')');
+
+        eb.AddField("📊 Результат", resultValue.ToString(), inline: false);
+
         eb.AddField("Кто", user.Username, inline: true);
         eb.AddField("Когда", DateTimeOffset.UtcNow.ToString("u"), inline: true);
         eb.Footer = new EmbedFooterBuilder
@@ -353,5 +421,25 @@ public static class VampireStartService
             Text = "VtM V20 /vampire_start — проверка канала VtMRollChannelID.",
         };
         return eb.Build();
+    }
+
+    /// <summary>
+    /// Отформатировать массив кубиков в строку вида «1, 6, 10»,
+    /// выделяя жирным успехи (6–9 и 10).
+    /// </summary>
+    private static string FormatDice(int[] dice)
+    {
+        if (dice == null || dice.Length == 0) return "—";
+        var sb = new StringBuilder();
+        for (int i = 0; i < dice.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            var d = dice[i];
+            bool isSuccess = d >= VampireDicePool.SuccessThreshold;
+            if (isSuccess) sb.Append("**");
+            sb.Append(d);
+            if (isSuccess) sb.Append("**");
+        }
+        return sb.ToString();
     }
 }
