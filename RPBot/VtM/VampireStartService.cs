@@ -176,11 +176,29 @@ public static class VampireStartService
         }
 
         // ─── Шаг 4. Тестовый бросок в VtMRollChannel. ───────────────────
+        // Используем PublishForStartAsync вместо PublishAsync(command, ...),
+        // потому что PublishAsync делает command.RespondAsync внутри,
+        // а slash уже задеферен в VampireStartSlashModule — повторный
+        // ack кидает InvalidOperationException
+        // ("Cannot respond twice to the same interaction").
         var rollEb = BuildTestRollEmbed(command.User);
-        var ok = await VampireRollChannelPublisher.PublishAsync(command, rollEb);
-        result.TestRollPosted = ok;
-        if (!ok)
-            result.ChannelName = "VtMRollChannel";
+        var rollResult = await VampireRollChannelPublisher.PublishForStartAsync(
+            command.GuildId!.Value, rollEb);
+        result.TestRollPosted = rollResult.IsPublished;
+        result.ChannelName = rollResult.IsPublished
+            ? "VtMRollChannel"
+            : rollResult.Status switch
+            {
+                VampireRollChannelPublisher.StartPublishStatus.ChannelNotConfigured =>
+                    "VtMRollChannel (не задан)",
+                VampireRollChannelPublisher.StartPublishStatus.ChannelUnavailable =>
+                    $"VtMRollChannel (канал #{rollResult.ChannelId} недоступен)",
+                VampireRollChannelPublisher.StartPublishStatus.ConfigMissing =>
+                    "VtMRollChannel (конфиг не загружен)",
+                VampireRollChannelPublisher.StartPublishStatus.SendFailed =>
+                    $"VtMRollChannel (SendMessageAsync упал: {rollResult.ErrorMessage})",
+                _ => "VtMRollChannel",
+            };
 
         return result;
     }

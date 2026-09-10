@@ -66,6 +66,106 @@ public static class VampireRollChannelPublisher
     }
 
     /// <summary>
+    /// Публикация embed в VtMRollChannel для шага 4 <c>/vampire_start</c>.
+    /// <para>В отличие от <see cref="PublishAsync(SocketSlashCommand, Embed, MessageComponent?, IReadOnlyList{FileAttachment}?)"/>,
+    /// <b>НЕ</b> вызывает <c>command.RespondAsync</c> — slash-команда
+    /// <c>/vampire_start</c> уже задеферена в
+    /// <c>VampireStartSlashModule.DispatchAsync</c>, и любой второй
+    /// <c>RespondAsync</c> приводит к <c>InvalidOperationException:
+    /// Cannot respond twice to the same interaction</c>.</para>
+    /// <para>Решение: принимает только guildId + embed, отправляет
+    /// embed + (опц.) PNG-кубы в VtMRollChannel, возвращает
+    /// структурированный результат — вызывающий код сам решает, что
+    /// писать пользователю в FollowupAsync.</para>
+    /// </summary>
+    /// <param name="guildId">ID гильдии, на которой вызвали команду.</param>
+    /// <param name="embed">Готовое embed-сообщение (например, BuildTestRollEmbed).</param>
+    /// <param name="extraAttachments">
+    /// Доп. файлы отдельным сообщением под embed'ом (PNG-кубы d10).
+    /// null/пусто = ничего не шлём.
+    /// </param>
+    /// <returns>
+    /// <c>StartPublishResult</c> со статусом публикации:
+    /// <see cref="StartPublishStatus.Published"/> — успех;
+    /// <see cref="StartPublishStatus.ChannelNotConfigured"/> — VtMRollChannelID == 0;
+    /// <see cref="StartPublishStatus.ConfigMissing"/> — ServerConfig не загружен;
+    /// <see cref="StartPublishStatus.ChannelUnavailable"/> — канал не найден.
+    /// </returns>
+    public static async Task<StartPublishResult> PublishForStartAsync(
+        ulong guildId,
+        Embed embed,
+        IReadOnlyList<FileAttachment>? extraAttachments = null)
+    {
+        var cfg = ConfigGetter(guildId);
+        if (cfg == null)
+            return new StartPublishResult(StartPublishStatus.ConfigMissing, 0, null);
+
+        if (cfg.VtMRollChannelID == 0UL)
+            return new StartPublishResult(StartPublishStatus.ChannelNotConfigured, 0, null);
+
+        var channel = ChannelGetter(cfg.VtMRollChannelID);
+        if (channel == null)
+            return new StartPublishResult(
+                StartPublishStatus.ChannelUnavailable, cfg.VtMRollChannelID, null);
+
+        try
+        {
+            await channel.SendMessageAsync(embed: embed);
+        }
+        catch (Exception ex)
+        {
+            return new StartPublishResult(
+                StartPublishStatus.SendFailed, cfg.VtMRollChannelID, null, ex.Message);
+        }
+
+        // PNG-кубы отдельным сообщением — best-effort.
+        if (extraAttachments != null && extraAttachments.Count > 0)
+        {
+            try
+            {
+                await channel.SendFilesAsync(extraAttachments);
+            }
+            catch
+            {
+                // embed уже ушёл; картинки — best-effort.
+            }
+        }
+
+        return new StartPublishResult(
+            StartPublishStatus.Published, cfg.VtMRollChannelID, channel.Mention);
+    }
+
+    /// <summary>Статус публикации в VtMRollChannel для шага 4 /vampire_start.</summary>
+    public enum StartPublishStatus
+    {
+        /// <summary>Embed (и опц. PNG) успешно отправлены в VtMRollChannel.</summary>
+        Published,
+        /// <summary>ServerConfig не загружен для данной гильдии.</summary>
+        ConfigMissing,
+        /// <summary>VtMRollChannelID == 0 — канал не настроен.</summary>
+        ChannelNotConfigured,
+        /// <summary>Канал с указанным ID не найден в кеше Discord.</summary>
+        ChannelUnavailable,
+        /// <summary>SendMessageAsync бросил исключение.</summary>
+        SendFailed,
+    }
+
+    /// <summary>Результат публикации в VtMRollChannel для шага 4 /vampire_start.</summary>
+    /// <param name="Status">Что произошло.</param>
+    /// <param name="ChannelId">ID целевого канала (0 если неизвестен).</param>
+    /// <param name="ChannelMention">Discord- mention канала (null если канал не задан/недоступен).</param>
+    /// <param name="ErrorMessage">Текст ошибки (только для <see cref="StartPublishStatus.SendFailed"/>).</param>
+    public readonly record struct StartPublishResult(
+        StartPublishStatus Status,
+        ulong ChannelId,
+        string? ChannelMention,
+        string? ErrorMessage = null)
+    {
+        /// <summary>True, если публикация прошла.</summary>
+        public bool IsPublished => Status == StartPublishStatus.Published;
+    }
+
+    /// <summary>
     /// Пост embed и (опц.) кнопок в канал VtM-бросков. В канале вызова
     /// отправляет эфемерное подтверждение.
     /// </summary>
