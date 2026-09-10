@@ -351,6 +351,80 @@ public class VampireAbilitiesTests
         Assert.Equal(0, d.AbilitiesStruct.Атлетика);
     }
 
+    // ── ResetGroup (Шаг 3, кнопка «Сбросить группу») ───────────────────
+
+    [Fact]
+    public void ResetGroup_Talents_ZeroesTalentsOnly_KeepsPriority()
+    {
+        var d = NewDraft();
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.SkillsPrimary);
+        // Заполним все три группы.
+        VampireAbilitiesResolver.Increment(d, "Атлетика");
+        VampireAbilitiesResolver.Increment(d, "Вождение");
+        VampireAbilitiesResolver.Increment(d, "Медицина");
+        // Сбросим только таланты.
+        var res = VampireAbilitiesResolver.ResetGroup(d, VampireAbilityGroup.Talents);
+        Assert.True(res.IsSuccess, res.Message);
+        Assert.Equal(0, d.AbilitiesStruct.Атлетика);
+        // Навыки и Знания остаются нетронутыми.
+        Assert.Equal(1, d.AbilitiesStruct.Вождение);
+        Assert.Equal(1, d.AbilitiesStruct.Медицина);
+        // Приоритет сохраняется.
+        Assert.Equal("SkillsPrimary", d.AbilitiesPriority);
+    }
+
+    [Fact]
+    public void ResetGroup_Skills_ZeroesSkillsOnly()
+    {
+        var d = NewDraft();
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
+        VampireAbilitiesResolver.Increment(d, "Атлетика");
+        VampireAbilitiesResolver.Increment(d, "Вождение");
+        VampireAbilitiesResolver.Increment(d, "Медицина");
+
+        VampireAbilitiesResolver.ResetGroup(d, VampireAbilityGroup.Skills);
+
+        Assert.Equal(1, d.AbilitiesStruct.Атлетика);
+        Assert.Equal(0, d.AbilitiesStruct.Вождение);
+        Assert.Equal(1, d.AbilitiesStruct.Медицина);
+    }
+
+    [Fact]
+    public void ResetGroup_Knowledges_ZeroesKnowledgesOnly()
+    {
+        var d = NewDraft();
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
+        VampireAbilitiesResolver.Increment(d, "Атлетика");
+        VampireAbilitiesResolver.Increment(d, "Вождение");
+        VampireAbilitiesResolver.Increment(d, "Медицина");
+
+        VampireAbilitiesResolver.ResetGroup(d, VampireAbilityGroup.Knowledges);
+
+        Assert.Equal(1, d.AbilitiesStruct.Атлетика);
+        Assert.Equal(1, d.AbilitiesStruct.Вождение);
+        Assert.Equal(0, d.AbilitiesStruct.Медицина);
+    }
+
+    [Fact]
+    public void ResetGroup_ClearsSpecializations_OnlyForThatGroup()
+    {
+        var d = NewDraft();
+        d.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+        d.AbilitiesStruct.Атлетика = 4;
+        d.AbilitiesStruct.Вождение = 4;
+        VampireFinishingResolver.MarkFreebiesExhausted(d);
+        VampireAbilitiesResolver.SetSpecialization(d, "Атлетика", "бег");
+        VampireAbilitiesResolver.SetSpecialization(d, "Вождение", "мотоцикл");
+        d.Specializations["Сила"] = "кулак"; // атрибутная — должна остаться.
+
+        VampireAbilitiesResolver.ResetGroup(d, VampireAbilityGroup.Talents);
+
+        Assert.False(d.Specializations.ContainsKey("Атлетика"));
+        Assert.True(d.Specializations.ContainsKey("Вождение"));
+        Assert.Equal("мотоцикл", d.Specializations["Вождение"]);
+        Assert.Equal("кулак", d.Specializations["Сила"]);
+    }
+
     [Fact]
     public void IsAbilitiesComplete_FalseWhenBudgetUnspent()
     {
@@ -482,5 +556,57 @@ public class VampireAbilitiesTests
         var msg = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(d);
         Assert.Contains("*Спец:", msg);
         Assert.Contains("бег", msg);
+    }
+
+    // ── Подсветка переполнения при смене приоритета ────────────────────
+
+    [Fact]
+    public void BuildAbilitiesStatusMessage_HighlightsOverBudgetGroupAfterPriorityChange()
+    {
+        // Имитируем ситуацию: игрок задал 13 пунктов в Талантах с TalPrimary
+        // (бюджет 13), потом сменил приоритет на SklPrimary (Таланты=9).
+        var d = NewDraft();
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
+        // Заполним 13/9/5 напрямую (Increment ограничен 3 на способность, поэтому прямое задание).
+        d.AbilitiesStruct.Атлетика = 3;
+        d.AbilitiesStruct.Бдительность = 3;
+        d.AbilitiesStruct.Драка = 3;
+        d.AbilitiesStruct.Запугивание = 2;
+        d.AbilitiesStruct.Красноречие = 2;
+        d.AbilitiesStruct.Вождение = 3;
+        d.AbilitiesStruct.Фехтование = 3;
+        d.AbilitiesStruct.Скрытность = 3;
+        d.AbilitiesStruct.Медицина = 3;
+        d.AbilitiesStruct.Оккультизм = 2;
+        // Меняем приоритет: теперь Таланты имеют бюджет 9, но потрачено 13.
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.SkillsPrimary);
+
+        var msg = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(d);
+        // Заголовок Талантов должен содержать «⚠️ превышение».
+        Assert.Contains("⚠️", msg);
+        Assert.Contains("Превышение бюджета", msg);
+        Assert.Contains("Таланты", msg);
+    }
+
+    [Fact]
+    public void BuildAbilitiesStatusMessage_NoOverBudget_ShowsRegularCounters()
+    {
+        var d = NewDraft();
+        VampireAbilitiesResolver.SetPriority(d, VampireAbilityPriority.TalentsPrimary);
+        // Распределим точно по бюджету 13/9/5.
+        d.AbilitiesStruct.Атлетика = 3;
+        d.AbilitiesStruct.Бдительность = 3;
+        d.AbilitiesStruct.Драка = 3;
+        d.AbilitiesStruct.Запугивание = 2;
+        d.AbilitiesStruct.Красноречие = 2;
+        d.AbilitiesStruct.Вождение = 3;
+        d.AbilitiesStruct.Фехтование = 3;
+        d.AbilitiesStruct.Скрытность = 3;
+        d.AbilitiesStruct.Медицина = 3;
+        d.AbilitiesStruct.Оккультизм = 2;
+
+        var msg = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(d);
+        Assert.DoesNotContain("⚠️", msg);
+        Assert.DoesNotContain("Превышение бюджета", msg);
     }
 }

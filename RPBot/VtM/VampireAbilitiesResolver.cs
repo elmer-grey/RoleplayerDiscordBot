@@ -111,6 +111,24 @@ public static class VampireAbilitiesResolver
         return CompleteCheck(draft);
     }
 
+    /// <summary>Сбросить способности только в одной группе (для кнопки «Сбросить группу» на Шаге 3).</summary>
+    public static VampireAbilitiesDecision ResetGroup(VampireCharacter draft, VampireAbilityGroup group)
+    {
+        if (draft == null) throw new System.ArgumentNullException(nameof(draft));
+        var groupNames = VampireAbilitiesCatalog.NamesInGroup(group);
+        if (groupNames == null || groupNames.Count == 0)
+        {
+            return VampireAbilitiesDecision.Fail(VampireAbilitiesFailure.UnknownAbility,
+                $"Неизвестная группа: {group}");
+        }
+        foreach (var name in groupNames)
+        {
+            SetAbilityValue(draft.AbilitiesStruct, name, 0);
+        }
+        ClearAbilitySpecializationsForGroup(draft, group);
+        return CompleteCheck(draft);
+    }
+
     /// <summary>Сбросить и приоритет, и способности (для кнопки «Сбросить всё»).</summary>
     public static VampireAbilitiesDecision ResetAll(VampireCharacter draft)
     {
@@ -252,7 +270,11 @@ public static class VampireAbilitiesResolver
 
             var budget = TryParsePriority(draft.AbilitiesPriority, out var p) ? p.PointsFor(group) : 0;
             var spent = GetGroupSpent(draft.AbilitiesStruct, group);
-            sb.AppendLine($"**{groupNames}** (потрачено {spent}/{budget}):");
+            var overBudget = budget > 0 && spent > budget;
+            var header = overBudget
+                ? $"**{groupNames}** (⚠️ потрачено {spent}/{budget} — превышение на {spent - budget})"
+                : $"**{groupNames}** (потрачено {spent}/{budget}):";
+            sb.AppendLine(header);
 
             foreach (var name in VampireAbilitiesCatalog.NamesInGroup(group))
             {
@@ -271,6 +293,29 @@ public static class VampireAbilitiesResolver
         var totalSpent = GetTotalSpent(draft.AbilitiesStruct);
         sb.AppendLine($"**Итого потрачено:** {totalSpent}/27");
         sb.AppendLine();
+
+        if (TryParsePriority(draft.AbilitiesPriority, out var pr))
+        {
+            var overGroups = new System.Collections.Generic.List<string>();
+            foreach (var g in new[] { VampireAbilityGroup.Talents, VampireAbilityGroup.Skills, VampireAbilityGroup.Knowledges })
+            {
+                var s = GetGroupSpent(draft.AbilitiesStruct, g);
+                var b = pr.PointsFor(g);
+                if (s > b) overGroups.Add(g switch
+                {
+                    VampireAbilityGroup.Talents => "Таланты",
+                    VampireAbilityGroup.Skills => "Навыки",
+                    VampireAbilityGroup.Knowledges => "Знания",
+                    _ => g.ToString(),
+                });
+            }
+            if (overGroups.Count > 0)
+            {
+                sb.AppendLine($"⚠️ **Превышение бюджета:** {string.Join(", ", overGroups)}. " +
+                              "Уменьшите значения в этих группах или смените приоритет.");
+                sb.AppendLine();
+            }
+        }
 
         sb.AppendLine(IsAbilitiesComplete(draft)
             ? "✅ Все 27 пунктов распределены по приоритету. Нажмите «Далее», чтобы перейти к Шагу 4 (преимущества)."
@@ -425,6 +470,24 @@ public static class VampireAbilitiesResolver
         foreach (var kv in draft.Specializations)
         {
             if (VampireAbilitiesCatalog.FindGroup(kv.Key).HasValue)
+                keysToRemove.Add(kv.Key);
+        }
+        foreach (var k in keysToRemove) draft.Specializations.Remove(k);
+    }
+
+    /// <summary>
+    /// Удалить специализации только в одной группе способностей
+    /// (для <see cref="ResetGroup"/>). Атрибутные специализации не трогаем.
+    /// </summary>
+    private static void ClearAbilitySpecializationsForGroup(VampireCharacter draft, VampireAbilityGroup group)
+    {
+        var names = VampireAbilitiesCatalog.NamesInGroup(group);
+        if (names == null) return;
+        var nameSet = new System.Collections.Generic.HashSet<string>(names);
+        var keysToRemove = new System.Collections.Generic.List<string>();
+        foreach (var kv in draft.Specializations)
+        {
+            if (nameSet.Contains(kv.Key))
                 keysToRemove.Add(kv.Key);
         }
         foreach (var k in keysToRemove) draft.Specializations.Remove(k);

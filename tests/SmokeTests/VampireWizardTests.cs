@@ -656,6 +656,117 @@ public class VampireWizardTests : IsolatedDataTestBase
                                                             $"UI должно помещаться в лимит Discord (5 рядов), сейчас {rowCount}.");
                                                     }
 
+                        // ── Step 3 build (вариант E: SelectMenu группы + SelectMenu способности + кнопки ±) ──
+
+                        [Fact]
+                        public void BuildAbilitiesStep_HasPriorityAndGroupAndAbilityMenus()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 0, selectedAbility: null);
+                            var menus = GetRows(comp)
+                                .SelectMany(r => r.Components)
+                                .OfType<SelectMenuComponent>()
+                                .ToList();
+                            // 3 SelectMenu: приоритет + группа + способности.
+                            Assert.Equal(3, menus.Count);
+                            // Первый — приоритет (6 опций).
+                            Assert.Contains("ability_priority", menus[0].CustomId);
+                            Assert.Equal(6, menus[0].Options.Count);
+                            // Второй — выбор группы.
+                            Assert.Contains("ability_group_select", menus[1].CustomId);
+                            Assert.Equal(3, menus[1].Options.Count);
+                            // Третий — выбор способности в активной группе (10 опций).
+                            Assert.Contains("ability_select", menus[2].CustomId);
+                            Assert.Equal(10, menus[2].Options.Count);
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_AbilityMenuRespectsGroup()
+                        {
+                            var draft = NewDraft();
+                            // groupIndex=1 = Skills — меню способностей должно содержать только навыки.
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 1, selectedAbility: null);
+                            var menus = GetRows(comp)
+                                .SelectMany(r => r.Components)
+                                .OfType<SelectMenuComponent>()
+                                .ToList();
+                            var abilityMenu = menus[2];
+                            var values = abilityMenu.Options.Select(o => o.Value).ToList();
+                            Assert.Contains("Вождение", values);
+                            Assert.Contains("Фехтование", values);
+                            Assert.DoesNotContain("Атлетика", values);  // талант
+                            Assert.DoesNotContain("Оккультизм", values); // знание
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_ResetGroupButtonPresent_NotOldResetProgress()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft);
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            // Кнопка «Сбросить группу» — новая, единообразная с Шагом 2.
+                            Assert.Contains(buttons, b => b.CustomId.Contains("reset_ability_progress:") && b.Label == "Сбросить группу");
+                            // Старой «Сбросить прогресс» быть не должно.
+                            Assert.DoesNotContain(buttons, b => b.Label == "Сбросить прогресс");
+                            // Кнопка «Сбросить всё» остаётся.
+                            Assert.Contains(buttons, b => b.CustomId.Contains("reset_ability_all:"));
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_NextButtonHiddenUntilComplete()
+                        {
+                            var draft = NewDraft();
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft);
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            Assert.DoesNotContain(buttons, b => b.CustomId.Contains(":next:") && b.Label != null && b.Label.Contains("Шаг 4"));
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_NoPriority_ShowsNoopHint()
+                        {
+                            var draft = NewDraft();
+                            // Без приоритета + с выбранной способностью — кнопки −/+ не активны.
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 0, selectedAbility: "Атлетика");
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            Assert.DoesNotContain(buttons, b => b.CustomId.Contains("ability_inc:") && !b.IsDisabled);
+                            Assert.DoesNotContain(buttons, b => b.CustomId.Contains("ability_dec:") && !b.IsDisabled);
+                            Assert.Contains(buttons, b => b.Label != null && b.Label.Contains("Сначала выберите приоритет"));
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_NothingSelected_ShowsPickAbilityHint()
+                        {
+                            var draft = NewDraft();
+                            draft.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+                            // Способность не выбрана → подсказка.
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 0, selectedAbility: null);
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            Assert.Contains(buttons, b => b.Label != null && b.Label.Contains("Выберите способность"));
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_WithPriorityAndSelected_ShowsIncDecButtons()
+                        {
+                            var draft = NewDraft();
+                            draft.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 0, selectedAbility: "Атлетика");
+                            var buttons = GetRows(comp).SelectMany(r => r.Components).OfType<ButtonComponent>().ToList();
+                            // Кнопки ± (без arg, по session.AbilitySelected).
+                            Assert.Contains(buttons, b => b.CustomId.Contains("ability_inc:") && b.Label != null && b.Label.Contains("Атлетика"));
+                            Assert.Contains(buttons, b => b.CustomId.Contains("ability_dec:") && b.Label != null && b.Label.Contains("Атлетика"));
+                        }
+
+                        [Fact]
+                        public void BuildAbilitiesStep_RowsWithinDiscordLimit()
+                        {
+                            var draft = NewDraft();
+                            draft.AbilitiesPriority = VampireAbilityPriority.TalentsPrimary.ToString();
+                            var comp = VampireWizardComponents.BuildForAbilitiesStep(draft, groupIndex: 0, selectedAbility: "Атлетика");
+                            var rowCount = GetRows(comp).Count();
+                            Assert.True(rowCount <= 5,
+                                $"UI должно помещаться в лимит Discord (5 рядов), сейчас {rowCount}.");
+                        }
+
                         [Fact]
                         public void TryParseWithArg_RoundTrip_AttrInc()
                         {

@@ -79,15 +79,19 @@ public enum VampireWizardAction
 
                 /// <summary>SelectMenu выбора приоритета 13/9/5 (Шаг 3).</summary>
                 AbilityPriority,
-                /// <summary>Увеличить способность на 1 (Шаг 3). Action-arg = имя способности.</summary>
+                /// <summary>SelectMenu выбора активной группы способностей (Шаг 3). Action-arg = имя группы.</summary>
+                AbilityGroupSelect,
+                /// <summary>SelectMenu выбора способности в активной группе (Шаг 3). Action-arg = имя группы.</summary>
+                AbilitySelect,
+                /// <summary>Увеличить выбранную способность на 1 (Шаг 3). Без arg — берётся из session.AbilitySelected.</summary>
                 AbilityInc,
-                /// <summary>Уменьшить способность на 1 (Шаг 3).</summary>
+                /// <summary>Уменьшить выбранную способность на 1 (Шаг 3).</summary>
                 AbilityDec,
                 /// <summary>Задать специализацию (SelectMenu выбора подсказки или «Своя»). Action-arg = имя параметра.</summary>
                 SpecChoice,
                 /// <summary>Установить выбранную специализацию (SelectMenu). Action-arg = имя параметра.</summary>
                 SpecSet,
-                /// <summary>Сбросить прогресс Шага 3 (только способности; приоритет сохраняется).</summary>
+                /// <summary>Сбросить прогресс Шага 3 (только способности активной группы; приоритет сохраняется).</summary>
                 ResetAbilityProgress,
                 /// <summary>Сбросить всё на Шаге 3 (приоритет и способности).</summary>
                 ResetAbilityAll,
@@ -402,40 +406,110 @@ public static class VampireWizardComponents
                                 // ── Шаг 3 «Способности 13/9/5» ─────────────────────────────────────
 
                                 /// <summary>
-                                /// UI Шага 3: 5 рядов.
+                                /// UI Шага 3 (вариант E — единообразно с Шагом 2): 5 рядов.
                                 ///   1) SelectMenu выбора приоритета 13/9/5.
-                                ///   2-4) SelectMenu по группам (Таланты/Навыки/Знания) — ± по 10 способностей.
-                                ///   5) Назад / Сбросить / Сбросить всё / (Далее если завершено).
+                                ///   2) SelectMenu выбора активной группы способностей (3 опции: Таланты/Навыки/Знания).
+                                ///   3) SelectMenu выбора способности в активной группе (10 опций).
+                                ///   4) Кнопки − / + (активны только если приоритет выбран и способность выбрана).
+                                ///   5) «Сбросить группу» (активную) / «Сбросить всё» / «⬅ Назад» / (если завершено) «Далее».
                                 /// </summary>
-                                public static MessageComponent BuildForAbilitiesStep(VampireCharacter draft)
+                                public static MessageComponent BuildForAbilitiesStep(
+                                    VampireCharacter draft,
+                                    int groupIndex = 0,
+                                    string? selectedAbility = null)
                                 {
                                     if (draft == null) throw new ArgumentNullException(nameof(draft));
                                     if (draft.CharacterId == Guid.Empty)
                                         throw new ArgumentException("CharacterId обязателен", nameof(draft));
+                                    if (groupIndex < 0 || groupIndex > 2)
+                                        groupIndex = 0;
+
+                                    var activeGroup = (VampireAbilityGroup)groupIndex;
+                                    var groupNames = VampireAbilitiesCatalog.NamesInGroup(activeGroup);
 
                                     var cb = new ComponentBuilder();
 
                                     // Ряд 1: SelectMenu с приоритетами 13/9/5.
-                                    var menu = new SelectMenuBuilder()
+                                    var priorityMenu = new SelectMenuBuilder()
                                         .WithCustomId(BuildCustomId(VampireWizardAction.AbilityPriority, draft.CharacterId))
                                         .WithPlaceholder(HasAbilityPriority(draft)
-                                            ? $"Приоритет: {draft.AbilitiesPriority}"
+                                            ? $"Приоритет: {draft.AbilitiesPriority} (по группам)"
                                             : "Выберите приоритет групп (13/9/5)…");
                                     foreach (var p in VampireAbilityPriorityExtensions.All)
                                     {
-                                        menu.AddOption(p.HumanName(), p.ToString());
+                                        priorityMenu.AddOption(p.HumanName(), p.ToString());
                                     }
-                                    cb.WithSelectMenu(menu);
+                                    cb.WithSelectMenu(priorityMenu);
 
-                                    // Ряды 2-4: SelectMenu по группам. В каждом — 20 опций (±10 способностей).
-                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Talents));
-                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Skills));
-                                    cb.WithSelectMenu(BuildAbilityGroupSelect(draft, VampireAbilityGroup.Knowledges));
+                                    // Ряд 2: SelectMenu «Группа способностей».
+                                    var groupMenu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.AbilityGroupSelect, draft.CharacterId, activeGroup.ToString()))
+                                        .WithPlaceholder($"Группа: {AbilGroupLabel(activeGroup)} (выберите)…");
+                                    foreach (var g in new[] { VampireAbilityGroup.Talents, VampireAbilityGroup.Skills, VampireAbilityGroup.Knowledges })
+                                    {
+                                        groupMenu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel(AbilGroupLabel(g))
+                                            .WithValue(g.ToString())
+                                            .WithDescription(g == activeGroup ? "активная группа" : "переключить на эту группу"));
+                                    }
+                                    cb.WithSelectMenu(groupMenu);
+
+                                    // Ряд 3: SelectMenu «Способность для изменения» (10 опций в активной группе).
+                                    var abilityMenu = new SelectMenuBuilder()
+                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.AbilitySelect, draft.CharacterId, activeGroup.ToString()))
+                                        .WithPlaceholder(string.IsNullOrEmpty(selectedAbility)
+                                            ? $"Способность ({AbilGroupLabel(activeGroup)}) для изменения…"
+                                            : $"Способность: {selectedAbility} — выберите другую…");
+                                    foreach (var name in groupNames)
+                                    {
+                                        var cur = GetAbilityValue(draft, name);
+                                        var label = $"{(name == selectedAbility ? "★ " : "")}{name}: {cur}";
+                                        var max = 3;
+                                        var desc = $"сейчас {cur}, макс шага 3 = {max}";
+                                        abilityMenu.AddOption(new SelectMenuOptionBuilder()
+                                            .WithLabel(label)
+                                            .WithValue(name)
+                                            .WithDescription(desc));
+                                    }
+                                    cb.WithSelectMenu(abilityMenu);
+
+                                    // Ряд 4: кнопки −/+. Активны только если способность выбрана,
+                                    // она в активной группе, и приоритет задан.
+                                    var selInGroup = !string.IsNullOrEmpty(selectedAbility) &&
+                                                     groupNames.Contains(selectedAbility);
+                                    if (selInGroup && HasAbilityPriority(draft))
+                                    {
+                                        var cur = GetAbilityValue(draft, selectedAbility!);
+                                        var max = 3;
+                                        var decDisabled = cur <= 0;
+                                        var incDisabled = cur >= max;
+
+                                        cb.WithButton($"− {selectedAbility} ({cur})",
+                                            BuildCustomId(VampireWizardAction.AbilityDec, draft.CharacterId),
+                                            ButtonStyle.Secondary, disabled: decDisabled);
+                                        cb.WithButton($"+ {selectedAbility} ({cur})",
+                                            BuildCustomId(VampireWizardAction.AbilityInc, draft.CharacterId),
+                                            incDisabled ? ButtonStyle.Secondary : ButtonStyle.Primary, disabled: incDisabled);
+                                    }
+                                    else if (selInGroup && !HasAbilityPriority(draft))
+                                    {
+                                        cb.WithButton("− …", "vtm_wiz:noop:" + draft.CharacterId.ToString("N"),
+                                            ButtonStyle.Secondary, disabled: true);
+                                        cb.WithButton("Сначала выберите приоритет (выпадающее меню выше)",
+                                            "vtm_wiz:noop:" + draft.CharacterId.ToString("N"),
+                                            ButtonStyle.Secondary, disabled: true);
+                                    }
+                                    else
+                                    {
+                                        cb.WithButton("Выберите способность в меню выше",
+                                            "vtm_wiz:noop:" + draft.CharacterId.ToString("N"),
+                                            ButtonStyle.Secondary, disabled: true);
+                                    }
 
                                     // Ряд 5: навигация.
-                                    cb.WithButton("⬅ Назад (Шаг 2)", BuildCustomId(VampireWizardAction.BackToAttributes, draft.CharacterId), ButtonStyle.Secondary)
-                                      .WithButton("Сбросить прогресс", BuildCustomId(VampireWizardAction.ResetAbilityProgress, draft.CharacterId), ButtonStyle.Secondary)
-                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAbilityAll, draft.CharacterId), ButtonStyle.Danger);
+                                    cb.WithButton("Сбросить группу", BuildCustomId(VampireWizardAction.ResetAbilityProgress, draft.CharacterId), ButtonStyle.Secondary)
+                                      .WithButton("Сбросить всё", BuildCustomId(VampireWizardAction.ResetAbilityAll, draft.CharacterId), ButtonStyle.Danger)
+                                      .WithButton("⬅ Назад (Шаг 2)", BuildCustomId(VampireWizardAction.BackToAttributes, draft.CharacterId), ButtonStyle.Secondary);
 
                                     if (VampireAbilitiesResolver.IsAbilitiesComplete(draft))
                                     {
@@ -444,6 +518,15 @@ public static class VampireWizardComponents
 
                                     return cb.Build();
                                 }
+
+                                /// <summary>Краткий лейбл группы для UI Шага 3.</summary>
+                                private static string AbilGroupLabel(VampireAbilityGroup g) => g switch
+                                {
+                                    VampireAbilityGroup.Talents => "Таланты",
+                                    VampireAbilityGroup.Skills => "Навыки",
+                                    VampireAbilityGroup.Knowledges => "Знания",
+                                    _ => g.ToString()
+                                };
 
                                 // ── Шаг 4 «Преимущества» — 3 экрана ────────────────────────────────
 
@@ -919,55 +1002,6 @@ public static class VampireWizardComponents
                                 }
 
                                 /// <summary>
-                                /// SelectMenu для изменения одной способности в группе.
-                                /// Опции: +Способность, −Способность для каждой из 10 в группе (20 опций).
-                                /// </summary>
-                                private static SelectMenuBuilder BuildAbilityGroupSelect(
-                                    VampireCharacter draft,
-                                    VampireAbilityGroup group)
-                                {
-                                    var groupLabel = group switch
-                                    {
-                                        VampireAbilityGroup.Talents => "Таланты",
-                                        VampireAbilityGroup.Skills => "Навыки",
-                                        VampireAbilityGroup.Knowledges => "Знания",
-                                        _ => group.ToString()
-                                    };
-
-                                    var remaining = VampireAbilitiesResolver.RemainingInGroup(draft, group);
-                                    var placeholder = $"{groupLabel} (±): ост. {remaining}";
-
-                                    var menu = new SelectMenuBuilder()
-                                        .WithCustomId(BuildCustomIdWithArg(VampireWizardAction.AbilityInc, draft.CharacterId, group.ToString()))
-                                        .WithPlaceholder(placeholder);
-
-                                    foreach (var name in VampireAbilitiesCatalog.NamesInGroup(group))
-                                    {
-                                        var cur = GetAbilityValue(draft, name);
-
-                                        // Опция «+».
-                                        var incVal = $"+:{name}";
-                                        var incDesc = $"текущее: {cur}, макс шага 3 = 3";
-                                        if (cur >= 3) incDesc = "уже 3 (макс шага 3)";
-                                        menu.AddOption(new SelectMenuOptionBuilder()
-                                            .WithLabel($"+ {Truncate(name, 18)} ({cur})")
-                                            .WithValue(incVal)
-                                            .WithDescription(incDesc));
-
-                                        // Опция «−».
-                                        var decVal = $"−:{name}";
-                                        var decDesc = $"текущее: {cur}, база = 0";
-                                        if (cur <= 0) decDesc = "уже на базе";
-                                        menu.AddOption(new SelectMenuOptionBuilder()
-                                            .WithLabel($"− {Truncate(name, 18)} ({cur})")
-                                            .WithValue(decVal)
-                                            .WithDescription(decDesc));
-                                    }
-
-                                    return menu;
-                                }
-
-                                /// <summary>
                                 /// SelectMenu выбора специализации для конкретного параметра
                                 /// (характеристики или способности). Опции: 3 подсказки из каталога
                                 /// + «Своя…» (открывает текстовый ввод).
@@ -1168,6 +1202,8 @@ public static class VampireWizardComponents
                 VampireWizardAction.ResetAttrAll      => "reset_attr_all",
                 VampireWizardAction.BackToConcept     => "back_to_concept",
                         VampireWizardAction.AbilityPriority     => "ability_priority",
+                        VampireWizardAction.AbilityGroupSelect  => "ability_group_select",
+                        VampireWizardAction.AbilitySelect       => "ability_select",
                         VampireWizardAction.AbilityInc          => "ability_inc",
                         VampireWizardAction.AbilityDec          => "ability_dec",
                         VampireWizardAction.SpecChoice          => "spec_choice",
@@ -1232,6 +1268,8 @@ public static class VampireWizardComponents
                         case "reset_attr_all": action = VampireWizardAction.ResetAttrAll;  return true;
                         case "back_to_concept": action = VampireWizardAction.BackToConcept; return true;
                                     case "ability_priority":    action = VampireWizardAction.AbilityPriority;    return true;
+                                    case "ability_group_select": action = VampireWizardAction.AbilityGroupSelect; return true;
+                                    case "ability_select":      action = VampireWizardAction.AbilitySelect;      return true;
                                     case "ability_inc":         action = VampireWizardAction.AbilityInc;         return true;
                                     case "ability_dec":         action = VampireWizardAction.AbilityDec;         return true;
                                     case "spec_choice":         action = VampireWizardAction.SpecChoice;         return true;

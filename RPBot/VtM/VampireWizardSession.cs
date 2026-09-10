@@ -118,6 +118,18 @@ public sealed class VampireWizardSession
     /// редактирования кнопками −/+. null — ничего не выбрано.
     /// </summary>
     public string? AttrSelected { get; set; }
+
+    /// <summary>
+    /// Шаг 3: индекс активной группы способностей: 0=Таланты, 1=Навыки, 2=Знания.
+    /// По умолчанию 0 (Таланты). Сбрасывается только при сбросе прогресса шага.
+    /// </summary>
+    public int AbilityGroupIndex { get; set; } = 0;
+
+    /// <summary>
+    /// Шаг 3: имя способности в активной группе, которая сейчас «выбрана»
+    /// (через SelectMenu) для редактирования кнопками −/+. null — ничего не выбрано.
+    /// </summary>
+    public string? AbilitySelected { get; set; }
 }
 
 /// <summary>

@@ -311,22 +311,51 @@ public sealed class VampireCommands
                                                     return;
 
                                                 case VampireWizardAction.ResetAbilityProgress:
-                                                    VampireAbilitiesResolver.ResetProgress(session.Draft);
-                                                    await RerenderWizardAsync(component, session);
-                                                    return;
+                                                    {
+                                                        // Сбросить только способности активной группы (приоритет сохраняется).
+                                                        var activeGroup = (VampireAbilityGroup)session.AbilityGroupIndex;
+                                                        VampireAbilitiesResolver.ResetGroup(session.Draft, activeGroup);
+                                                        await RerenderWizardAsync(component, session);
+                                                        return;
+                                                    }
 
                                                 case VampireWizardAction.ResetAbilityAll:
                                                     VampireAbilitiesResolver.ResetAll(session.Draft);
+                                                    // Сбросить и UI-состояние выбора.
+                                                    session.AbilityGroupIndex = 0;
+                                                    session.AbilitySelected = null;
                                                     await RerenderWizardAsync(component, session);
                                                     return;
 
-                                                case VampireWizardAction.AbilityPriority:
                                                 case VampireWizardAction.AbilityInc:
                                                 case VampireWizardAction.AbilityDec:
                                                     {
-                                                        // Эти actions несут аргументы в customId-arg и обрабатываются
-                                                        // отдельным entry-point (HandleWizardSelectMenuWithArgAsync).
-                                                        await component.RespondEphemeralAsync("⚠️ Внутренняя ошибка визарда (ability без аргумента).");
+                                                        // Кнопка −/+ (без arg) — берём способность и группу из сессии.
+                                                        if (string.IsNullOrEmpty(session.AbilitySelected))
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Сначала выберите способность в выпадающем меню выше.");
+                                                            return;
+                                                        }
+                                                        if (!VampireAbilitiesCatalog.FindGroup(session.AbilitySelected).HasValue)
+                                                        {
+                                                            await component.RespondEphemeralAsync("⚠️ Выбранная способность больше не доступна. Выберите другую в меню.");
+                                                            session.AbilitySelected = null;
+                                                            await RerenderWizardAsync(component, session);
+                                                            return;
+                                                        }
+                                                        var group = VampireAbilitiesCatalog.FindGroup(session.AbilitySelected)!.Value;
+                                                        session.AbilityGroupIndex = (int)group;
+
+                                                        VampireAbilitiesResolver.VampireAbilitiesDecision dec =
+                                                            action == VampireWizardAction.AbilityInc
+                                                                ? VampireAbilitiesResolver.Increment(session.Draft, group, session.AbilitySelected)
+                                                                : VampireAbilitiesResolver.Decrement(session.Draft, group, session.AbilitySelected);
+                                                        if (!dec.IsSuccess)
+                                                        {
+                                                            await component.RespondEphemeralAsync("❌ " + dec.Message);
+                                                            return;
+                                                        }
+                                                        await RerenderWizardAsync(component, session);
                                                         return;
                                                     }
 
@@ -795,7 +824,8 @@ public sealed class VampireCommands
                     else if (session.Step == VampireWizardStep.Abilities)
                     {
                         var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
-                        var components = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                        var components = VampireWizardComponents.BuildForAbilitiesStep(
+                            session.Draft, session.AbilityGroupIndex, session.AbilitySelected);
                         await um.ModifyAsync(m => { m.Content = text; m.Components = components; });
                     }
                     else if (session.Step == VampireWizardStep.Advantages)

@@ -4781,8 +4781,10 @@ await Task.CompletedTask;
                                             await HandleVampireWizardAttrSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:ability_priority:"))
                             await HandleVampireWizardAbilityPriorityAsync(component);
-                                        else if (cid.StartsWith("vtm_wiz:ability_inc:"))
+                                        else if (cid.StartsWith("vtm_wiz:ability_group_select:"))
                                             await HandleVampireWizardAbilityGroupSelectAsync(component);
+                                        else if (cid.StartsWith("vtm_wiz:ability_select:"))
+                                            await HandleVampireWizardAbilitySelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:discipline_inc:"))
                                             await HandleVampireWizardDisciplineSelectAsync(component);
                                         else if (cid.StartsWith("vtm_wiz:background_inc:"))
@@ -5074,7 +5076,8 @@ await Task.CompletedTask;
                                                                 if (msg is IUserMessage um)
                                                                 {
                                                                     var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
-                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(
+                                                                        session.Draft, session.AbilityGroupIndex, session.AbilitySelected);
                                                                     await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
                                                                 }
                                                             }
@@ -5097,47 +5100,30 @@ await Task.CompletedTask;
                                                     }
 
                                                     /// <summary>
-                                                    /// Обработка SelectMenu изменения способности в группе (Шаг 3).
-                                                    /// CustomId: <c>vtm_wiz:ability_inc:{cid}:{GroupName}</c>, value: <c>{sign}:{AbilityName}</c>.
+                                                    /// Обработка SelectMenu выбора активной группы способностей (Шаг 3, вариант E).
+                                                    /// CustomId: <c>vtm_wiz:ability_group_select:{cid}:{OldGroup}</c>, value: <c>{NewGroup}</c>.
                                                     /// </summary>
                                                     private async Task HandleVampireWizardAbilityGroupSelectAsync(SocketMessageComponent component)
                                                     {
                                                         try
                                                         {
                                                             if (!VampireWizardComponents.TryParseWithArg(
-                                                                component.Data.CustomId, out _, out _, out var groupArg))
+                                                                component.Data.CustomId, out _, out _, out _))
                                                             {
-                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId группы способностей.", ephemeral: true);
-                                                                return;
-                                                            }
-
-                                                            if (!System.Enum.TryParse<VampireAbilityGroup>(groupArg, out var group))
-                                                            {
-                                                                await component.RespondAsync($"⚠️ Неизвестная группа: {groupArg}", ephemeral: true);
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId группы.", ephemeral: true);
                                                                 return;
                                                             }
 
                                                             var selected = component.Data.Values;
                                                             if (selected == null || selected.Count == 0)
                                                             {
-                                                                await component.RespondAsync("⚠️ Не выбрано значение.", ephemeral: true);
+                                                                await component.RespondAsync("⚠️ Группа не выбрана.", ephemeral: true);
                                                                 return;
                                                             }
 
-                                                            var first = selected.First();
-                                                            var colonIdx = first.IndexOf(':');
-                                                            if (colonIdx <= 0 || colonIdx >= first.Length - 1)
+                                                            if (!System.Enum.TryParse<VampireAbilityGroup>(selected.First(), out var newGroup))
                                                             {
-                                                                await component.RespondAsync("⚠️ Неверный формат value.", ephemeral: true);
-                                                                return;
-                                                            }
-
-                                                            var sign = first.Substring(0, colonIdx);
-                                                            var abilityName = first.Substring(colonIdx + 1);
-
-                                                            if (sign != "+" && sign != "−")
-                                                            {
-                                                                await component.RespondAsync($"⚠️ Неизвестный знак: {sign}", ephemeral: true);
+                                                                await component.RespondAsync($"⚠️ Неизвестная группа: {selected.First()}", ephemeral: true);
                                                                 return;
                                                             }
 
@@ -5149,17 +5135,20 @@ await Task.CompletedTask;
                                                                     ephemeral: true);
                                                                 return;
                                                             }
-
-                                                            VampireAbilitiesResolver.VampireAbilitiesDecision dec;
-                                                            if (sign == "+")
-                                                                dec = VampireAbilitiesResolver.Increment(session.Draft, group, abilityName);
-                                                            else
-                                                                dec = VampireAbilitiesResolver.Decrement(session.Draft, group, abilityName);
-
-                                                            if (!dec.IsSuccess)
+                                                            if (session.Step != VampireWizardStep.Abilities)
                                                             {
-                                                                await component.RespondAsync("❌ " + dec.Message, ephemeral: true);
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 3 (способности).", ephemeral: true);
                                                                 return;
+                                                            }
+
+                                                            session.AbilityGroupIndex = (int)newGroup;
+                                                            // Сбрасываем выбранную способность, если она не в новой группе.
+                                                            if (!string.IsNullOrEmpty(session.AbilitySelected))
+                                                            {
+                                                                var currentNames = VampireAbilitiesCatalog.NamesInGroup(newGroup);
+                                                                if (!currentNames.Contains(session.AbilitySelected))
+                                                                    session.AbilitySelected = null;
                                                             }
 
                                                             try
@@ -5169,17 +5158,17 @@ await Task.CompletedTask;
                                                                 if (msg is IUserMessage um)
                                                                 {
                                                                     var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
-                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(session.Draft);
+                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(
+                                                                        session.Draft, session.AbilityGroupIndex, session.AbilitySelected);
                                                                     await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
                                                                 }
                                                             }
                                                             catch (Exception ex)
                                                             {
-                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 3 после изменения: {ex.Message}");
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 3 после выбора группы: {ex.Message}");
                                                             }
 
-                                                            var opLabel = (sign == "+") ? "+1" : "−1";
-                                                            await component.RespondAsync($"✅ {abilityName}: {opLabel} применено.", ephemeral: true);
+                                                            await component.RespondAsync($"✅ Активная группа: {newGroup}.", ephemeral: true);
                                                         }
                                                         catch (Exception ex)
                                                         {
@@ -5187,7 +5176,87 @@ await Task.CompletedTask;
                                                             try
                                                             {
                                                                 if (!component.HasResponded)
-                                                                    await component.RespondAsync("⚠️ Ошибка при изменении способности.", ephemeral: true);
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе группы.", ephemeral: true);
+                                                            }
+                                                            catch { }
+                                                        }
+                                                    }
+
+                                                    /// <summary>
+                                                    /// Обработка SelectMenu выбора способности в активной группе (Шаг 3, вариант E).
+                                                    /// CustomId: <c>vtm_wiz:ability_select:{cid}:{Group}</c>, value: <c>{AbilityName}</c>.
+                                                    /// </summary>
+                                                    private async Task HandleVampireWizardAbilitySelectAsync(SocketMessageComponent component)
+                                                    {
+                                                        try
+                                                        {
+                                                            if (!VampireWizardComponents.TryParseWithArg(
+                                                                component.Data.CustomId, out _, out _, out var groupArg))
+                                                            {
+                                                                await component.RespondAsync("⚠️ Не удалось разобрать customId группы.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (!System.Enum.TryParse<VampireAbilityGroup>(groupArg, out var group))
+                                                            {
+                                                                await component.RespondAsync($"⚠️ Неизвестная группа: {groupArg}", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            var selected = component.Data.Values;
+                                                            if (selected == null || selected.Count == 0)
+                                                            {
+                                                                await component.RespondAsync("⚠️ Способность не выбрана.", ephemeral: true);
+                                                                return;
+                                                            }
+                                                            var abilityName = selected.First();
+
+                                                            var session = VampireWizardRegistry.Instance.GetByUser(component.User.Id);
+                                                            if (session == null)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "❌ Сессия создания персонажа не найдена. Запустите `/vampire_create` в канале заново.",
+                                                                    ephemeral: true);
+                                                                return;
+                                                            }
+                                                            if (session.Step != VampireWizardStep.Abilities)
+                                                            {
+                                                                await component.RespondAsync(
+                                                                    "⚠️ Этот выбор доступен только на Шаге 3 (способности).", ephemeral: true);
+                                                                return;
+                                                            }
+
+                                                            // Синхронизируем активную группу с группой выбранной способности
+                                                            // (если пользователь как-то обошёл UI).
+                                                            var expectedIndex = (int)group;
+                                                            session.AbilityGroupIndex = expectedIndex;
+                                                            session.AbilitySelected = abilityName;
+
+                                                            try
+                                                            {
+                                                                var dm = await component.User.CreateDMChannelAsync();
+                                                                var msg = await dm.GetMessageAsync(session.DmMessageId ?? 0);
+                                                                if (msg is IUserMessage um)
+                                                                {
+                                                                    var text = VampireAbilitiesResolver.BuildAbilitiesStatusMessage(session.Draft);
+                                                                    var comp = VampireWizardComponents.BuildForAbilitiesStep(
+                                                                        session.Draft, session.AbilityGroupIndex, session.AbilitySelected);
+                                                                    await um.ModifyAsync(m => { m.Content = text; m.Components = comp; });
+                                                                }
+                                                            }
+                                                            catch (Exception ex)
+                                                            {
+                                                                BotLogger.Error(LogCategory.Discord, $"Ошибка при перерисовке Шага 3 после выбора способности: {ex.Message}");
+                                                            }
+
+                                                            await component.RespondAsync($"✅ Способность: {abilityName}.", ephemeral: true);
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            BotLogger.Error(LogCategory.Discord, $"HandleVampireWizardAbilitySelectAsync: {ex.Message}");
+                                                            try
+                                                            {
+                                                                if (!component.HasResponded)
+                                                                    await component.RespondAsync("⚠️ Ошибка при выборе способности.", ephemeral: true);
                                                             }
                                                             catch { }
                                                         }
