@@ -1026,7 +1026,7 @@ private void SaveServerConfigs()
     _eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
 
     _webDashboard = new WebDashboardService(
-    host: "127.0.0.1",
+    host: "0.0.0.0",
     port: 5057,
     healthProvider: () => new
     {
