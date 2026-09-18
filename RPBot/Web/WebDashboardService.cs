@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -12,6 +13,100 @@ using Discord.WebSocket;
 namespace RPBot.Web
 {
     public sealed record ActivityBucket(DateTimeOffset Minute, int Count);
+
+    /// <summary>
+    /// Помощник для регистрации URL-префикса HttpListener в Windows через
+    /// <c>netsh http add urlacl</c>. Без этого вызов <c>HttpListener.Start()</c>
+    /// на не-локальных URL (или на любом URL, если у пользователя нет
+    /// администраторских прав) падает с <c>HttpListenerException (503)</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>На Windows для запуска <c>netsh</c> обычно нужны права
+    /// администратора. Поэтому мы запускаем команду через <c>cmd /c start</c>:
+    /// сама команда открывает короткий чёрный терминал, выполняется и
+    /// закрывается, а основной процесс бота продолжает жить.</para>
+    ///
+    /// <para>Если регистрация уже есть — ничего не делаем (это узнаём из
+    /// <c>netsh http show urlacl</c>).</para>
+    ///
+    /// <para>На не-Windows платформах это no-op.</para>
+    /// </remarks>
+    internal static class UrlAclBootstrap
+    {
+        /// <summary>
+        /// Если URL ещё не зарегистрирован — пробует выполнить
+        /// <c>netsh http add urlacl url=... user=Everyone</c> в отдельном
+        /// короткоживущем окне cmd.
+        /// </summary>
+        /// <returns>
+        /// true, если после выхода URL уже зарегистрирован (был или только что добавлен).
+        /// false, если регистрация не удалась (нет прав / нет netsh / прочая ошибка).
+        /// </returns>
+        public static bool TryEnsureRegistered(string prefix)
+        {
+            if (string.IsNullOrEmpty(prefix)) return false;
+            if (!OperatingSystem.IsWindows()) return false;
+
+            if (IsRegistered(prefix)) return true;
+
+            try
+            {
+                // Запускаем в отдельном окне cmd, чтобы не блокировать основной поток.
+                // /c — выполнить и закрыть окно. Сам netsh синхронный, но без UAC-окна
+                // не сможет записать в HKLM\...\Services\Http\Parameters\UrlAclInfo.
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"\" cmd /c \"netsh http add urlacl url={prefix} user=Everyone\"",
+                    UseShellExecute = true,   // нужно, чтобы сработал start и UAC-окно
+                    CreateNoWindow = false,
+                    Verb = "runas",            // UAC: запросить повышение
+                };
+                using var p = Process.Start(psi);
+                if (p != null)
+                {
+                    // Ждём завершения до 5 секунд. netsh быстрый, UAC может задержать.
+                    if (!p.WaitForExit(5000)) return false;
+                }
+            }
+            catch
+            {
+                // Любая ошибка (нет прав на runas / нет netsh / не наш случай) —
+                // не валим бота, просто возвращаем false.
+                return false;
+            }
+
+            return IsRegistered(prefix);
+        }
+
+        private static bool IsRegistered(string prefix)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "netsh",
+                    Arguments = "http show urlacl",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var p = Process.Start(psi);
+                if (p == null) return false;
+                var stdout = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(2000);
+                // netsh выводит URL в формате:    URL : http://127.0.0.1:5057/
+                // Ищем подстроку без учёта регистра и финального слэша.
+                var needle = prefix.TrimEnd('/');
+                return stdout.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     public sealed class WebDashboardService : IDisposable
     {
@@ -92,9 +187,32 @@ namespace RPBot.Web
                     if (_cts != null)
                         return;
 
+            // Превентивная регистрация URL в Windows urlacl — иначе HttpListener.Start()
+            // падает с HttpListenerException (503) на не-локальных префиксах и у обычных
+            // пользователей. Пробуем один раз, без всплытия UAC, если уже зарегистрировано.
+            if (OperatingSystem.IsWindows() && !UrlAclBootstrap.TryEnsureRegistered(_prefix))
+            {
+                BotLogger.Warn(LogCategory.System,
+                    $"[WebDashboard] Не удалось зарегистрировать {_prefix} в urlacl автоматически. " +
+                    $"Запустите от администратора: netsh http add urlacl url={_prefix} user=Everyone");
+            }
+
             var cts = new CancellationTokenSource();
             _cts = cts;
-            _listener.Prefixes.Add(_prefix);
+            try
+            {
+                _listener.Prefixes.Add(_prefix);
+            }
+            catch (ObjectDisposedException)
+            {
+                // HttpListener в редких случаях оказывается disposed до первого Start
+                // (например, после неудачного предыдущего запуска). Это не наша ошибка —
+                // просто выходим, и пусть следующий restart цикл создаст свежий инстанс.
+                _cts = null;
+                BotLogger.Error(LogCategory.System,
+                    $"[WebDashboard] HttpListener уже disposed до старта на {_prefix}");
+                return;
+            }
 
             try
             {
@@ -103,7 +221,7 @@ namespace RPBot.Web
             catch (HttpListenerException ex)
             {
                 _cts = null;
-                _listener.Prefixes.Remove(_prefix);
+                SafeRemovePrefix();
                 BotLogger.Error(LogCategory.System,
                     $"[WebDashboard] Не удалось запустить HTTP-сервер на {_prefix}: {ex.Message}");
                 BotLogger.Warn(LogCategory.System,
@@ -111,10 +229,20 @@ namespace RPBot.Web
                     $"netsh http add urlacl url={_prefix} user=Everyone");
                 return;
             }
+            catch (ObjectDisposedException ex)
+            {
+                // HttpListener на Windows после неудачного Start() иногда переходит
+                // в disposed-состояние — тогда геттер Prefixes тоже бросает.
+                // Ловим здесь, чтобы бот не валился с непонятным стектрейсом.
+                _cts = null;
+                BotLogger.Error(LogCategory.System,
+                    $"[WebDashboard] HttpListener disposed во время Start на {_prefix}: {ex.Message}");
+                return;
+            }
             catch (Exception ex)
             {
                 _cts = null;
-                _listener.Prefixes.Remove(_prefix);
+                SafeRemovePrefix();
                 BotLogger.Error(LogCategory.System, $"[WebDashboard] Ошибка запуска: {ex.Message}");
                 return;
             }
@@ -172,6 +300,24 @@ namespace RPBot.Web
 
                     try { cts.Dispose(); } catch { }
                 }
+
+        /// <summary>
+        /// Безопасно убрать префикс URL из HttpListener. Геттер <c>Prefixes</c>
+        /// бросает <see cref="ObjectDisposedException"/>, если listener уже
+        /// disposed — это нормальное состояние после неудачного Start/Stop,
+        /// игнорируем.
+        /// </summary>
+        private void SafeRemovePrefix()
+        {
+            try
+            {
+                _listener.Prefixes.Remove(_prefix);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Listener уже закрыт — префикс точно не активен.
+            }
+        }
 
         public int RateLimitPerMinute => _rateLimitPerMinute;
 
