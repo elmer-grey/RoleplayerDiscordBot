@@ -187,10 +187,15 @@ private async Task<(int? messageId, string? error)> SendMessageInternalReturning
 
 private static Dictionary<string, object> BuildSendMessagePayload(ServerConfig cfg, string text)
 {
+    // text предполагается уже собранным HTML-фрагментом с тегами <b>, <i>, <u>,
+    // <s>, <a href="...">, <code>. Telegram требует экранировать &, <, > только
+    // ВНУТРИ текстовых узлов — сами теги должны остаться как есть. Используем
+    // EscapeHtmlPreservingTags: пробегает посимвольно и экранирует только там,
+    // где не внутри тега.
     var payload = new Dictionary<string, object>
     {
     ["chat_id"] = cfg.TelegramChatId,
-    ["text"] = EscapeHtml(text),
+    ["text"] = EscapeHtmlPreservingTags(text),
     ["parse_mode"] = "HTML",
     ["disable_web_page_preview"] = true
     };
@@ -434,6 +439,157 @@ private static string EscapeHtml(string text)
     .Replace("&", "&amp;", StringComparison.Ordinal)
     .Replace("<", "&lt;", StringComparison.Ordinal)
     .Replace(">", "&gt;", StringComparison.Ordinal);
+}
+
+/// <summary>
+/// Экранирует &, <, > в HTML-фрагменте, но НЕ трогает сами теги Telegram:
+/// <b>, <i>, <u>, <s>, <a href="...">, <code>, <pre>. Нужен для случаев,
+/// когда в текст уже подставлены пользовательские данные внутри тегов —
+/// их надо экранировать, а теги — оставить. Внутри <a href="..."> значение
+/// атрибута не трогается (URL должен быть сырым для Telegram).
+/// </summary>
+private static string EscapeHtmlPreservingTags(string html)
+{
+    if (string.IsNullOrEmpty(html)) return html;
+
+    var sb = new StringBuilder(html.Length + 32);
+    int i = 0;
+    int n = html.Length;
+    var openTags = new System.Collections.Generic.Stack<string>();
+
+    while (i < n)
+    {
+        if (html[i] == '<')
+        {
+            int closeIdx = html.IndexOf('>', i + 1);
+            if (closeIdx < 0)
+            {
+                AppendEscapedChar(sb, '<');
+                i++;
+                continue;
+            }
+
+            string tagBody = html.Substring(i, closeIdx - i + 1);
+            string? tagName = ExtractTagName(tagBody);
+
+            // Закрывающий тег </xxx>.
+            bool isClose = tagName == null && tagBody.Length >= 4 && tagBody[1] == '/';
+            if (isClose)
+            {
+                string name = tagBody.Substring(2, tagBody.Length - 3).Trim().ToLowerInvariant();
+                if (IsPairedTag(name) && openTags.Count > 0 && openTags.Peek() == name)
+                {
+                    sb.Append(tagBody);
+                    openTags.Pop();
+                }
+                else
+                {
+                    // Голый </tag> без открывающего — экранируем как текст.
+                    AppendEscapedText(sb, tagBody, 0, tagBody.Length);
+                }
+                i = closeIdx + 1;
+                continue;
+            }
+
+            if (tagName != null && IsAllowedTelegramTag(tagBody))
+            {
+                sb.Append(tagBody);
+                i = closeIdx + 1;
+                if (IsPairedTag(tagName))
+                {
+                    openTags.Push(tagName);
+                    // Содержимое парного тега экранируем.
+                    string closeTag = $"</{tagName}>";
+                    int contentEnd = FindClosingTag(html, i, closeTag);
+                    if (contentEnd < 0)
+                    {
+                        AppendEscapedText(sb, html, i, n);
+                        i = n;
+                    }
+                    else
+                    {
+                        AppendEscapedText(sb, html, i, contentEnd);
+                        sb.Append(closeTag);
+                        openTags.Pop();
+                        i = contentEnd + closeTag.Length;
+                    }
+                }
+            }
+            else
+            {
+                // Неизвестный «тег» — экранируем символ '<'.
+                AppendEscapedChar(sb, '<');
+                i++;
+            }
+        }
+        else
+        {
+            int nextLt = html.IndexOf('<', i + 1);
+            int end = nextLt < 0 ? n : nextLt;
+            AppendEscapedText(sb, html, i, end);
+            i = end;
+        }
+    }
+
+    return sb.ToString();
+}
+
+private static void AppendEscapedText(StringBuilder sb, string text, int start, int end)
+{
+    for (int k = start; k < end; k++)
+    {
+        AppendEscapedChar(sb, text[k]);
+    }
+}
+
+private static void AppendEscapedChar(StringBuilder sb, char c)
+{
+    switch (c)
+    {
+        case '&': sb.Append("&amp;"); break;
+        case '<': sb.Append("&lt;"); break;
+        case '>': sb.Append("&gt;"); break;
+        case '"': sb.Append("&quot;"); break;
+        default: sb.Append(c); break;
+    }
+}
+
+private static string? ExtractTagName(string tag)
+{
+    if (tag.Length < 3 || tag[0] != '<' || tag[tag.Length - 1] != '>') return null;
+    string inner = tag.Substring(1, tag.Length - 2).Trim();
+    if (inner.Length > 0 && inner[0] == '/') return null;
+    int spIdx = inner.IndexOf(' ');
+    return (spIdx < 0 ? inner : inner.Substring(0, spIdx)).ToLowerInvariant();
+}
+
+private static bool IsPairedTag(string name) => name is "b" or "i" or "u" or "s" or "a" or "code" or "pre";
+
+private static int FindClosingTag(string html, int from, string closeTag)
+{
+    return html.IndexOf(closeTag, from, StringComparison.OrdinalIgnoreCase);
+}
+
+private static bool IsAllowedTelegramTag(string tag)
+{
+    if (tag.Length < 3 || tag[0] != '<' || tag[tag.Length - 1] != '>') return false;
+    string inner = tag.Substring(1, tag.Length - 2).Trim();
+
+    if (inner.Length > 0 && inner[0] == '/')
+    {
+        string name = inner.Substring(1).Trim().ToLowerInvariant();
+        return name is "b" or "i" or "u" or "s" or "a" or "code" or "pre";
+    }
+
+    int spIdx = inner.IndexOf(' ');
+    string tagName = (spIdx < 0 ? inner : inner.Substring(0, spIdx)).ToLowerInvariant();
+    if (tagName is not ("b" or "i" or "u" or "s" or "a" or "code" or "pre")) return false;
+
+    if (tagName == "a")
+    {
+        return inner.Contains("href=\"") || inner.Contains("href='");
+    }
+    return true;
 }
 }
 }

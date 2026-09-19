@@ -582,7 +582,10 @@ namespace RPBot.EventOps
 
                     // «Где»: в стиле основного анонса (BuildStatusTelegramText) —
                     // plain text «Guild → #channel-name» либо текстовая локация,
-                    // без HTML-обёрток.
+                    // без HTML-обёрток. TelegramNotifier.BuildSendMessagePayload
+                    // экранирует все <, >, & для parse_mode=HTML, поэтому
+                    // передавать сюда HTML-теги бессмысленно — придут как
+                    // текст «<b>...</b>». Делаем единый стиль с основным анонсом.
                     string whereTextTg;
                     if (entry.LastChannelId is ulong tgChId && tgChId != 0)
                     {
@@ -604,14 +607,20 @@ namespace RPBot.EventOps
                     {
                         whereTextTg = "(локация не указана)";
                     }
-                    whereTextTg = EscapeHtml(whereTextTg);
 
+                    // Стиль — как BuildStatusTelegramText (EventAnnouncer.cs:1180+):
+                    // одна шапка с эмодзи ⏰, время по МСК, жирные «Когда»/«Где»,
+                    // кликабельная ссылка на событие. Реальный HTML для parse_mode=HTML.
+                    // Экранирование &, <, > внутри пользовательских данных выполняет
+                    // сам TelegramNotifier.BuildSendMessagePayload через
+                    // EscapeHtmlPreservingTags — поэтому здесь подставляем eventName,
+                    // whenText, whereTextTg, eventUrl БЕЗ предварительного EscapeHtml.
+                    // Двойное экранирование даёт &amp;amp; и ломает вывод.
                     var tgText =
-                        $"⏰ <b>Напоминание о событии</b>\n\n" +
-                        $"<b>Напоминание:</b> через час начнётся событие <b>{EscapeHtml(eventName)}</b> — не пропустите!\n\n" +
+                        $"⏰ <b>Напоминание:</b> через час начнётся событие <b>{eventName}</b>, не пропустите!\n\n" +
                         $"🕒 <b>Когда:</b> {whenText}\n" +
                         $"📍 <b>Где:</b> {whereTextTg}\n\n" +
-                        $"🔥 <a href=\"{eventUrl}\">Ссылка на событие в Discord</a>";
+                        $"🔗 <a href=\"{eventUrl}\">Открыть событие в Discord</a>";
 
                     // SendMessageReturningMessageIdAsync: вернёт messageId,
                     // кладём его в ReminderTelegramMessageId чтобы потом удалить.
@@ -839,9 +848,6 @@ namespace RPBot.EventOps
             try { return await client.Rest.GetUserAsync(userId); }
             catch { return null; }
         }
-
-        private static string EscapeHtml(string s) =>
-            s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
         private sealed class ScheduledTimers
         {
