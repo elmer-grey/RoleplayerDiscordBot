@@ -1329,7 +1329,7 @@ namespace RPBot
                             if (user != null)
                             {
                                 var reminderMessage = await channel.SendMessageAsync(
-                                    $"{user.Mention}, игра на паузе с {pauseStartTime:HH:mm} (уже {totalMinutes} мин)");
+                                    $"{user.Mention}, игра на паузе с {DiscordTimeFormatter.TimeOnly(pauseStartTime)} (уже {totalMinutes} мин)");
 
                                 session.PauseReminderMessageId = reminderMessage.Id;
 
