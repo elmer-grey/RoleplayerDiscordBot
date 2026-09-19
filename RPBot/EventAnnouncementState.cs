@@ -90,5 +90,11 @@ public Dictionary<ulong, ulong>? ReminderDmMessageIdsByUserId { get; set; }
 public int ReminderTelegramMessageId { get; set; }
 public long ReminderTelegramChatId { get; set; }
 public int ReminderTelegramThreadId { get; set; }
+
+// ID сообщения с напоминанием за час в основном канале анонса
+// (entry.AnnounceChannelId). Напоминание шлётся отдельным сообщением рядом
+// с анонсом; через 15 мин после ActualStartTimeUtc удаляется именно оно,
+// а не сам анонс.
+public ulong ReminderAnnounceMessageId { get; set; }
 }
 }

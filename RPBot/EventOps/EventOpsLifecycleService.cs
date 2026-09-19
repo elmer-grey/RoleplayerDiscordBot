@@ -512,12 +512,52 @@ namespace RPBot.EventOps
                 }
             }
 
-            // Сохраняем ID DM-напоминаний в запись стора (отдельный словарь,
-            // чтобы потом удалить именно напоминание, не трогая анонс).
-            if (dmSent.Count > 0)
+            // ── Discord: основной канал анонса (рядом с анонсом события) ──────
+            // Шлём отдельным сообщением — анонс события не трогаем. Через 15 мин
+            // после ActualStartTimeUtc это сообщение удаляется.
+            ulong? announceReminderMsgId = null;
+            if (entry.AnnounceChannelId != 0)
+            {
+                try
+                {
+                    var announceCh = await client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
+                    if (announceCh != null)
+                    {
+                        var announceEmbed = new EmbedBuilder()
+                            .WithTitle("⏰ Напоминание о событии")
+                            .WithDescription(
+                                $"**Напоминание:** через час начнётся событие **{eventName}**, не пропустите!")
+                            .WithColor(Color.Orange)
+                            .AddField("🕒 Когда", startUnix > 0 ? $"<t:{startUnix}:F>" : "—", true)
+                            .AddField("📍 Где", whereText, true)
+                            .AddField("👤 Создал", creatorText, true)
+                            .WithUrl(eventUrl)
+                            .WithFooter("Через 15 минут после начала события это сообщение будет удалено автоматически")
+                            .WithCurrentTimestamp()
+                            .Build();
+
+                        var announceMsg = await announceCh.SendMessageAsync(embed: announceEmbed);
+                        announceReminderMsgId = announceMsg.Id;
+
+                        BotLogger.Info(LogCategory.Discord,
+                            $"[EventOpsLifecycle] reminder в канал анонса отправлен channel={entry.AnnounceChannelId} guild={entry.GuildId} event={entry.EventId} msg={announceMsg.Id}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Warn(LogCategory.Discord,
+                        $"[EventOpsLifecycle] reminder в канал анонса error: {ex.Message}");
+                }
+            }
+
+            // Сохраняем все ID напоминаний в запись стора (reminder DM, reminder Telegram,
+            // reminder в канале), чтобы потом через 15 мин после старта всё корректно удалить.
             {
                 var updated = _store.TryGet(entry.GuildId, entry.EventId) ?? entry;
-                updated.ReminderDmMessageIdsByUserId = new Dictionary<ulong, ulong>(dmSent);
+                if (dmSent.Count > 0)
+                    updated.ReminderDmMessageIdsByUserId = new Dictionary<ulong, ulong>(dmSent);
+                if (announceReminderMsgId.HasValue)
+                    updated.ReminderAnnounceMessageId = announceReminderMsgId.Value;
                 _store.UpdateEntry(updated);
             }
 
@@ -562,6 +602,33 @@ namespace RPBot.EventOps
         {
             var client = SafeGetClient();
             if (client == null) return;
+
+            // ── Discord: канал анонса (удаляем именно reminder-сообщение) ──────
+            if (entry.ReminderAnnounceMessageId != 0 && entry.AnnounceChannelId != 0)
+            {
+                try
+                {
+                    var ch = await client.GetChannelAsync(entry.AnnounceChannelId) as ITextChannel;
+                    if (ch != null)
+                    {
+                        var msg = await ch.GetMessageAsync(entry.ReminderAnnounceMessageId) as IUserMessage;
+                        if (msg != null)
+                        {
+                            await msg.DeleteAsync();
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsLifecycle] reminder в канале анонса удалён channel={entry.AnnounceChannelId} msg={entry.ReminderAnnounceMessageId} guild={entry.GuildId} event={entry.EventId}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (ex.Message?.Contains("10008", StringComparison.OrdinalIgnoreCase) == true)
+                        goto SkipAnnounceDelete;
+                    BotLogger.Warn(LogCategory.Discord,
+                        $"[EventOpsLifecycle] reminder announce channel delete error: {ex.Message}");
+                }
+            }
+            SkipAnnounceDelete:;
 
             // ── Discord DM: удаляем именно DM-напоминания ────────────────────
             if (entry.ReminderDmMessageIdsByUserId != null && entry.ReminderDmMessageIdsByUserId.Count > 0)
@@ -614,6 +681,7 @@ namespace RPBot.EventOps
             updated.ReminderTelegramMessageId = 0;
             updated.ReminderTelegramChatId = 0;
             updated.ReminderTelegramThreadId = 0;
+            updated.ReminderAnnounceMessageId = 0;
             _store.UpdateEntry(updated);
         }
 

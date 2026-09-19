@@ -77,7 +77,8 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
             : new Dictionary<ulong, ulong>(e.ReminderDmMessageIdsByUserId),
         ReminderTelegramMessageId = e.ReminderTelegramMessageId,
         ReminderTelegramChatId = e.ReminderTelegramChatId,
-        ReminderTelegramThreadId = e.ReminderTelegramThreadId
+        ReminderTelegramThreadId = e.ReminderTelegramThreadId,
+        ReminderAnnounceMessageId = e.ReminderAnnounceMessageId
         });
     }
     }
