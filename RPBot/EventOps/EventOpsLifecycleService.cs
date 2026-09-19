@@ -562,15 +562,55 @@ namespace RPBot.EventOps
             }
 
             // ── Telegram: в канал/топик из ServerConfig ───────────────────────
+            // Telegram reminder: время в МСК-формате (как в основном анонсе),
+            // «Где» — plain text в стиле основного анонса (BuildStatusTelegramText).
             if (_telegramNotifier != null && entry.TelegramChatId != 0)
             {
                 try
                 {
+                    // «Когда»: если есть UTC-старт — конвертируем в МСК; формат
+                    // совпадает с EventAnnouncer.BuildStatusTelegramText (dd.MM.yyyy HH-mm по МСК).
+                    string whenText = "—";
+                    if (entry.LastStartTimeUtc.HasValue)
+                    {
+                        var utc = entry.LastStartTimeUtc.Value.UtcDateTime;
+                        if (MoscowTime.TryConvertFromUtc(utc, out var msk))
+                            whenText = msk.ToString("dd.MM.yyyy HH:mm", System.Globalization.CultureInfo.GetCultureInfo("ru-RU")) + " (по МСК)";
+                        else
+                            whenText = entry.LastStartTimeUtc.Value.LocalDateTime.ToString("dd.MM.yyyy HH:mm", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"));
+                    }
+
+                    // «Где»: в стиле основного анонса (BuildStatusTelegramText) —
+                    // plain text «Guild → #channel-name» либо текстовая локация,
+                    // без HTML-обёрток.
+                    string whereTextTg;
+                    if (entry.LastChannelId is ulong tgChId && tgChId != 0)
+                    {
+                        string channelDisplay = tgChId.ToString();
+                        try
+                        {
+                            var sockCh = await client.GetChannelAsync(tgChId) as SocketChannel;
+                            if (sockCh is IGuildChannel gc && !string.IsNullOrWhiteSpace(gc.Name))
+                                channelDisplay = gc.Name;
+                        }
+                        catch { /* имя канала недоступно — оставляем id */ }
+                        whereTextTg = "#" + channelDisplay;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(entry.LastLocation))
+                    {
+                        whereTextTg = entry.LastLocation!;
+                    }
+                    else
+                    {
+                        whereTextTg = "(локация не указана)";
+                    }
+                    whereTextTg = EscapeHtml(whereTextTg);
+
                     var tgText =
                         $"⏰ <b>Напоминание о событии</b>\n\n" +
                         $"<b>Напоминание:</b> через час начнётся событие <b>{EscapeHtml(eventName)}</b> — не пропустите!\n\n" +
-                        $"🕒 <b>Когда:</b> {(startUnix > 0 ? FormatTgTimestamp(startUnix) : "—")}\n" +
-                        $"📍 <b>Где:</b> {entry.LastLocation ?? "(локация не указана)"}\n\n" +
+                        $"🕒 <b>Когда:</b> {whenText}\n" +
+                        $"📍 <b>Где:</b> {whereTextTg}\n\n" +
                         $"🔥 <a href=\"{eventUrl}\">Ссылка на событие в Discord</a>";
 
                     // SendMessageReturningMessageIdAsync: вернёт messageId,
@@ -802,13 +842,6 @@ namespace RPBot.EventOps
 
         private static string EscapeHtml(string s) =>
             s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-
-        private static string FormatTgTimestamp(long unixSeconds)
-        {
-            // Telegram не умеет Discord-стиль <t:…:F>, поэтому даём человекочитаемый формат.
-            var dt = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime();
-            return dt.ToString("dddd, d MMMM yyyy г. HH:mm", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"));
-        }
 
         private sealed class ScheduledTimers
         {
