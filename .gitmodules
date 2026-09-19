@@ -1,3 +1,4 @@
 [submodule "yt-cipher"]
 	path = yt-cipher
 	url = https://github.com/kikkia/yt-cipher.git
+	ignore = all
