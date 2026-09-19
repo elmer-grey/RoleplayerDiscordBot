@@ -282,23 +282,28 @@ private async Task<(bool ok, string body)> PostJsonAsync(string url, Dictionary<
     }
 }
 
-private async Task<bool> DeleteMessageAsync(ulong guildId, int messageId, CancellationToken ct = default)
+/// <summary>
+/// Удаляет сообщение в Telegram-чате гильдии. Возвращает true при успехе.
+/// Публичный метод — раньше был приватным, но нужен в EventOpsLifecycleService
+/// для автоудаления анонсов через 24ч после EndTime / Cancelled.
+/// </summary>
+public async Task<bool> DeleteMessageAsync(ulong guildId, int messageId, CancellationToken ct = default)
 {
     var cfg = _serverConfigAccessor(guildId);
     if (cfg == null || !cfg.TelegramEnabled)
-    return false;
+        return false;
 
     if (string.IsNullOrWhiteSpace(cfg.TelegramBotToken) || cfg.TelegramChatId == 0)
-    return false;
+        return false;
 
     if (messageId <= 0)
-    return false;
+        return false;
 
     var url = $"https://api.telegram.org/bot{cfg.TelegramBotToken}/deleteMessage";
     var payload = new Dictionary<string, object>
     {
-    ["chat_id"] = cfg.TelegramChatId,
-    ["message_id"] = messageId
+        ["chat_id"] = cfg.TelegramChatId,
+        ["message_id"] = messageId
     };
 
     var (ok, _) = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);

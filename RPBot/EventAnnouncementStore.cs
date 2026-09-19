@@ -70,7 +70,14 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
         LastCoverImageUrl = e.LastCoverImageUrl,
         LastUpdatedMark = e.LastUpdatedMark,
         LastUpdatedAt = e.LastUpdatedAt,
-        ActualStartTimeUtc = e.ActualStartTimeUtc
+        ActualStartTimeUtc = e.ActualStartTimeUtc,
+        CancelledAtUtc = e.CancelledAtUtc,
+        ReminderDmMessageIdsByUserId = e.ReminderDmMessageIdsByUserId is null
+            ? null
+            : new Dictionary<ulong, ulong>(e.ReminderDmMessageIdsByUserId),
+        ReminderTelegramMessageId = e.ReminderTelegramMessageId,
+        ReminderTelegramChatId = e.ReminderTelegramChatId,
+        ReminderTelegramThreadId = e.ReminderTelegramThreadId
         });
     }
     }

@@ -659,6 +659,19 @@ namespace RPBot.EventOps
                 catch { }
             }
 
+            // Записываем фактическое время отмены — нужно EventOpsLifecycleService
+            // чтобы отсчитать «+24ч удаление» от момента cancel, а не от
+            // планового LastStartTimeUtc.
+            if (isCancelled)
+            {
+                try
+                {
+                    entry.CancelledAtUtc = DateTimeOffset.UtcNow;
+                    _store.UpdateEntry(entry);
+                }
+                catch { }
+            }
+
             string whereText;
             string whereTextPlain;
             if (guildEvent.Channel != null)

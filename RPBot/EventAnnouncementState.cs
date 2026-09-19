@@ -74,5 +74,21 @@ public DateTime? LastUpdatedAt { get; set; }
 // чтобы при completed/cancelled корректно показать «когда событие
 // действительно началось», а не плановое время.
 public DateTimeOffset? ActualStartTimeUtc { get; set; }
+
+// Фактическое время отмены события (UTC). Записывается в момент cancelled,
+// чтобы EventOpsLifecycleService мог отсчитать от него «+24ч удаление».
+// Если null — fallback на LastStartTimeUtc (плановое).
+public DateTimeOffset? CancelledAtUtc { get; set; }
+
+// ID DM-сообщений с напоминанием за час (рассылка EventOpsLifecycleService).
+// Хранится отдельно от DmMessageIdsByUserId (там лежат анонсы), чтобы при
+// удалении напоминания через 15 мин после старта события не трогать анонсы.
+public Dictionary<ulong, ulong>? ReminderDmMessageIdsByUserId { get; set; }
+
+// ID Telegram-сообщения с напоминанием за час и параметры чата/топика.
+// Нужны для последующего удаления через 15 мин после ActualStartTimeUtc.
+public int ReminderTelegramMessageId { get; set; }
+public long ReminderTelegramChatId { get; set; }
+public int ReminderTelegramThreadId { get; set; }
 }
 }

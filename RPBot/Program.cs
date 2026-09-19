@@ -86,6 +86,7 @@ private VoicePointsService? _voicePointsService;
         private EventAnnouncementStore? _eventAnnouncementStore;
         private EventOpsOrchestrator? _eventOpsOrchestrator;
         private RPBot.EventOps.EventOpsRemigrationService? _eventOpsRemigrator;
+        private RPBot.EventOps.EventOpsLifecycleService? _eventOpsLifecycle;
         private EventAnnouncer? _eventAnnouncer;
         private WebDashboardService? _webDashboard;
 private GoogleSheetsService? _googleSheetsService;
@@ -1024,6 +1025,16 @@ private void SaveServerConfigs()
     _eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
     _eventOpsOrchestrator.OnCancelledAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "cancelled");
     _eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
+
+    // EventOpsLifecycleService — отложенные напоминания и автоудаление анонсов.
+    // Подключается к тому же оркестратору (его хэндлеры добавляются ПОСЛЕ базовых).
+    _eventOpsLifecycle = new RPBot.EventOps.EventOpsLifecycleService(
+        _eventAnnouncementStore,
+        () => _client!,
+        _telegramNotifier,
+        _eventNotifications!,
+        () => _serverConfigs!);
+    _eventOpsLifecycle.Attach(_eventOpsOrchestrator);
 
     _webDashboard = new WebDashboardService(
     host: "0.0.0.0",
@@ -4104,6 +4115,23 @@ await Task.CompletedTask;
                                         }
                                     });
                                 }
+
+                                // EventOpsLifecycleService: восстановление отложенных таймеров
+                                // (reminder1h / cleanup24h) для уже опубликованных событий.
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        // Чуть позже, чтобы клиент успел законнектиться.
+                                        await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                                        await _eventOpsLifecycle!.RebuildFromStoreAsync(CancellationToken.None).ConfigureAwait(false);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        BotLogger.Error(LogCategory.Discord,
+                                            $"[EventOpsLifecycle] RebuildFromStoreAsync упал: {ex.GetType().Name}: {ex.Message}");
+                                    }
+                                });
                             }
                             catch (Exception ex)
                             {
@@ -4116,6 +4144,10 @@ await Task.CompletedTask;
         {
             // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
                     try { _eventOpsRemigrator?.Cancel(); } catch { }
+
+                    // Останавливаем таймеры lifecycle — после дисконнекта Task.Delay внутри
+                    // них всё равно сработает, но делать там нечего (REST не ответит).
+                    try { _eventOpsLifecycle?.Cancel(); } catch { }
 
                     // ✅ R6 fix: при отключении от Discord все pending-UI кнопки
                     // «Продолжить» теряют смысл — клиент их не видит. Чистим.
