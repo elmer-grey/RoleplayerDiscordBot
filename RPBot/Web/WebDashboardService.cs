@@ -32,13 +32,12 @@ namespace RPBot.Web
     /// <para>На не-Windows платформах это no-op.</para>
     /// </remarks>
     internal static class UrlAclBootstrap
-    {
-        // Кэш по порту: если для данного порта в текущей сессии мы уже успешно
-        // подтвердили регистрацию (или только что зарегистрировали) — повторно
-        // 'netsh http show urlacl' не запускаем. Иначе каждый рестарт бота
-        // спавнит процесс netsh, и на части машин CreateNoWindow игнорируется —
-        // пользователь видит мигающие окна терминала.
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> _portVerified = new();
+        {
+            // Кэш по полному prefix (а не по порту): для одного порта может быть
+            // несколько разных IP (192.168.x.x, 10.x.x.x, 100.x.x.x, [::1] и т.д.),
+            // у каждого свой urlacl. Кэшируем ТОЛЬКО конкретный prefix, для которого
+            // уже подтвердили регистрацию. Иначе мигающие netsh при рестарте.
+            private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _prefixVerified = new(System.StringComparer.Ordinal);
 
         /// <summary>
         /// Если URL ещё не зарегистрирован — пробует выполнить
@@ -63,14 +62,13 @@ namespace RPBot.Web
             }
 
             BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] проверка регистрации {prefix}");
-            int port = ExtractPort(prefix);
-            if (port > 0 && _portVerified.TryGetValue(port, out var verified) && verified)
-            {
-                BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже подтверждён ранее в этой сессии — пропускаю netsh show");
-                return true;
-            }
-            bool alreadyRegistered = IsRegistered(prefix);
-            if (alreadyRegistered && port > 0) _portVerified[port] = true;
+                        if (_prefixVerified.TryGetValue(prefix, out var verified) && verified)
+                        {
+                            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже подтверждён ранее в этой сессии — пропускаю netsh show");
+                            return true;
+                        }
+                        bool alreadyRegistered = IsRegistered(prefix);
+                        if (alreadyRegistered) _prefixVerified[prefix] = true;
             BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] IsRegistered({prefix}) = {alreadyRegistered}");
             if (alreadyRegistered)
             {
@@ -132,15 +130,11 @@ namespace RPBot.Web
             }
 
             bool finalRegistered = IsRegistered(prefix);
-            BotLogger.Info(LogCategory.System,
-                $"[UrlAclBootstrap] пост-проверка IsRegistered({prefix}) = {finalRegistered}");
-            if (finalRegistered)
-            {
-                int port = ExtractPort(prefix);
-                if (port > 0) _portVerified[port] = true;
-            }
-            return finalRegistered;
-        }
+                        BotLogger.Info(LogCategory.System,
+                            $"[UrlAclBootstrap] пост-проверка IsRegistered({prefix}) = {finalRegistered}");
+                        if (finalRegistered) _prefixVerified[prefix] = true;
+                        return finalRegistered;
+                    }
 
         private static int ExtractPort(string prefix)
         {
