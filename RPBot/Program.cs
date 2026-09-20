@@ -129,6 +129,10 @@ private Task? _dailyRestartTask;
         // мы НЕ добавляем sinks повторно — иначе в UI одна и та же строка
         // появляется N раз (по разу на каждый сохранённый UiSink-экземпляр).
         private static bool _startupSinksAttached = false;
+        // Флаг, что BotLogger уже инициализирован (в constructor Program). Используется,
+        // чтобы RunBotAsync() не вызывал Initialize() повторно — иначе будет две сессионные
+        // папки с одним именем и маркеры restart побьются.
+        private static bool _loggerInitialized = false;
         private static readonly List<RPBot.Startup.IStartupSink> _attachedSinks = new();
 
         private void CleanupServices()
@@ -944,6 +948,26 @@ private void SaveServerConfigs()
     // Автоматически мигрируем файлы данных из Settings/ в Data/ (один раз)
     BotConfig.MigrateDataFiles();
 
+    // ✅ Инициализируем BotLogger как можно раньше — в constructor Program, ДО создания
+    // любых сервисов (в т.ч. WebDashboardService). Иначе логи из constructor и Start()
+    // сервисов уходят в пустоту, потому что WriteUnifiedLineAsync пишет только когда
+    // задан _unifiedLogPath, а _paths заполняется именно в Initialize().
+    //
+    // Раньше Initialize() жил в RunBotAsync() — это слишком поздно: WebDashboard уже
+    // создаётся и запускается в constructor Program, и любые его логи (включая ошибки
+    // HttpListener) терялись, бот продолжал работу без видимой диагностики.
+    //
+    // Чтобы не плодить две сессионные папки, RunBotAsync() проверит флаг
+    // _loggerInitialized (см. ниже) и не будет звать Initialize повторно.
+    if (!_loggerInitialized)
+    {
+        var logDirRawEarly = _config?.LogDirectory;
+        var logDirEarly = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRawEarly) ? "Logs" : logDirRawEarly);
+        BotLogger.Initialize(logDirEarly, DateTime.Now);
+        _loggerInitialized = true;
+        BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
+    }
+
     // Критическая проверка: GuildIDs должен быть задан в config.json
     if (_config.GuildIDs == null || _config.GuildIDs.Count == 0)
     {
@@ -1041,6 +1065,7 @@ private void SaveServerConfigs()
         () => _serverConfigs!);
     _eventOpsLifecycle.Attach(_eventOpsOrchestrator);
 
+    BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: создаю WebDashboardService на 0.0.0.0:5057");
     _webDashboard = new WebDashboardService(
     host: "0.0.0.0",
     port: 5057,
@@ -1239,7 +1264,19 @@ private void SaveServerConfigs()
     catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
     return checks;
     });
-    _webDashboard.Start();
+    BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: вызываю _webDashboard.Start()");
+    try
+    {
+        _webDashboard.Start();
+        BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: _webDashboard.Start() вернул управление");
+    }
+    catch (Exception ex)
+    {
+        BotLogger.Error(LogCategory.System,
+            $"[WebDashboard] Program constructor: _webDashboard.Start() БРОСИЛ исключение: {ex.GetType().Name}: {ex.Message}");
+        BotLogger.Error(LogCategory.System, $"[WebDashboard] Stack: {ex.StackTrace}");
+        throw;
+    }
 
     _googleSheetsService = GoogleSheetsService.TryCreate(_config!);
     if (_googleSheetsService != null)
@@ -2166,7 +2203,15 @@ private static BotUI? _ui;
     {
     var logDirRaw = _config?.LogDirectory;
     var logDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDirRaw) ? "Logs" : logDirRaw);
-    BotLogger.Initialize(logDir, DateTime.Now);
+    // ✅ BotLogger теперь инициализируется раньше — в constructor Program, чтобы логи
+    // WebDashboardService.Start() и других сервисов constructor-уровня не терялись.
+    // Здесь — только ленивый Initialize на случай, если constructor был пропущен
+    // (например, юнит-тест, который не идёт через Program()).
+    if (!_loggerInitialized)
+    {
+        BotLogger.Initialize(logDir, DateTime.Now);
+        _loggerInitialized = true;
+    }
     // Возвращаем строку-маркер: заголовок «=== Бот запускается: … ===»
     // пишется только в run.log (в самом файле), в Logs Panel он не виден,
     // поэтому для пользователя в терминале нужна явная запись отсюда.

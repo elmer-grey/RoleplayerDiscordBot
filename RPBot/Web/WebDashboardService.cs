@@ -44,39 +44,72 @@ namespace RPBot.Web
         /// </returns>
         public static bool TryEnsureRegistered(string prefix)
         {
-            if (string.IsNullOrEmpty(prefix)) return false;
-            if (!OperatingSystem.IsWindows()) return false;
+            if (string.IsNullOrEmpty(prefix))
+            {
+                BotLogger.Warn(LogCategory.System, "[UrlAclBootstrap] prefix пуст — пропуск");
+                return false;
+            }
+            if (!OperatingSystem.IsWindows())
+            {
+                BotLogger.Info(LogCategory.System, "[UrlAclBootstrap] не Windows — пропуск netsh");
+                return false;
+            }
 
-            if (IsRegistered(prefix)) return true;
+            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] проверка регистрации {prefix}");
+            bool alreadyRegistered = IsRegistered(prefix);
+            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] IsRegistered({prefix}) = {alreadyRegistered}");
+            if (alreadyRegistered)
+            {
+                BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже зарегистрирован");
+                return true;
+            }
 
+            // На доменных аккаунтах `Everyone` часто не резолвится → SDDL не создаётся
+            // (Error 183/1332). Используем конкретного текущего пользователя.
+            string aclUser = Environment.GetEnvironmentVariable("USERNAME") ?? "Everyone";
             try
             {
+                BotLogger.Info(LogCategory.System,
+                    $"[UrlAclBootstrap] {prefix} НЕ зарегистрирован, пробую netsh http add urlacl url={prefix} user={aclUser} (UAC)");
                 // Запускаем в отдельном окне cmd, чтобы не блокировать основной поток.
                 // /c — выполнить и закрыть окно. Сам netsh синхронный, но без UAC-окна
                 // не сможет записать в HKLM\...\Services\Http\Parameters\UrlAclInfo.
                 var psi = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/c start \"\" cmd /c \"netsh http add urlacl url={prefix} user=Everyone\"",
+                    Arguments = $"/c start \"\" cmd /c \"netsh http add urlacl url={prefix} user={aclUser}\"",
                     UseShellExecute = true,   // нужно, чтобы сработал start и UAC-окно
                     CreateNoWindow = false,
                     Verb = "runas",            // UAC: запросить повышение
                 };
                 using var p = Process.Start(psi);
-                if (p != null)
+                if (p == null)
                 {
-                    // Ждём завершения до 5 секунд. netsh быстрый, UAC может задержать.
-                    if (!p.WaitForExit(5000)) return false;
+                    BotLogger.Warn(LogCategory.System, "[UrlAclBootstrap] Process.Start вернул null (UAC отклонён или нет шелла)");
+                    return false;
                 }
+                BotLogger.Info(LogCategory.System, "[UrlAclBootstrap] ожидаю завершения UAC/netsh (до 5с)...");
+                // Ждём завершения до 5 секунд. netsh быстрый, UAC может задержать.
+                if (!p.WaitForExit(5000))
+                {
+                    BotLogger.Warn(LogCategory.System, "[UrlAclBootstrap] таймаут 5с на netsh/UAC — продолжаю без повышения");
+                    return false;
+                }
+                BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] UAC-процесс завершился, ExitCode={p.ExitCode}");
             }
-            catch
+            catch (Exception ex)
             {
                 // Любая ошибка (нет прав на runas / нет netsh / не наш случай) —
                 // не валим бота, просто возвращаем false.
+                BotLogger.Warn(LogCategory.System,
+                    $"[UrlAclBootstrap] исключение при запуске netsh: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
 
-            return IsRegistered(prefix);
+            bool finalRegistered = IsRegistered(prefix);
+            BotLogger.Info(LogCategory.System,
+                $"[UrlAclBootstrap] пост-проверка IsRegistered({prefix}) = {finalRegistered}");
+            return finalRegistered;
         }
 
         private static bool IsRegistered(string prefix)
@@ -93,16 +126,31 @@ namespace RPBot.Web
                     CreateNoWindow = true,
                 };
                 using var p = Process.Start(psi);
-                if (p == null) return false;
+                if (p == null)
+                {
+                    BotLogger.Warn(LogCategory.System, "[UrlAclBootstrap] IsRegistered: Process.Start(netsh) вернул null");
+                    return false;
+                }
                 var stdout = p.StandardOutput.ReadToEnd();
+                var stderr = p.StandardError.ReadToEnd();
                 p.WaitForExit(2000);
                 // netsh выводит URL в формате:    URL : http://127.0.0.1:5057/
-                // Ищем подстроку без учёта регистра и финального слэша.
+                // Нормализуем: `+`, `*`, `0.0.0.0` для urlacl эквивалентны — ищем любой из них.
                 var needle = prefix.TrimEnd('/');
-                return stdout.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+                string[] aliases = { needle, needle.Replace("://+", "://*"), needle.Replace("://*", "://+"), needle.Replace("://0.0.0.0", "://+") };
+                bool found = false;
+                foreach (var n in aliases)
+                {
+                    if (stdout.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0) { found = true; break; }
+                }
+                BotLogger.Info(LogCategory.System,
+                    $"[UrlAclBootstrap] IsRegistered: needle='{needle}' found={found} exit={p.ExitCode} stderr='{stderr.Trim()}'");
+                return found;
             }
-            catch
+            catch (Exception ex)
             {
+                BotLogger.Warn(LogCategory.System,
+                    $"[UrlAclBootstrap] IsRegistered: исключение {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }
@@ -153,7 +201,15 @@ namespace RPBot.Web
                         Func<object> systemsProvider,
                         int maxLogs = 1000)
                                 {
-                                    _prefix = $"http://{host}:{port}/";
+                                    // HttpListener требует, чтобы префикс был покрыт записью urlacl.
+                                    // `+` — сильный wildcard, который покрывается единственной записью
+                                    // `http://+:PORT/` (не требуется отдельная запись для каждого IP).
+                                    // Для `0.0.0.0`/`*`/пустого хоста используем `+`. Конкретный IP/имя
+                                    // оставляем как есть (требует точной записи urlacl).
+                                    string hostPart = string.IsNullOrEmpty(host) || host == "0.0.0.0" || host == "*"
+                                        ? "+"
+                                        : host;
+                                    _prefix = $"http://{hostPart}:{port}/";
                                     _healthProvider = healthProvider;
                                     _serverConfigsProvider = serverConfigsProvider;
                                     _sessionsProvider = sessionsProvider;
@@ -173,6 +229,7 @@ namespace RPBot.Web
             // 240 req/min даёт 4-кратный запас на параллельные вкладки и редкие бурсты.
             // Раньше было 60 req/min — перекрывалось даже одиночным открытием дашборда.
             _rateLimitPerMinute = 240;
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] конструктор завершён: prefix={_prefix}, rateLimit={_rateLimitPerMinute}/min");
         }
 
         // Состояние «хвостового» чтения. Подписываемся не на observer (он может
@@ -184,68 +241,93 @@ namespace RPBot.Web
 
                 public void Start()
                 {
+                    BotLogger.Info(LogCategory.System, $"[WebDashboard] Start() вызван, prefix={_prefix}, OS=Windows={OperatingSystem.IsWindows()}");
                     if (_cts != null)
+                    {
+                        BotLogger.Warn(LogCategory.System, "[WebDashboard] Start(): _cts уже установлен — повторный вызов игнорируется");
                         return;
+                    }
 
-            // Превентивная регистрация URL в Windows urlacl — иначе HttpListener.Start()
-            // падает с HttpListenerException (503) на не-локальных префиксах и у обычных
-            // пользователей. Пробуем один раз, без всплытия UAC, если уже зарегистрировано.
-            if (OperatingSystem.IsWindows() && !UrlAclBootstrap.TryEnsureRegistered(_prefix))
-            {
-                BotLogger.Warn(LogCategory.System,
-                    $"[WebDashboard] Не удалось зарегистрировать {_prefix} в urlacl автоматически. " +
-                    $"Запустите от администратора: netsh http add urlacl url={_prefix} user=Everyone");
-            }
+                    // Превентивная регистрация URL в Windows urlacl — иначе HttpListener.Start()
+                    // падает с HttpListenerException (503) на не-локальных префиксах и у обычных
+                    // пользователей. Пробуем один раз, без всплытия UAC, если уже зарегистрировано.
+                    if (OperatingSystem.IsWindows())
+                    {
+                        BotLogger.Info(LogCategory.System, "[WebDashboard] вызываю UrlAclBootstrap.TryEnsureRegistered");
+                        bool aclOk = UrlAclBootstrap.TryEnsureRegistered(_prefix);
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] UrlAclBootstrap.TryEnsureRegistered → {aclOk}");
+                        if (!aclOk)
+                        {
+                            BotLogger.Warn(LogCategory.System,
+                                $"[WebDashboard] Не удалось зарегистрировать {_prefix} в urlacl автоматически. " +
+                                $"Запустите от администратора: netsh http add urlacl url={_prefix} user=Everyone");
+                        }
+                    }
+                    else
+                    {
+                        BotLogger.Info(LogCategory.System, "[WebDashboard] не Windows — пропускаю UrlAclBootstrap");
+                    }
 
-            var cts = new CancellationTokenSource();
-            _cts = cts;
-            try
-            {
-                _listener.Prefixes.Add(_prefix);
+                    var cts = new CancellationTokenSource();
+                    _cts = cts;
+                    try
+                    {
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] добавляю префикс {_prefix} в HttpListener");
+                        _listener.Prefixes.Add(_prefix);
             }
-            catch (ObjectDisposedException)
+                    catch (ObjectDisposedException ex)
             {
-                // HttpListener в редких случаях оказывается disposed до первого Start
-                // (например, после неудачного предыдущего запуска). Это не наша ошибка —
-                // просто выходим, и пусть следующий restart цикл создаст свежий инстанс.
-                _cts = null;
-                BotLogger.Error(LogCategory.System,
-                    $"[WebDashboard] HttpListener уже disposed до старта на {_prefix}");
-                return;
-            }
+                        // HttpListener в редких случаях оказывается disposed до первого Start
+                        // (например, после неудачного предыдущего запуска). Это не наша ошибка —
+                        // просто выходим, и пусть следующий restart цикл создаст свежий инстанс.
+                        _cts = null;
+                        BotLogger.Error(LogCategory.System,
+                            $"[WebDashboard] HttpListener уже disposed до старта на {_prefix}: {ex.Message}");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _cts = null;
+                        BotLogger.Error(LogCategory.System,
+                            $"[WebDashboard] исключение при добавлении префикса {_prefix}: {ex.GetType().Name}: {ex.Message}");
+                        return;
+                    }
 
-            try
-            {
-                _listener.Start();
-            }
-            catch (HttpListenerException ex)
-            {
-                _cts = null;
-                SafeRemovePrefix();
-                BotLogger.Error(LogCategory.System,
-                    $"[WebDashboard] Не удалось запустить HTTP-сервер на {_prefix}: {ex.Message}");
-                BotLogger.Warn(LogCategory.System,
-                    $"[WebDashboard] На Windows может потребоваться регистрация URL: " +
-                    $"netsh http add urlacl url={_prefix} user=Everyone");
-                return;
-            }
-            catch (ObjectDisposedException ex)
-            {
-                // HttpListener на Windows после неудачного Start() иногда переходит
-                // в disposed-состояние — тогда геттер Prefixes тоже бросает.
-                // Ловим здесь, чтобы бот не валился с непонятным стектрейсом.
-                _cts = null;
-                BotLogger.Error(LogCategory.System,
-                    $"[WebDashboard] HttpListener disposed во время Start на {_prefix}: {ex.Message}");
-                return;
-            }
-            catch (Exception ex)
-            {
-                _cts = null;
-                SafeRemovePrefix();
-                BotLogger.Error(LogCategory.System, $"[WebDashboard] Ошибка запуска: {ex.Message}");
-                return;
-            }
+                    try
+                    {
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() для {_prefix}");
+                        _listener.Start();
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() успешно для {_prefix}");
+                    }
+                    catch (HttpListenerException ex)
+                    {
+                        _cts = null;
+                        SafeRemovePrefix();
+                        BotLogger.Error(LogCategory.System,
+                            $"[WebDashboard] Не удалось запустить HTTP-сервер на {_prefix}: {ex.Message} (ErrorCode={ex.ErrorCode})");
+                        BotLogger.Warn(LogCategory.System,
+                            $"[WebDashboard] На Windows может потребоваться регистрация URL: " +
+                            $"netsh http add urlacl url={_prefix} user=Everyone");
+                        return;
+                    }
+                    catch (ObjectDisposedException ex)
+                    {
+                        // HttpListener на Windows после неудачного Start() иногда переходит
+                        // в disposed-состояние — тогда геттер Prefixes тоже бросает.
+                        // Ловим здесь, чтобы бот не валился с непонятным стектрейсом.
+                        _cts = null;
+                        BotLogger.Error(LogCategory.System,
+                            $"[WebDashboard] HttpListener disposed во время Start на {_prefix}: {ex.Message}");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _cts = null;
+                        SafeRemovePrefix();
+                        BotLogger.Error(LogCategory.System, $"[WebDashboard] Ошибка запуска: {ex.GetType().Name}: {ex.Message}");
+                        BotLogger.Error(LogCategory.System, $"[WebDashboard] Stack: {ex.StackTrace}");
+                        return;
+                    }
 
             // Подписка напрямую на observer BotLogger. Это надёжнее, чем хвост
                         // из run.log: гарантированно получаем все записи, прошедшие через Write,
@@ -269,20 +351,24 @@ namespace RPBot.Web
                                 BotLogger.Info(LogCategory.System, $"[WebDashboard] Start observer={_tailObserverId}");
             }
             _loopTask = Task.Run(() => AcceptLoopAsync(cts.Token));
-            BotLogger.Info(LogCategory.System, $"[WebDashboard] Запущен на {_prefix}");
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] Запущен на {_prefix} (loopTask={_loopTask?.Id})");
         }
 
         public async Task StopAsync()
         {
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] StopAsync вызван");
                     // Идемпотентность — повторный вызов из GracefulShutdownAsync + DisposeAsync
                     // не должен ронять _listener.Close() на disposed объекте.
                     var cts = Interlocked.Exchange(ref _cts, null);
                     if (cts == null)
+                    {
+                        BotLogger.Info(LogCategory.System, "[WebDashboard] StopAsync: уже остановлен");
                         return;
+                    }
 
-                    try { cts.Cancel(); } catch { }
-                    try { _listener.Stop(); } catch { }
-                    try { _listener.Close(); } catch { }
+                    try { cts.Cancel(); BotLogger.Info(LogCategory.System, "[WebDashboard] StopAsync: cts.Cancel()"); } catch (Exception ex) { BotLogger.Warn(LogCategory.System, $"[WebDashboard] StopAsync: cts.Cancel ex: {ex.Message}"); }
+                    try { _listener.Stop(); BotLogger.Info(LogCategory.System, "[WebDashboard] StopAsync: _listener.Stop()"); } catch (Exception ex) { BotLogger.Warn(LogCategory.System, $"[WebDashboard] StopAsync: _listener.Stop ex: {ex.Message}"); }
+                    try { _listener.Close(); BotLogger.Info(LogCategory.System, "[WebDashboard] StopAsync: _listener.Close()"); } catch (Exception ex) { BotLogger.Warn(LogCategory.System, $"[WebDashboard] StopAsync: _listener.Close ex: {ex.Message}"); }
                     lock (_tailInitLock)
                     {
                         if (_tailRegistered)
@@ -331,6 +417,7 @@ namespace RPBot.Web
 
         private async Task AcceptLoopAsync(CancellationToken token)
         {
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] AcceptLoopAsync стартовал, ожидаю подключения на {_prefix}");
             while (!token.IsCancellationRequested)
             {
                 HttpListenerContext? context = null;
@@ -339,20 +426,28 @@ namespace RPBot.Web
                     context = await _listener.GetContextAsync().ConfigureAwait(false);
                     _ = Task.Run(() => HandleRequestAsync(context, token), token);
                 }
-                catch (HttpListenerException)
+                catch (HttpListenerException ex)
                 {
                     if (token.IsCancellationRequested)
+                    {
+                        BotLogger.Info(LogCategory.System, "[WebDashboard] AcceptLoopAsync: токен отменён, выхожу");
                         return;
+                    }
+                    BotLogger.Warn(LogCategory.System,
+                        $"[WebDashboard] AcceptLoop: HttpListenerException {ex.ErrorCode}: {ex.Message}");
                 }
                 catch (ObjectDisposedException)
                 {
+                    BotLogger.Warn(LogCategory.System, "[WebDashboard] AcceptLoopAsync: listener disposed, выхожу");
                     return;
                 }
                 catch (Exception ex)
                 {
-                    BotLogger.Warn(LogCategory.System, $"[WebDashboard] Ошибка цикла HTTP: {ex.Message}");
+                    BotLogger.Warn(LogCategory.System,
+                        $"[WebDashboard] Ошибка цикла HTTP: {ex.GetType().Name}: {ex.Message}");
                 }
             }
+            BotLogger.Info(LogCategory.System, "[WebDashboard] AcceptLoopAsync: выход из while (token cancelled)");
         }
 
         private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken token)
