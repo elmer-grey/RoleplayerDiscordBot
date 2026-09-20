@@ -170,6 +170,7 @@ namespace RPBot.Web
     public sealed class WebDashboardService : IDisposable
     {
         private readonly string _prefix;
+        private readonly List<string> _prefixes = new();
         private readonly Func<object> _healthProvider;
         private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
         private readonly Func<object> _sessionsProvider;
@@ -214,15 +215,26 @@ namespace RPBot.Web
                                 {
                                     // HttpListener требует, чтобы префикс был покрыт записью urlacl.
                                     // `*` — слабый wildcard: покрывает IPv4+IPv6+DNS-имена одной записью
-                                    // urlacl `http://*:PORT/`. Это надёжнее, чем `+` (только IPv4):
-                                    // на машинах с включённым IPv6 loopback `localhost` резолвится в [::1],
-                                    // и `+` его не покрывает.
-                                    // Для `0.0.0.0`/`*`/пустого хоста используем `*`. Конкретный IP/имя
-                                    // оставляем как есть (требует точной записи urlacl).
-                                    string hostPart = string.IsNullOrEmpty(host) || host == "0.0.0.0" || host == "*"
-                                        ? "*"
-                                        : host;
-                                    _prefix = $"http://{hostPart}:{port}/";
+                                    // urlacl `http://*:PORT/`. На Windows .NET 8 один префикс `*` слушает
+                                    // только IPv6 ([::]), а IPv4-клиенты (включая Tailscale 100.x.x.x) не доходят.
+                                    // Поэтому для всех "любых интерфейсов" добавляем ОБА префикса:
+                                    //   http://0.0.0.0:PORT/  — IPv4 any
+                                    //   http://[::]:PORT/    — IPv6 any
+                                    // Оба покрываются одной записью urlacl http://*:PORT/ (weak wildcard).
+                                    // Конкретный IP/имя хоста — оставляем как есть (один префикс).
+                                    if (string.IsNullOrEmpty(host) || host == "0.0.0.0" || host == "*")
+                                    {
+                                        _prefixes.Clear();
+                                        _prefixes.Add($"http://0.0.0.0:{port}/");
+                                        _prefixes.Add($"http://[::]:{port}/");
+                                        _prefix = _prefixes[0];
+                                    }
+                                    else
+                                    {
+                                        _prefix = $"http://{host}:{port}/";
+                                        _prefixes.Clear();
+                                        _prefixes.Add(_prefix);
+                                    }
                                     _healthProvider = healthProvider;
                                     _serverConfigsProvider = serverConfigsProvider;
                                     _sessionsProvider = sessionsProvider;
@@ -266,14 +278,19 @@ namespace RPBot.Web
                     // пользователей. Пробуем один раз, без всплытия UAC, если уже зарегистрировано.
                     if (OperatingSystem.IsWindows())
                     {
-                        BotLogger.Info(LogCategory.System, "[WebDashboard] вызываю UrlAclBootstrap.TryEnsureRegistered");
-                        bool aclOk = UrlAclBootstrap.TryEnsureRegistered(_prefix);
-                        BotLogger.Info(LogCategory.System, $"[WebDashboard] UrlAclBootstrap.TryEnsureRegistered → {aclOk}");
-                        if (!aclOk)
+                        // Для dual-stack (IPv4+IPv6) регистрируем все префиксы —
+                        // urlacl-запись http://*:PORT/ покрывает любой из них.
+                        foreach (var p in _prefixes)
                         {
-                            BotLogger.Warn(LogCategory.System,
-                                $"[WebDashboard] Не удалось зарегистрировать {_prefix} в urlacl автоматически. " +
-                                $"Запустите от администратора: netsh http add urlacl url={_prefix} user=Everyone");
+                            BotLogger.Info(LogCategory.System, "[WebDashboard] вызываю UrlAclBootstrap.TryEnsureRegistered");
+                            bool aclOk = UrlAclBootstrap.TryEnsureRegistered(p);
+                            BotLogger.Info(LogCategory.System, $"[WebDashboard] UrlAclBootstrap.TryEnsureRegistered → {aclOk}");
+                            if (!aclOk)
+                            {
+                                BotLogger.Warn(LogCategory.System,
+                                    $"[WebDashboard] Не удалось зарегистрировать {p} в urlacl автоматически. " +
+                                    $"Запустите от администратора: netsh http add urlacl url={p} user=Everyone");
+                            }
                         }
                     }
                     else
@@ -285,8 +302,11 @@ namespace RPBot.Web
                     _cts = cts;
                     try
                     {
-                        BotLogger.Info(LogCategory.System, $"[WebDashboard] добавляю префикс {_prefix} в HttpListener");
-                        _listener.Prefixes.Add(_prefix);
+                        foreach (var p in _prefixes)
+                        {
+                            BotLogger.Info(LogCategory.System, $"[WebDashboard] добавляю префикс {p} в HttpListener");
+                            _listener.Prefixes.Add(p);
+                        }
             }
                     catch (ObjectDisposedException ex)
             {
@@ -308,9 +328,9 @@ namespace RPBot.Web
 
                     try
                     {
-                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() для {_prefix}");
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() для {string.Join(", ", _prefixes)}");
                         _listener.Start();
-                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() успешно для {_prefix}");
+                        BotLogger.Info(LogCategory.System, $"[WebDashboard] HttpListener.Start() успешно для {string.Join(", ", _prefixes)}");
                     }
                     catch (HttpListenerException ex)
                     {
@@ -364,7 +384,7 @@ namespace RPBot.Web
                                 BotLogger.Info(LogCategory.System, $"[WebDashboard] Start observer={_tailObserverId}");
             }
             _loopTask = Task.Run(() => AcceptLoopAsync(cts.Token));
-            BotLogger.Info(LogCategory.System, $"[WebDashboard] Запущен на {_prefix} (loopTask={_loopTask?.Id})");
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] Запущен на {string.Join(", ", _prefixes)} (loopTask={_loopTask?.Id})");
         }
 
         public async Task StopAsync()
@@ -408,13 +428,16 @@ namespace RPBot.Web
         /// </summary>
         private void SafeRemovePrefix()
         {
-            try
+            foreach (var p in _prefixes)
             {
-                _listener.Prefixes.Remove(_prefix);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Listener уже закрыт — префикс точно не активен.
+                try
+                {
+                    _listener.Prefixes.Remove(p);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Listener уже закрыт — префикс точно не активен.
+                }
             }
         }
 
@@ -430,7 +453,7 @@ namespace RPBot.Web
 
         private async Task AcceptLoopAsync(CancellationToken token)
         {
-            BotLogger.Info(LogCategory.System, $"[WebDashboard] AcceptLoopAsync стартовал, ожидаю подключения на {_prefix}");
+            BotLogger.Info(LogCategory.System, $"[WebDashboard] AcceptLoopAsync стартовал, ожидаю подключения на {string.Join(", ", _prefixes)}");
             while (!token.IsCancellationRequested)
             {
                 HttpListenerContext? context = null;
