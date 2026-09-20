@@ -33,6 +33,13 @@ namespace RPBot.Web
     /// </remarks>
     internal static class UrlAclBootstrap
     {
+        // Кэш по порту: если для данного порта в текущей сессии мы уже успешно
+        // подтвердили регистрацию (или только что зарегистрировали) — повторно
+        // 'netsh http show urlacl' не запускаем. Иначе каждый рестарт бота
+        // спавнит процесс netsh, и на части машин CreateNoWindow игнорируется —
+        // пользователь видит мигающие окна терминала.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> _portVerified = new();
+
         /// <summary>
         /// Если URL ещё не зарегистрирован — пробует выполнить
         /// <c>netsh http add urlacl url=... user=Everyone</c> в отдельном
@@ -56,7 +63,14 @@ namespace RPBot.Web
             }
 
             BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] проверка регистрации {prefix}");
+            int port = ExtractPort(prefix);
+            if (port > 0 && _portVerified.TryGetValue(port, out var verified) && verified)
+            {
+                BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже подтверждён ранее в этой сессии — пропускаю netsh show");
+                return true;
+            }
             bool alreadyRegistered = IsRegistered(prefix);
+            if (alreadyRegistered && port > 0) _portVerified[port] = true;
             BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] IsRegistered({prefix}) = {alreadyRegistered}");
             if (alreadyRegistered)
             {
@@ -120,8 +134,63 @@ namespace RPBot.Web
             bool finalRegistered = IsRegistered(prefix);
             BotLogger.Info(LogCategory.System,
                 $"[UrlAclBootstrap] пост-проверка IsRegistered({prefix}) = {finalRegistered}");
+            if (finalRegistered)
+            {
+                int port = ExtractPort(prefix);
+                if (port > 0) _portVerified[port] = true;
+            }
             return finalRegistered;
         }
+
+        private static int ExtractPort(string prefix)
+        {
+            if (string.IsNullOrEmpty(prefix)) return -1;
+            int schemeEnd = prefix.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd < 0) return -1;
+            var body = prefix[(schemeEnd + 3)..];
+            int colonIdx = body.LastIndexOf(':');
+            if (colonIdx < 0) return -1;
+            return int.TryParse(body[(colonIdx + 1)..], out var p) ? p : -1;
+        }
+
+                // Собираем все адреса, на которые HttpListener реально может забиндиться
+                // (конкретные IP локальных интерфейсов). Wildcard-префиксы ('+', '*', '0.0.0.0')
+                // .NET 8 HttpListener НЕ принимает — Start() падает с ErrorCode=50.
+                public static HashSet<string> EnumerateBindableAddresses()
+                {
+                    var result = new HashSet<string>(StringComparer.Ordinal);
+                    try
+                    {
+                        foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                        {
+                            if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                            // пропускаем loopback — отдельно добавим 127.0.0.1 и [::1]
+                            if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                            var props = ni.GetIPProperties();
+                            foreach (var ua in props.UnicastAddresses)
+                            {
+                                if (ua.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork &&
+                                    ua.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6) continue;
+                                // link-local IPv6 ([fe80::..]) HttpListener принимает только при наличии scope id
+                                if (ua.Address.IsIPv6LinkLocal) continue;
+                                var ip = ua.Address.ToString();
+                                // отбрасываем IPv4 link-local (169.254.x.x) — Bluetooth / WinRM / Wi-Fi-Direct,
+                                // не маршрутизируется, мусор в urlacl.
+                                if (ip.StartsWith("169.254.", StringComparison.Ordinal)) continue;
+                                result.Add(ip);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.System,
+                            $"[UrlAclBootstrap] EnumerateBindableAddresses: {ex.GetType().Name}: {ex.Message}");
+                    }
+                    // loopback
+                    result.Add("127.0.0.1");
+                    result.Add("::1");
+                    return result;
+                }
 
         private static bool IsRegistered(string prefix)
         {
@@ -146,16 +215,45 @@ namespace RPBot.Web
                 var stderr = p.StandardError.ReadToEnd();
                 p.WaitForExit(2000);
                 // netsh выводит URL в формате:    URL : http://127.0.0.1:5057/
-                // Нормализуем: `+`, `*`, `0.0.0.0` для urlacl эквивалентны — ищем любой из них.
+                // Нам важно знать: покрыта ли записью urlacl пара host:port нашего prefix.
+                // Weak wildcard '*' и strong wildcard '+' покрывают любой хост (включая наш
+                // 0.0.0.0 и [::]). Конкретный IP/имя хоста — только если совпадает.
                 var needle = prefix.TrimEnd('/');
-                string[] aliases = { needle, needle.Replace("://+", "://*"), needle.Replace("://*", "://+"), needle.Replace("://0.0.0.0", "://+") };
-                bool found = false;
-                foreach (var n in aliases)
+                string needleHost = "", needlePort = "";
+                int nSchemeEnd = needle.IndexOf("://", StringComparison.Ordinal);
+                if (nSchemeEnd >= 0)
                 {
-                    if (stdout.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0) { found = true; break; }
+                    var nBody = needle[(nSchemeEnd + 3)..];
+                    int nColon = nBody.LastIndexOf(':');
+                    if (nColon >= 0)
+                    {
+                        needleHost = nBody[..nColon];
+                        needlePort = nBody[(nColon + 1)..];
+                    }
+                }
+                bool found = false;
+                foreach (var rawLine in stdout.Split('\n'))
+                {
+                    var line = rawLine.Trim();
+                    var urlIdx = line.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+                    if (urlIdx < 0) continue;
+                    var rest = line[urlIdx..];
+                    int spaceIdx = rest.IndexOfAny(new[] { ' ', '\t' }, "http://".Length);
+                    var registered = (spaceIdx >= 0 ? rest[..spaceIdx] : rest).TrimEnd('/');
+                    if (!registered.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) continue;
+                    var regBody = registered["http://".Length..];
+                    int colonIdx = regBody.LastIndexOf(':');
+                    if (colonIdx < 0) continue;
+                    var regHost = regBody[..colonIdx];
+                    var regPort = regBody[(colonIdx + 1)..];
+                    if (!regPort.Equals(needlePort, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool wildcardHost = regHost == "*" || regHost == "+";
+                    bool matchesHost = wildcardHost
+                        || regHost.Equals(needleHost, StringComparison.OrdinalIgnoreCase);
+                    if (matchesHost) { found = true; break; }
                 }
                 BotLogger.Info(LogCategory.System,
-                    $"[UrlAclBootstrap] IsRegistered: needle='{needle}' found={found} exit={p.ExitCode} stderr='{stderr.Trim()}'");
+                    $"[UrlAclBootstrap] IsRegistered: needle='{needle}' (host={needleHost}, port={needlePort}) found={found} exit={p.ExitCode} stderr='{stderr.Trim()}'");
                 return found;
             }
             catch (Exception ex)
@@ -213,22 +311,47 @@ namespace RPBot.Web
                         Func<object> systemsProvider,
                         int maxLogs = 1000)
                                 {
-                                    // HttpListener требует, чтобы префикс был покрыт записью urlacl.
-                                    // `*` — слабый wildcard: покрывает IPv4+IPv6+DNS-имена одной записью
-                                    // urlacl `http://*:PORT/`. На Windows .NET 8 один префикс `*` слушает
-                                    // только IPv6 ([::]), а IPv4-клиенты (включая Tailscale 100.x.x.x) не доходят.
-                                    // Поэтому для всех "любых интерфейсов" добавляем ОБА префикса:
-                                    //   http://0.0.0.0:PORT/  — IPv4 any
-                                    //   http://[::]:PORT/    — IPv6 any
-                                    // Оба покрываются одной записью urlacl http://*:PORT/ (weak wildcard).
-                                    // Конкретный IP/имя хоста — оставляем как есть (один префикс).
+                                    // HttpListener на .NET 8 принимает префиксы в формате:
+                                    //   http://+:PORT/        — strong wildcard (все IPv4), ТРЕБУЕТ admin
+                                    //                      или urlacl с правом Register (GA) для текущего юзера.
+                                    //   http://[::]:PORT/     — IPv6 any
+                                    //   http://localhost:PORT/
+                                    //   http://<конкретный-IP>:PORT/
+                                    // Префикс http://0.0.0.0:PORT/ Start() отвергает (ErrorCode=50).
+                                    //
+                                    // Для dual-stack на .NET 8 Windows:
+                                    //   http://+:PORT/   — покрывает все IPv4 (включая Tailscale 100.x.x.x),
+                                    //                      если urlacl содержит GA (Generic All) для текущего
+                                    //                      пользователя или Everyone.
+                                    //   http://[::]:PORT/ — IPv6 any, проходит с urlacl GX.
+                                    //
+                                    // Urlacl-запись http://*:PORT/ (weak wildcard) покрывает оба префикса.
                                     if (string.IsNullOrEmpty(host) || host == "0.0.0.0" || host == "*")
-                                    {
-                                        _prefixes.Clear();
-                                        _prefixes.Add($"http://0.0.0.0:{port}/");
-                                        _prefixes.Add($"http://[::]:{port}/");
-                                        _prefix = _prefixes[0];
-                                    }
+                                                                        {
+                                                                            // dual-stack: IPv4 + IPv6 всех интерфейсов.
+                                                                            // .NET 8 HttpListener НЕ принимает "http://+:PORT/" и "http://0.0.0.0:PORT/"
+                                                                            // (Start() → ErrorCode=50 "Такой запрос не поддерживается").
+                                                                            // Принимает только конкретные хосты: "http://<ip>:PORT/".
+                                                                            //
+                                                                            // Urlacl "http://*:PORT/ sddl=D:(A;;GA;;;WD)" покрывает ЛЮБОЙ из них.
+                                                                            // HttpListener биндит каждый префикс отдельным сокетом (как Listener.exe).
+                                                                            _prefixes.Clear();
+                                                                            var addresses = UrlAclBootstrap.EnumerateBindableAddresses();
+                                                                            foreach (var ip in addresses)
+                                                                            {
+                                                                                if (ip.Contains(':'))
+                                                                                    _prefixes.Add($"http://[{ip}]:{port}/");
+                                                                                else
+                                                                                    _prefixes.Add($"http://{ip}:{port}/");
+                                                                            }
+                                                                            if (_prefixes.Count == 0)
+                                                                            {
+                                                                                // fallback на loopback
+                                                                                _prefixes.Add($"http://127.0.0.1:{port}/");
+                                                                                _prefixes.Add($"http://[::1]:{port}/");
+                                                                            }
+                                                                            _prefix = string.Join(", ", _prefixes);
+                                                                        }
                                     else
                                     {
                                         _prefix = $"http://{host}:{port}/";
