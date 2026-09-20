@@ -65,22 +65,36 @@ namespace RPBot.Web
             }
 
             // На доменных аккаунтах `Everyone` часто не резолвится → SDDL не создаётся
-            // (Error 183/1332). Используем конкретного текущего пользователя.
+            // (Error 183/1332). Используем конкретного текущего пользователя. Если и это
+            // не сработает — fallback на SDDL "D:(A;;GX;;;WD)" (Allow Generic eXecute для
+            // World Domain / Everyone) — это работает на любой Windows-машине без
+            // необходимости резолвить доменный аккаунт.
             string aclUser = Environment.GetEnvironmentVariable("USERNAME") ?? "Everyone";
+            const string sddlEveryone = "D:(A;;GX;;;WD)";
+            bool ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} user={aclUser}", prefix, aclUser);
+            if (!ok)
+            {
+                BotLogger.Info(LogCategory.System,
+                    $"[UrlAclBootstrap] user={aclUser} не сработал, fallback на SDDL '{sddlEveryone}'");
+                ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} sddl=\"{sddlEveryone}\"", prefix, "SDDL(WD)");
+            }
+
+            return ok;
+        }
+
+        private static bool TryNetshAdd(Func<string, string> commandForArg, string prefix, string label)
+        {
             try
             {
                 BotLogger.Info(LogCategory.System,
-                    $"[UrlAclBootstrap] {prefix} НЕ зарегистрирован, пробую netsh http add urlacl url={prefix} user={aclUser} (UAC)");
-                // Запускаем в отдельном окне cmd, чтобы не блокировать основной поток.
-                // /c — выполнить и закрыть окно. Сам netsh синхронный, но без UAC-окна
-                // не сможет записать в HKLM\...\Services\Http\Parameters\UrlAclInfo.
+                    $"[UrlAclBootstrap] {prefix} НЕ зарегистрирован, пробую ({label}): {commandForArg(prefix)}");
                 var psi = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/c start \"\" cmd /c \"netsh http add urlacl url={prefix} user={aclUser}\"",
-                    UseShellExecute = true,   // нужно, чтобы сработал start и UAC-окно
+                    Arguments = $"/c start \"\" cmd /c \"{commandForArg(prefix)}\"",
+                    UseShellExecute = true,
                     CreateNoWindow = false,
-                    Verb = "runas",            // UAC: запросить повышение
+                    Verb = "runas",
                 };
                 using var p = Process.Start(psi);
                 if (p == null)
@@ -89,7 +103,6 @@ namespace RPBot.Web
                     return false;
                 }
                 BotLogger.Info(LogCategory.System, "[UrlAclBootstrap] ожидаю завершения UAC/netsh (до 5с)...");
-                // Ждём завершения до 5 секунд. netsh быстрый, UAC может задержать.
                 if (!p.WaitForExit(5000))
                 {
                     BotLogger.Warn(LogCategory.System, "[UrlAclBootstrap] таймаут 5с на netsh/UAC — продолжаю без повышения");
@@ -99,8 +112,6 @@ namespace RPBot.Web
             }
             catch (Exception ex)
             {
-                // Любая ошибка (нет прав на runas / нет netsh / не наш случай) —
-                // не валим бота, просто возвращаем false.
                 BotLogger.Warn(LogCategory.System,
                     $"[UrlAclBootstrap] исключение при запуске netsh: {ex.GetType().Name}: {ex.Message}");
                 return false;
@@ -202,12 +213,14 @@ namespace RPBot.Web
                         int maxLogs = 1000)
                                 {
                                     // HttpListener требует, чтобы префикс был покрыт записью urlacl.
-                                    // `+` — сильный wildcard, который покрывается единственной записью
-                                    // `http://+:PORT/` (не требуется отдельная запись для каждого IP).
-                                    // Для `0.0.0.0`/`*`/пустого хоста используем `+`. Конкретный IP/имя
+                                    // `*` — слабый wildcard: покрывает IPv4+IPv6+DNS-имена одной записью
+                                    // urlacl `http://*:PORT/`. Это надёжнее, чем `+` (только IPv4):
+                                    // на машинах с включённым IPv6 loopback `localhost` резолвится в [::1],
+                                    // и `+` его не покрывает.
+                                    // Для `0.0.0.0`/`*`/пустого хоста используем `*`. Конкретный IP/имя
                                     // оставляем как есть (требует точной записи urlacl).
                                     string hostPart = string.IsNullOrEmpty(host) || host == "0.0.0.0" || host == "*"
-                                        ? "+"
+                                        ? "*"
                                         : host;
                                     _prefix = $"http://{hostPart}:{port}/";
                                     _healthProvider = healthProvider;
