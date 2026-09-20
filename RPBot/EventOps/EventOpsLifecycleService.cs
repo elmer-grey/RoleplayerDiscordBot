@@ -214,6 +214,17 @@ namespace RPBot.EventOps
                 CancelReminder1h(entry);
                 CancelDeleteReminder15m(entry);
 
+                // Вычисляем и сохраняем абсолютное время cleanup в стор —
+                // это поле переживёт рестарт бота (см. RebuildFromStoreAsync).
+                var at = entry.CancelledAtUtc
+                      ?? entry.ActualStartTimeUtc
+                      ?? entry.LastStartTimeUtc;
+                if (at.HasValue)
+                {
+                    entry.CleanupAtUtc = at.Value.AddHours(24);
+                    try { _store.UpdateEntry(entry); } catch { }
+                }
+
                 // Через 24ч удаляем анонс.
                 ScheduleCleanup24h(entry);
             }
@@ -234,6 +245,16 @@ namespace RPBot.EventOps
 
                 CancelReminder1h(entry);
                 CancelDeleteReminder15m(entry);
+
+                // Для cancelled момент отмены — это уже сейчас; если
+                // EventAnnouncer не успел проставить CancelledAtUtc, сделаем
+                // это сами и сохраним в стор.
+                if (!entry.CancelledAtUtc.HasValue)
+                {
+                    entry.CancelledAtUtc = DateTimeOffset.UtcNow;
+                }
+                entry.CleanupAtUtc = entry.CancelledAtUtc.Value.AddHours(24);
+                try { _store.UpdateEntry(entry); } catch { }
 
                 ScheduleCleanup24h(entry);
             }
@@ -336,20 +357,32 @@ namespace RPBot.EventOps
 
         private bool ScheduleCleanup24h(EventAnnouncementEntry entry)
         {
-            var at = entry.CancelledAtUtc
-                  ?? entry.ActualStartTimeUtc
-                  ?? entry.LastStartTimeUtc;
-            if (!at.HasValue) return false;
+            // Приоритет: entry.CleanupAtUtc (абсолютное время, записанное в JSON).
+            // Если null — вычисляем на лету и сохраняем в стор, чтобы при рестарте
+            // бота RebuildFromStoreAsync использовал тот же момент.
+            DateTimeOffset cleanupAt;
+            if (entry.CleanupAtUtc.HasValue)
+            {
+                cleanupAt = entry.CleanupAtUtc.Value;
+            }
+            else
+            {
+                var at = entry.CancelledAtUtc
+                      ?? entry.ActualStartTimeUtc
+                      ?? entry.LastStartTimeUtc;
+                if (!at.HasValue) return false;
+                cleanupAt = at.Value.AddHours(24);
+                entry.CleanupAtUtc = cleanupAt;
+                try { _store.UpdateEntry(entry); } catch { }
+            }
 
-            // Completed: считаем от ActualStartTimeUtc (когда реально началось),
-            // если оно есть. Иначе fallback на LastStartTimeUtc.
-            // Cancelled: считаем от CancelledAtUtc (момент отмены), иначе от LastStartTime.
-            var cleanupAt = at.Value.AddHours(24);
             var nowUtc = DateTimeOffset.UtcNow;
             if (cleanupAt <= nowUtc)
             {
-                // Прошло больше 24ч — удаляем прямо сейчас (в фоне).
+                // Момент уже в прошлом — выполним через 2 секунды (фон).
                 cleanupAt = nowUtc.AddSeconds(2);
+                entry.CleanupAtUtc = cleanupAt;
+                try { _store.UpdateEntry(entry); } catch { }
             }
 
             var key = (entry.GuildId, entry.EventId);

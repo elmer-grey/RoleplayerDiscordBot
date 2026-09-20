@@ -833,7 +833,17 @@ namespace RPBot.EventOps
 
             if (isCancelled || isCompleted)
             {
-            try { _store.Remove(guild.Id, guildEvent.Id); } catch { }
+                // Помечаем запись финальным статусом и сохраняем в стор —
+            // удаление произойдёт позже в EventOpsLifecycleService.RunCleanup24hAsync
+            // через 24ч. Так запись переживёт рестарт бота (RebuildFromStoreAsync
+            // по LastUpdatedMark поставит cleanup24h на восстановление).
+            try
+            {
+                entry.LastUpdatedMark = status;
+                entry.LastUpdatedAt = DateTime.UtcNow;
+                _store.UpdateEntry(entry);
+            }
+            catch { }
             }
         }
 
@@ -1073,14 +1083,12 @@ namespace RPBot.EventOps
                 }
             }
 
-            // Помечаем и убираем из store для финальных статусов.
+            // Помечаем запись финальным статусом и сохраняем в стор.
+            // Удаление произойдёт позже в EventOpsLifecycleService.RunCleanup24hAsync
+            // через 24ч — это даёт шанс пережить рестарт бота.
             entry.LastUpdatedMark = status;
             entry.LastUpdatedAt = DateTime.UtcNow;
             try { _store.UpdateEntry(entry); } catch { }
-            if (isCancelled || isCompleted)
-            {
-                try { _store.Remove(entry.GuildId, entry.EventId); } catch { }
-            }
         }
 
                     /// <summary>

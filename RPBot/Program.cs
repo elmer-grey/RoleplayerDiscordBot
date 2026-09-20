@@ -1023,6 +1023,11 @@ private void SaveServerConfigs()
     _eventOpsOrchestrator.OnCreatedAsync = e => _eventAnnouncer!.AnnounceCreatedAsync(e);
     _eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(default, current);
     _eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
+    // ВАЖНО: Announcer назначается первым (=), а Lifecycle подключается ПОСЛЕ через +=.
+    // Тогда multicast-делегат = [Announcer → Lifecycle]. Announcer успевает
+    // проставить LastUpdatedMark и сохранить запись, потом Lifecycle читает её и
+    // планирует cleanup24h. Если Lifecycle вызвался бы раньше — store.TryGet вернул
+    // бы ещё-не-обновлённую запись и таймер бы не встал.
     _eventOpsOrchestrator.OnCancelledAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "cancelled");
     _eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
 

@@ -80,6 +80,14 @@ public DateTimeOffset? ActualStartTimeUtc { get; set; }
 // Если null — fallback на LastStartTimeUtc (плановое).
 public DateTimeOffset? CancelledAtUtc { get; set; }
 
+// Абсолютное время UTC, когда анонс должен быть удалён из канала / DM / TG
+// (после Completed или Cancelled). Выставляется EventOpsLifecycleService в
+// HandleCompletedAsync / HandleCancelledAsync и сохраняется в JSON, чтобы
+// пережить рестарт бота: при старте RebuildFromStoreAsync читает это поле
+// и ставит cleanup-таймер заново. Если null — вычисляется на лету
+// (CancelledAtUtc ?? ActualStartTimeUtc ?? LastStartTimeUtc) + 24ч.
+public DateTimeOffset? CleanupAtUtc { get; set; }
+
 // ID DM-сообщений с напоминанием за час (рассылка EventOpsLifecycleService).
 // Хранится отдельно от DmMessageIdsByUserId (там лежат анонсы), чтобы при
 // удалении напоминания через 15 мин после старта события не трогать анонсы.
