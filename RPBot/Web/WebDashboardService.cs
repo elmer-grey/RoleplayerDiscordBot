@@ -78,21 +78,23 @@ namespace RPBot.Web
 
             // На доменных аккаунтах `Everyone` часто не резолвится → SDDL не создаётся
             // (Error 183/1332). Используем конкретного текущего пользователя. Если и это
-            // не сработает — fallback на SDDL "D:(A;;GX;;;WD)" (Allow Generic eXecute для
+                        // не сработает — fallback на SDDL "D:(A;;GA;;;WD)" (Allow Generic All для
             // World Domain / Everyone) — это работает на любой Windows-машине без
-            // необходимости резолвить доменный аккаунт.
-            string aclUser = Environment.GetEnvironmentVariable("USERNAME") ?? "Everyone";
-            const string sddlEveryone = "D:(A;;GX;;;WD)";
-            bool ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} user={aclUser}", prefix, aclUser);
-            if (!ok)
-            {
-                BotLogger.Info(LogCategory.System,
-                    $"[UrlAclBootstrap] user={aclUser} не сработал, fallback на SDDL '{sddlEveryone}'");
-                ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} sddl=\"{sddlEveryone}\"", prefix, "SDDL(WD)");
-            }
+                        // необходимости резолвить доменный аккаунт, и — главное — урлпреджные правила
+                        // с GA покрывают HttpListener-префиксы с конкретным IP. Только GX недостаточно
+                        // для HttpListener.Start() на concrete-IP префиксах.
+                        string aclUser = Environment.GetEnvironmentVariable("USERNAME") ?? "Everyone";
+                        const string sddlEveryone = "D:(A;;GA;;;WD)";
+                        bool ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} user={aclUser}", prefix, aclUser);
+                        if (!ok)
+                        {
+                            BotLogger.Info(LogCategory.System,
+                                $"[UrlAclBootstrap] user={aclUser} не сработал, fallback на SDDL '{sddlEveryone}'");
+                            ok = TryNetshAdd(psi => $"netsh http add urlacl url={prefix} sddl=\"{sddlEveryone}\"", prefix, "SDDL(WD)");
+                        }
 
-            return ok;
-        }
+                        return ok;
+                    }
 
         private static bool TryNetshAdd(Func<string, string> commandForArg, string prefix, string label)
         {
@@ -210,42 +212,56 @@ namespace RPBot.Web
                 p.WaitForExit(2000);
                 // netsh выводит URL в формате:    URL : http://127.0.0.1:5057/
                 // Нам важно знать: покрыта ли записью urlacl пара host:port нашего prefix.
-                // Weak wildcard '*' и strong wildcard '+' покрывают любой хост (включая наш
-                // 0.0.0.0 и [::]). Конкретный IP/имя хоста — только если совпадает.
-                var needle = prefix.TrimEnd('/');
-                string needleHost = "", needlePort = "";
-                int nSchemeEnd = needle.IndexOf("://", StringComparison.Ordinal);
-                if (nSchemeEnd >= 0)
+                                //
+                                // Поведение Windows urlacl vs HttpListener:
+                                //   • Строгий матч host:port       — покрывает (если SDDL даёт GA для бота).
+                                //   • Weak wildcard '*' в urlacl   — НЕ покрывает concrete-IP префикс HttpListener.
+                                //                                    Раньше я считал, что покрывает — НЕВЕРНО,
+                                //                                    отсюда ложные found=True без реальной записи.
+                                //   • Strong wildcard '+' в urlacl — тоже НЕ покрывает concrete-IP (НЕ tested by us).
+                                //                                    HttpListener хочет либо exact-match host, либо
+                                //                                    собственный +/'*' на своей стороне (но .NET 8
+                                //                                    Start() для +/'*' отдаёт ErrorCode=50).
+                                //
+                                // Значит: считаем prefix покрытым ТОЛЬКО если в urlacl есть строгий матч
+                                // host:port для нашего prefix. Wildcard-записи игнорируем.
+                                var needle = prefix.TrimEnd('/');
+                                string needleHost = "", needlePort = "";
+                                int nSchemeEnd = needle.IndexOf("://", StringComparison.Ordinal);
+                                if (nSchemeEnd >= 0)
                 {
-                    var nBody = needle[(nSchemeEnd + 3)..];
-                    int nColon = nBody.LastIndexOf(':');
-                    if (nColon >= 0)
-                    {
-                        needleHost = nBody[..nColon];
-                        needlePort = nBody[(nColon + 1)..];
-                    }
-                }
-                bool found = false;
-                foreach (var rawLine in stdout.Split('\n'))
-                {
-                    var line = rawLine.Trim();
-                    var urlIdx = line.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
-                    if (urlIdx < 0) continue;
-                    var rest = line[urlIdx..];
-                    int spaceIdx = rest.IndexOfAny(new[] { ' ', '\t' }, "http://".Length);
-                    var registered = (spaceIdx >= 0 ? rest[..spaceIdx] : rest).TrimEnd('/');
-                    if (!registered.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) continue;
-                    var regBody = registered["http://".Length..];
-                    int colonIdx = regBody.LastIndexOf(':');
-                    if (colonIdx < 0) continue;
-                    var regHost = regBody[..colonIdx];
-                    var regPort = regBody[(colonIdx + 1)..];
-                    if (!regPort.Equals(needlePort, StringComparison.OrdinalIgnoreCase)) continue;
-                    bool wildcardHost = regHost == "*" || regHost == "+";
-                    bool matchesHost = wildcardHost
-                        || regHost.Equals(needleHost, StringComparison.OrdinalIgnoreCase);
-                    if (matchesHost) { found = true; break; }
-                }
+                                    var nBody = needle[(nSchemeEnd + 3)..];
+                                    int nColon = nBody.LastIndexOf(':');
+                                    if (nColon >= 0)
+                                    {
+                                        needleHost = nBody[..nColon];
+                                        needlePort = nBody[(nColon + 1)..];
+                                    }
+                                }
+                                bool found = false;
+                                foreach (var rawLine in stdout.Split('\n'))
+                                {
+                                    var line = rawLine.Trim();
+                                    var urlIdx = line.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+                                    if (urlIdx < 0) continue;
+                                    var rest = line[urlIdx..];
+                                    int spaceIdx = rest.IndexOfAny(new[] { ' ', '\t' }, "http://".Length);
+                                    var registered = (spaceIdx >= 0 ? rest[..spaceIdx] : rest).TrimEnd('/');
+                                    if (!registered.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) continue;
+                                    var regBody = registered["http://".Length..];
+                                    int colonIdx = regBody.LastIndexOf(':');
+                                    if (colonIdx < 0) continue;
+                                    var regHost = regBody[..colonIdx];
+                                    var regPort = regBody[(colonIdx + 1)..];
+                                    if (!regPort.Equals(needlePort, StringComparison.OrdinalIgnoreCase)) continue;
+                                    // ТОЛЬКО strict match. Wildcard-host в urlacl не покрывает конкретный IP
+                                    // префикс HttpListener (доказано на netsh-выводе с ложным found=True).
+                                    if (regHost.Equals(needleHost, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        found = true;
+                                        break;
+                                    }
+                                }
                 BotLogger.Info(LogCategory.System,
                     $"[UrlAclBootstrap] IsRegistered: needle='{needle}' (host={needleHost}, port={needlePort}) found={found} exit={p.ExitCode} stderr='{stderr.Trim()}'");
                 return found;
