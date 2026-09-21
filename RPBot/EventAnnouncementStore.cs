@@ -72,6 +72,7 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
         LastUpdatedAt = e.LastUpdatedAt,
         ActualStartTimeUtc = e.ActualStartTimeUtc,
         CancelledAtUtc = e.CancelledAtUtc,
+        CompletedAtUtc = e.CompletedAtUtc,
         ReminderDmMessageIdsByUserId = e.ReminderDmMessageIdsByUserId is null
             ? null
             : new Dictionary<ulong, ulong>(e.ReminderDmMessageIdsByUserId),

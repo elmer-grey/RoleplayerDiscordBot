@@ -672,6 +672,24 @@ namespace RPBot.EventOps
                 catch { }
             }
 
+            // Записываем фактическое время завершения — нужно для двух вещей:
+            //   1) При status-from-rest (после рестарта) поле «Завершение» должно
+            //      показывать реальное время окончания, а не момент рестарта.
+            //   2) EventOpsLifecycleService.ScheduleCleanup24h считает «+24ч
+            //      удаление» отсюда, а не от планового LastStartTimeUtc.
+            // Пишем только при первом observed completed — повторные вызовы
+            // (например, после рестарта через status-from-rest) сохранят
+            // оригинальный момент.
+            if (isCompleted && !entry.CompletedAtUtc.HasValue)
+            {
+                try
+                {
+                    entry.CompletedAtUtc = DateTimeOffset.UtcNow;
+                    _store.UpdateEntry(entry);
+                }
+                catch { }
+            }
+
             string whereText;
             string whereTextPlain;
             if (guildEvent.Channel != null)
@@ -713,7 +731,14 @@ namespace RPBot.EventOps
             // записанного в момент started), а не плановое guildEvent.StartTime.
             var actualStartUtc = entry.ActualStartTimeUtc ?? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
             embedBuilder.AddField("🕒 Начало", $"<t:{actualStartUtc.ToUnixTimeSeconds()}:F>", true);
-            embedBuilder.AddField("🛑 Завершение", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true);
+            // «Завершение» — из сохранённого CompletedAtUtc (записан в момент
+            // первого observed completed). Fallback на DateTimeOffset.UtcNow
+            // нужен только если событие пришло completed минуя started
+            // (ActualStartTimeUtc отсутствует) и CompletedAtUtc ещё не
+            // успели проставить — это редкий кейс, на следующем рестарте
+            // будет исправлено.
+            var completedUtc = entry.CompletedAtUtc ?? DateTimeOffset.UtcNow;
+            embedBuilder.AddField("🛑 Завершение", $"<t:{completedUtc.ToUnixTimeSeconds()}:F>", true);
             embedBuilder.AddField("📍 Где", whereText, true);
             if (guildEvent.Creator != null)
             embedBuilder.AddField("👤 Создал", MentionUtils.MentionUser(guildEvent.Creator.Id), true);
@@ -801,7 +826,18 @@ namespace RPBot.EventOps
                 actualStartMsk = mskActual;
             }
 
-            var tgText = BuildStatusTelegramText(guildEvent, prefix, statusText, whereTextPlain, eventUrl, markMsk, startMsk, isStarted, isCompleted, isCancelled, serverConfigs, actualStartMsk);
+            // Для completed используем фактическое время завершения из
+            // entry.CompletedAtUtc (записано в момент первого observed completed).
+            // Это гарантирует, что TG-сообщение «Завершение» не перезапишется
+            // моментом рестарта при последующих ресинках.
+            DateTime? completedMskParam = null;
+            if (isCompleted && entry.CompletedAtUtc.HasValue
+                && TryGetMoscowTime(entry.CompletedAtUtc.Value.UtcDateTime, out var mskCompleted))
+            {
+                completedMskParam = mskCompleted;
+            }
+
+            var tgText = BuildStatusTelegramText(guildEvent, prefix, statusText, whereTextPlain, eventUrl, markMsk, startMsk, isStarted, isCompleted, isCancelled, serverConfigs, actualStartMsk, completedMskParam);
 
             bool ok;
                         string? error = null;
@@ -945,7 +981,18 @@ namespace RPBot.EventOps
             {
                 var actualStartUtc = entry.ActualStartTimeUtc ?? restEvent.StartTime;
                 embedBuilder.AddField("🕒 Начало", $"<t:{actualStartUtc.ToUnixTimeSeconds()}:F>", true);
-                embedBuilder.AddField("🛑 Завершение", $"<t:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}:F>", true);
+                // «Завершение» — из сохранённого entry.CompletedAtUtc
+                // (записывается при первом observed completed, переживает рестарт).
+                // Если null — это первый resync completed-события после рестарта:
+                // фиксируем момент «сейчас» в стор, чтобы при повторных рестартах
+                // число не «плавало». Fallback ниже — только если setter стора упал.
+                if (!entry.CompletedAtUtc.HasValue)
+                {
+                    entry.CompletedAtUtc = DateTimeOffset.UtcNow;
+                    try { _store.UpdateEntry(entry); } catch { }
+                }
+                var completedUtc = entry.CompletedAtUtc ?? DateTimeOffset.UtcNow;
+                embedBuilder.AddField("🛑 Завершение", $"<t:{completedUtc.ToUnixTimeSeconds()}:F>", true);
             }
             else if (isCancelled)
             {
@@ -1027,7 +1074,18 @@ namespace RPBot.EventOps
                     {
                         var startMskActual = actualStartMsk ?? startMsk;
                         sb.Append("🕒 Начало: ").Append(startMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        sb.Append("🛑 Завершение: ").Append(mskNow.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
+                        // «Завершение» — из entry.CompletedAtUtc (см. embed выше).
+                        DateTime completedMsk;
+                        if (entry.CompletedAtUtc.HasValue
+                            && TryGetMoscowTime(entry.CompletedAtUtc.Value.UtcDateTime, out var mskCompletedRest))
+                        {
+                            completedMsk = mskCompletedRest;
+                        }
+                        else
+                        {
+                            completedMsk = TryGetMoscowTime(DateTime.UtcNow, out var mskNowC) ? mskNowC : DateTime.Now;
+                        }
+                        sb.Append("🛑 Завершение: ").Append(completedMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
                     }
                     else
                     {
@@ -1115,7 +1173,8 @@ namespace RPBot.EventOps
                         bool isCompleted,
                         bool isCancelled,
                         IReadOnlyDictionary<ulong, ServerConfig>? serverConfigs,
-                        DateTime? actualStartMsk = null)
+                        DateTime? actualStartMsk = null,
+                        DateTime? completedMsk = null)
                     {
                         var sb = new System.Text.StringBuilder();
                         sb.Append(prefix).Append(' ').Append(statusText).Append(": ").Append(guildEvent.Name).Append('\n');
@@ -1136,8 +1195,21 @@ namespace RPBot.EventOps
                             // (например, бот пропустил started) — fallback на плановое.
                             var startMskActual = actualStartMsk ?? startMsk;
                             sb.Append("🕒 Начало: ").Append(startMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                            var completedMskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowCompleted) ? mskNowCompleted : DateTime.Now;
-                            sb.Append("🛑 Завершение: ").Append(completedMskNow.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
+                            // «Завершение» — из сохранённого completedMsk (передан
+                            // вызывающим кодом из entry.CompletedAtUtc). Это гарантирует,
+                            // что при рестарте/resync TG-сообщение не перезапишется
+                            // моментом рестарта. Fallback на DateTime.UtcNow —
+                            // только для редкого кейса «completed минуя started».
+                            DateTime completedMskActual;
+                            if (completedMsk.HasValue)
+                            {
+                                completedMskActual = completedMsk.Value;
+                            }
+                            else
+                            {
+                                completedMskActual = TryGetMoscowTime(DateTime.UtcNow, out var mskNowC) ? mskNowC : DateTime.Now;
+                            }
+                            sb.Append("🛑 Завершение: ").Append(completedMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
                         }
                         else
                         {

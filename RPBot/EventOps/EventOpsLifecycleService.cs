@@ -130,6 +130,16 @@ namespace RPBot.EventOps
                         {
                             if (ScheduleCleanup24h(entry))
                                 scheduledCleanup++;
+
+                            // Подчищаем reminder-сообщения (канал/DM/Telegram), если
+                            // они остались с предыдущей сессии. Типичный сценарий:
+                            // reminder1h был отправлен, потом событие отменили до
+                            // того, как отработал DeleteReminder15m — после рестарта
+                            // reminder-сообщение висит в канале/DM, а timer уже умер.
+                            // DeleteReminderMessagesAsync идемпотентен: если сообщений
+                            // нет или уже удалены — молча выходит.
+                            await DeleteReminderMessagesAsync(entry);
+
                             continue;
                         }
 
@@ -167,10 +177,23 @@ namespace RPBot.EventOps
                 var entry = _store.TryGet(current.Guild.Id, current.Id);
                 if (entry == null) return;
 
+                // Если событие уже в финальном статусе — reminder не нужен,
+                // и мы не должны его перепланировать. Cleanup24h для cancelled/completed
+                // уже стоит (см. HandleCancelledAsync/HandleCompletedAsync).
+                // Раньше здесь всегда вызывался ScheduleReminder1h — это могло
+                // привести к повторной рассылке reminder для cancelled-события,
+                // если Discord прислал обновление после нашей обработки cancelled.
+                var status = current.Status.ToString().ToLowerInvariant();
+                if (status == "cancelled" || status == "completed")
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] HandleUpdatedAsync guild={current.Guild.Id} event={current.Id} status={status} (reminder пропущен, финальный статус)");
+                    return;
+                }
+
                 // Перепланируем reminder1h: время могло сдвинуться.
                 ScheduleReminder1h(entry);
 
-                // Если статус уже Completed/Cancelled — cleanup24h уже стоит, ничего не делаем.
                 BotLogger.Info(LogCategory.Discord,
                     $"[EventOpsLifecycle] HandleUpdatedAsync guild={current.Guild.Id} event={current.Id} (reminder1h перепланирован)");
             }
@@ -214,9 +237,24 @@ namespace RPBot.EventOps
                 CancelReminder1h(entry);
                 CancelDeleteReminder15m(entry);
 
+                // Сразу подчищаем reminder-сообщения из канала/DM/Telegram —
+                // даже если reminder1h уже отправлен, оно не должно висеть
+                // после завершения события. Делаем ДО ScheduleCleanup24h,
+                // чтобы cleanup не сработал раньше (cleanup24h ждёт 24ч, тут
+                // удаление мгновенное — порядок не критичен, но логически
+                // cleanup для анонса, а reminder для служебного сообщения).
+                await DeleteReminderMessagesAsync(entry);
+
                 // Вычисляем и сохраняем абсолютное время cleanup в стор —
                 // это поле переживёт рестарт бота (см. RebuildFromStoreAsync).
-                var at = entry.CancelledAtUtc
+                //
+                // Приоритет: CompletedAtUtc (фактическое завершение) → CancelledAtUtc
+                // (теоретически, если бот увидел cancelled сразу после completed) →
+                // ActualStartTimeUtc (фактический старт) → LastStartTimeUtc (план).
+                // Раньше fallback начинался с CancelledAtUtc — для completed-событий
+                // без ActualStartTimeUtc это давало неверный момент.
+                var at = entry.CompletedAtUtc
+                      ?? entry.CancelledAtUtc
                       ?? entry.ActualStartTimeUtc
                       ?? entry.LastStartTimeUtc;
                 if (at.HasValue)
@@ -245,6 +283,12 @@ namespace RPBot.EventOps
 
                 CancelReminder1h(entry);
                 CancelDeleteReminder15m(entry);
+
+                // Если reminder1h уже был отправлен в канал анонса / DM / Telegram —
+                // удаляем эти сообщения немедленно, чтобы они не висели после
+                // отмены события. Idempotent: если сообщений нет (не отправлялись
+                // или уже удалены), DeleteReminderMessagesAsync молча выходит.
+                await DeleteReminderMessagesAsync(entry);
 
                 // Для cancelled момент отмены — это уже сейчас; если
                 // EventAnnouncer не успел проставить CancelledAtUtc, сделаем
@@ -360,6 +404,15 @@ namespace RPBot.EventOps
             // Приоритет: entry.CleanupAtUtc (абсолютное время, записанное в JSON).
             // Если null — вычисляем на лету и сохраняем в стор, чтобы при рестарте
             // бота RebuildFromStoreAsync использовал тот же момент.
+            //
+            // Порядок fallback'ов — от «самого позднего» к «самому раннему»:
+            //   1) CompletedAtUtc  — фактический момент завершения (если событие было completed)
+            //   2) CancelledAtUtc  — фактический момент отмены      (если cancelled)
+            //   3) ActualStartTimeUtc — фактический момент старта  (бот был онлайн на started)
+            //   4) LastStartTimeUtc   — плановое время начала       (rare fallback)
+            // Раньше fallback начинался с CancelledAtUtc — это давало 1372 мин вместо 1440 мин
+            // для completed-событий, у которых ActualStartTimeUtc был null: cleanup считался от
+            // планового LastStartTimeUtc, а не от фактического завершения.
             DateTimeOffset cleanupAt;
             if (entry.CleanupAtUtc.HasValue)
             {
@@ -367,7 +420,8 @@ namespace RPBot.EventOps
             }
             else
             {
-                var at = entry.CancelledAtUtc
+                var at = entry.CompletedAtUtc
+                      ?? entry.CancelledAtUtc
                       ?? entry.ActualStartTimeUtc
                       ?? entry.LastStartTimeUtc;
                 if (!at.HasValue) return false;

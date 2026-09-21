@@ -80,6 +80,16 @@ public DateTimeOffset? ActualStartTimeUtc { get; set; }
 // Если null — fallback на LastStartTimeUtc (плановое).
 public DateTimeOffset? CancelledAtUtc { get; set; }
 
+// Фактическое время завершения события (UTC). Записывается в момент completed
+// в AnnounceStatusChangedInternalAsync (или берётся из уже сохранённого при
+// resync через REST). Используется для двух целей:
+//   1) Чтобы при status-from-rest поле «Завершение» показывало реальное время
+//      окончания, а не момент рестарта бота.
+//   2) Чтобы EventOpsLifecycleService.ScheduleCleanup24h считал «+24ч удаление»
+//      от момента завершения, а не от планового LastStartTimeUtc.
+// Если null — fallback на CancelledAtUtc ?? ActualStartTimeUtc ?? LastStartTimeUtc.
+public DateTimeOffset? CompletedAtUtc { get; set; }
+
 // Абсолютное время UTC, когда анонс должен быть удалён из канала / DM / TG
 // (после Completed или Cancelled). Выставляется EventOpsLifecycleService в
 // HandleCompletedAsync / HandleCancelledAsync и сохраняется в JSON, чтобы
