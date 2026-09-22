@@ -69,6 +69,17 @@ public async Task<int?> SendMessageReturningMessageIdAsync(ulong guildId, string
     return send.messageId;
 }
 
+/// <summary>
+/// Публичная обёртка вокруг <see cref="SendMessageInternalReturningMessageIdAsync"/>,
+/// возвращающая и messageId, и причину ошибки (если отправка не удалась).
+/// Используется в EventAnnouncer, чтобы в логах различать «Telegram отключён / нет
+/// chat_id» (skipped: no-config) и реальные сетевые/прочие ошибки.
+/// </summary>
+public async Task<(int? messageId, string? error)> SendMessageWithReasonAsync(ulong guildId, string text, CancellationToken ct = default)
+{
+    return await SendMessageInternalReturningMessageIdAsync(guildId, text, ct).ConfigureAwait(false);
+}
+
 public async Task<TelegramProbeResult> ProbeAsync(ulong guildId, CancellationToken ct = default)
 {
     var cfg = _serverConfigAccessor(guildId);

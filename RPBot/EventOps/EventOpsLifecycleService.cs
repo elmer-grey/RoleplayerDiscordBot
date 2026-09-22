@@ -402,14 +402,44 @@ namespace RPBot.EventOps
 
         private bool ScheduleReminder1h(EventAnnouncementEntry entry)
         {
-            if (!entry.LastStartTimeUtc.HasValue) return false;
+            if (!entry.LastStartTimeUtc.HasValue)
+            {
+                BotLogger.Warn(LogCategory.Discord,
+                    $"[EventOpsLifecycle] ScheduleReminder1h: skip, нет LastStartTimeUtc guild={entry.GuildId} event={entry.EventId}");
+                return false;
+            }
 
             var reminderAt = entry.LastStartTimeUtc.Value.AddHours(-1);
             var nowUtc = DateTimeOffset.UtcNow;
-            if (reminderAt <= nowUtc)
+            var startUtc = entry.LastStartTimeUtc.Value;
+
+            // Окно для reminder1h: [start - 1h, start).
+            //   • reminderAt > nowUtc → планируем на будущее (норма).
+            //   • reminderAt <= nowUtc < start → опоздали, но событие ещё не началось:
+            //     шлём reminder прямо сейчас (всё равно полезнее, чем не слать).
+            //   • nowUtc >= start → событие уже стартовало/завершилось — reminder не нужен,
+            //     удаляем, если он был, и выходим.
+            if (nowUtc >= startUtc)
             {
-                // Меньше часа до начала — не успеваем напомнить.
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] ScheduleReminder1h: skip, событие уже стартовало/завершилось now={nowUtc:o} start={startUtc:o} guild={entry.GuildId} event={entry.EventId}");
+                // На всякий случай — если reminder-сообщения остались с предыдущей сессии,
+                // попробуем их удалить. Идемпотентно.
+                _ = Task.Run(() => DeleteReminderMessagesAsync(entry));
                 return false;
+            }
+
+            TimeSpan delay;
+            if (reminderAt > nowUtc)
+            {
+                delay = reminderAt - nowUtc;
+            }
+            else
+            {
+                // Опоздали — шлём сейчас, delay=0.
+                delay = TimeSpan.Zero;
+                BotLogger.Warn(LogCategory.Discord,
+                    $"[EventOpsLifecycle] ScheduleReminder1h: опоздали с планированием, шлём reminder немедленно now={nowUtc:o} reminderAt={reminderAt:o} guild={entry.GuildId} event={entry.EventId}");
             }
 
             var key = (entry.GuildId, entry.EventId);
@@ -423,7 +453,6 @@ namespace RPBot.EventOps
             slot.Reminder1hCts = cts;
             slot.Reminder1hAtUtc = reminderAt;
 
-            var delay = reminderAt - nowUtc;
             _ = Task.Run(() => RunReminder1hAsync(entry, cts.Token, delay), cts.Token);
 
             BotLogger.Info(LogCategory.Discord,

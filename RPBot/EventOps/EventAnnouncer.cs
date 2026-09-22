@@ -850,15 +850,20 @@ namespace RPBot.EventOps
                         }
                         else
                         {
-                        var sentId = await _telegramNotifier.SendMessageReturningMessageIdAsync(guild.Id, tgText);
-                        ok = sentId.HasValue;
+                        var sentResult = await _telegramNotifier.SendMessageWithReasonAsync(guild.Id, tgText);
+                        ok = sentResult.messageId.HasValue;
+                        var sentId = sentResult.messageId;
                         if (sentId.HasValue)
                         {
                         entry.TelegramMessageId = sentId.Value;
                         entry.TelegramHasPhoto = false;
                         _store.Upsert(entry);
                         }
-                        Log($"[EVENT] status {status} telegram {(ok ? "sent" : "skip/fail")} guild={guild.Id} event={guildEvent.Id} msg={(sentId ?? 0)}");
+                        string sendOutcome;
+                        if (ok) sendOutcome = "sent";
+                        else if (string.IsNullOrEmpty(sentResult.error)) sendOutcome = "skipped: no-config";
+                        else sendOutcome = $"fail — {sentResult.error}";
+                        Log($"[EVENT] status {status} telegram {sendOutcome} guild={guild.Id} event={guildEvent.Id} msg={(sentId ?? 0)}");
                         }
             }
             }
@@ -1143,14 +1148,19 @@ namespace RPBot.EventOps
                     }
                     else
                     {
-                        var sentId = await _telegramNotifier.SendMessageReturningMessageIdAsync(entry.GuildId, tgText);
-                        ok = sentId.HasValue;
+                        var sentResult = await _telegramNotifier.SendMessageWithReasonAsync(entry.GuildId, tgText);
+                        ok = sentResult.messageId.HasValue;
+                        var sentId = sentResult.messageId;
                         if (sentId.HasValue)
                         {
                             entry.TelegramMessageId = sentId.Value;
                             entry.TelegramHasPhoto = false;
                         }
-                        Log($"[EVENT] status-from-rest {status} telegram {(ok ? "sent" : "skip/fail")} guild={entry.GuildId} event={entry.EventId} msg={(sentId ?? 0)}");
+                        string sendOutcome;
+                        if (ok) sendOutcome = "sent";
+                        else if (string.IsNullOrEmpty(sentResult.error)) sendOutcome = "skipped: no-config";
+                        else sendOutcome = $"fail — {sentResult.error}";
+                        Log($"[EVENT] status-from-rest {status} telegram {sendOutcome} guild={entry.GuildId} event={entry.EventId} msg={(sentId ?? 0)}");
                     }
                 }
                 catch (Exception ex)
