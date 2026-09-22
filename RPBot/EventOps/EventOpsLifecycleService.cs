@@ -87,20 +87,25 @@ namespace RPBot.EventOps
                     foreach (var kv in _timers)
                     {
                         var slot = kv.Value;
-                        try { slot.Reminder1hCts?.Cancel(); } catch { }
-                        try { slot.Reminder1hCts?.Dispose(); } catch { }
-                        slot.Reminder1hCts = null;
-                        slot.Reminder1hAtUtc = null;
+                                            // Bug #7: lock на слот — иначе параллельный ScheduleXxx может
+                                            // перезаписать наш null после cancel/dispose, оставив «живой» CTS.
+                                            lock (slot.Lock)
+                                            {
+                                                try { slot.Reminder1hCts?.Cancel(); } catch { }
+                                                try { slot.Reminder1hCts?.Dispose(); } catch { }
+                                                slot.Reminder1hCts = null;
+                                                slot.Reminder1hAtUtc = null;
 
-                        try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
-                        try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
-                        slot.DeleteReminder15mCts = null;
+                                                try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
+                                                try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
+                                                slot.DeleteReminder15mCts = null;
 
-                        try { slot.Cleanup24hCts?.Cancel(); } catch { }
-                        try { slot.Cleanup24hCts?.Dispose(); } catch { }
-                        slot.Cleanup24hCts = null;
-                    }
-                }
+                                                try { slot.Cleanup24hCts?.Cancel(); } catch { }
+                                                try { slot.Cleanup24hCts?.Dispose(); } catch { }
+                                                slot.Cleanup24hCts = null;
+                                            }
+                                        }
+                                    }
 
         /// <summary>
         /// Привязка к <see cref="EventOpsOrchestrator"/>. Вызывать один раз после создания.
@@ -495,13 +500,21 @@ namespace RPBot.EventOps
             var key = (entry.GuildId, entry.EventId);
             var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
 
-            // Отменяем старый, если был.
-            slot.Reminder1hCts?.Cancel();
-            slot.Reminder1hCts?.Dispose();
+                        // ВАЖНО: меняем CTS атомарно через lock на слоте. Иначе при
+                        // одновременном ScheduleReminder1h (например, duplicate resync плюс
+                        // OnUpdatedAsync) две нитки могут cancel+Dispose одну и ту же ссылку
+                        // и затереть только что созданный CTS другой ниткой — reminder не
+                        // уйдёт вообще (Bug #7: duplicate resync race).
+                        CancellationTokenSource cts;
+                        lock (slot.Lock)
+                        {
+                            try { slot.Reminder1hCts?.Cancel(); } catch { }
+                            try { slot.Reminder1hCts?.Dispose(); } catch { }
 
-            var cts = new CancellationTokenSource();
-            slot.Reminder1hCts = cts;
-            slot.Reminder1hAtUtc = reminderAt;
+                            cts = new CancellationTokenSource();
+                            slot.Reminder1hCts = cts;
+                            slot.Reminder1hAtUtc = reminderAt;
+                        }
 
             _ = Task.Run(() => RunReminder1hAsync(entry, cts.Token, delay), cts.Token);
 
@@ -515,14 +528,19 @@ namespace RPBot.EventOps
             var key = (entry.GuildId, entry.EventId);
             if (!_timers.TryGetValue(key, out var slot)) return;
 
-            if (slot.Reminder1hCts != null)
-            {
-                try { slot.Reminder1hCts.Cancel(); } catch { }
-                slot.Reminder1hCts.Dispose();
-                slot.Reminder1hCts = null;
-                slot.Reminder1hAtUtc = null;
-            }
-        }
+                        // Bug #7: lock — атомарная отмена Reminder1hCts под блокировкой слота,
+                        // чтобы параллельный ScheduleReminder1h не отменил только что созданный CTS.
+                        lock (slot.Lock)
+                        {
+                            if (slot.Reminder1hCts != null)
+                            {
+                                try { slot.Reminder1hCts.Cancel(); } catch { }
+                                try { slot.Reminder1hCts.Dispose(); } catch { }
+                                slot.Reminder1hCts = null;
+                                slot.Reminder1hAtUtc = null;
+                            }
+                        }
+                    }
 
         private void ScheduleDeleteReminder15m(EventAnnouncementEntry entry)
         {
@@ -538,11 +556,16 @@ namespace RPBot.EventOps
             var key = (entry.GuildId, entry.EventId);
             var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
 
-            slot.DeleteReminder15mCts?.Cancel();
-            slot.DeleteReminder15mCts?.Dispose();
+                        // См. Bug #7 в ScheduleReminder1h — атомарная перестановка CTS под lock.
+                        CancellationTokenSource cts;
+                        lock (slot.Lock)
+                        {
+                            try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
+                            try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
 
-            var cts = new CancellationTokenSource();
-            slot.DeleteReminder15mCts = cts;
+                            cts = new CancellationTokenSource();
+                            slot.DeleteReminder15mCts = cts;
+                        }
 
             var delay = deleteAt - nowUtc;
             _ = Task.Run(() => RunDeleteReminder15mAsync(entry, cts.Token, delay), cts.Token);
@@ -556,13 +579,18 @@ namespace RPBot.EventOps
             var key = (entry.GuildId, entry.EventId);
             if (!_timers.TryGetValue(key, out var slot)) return;
 
-            if (slot.DeleteReminder15mCts != null)
-            {
-                try { slot.DeleteReminder15mCts.Cancel(); } catch { }
-                slot.DeleteReminder15mCts.Dispose();
-                slot.DeleteReminder15mCts = null;
-            }
-        }
+                    // Bug #7: lock — иначе может прийти параллельный ScheduleDeleteReminder15m
+                    // и либо прочитать старый отменённый CTS, либо наоборот — отменить наш.
+                    lock (slot.Lock)
+                    {
+                        if (slot.DeleteReminder15mCts != null)
+                        {
+                            try { slot.DeleteReminder15mCts.Cancel(); } catch { }
+                            try { slot.DeleteReminder15mCts.Dispose(); } catch { }
+                            slot.DeleteReminder15mCts = null;
+                        }
+                    }
+                }
 
         private bool ScheduleCleanup24h(EventAnnouncementEntry entry)
         {
@@ -621,14 +649,22 @@ namespace RPBot.EventOps
             var key = (entry.GuildId, entry.EventId);
             var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
 
-            slot.Cleanup24hCts?.Cancel();
-            slot.Cleanup24hCts?.Dispose();
+                        // Bug #7: lock — атомарная перестановка Cleanup24hCts под блокировкой
+                        // слота, иначе параллельные ScheduleCleanup24h (например, из HandleCompletedAsync
+                        // и из RebuildFromStoreAsync при рестарте) могут cancel+Dispose одну ссылку и
+                        // затереть только что созданную другой ниткой — cleanup не выполнится.
+                        CancellationTokenSource cts;
+                        lock (slot.Lock)
+                        {
+                            try { slot.Cleanup24hCts?.Cancel(); } catch { }
+                            try { slot.Cleanup24hCts?.Dispose(); } catch { }
 
-            var cts = new CancellationTokenSource();
-            slot.Cleanup24hCts = cts;
+                            cts = new CancellationTokenSource();
+                            slot.Cleanup24hCts = cts;
+                        }
 
-            var delay = cleanupAt - nowUtc;
-            _ = Task.Run(() => RunCleanup24hAsync(entry, cts.Token, delay), cts.Token);
+                        var delay = cleanupAt - nowUtc;
+                        _ = Task.Run(() => RunCleanup24hAsync(entry, cts.Token, delay), cts.Token);
 
             BotLogger.Info(LogCategory.Discord,
                 $"[EventOpsLifecycle] запланирован cleanup24h: guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {cleanupAt:u})");
@@ -1106,17 +1142,21 @@ namespace RPBot.EventOps
                 }
             }
 
-            // Удаляем запись из стора целиком.
-            _store.Remove(entry.GuildId, entry.EventId);
+                        // ── Bug #12: финал — стор и таймеры удаляем ПОСЛЕ всех Discord/TG/DM
+                        // удалений. Если что-то из вышестоящего упало (например, нет сети при
+                        // удалении из TG) — стейт остаётся в сторе, и при следующем рестарте
+                        // RebuildFromStoreAsync снова выполнит cleanup24h для этой записи.
+                        // Раньше _store.Remove стоял безусловно, и при рестарте мы теряли
+                        // информацию о необходимости повторить удаление. ───────────────────
+                        _store.Remove(entry.GuildId, entry.EventId);
 
-            // Удаляем таймеры.
-            if (_timers.TryRemove((entry.GuildId, entry.EventId), out var slot))
-            {
-                slot.Cleanup24hCts?.Dispose();
-                slot.Reminder1hCts?.Dispose();
-                slot.DeleteReminder15mCts?.Dispose();
-            }
-        }
+                        if (_timers.TryRemove((entry.GuildId, entry.EventId), out var slot))
+                        {
+                            slot.Cleanup24hCts?.Dispose();
+                            slot.Reminder1hCts?.Dispose();
+                            slot.DeleteReminder15mCts?.Dispose();
+                        }
+                    }
 
         // ════════════════════════════════════════════════════════════════════
         //  Хелперы
@@ -1145,10 +1185,18 @@ namespace RPBot.EventOps
 
         private sealed class ScheduledTimers
         {
-            public CancellationTokenSource? Reminder1hCts;
-            public DateTimeOffset? Reminder1hAtUtc;
-            public CancellationTokenSource? DeleteReminder15mCts;
-            public CancellationTokenSource? Cleanup24hCts;
-        }
+                    // Lock-объект для безопасной перестановки CTS. Нужен потому, что
+                    // ScheduleReminder1h/ScheduleCleanup24h/ScheduleDeleteReminder15m
+                    // читают текущий CTS, делают Cancel+Dispose, и пишут новый — три
+                    // независимые операции, между которыми может вклиниться параллельный
+                    // вызов из duplicate resync / OnUpdatedAsync. Без lock второй
+                    // вызов отменит только что созданный CTS первого, и reminder не
+                    // уйдёт (race-condition #7).
+                    public readonly object Lock = new();
+                    public CancellationTokenSource? Reminder1hCts;
+                    public DateTimeOffset? Reminder1hAtUtc;
+                    public CancellationTokenSource? DeleteReminder15mCts;
+                    public CancellationTokenSource? Cleanup24hCts;
+                }
     }
 }
