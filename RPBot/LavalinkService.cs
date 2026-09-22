@@ -621,8 +621,21 @@ namespace RPBot
         public IEnumerable<KeyValuePair<ulong, MusicPlayerState>> GetAllStates()
             => _playerStates;
 
-        /// <summary>Удаляет состояние (вызывается при Stop).</summary>
-        public void RemoveState(ulong guildId) => _playerStates.TryRemove(guildId, out _);
+        /// <summary>
+        /// Удаляет состояние (вызывается при Stop) и корректно гасит фоновые
+        /// таймеры, иначе AutoPauseTimer/AutoStopTimer удерживают ссылку на
+        /// state и callback'и могут выстрелить уже после удаления.
+        /// </summary>
+        public void RemoveState(ulong guildId)
+        {
+            if (_playerStates.TryRemove(guildId, out var state))
+            {
+                state.AutoPauseTimer?.Dispose();
+                state.AutoStopTimer?.Dispose();
+                state.AutoPauseTimer = null;
+                state.AutoStopTimer = null;
+            }
+        }
 
         // ─── Воспроизведение ──────────────────────────────────────────────
 

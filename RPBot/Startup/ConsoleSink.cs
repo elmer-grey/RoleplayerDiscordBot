@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -29,9 +30,12 @@ namespace RPBot.Startup
                     try { _gate.Release(); } catch { }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // не валим старт из-за консоли
+                // не валим старт из-за консоли, но оставляем след в Debug —
+                // Console.Write может бросить, если stdout перенаправлен и
+                // пайп закрыт (например, бот запущен как Windows-сервис).
+                Debug.WriteLine($"[ConsoleSink] write failed: {ex.GetType().Name}: {ex.Message}");
             }
             return Task.CompletedTask;
         }

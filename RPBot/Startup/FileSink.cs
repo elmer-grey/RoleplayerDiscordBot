@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -46,9 +47,12 @@ namespace RPBot.Startup
                     Directory.CreateDirectory(dir);
                 File.AppendAllText(_fallbackPath, line + Environment.NewLine, Encoding.UTF8);
             }
-            catch
+            catch (Exception ex)
             {
-                // не валим старт из-за файла
+                // не валим старт из-за файла, но оставляем след в Debug —
+                // раньше было catch { } и при проблемах с диском/правами
+                // строки пропадали без диагностики.
+                Debug.WriteLine($"[FileSink] write failed: {ex.GetType().Name}: {ex.Message}");
             }
         }
 

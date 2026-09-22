@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using RPBot.Util;
 
 namespace RPBot.Startup
 {
@@ -142,10 +143,18 @@ namespace RPBot.Startup
                 foreach (var sink in _sinks)
                 {
                     try { await sink.WriteAsync(record, _cts.Token).ConfigureAwait(false); }
-                    catch { /* один sink не должен ронять остальные */ }
+                    catch (Exception ex) { BotLogger.Warn(LogCategory.System, $"[StartupRenderer] sink {sink.GetType().Name} failed: {ex.GetType().Name}: {ex.Message}"); }
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { /* shutdown — норма */ }
+            catch (ObjectDisposedException) { /* shutdown — норма */ }
+            catch (Exception ex)
+            {
+                // Не валим startup-рендер из-за экзотики, но логируем —
+                // раньше было catch { } и при проблемах с самим sinks не было
+                // никакого следа в основном логе.
+                BotLogger.Warn(LogCategory.System, $"[StartupRenderer] DispatchAsync failed: {ex.GetType().Name}: {ex.Message}");
+            }
             finally
             {
                 if (_exclusive)

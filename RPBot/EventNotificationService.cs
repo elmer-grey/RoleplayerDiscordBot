@@ -168,10 +168,12 @@ private void Load()
     foreach (var u in dto.PausedUsers ?? new List<ulong>())
         _pausedUsers.Add(u);
     }
-    catch
+    catch (Exception ex)
     {
-    _subscriptionsByGuild.Clear();
-    _pausedUsers.Clear();
+        _subscriptionsByGuild.Clear();
+        _pausedUsers.Clear();
+        BotLogger.Error(LogCategory.System,
+            $"[EventNotificationService] failed to load '{_statePath}': {ex.GetType().Name}: {ex.Message}");
     }
     }
 }
@@ -203,9 +205,10 @@ private void SaveSnapshot(EventNotificationStateDto dto)
         lockHandle?.Dispose();
         }
     }
-    catch
+    catch (Exception ex)
     {
-        // ignore
+        BotLogger.Error(LogCategory.System,
+            $"[EventNotificationService] failed to save '{_statePath}': {ex.GetType().Name}: {ex.Message}");
     }
     }
 

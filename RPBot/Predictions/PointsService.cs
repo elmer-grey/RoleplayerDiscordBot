@@ -5,6 +5,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using RPBot.Util;
 
 namespace RPBot
 {
@@ -68,21 +69,32 @@ namespace RPBot
                     return;
 
                 var json = await File.ReadAllTextAsync(_statePath).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(json))
+                    return;
+
                 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 var raw = JsonSerializer.Deserialize<Dictionary<ulong, Dictionary<ulong, long>>>(json, options);
-                _balances.Clear();
-                if (raw != null)
+                if (raw == null)
+                    return;
+
+                // Строим новый снимок, и только затем подменяем _balances
+                // атомарно — иначе при исключении ниже мы бы оставили
+                // _balances пустым и потеряли все начисленные костяшки.
+                var newBalances = new ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, long>>();
+                foreach (var g in raw)
                 {
-                    foreach (var g in raw)
-                    {
-                        var inner = new ConcurrentDictionary<ulong, long>(g.Value);
-                        _balances[g.Key] = inner;
-                    }
+                    var inner = new ConcurrentDictionary<ulong, long>(g.Value);
+                    newBalances[g.Key] = inner;
                 }
+
+                _balances.Clear();
+                foreach (var kv in newBalances)
+                    _balances[kv.Key] = kv.Value;
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore errors on load, work from empty state
+                BotLogger.Error(LogCategory.Points,
+                    $"[PointsService] failed to load '{_statePath}': {ex.GetType().Name}: {ex.Message}");
             }
             finally
             {
@@ -120,9 +132,10 @@ namespace RPBot
                 await File.WriteAllTextAsync(tmpPath, json).ConfigureAwait(false);
                 File.Move(tmpPath, _statePath, overwrite: true);
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore save errors, чтобы не уронить бота
+                BotLogger.Error(LogCategory.Points,
+                    $"[PointsService] failed to save '{_statePath}': {ex.GetType().Name}: {ex.Message}");
             }
             finally
             {

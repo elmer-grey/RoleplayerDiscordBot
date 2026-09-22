@@ -140,19 +140,39 @@ private void Load()
     lock (_lock)
     {
     if (!File.Exists(_path))
-                        return;
+        return;
 
     var json = File.ReadAllText(_path);
+    if (string.IsNullOrWhiteSpace(json))
+        return;
+
     _state = JsonSerializer.Deserialize<EventAnnouncementState>(json) ?? new EventAnnouncementState();
-    }
-    }
-    catch
+    // Гарантируем non-null словари: иначе resync/reschedule упадут с NRE,
+    // если в старом JSON-файле ключ отсутствовал или был null.
+    if (_state.Guilds == null)
+        _state.Guilds = new Dictionary<ulong, GuildEventAnnouncements>();
+    foreach (var g in _state.Guilds.Values)
     {
-    lock (_lock)
-    {
-    _state = new EventAnnouncementState();
+        if (g.Events == null)
+            g.Events = new Dictionary<ulong, EventAnnouncementEntry>();
+        foreach (var e in g.Events.Values)
+        {
+            if (e.DmMessageIdsByUserId == null)
+                e.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
+        }
     }
-            }
+    }
+    }
+    catch (Exception ex)
+    {
+    // Нельзя молча сбрасывать state в новый — это уничтожит все ранее
+    // сохранённые события (Discord/Telegram message IDs), и рестарт
+    // получит чистый state без возможности cleanup'а старых анонсов.
+    // Логируем ошибку и оставляем существующий state как есть; следующая
+    // успешная SaveLocked() перезапишет файл.
+    BotLogger.Error(LogCategory.System,
+    $"[EventAnnouncementStore] failed to load '{_path}': {ex.GetType().Name}: {ex.Message}");
+    }
 }
 
 public bool EnsureFileExists()
@@ -191,32 +211,40 @@ private void SaveLocked()
 {
     try
     {
-    var dir = Path.GetDirectoryName(_path) ?? AppContext.BaseDirectory;
-    Directory.CreateDirectory(dir);
+        var dir = Path.GetDirectoryName(_path) ?? AppContext.BaseDirectory;
+        Directory.CreateDirectory(dir);
 
-    var opts = new JsonSerializerOptions
-    {
-    WriteIndented = true,
-    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-    };
-    var json = JsonSerializer.Serialize(_state, opts);
+        var opts = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+        var json = JsonSerializer.Serialize(_state, opts);
         // Advisory inter-process lock: защищает от двух одновременно
         // работающих инстансов RPBot.exe на одном RPBOT_DATA_DIR.
         // При неудаче — fallback на прямую запись (best-effort).
         FileStream? lockHandle = SafeJsonIO.AcquireLock(_path, retries: 5, retryDelayMs: 50);
         try
         {
-        SafeJsonIO.WriteAtomic(_path, json);
+            SafeJsonIO.WriteAtomic(_path, json);
         }
         finally
         {
-        lockHandle?.Dispose();
+            lockHandle?.Dispose();
         }
     }
-    catch
+    catch (Exception ex)
     {
-        // ignore
-    }
+        // Раньше было catch { /* ignore */ }, и при сбое диска/прав доступа
+        // состояние в памяти живо, но на диск не пишется — при рестарте всё
+        // теряется без следа. Теперь логируем Error, чтобы по логу видеть
+        // конкретную причину (место на диске, права, блокировка антивирусом).
+        // В памяти state остаётся валидным — следующая успешная операция
+        // (Upsert/Remove) попытается сохранить снова.
+        BotLogger.Error(LogCategory.System,
+            $"[EventAnnouncementStore] failed to save '{_path}': {ex.GetType().Name}: {ex.Message}");
     }
 }
+}
+
 }
