@@ -86,6 +86,7 @@ namespace RPBot.EventOps
         {
             if (orchestrator == null) throw new ArgumentNullException(nameof(orchestrator));
 
+            orchestrator.OnCreatedAsync += HandleCreatedAsync;
             orchestrator.OnUpdatedAsync += HandleUpdatedAsync;
             orchestrator.OnStartedAsync += HandleStartedAsync;
             orchestrator.OnCompletedAsync += HandleCompletedAsync;
@@ -287,6 +288,32 @@ namespace RPBot.EventOps
             {
                 BotLogger.Error(LogCategory.Discord,
                     $"[EventOpsLifecycle] HandleUpdatedAsync error: {ex.Message}");
+            }
+            await Task.CompletedTask;
+        }
+
+        private async Task HandleCreatedAsync(SocketGuildEvent ev)
+        {
+            try
+            {
+                // Created — самый первый момент, когда у нас появляется событие
+                // и есть валидный LastStartTimeUtc из REST. До этого момента reminder1h
+                // поставить невозможно. Раньше lifecycle подписывался только на Updated/Started/
+                // Completed/Cancelled, и если Discord не присылал ни одного Update между
+                // Created и Started (типичный случай: событие создаётся и висит долго без
+                // правок) — reminder1h вообще никогда не планировался, и игроки не получали
+                // напоминалку. Теперь ставим reminder сразу в Created.
+                var entry = _store.TryGet(ev.Guild.Id, ev.Id);
+                if (entry == null) return;
+
+                ScheduleReminder1h(entry);
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] HandleCreatedAsync guild={ev.Guild.Id} event={ev.Id} (reminder1h поставлен из Created)");
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Discord,
+                    $"[EventOpsLifecycle] HandleCreatedAsync error: {ex.Message}");
             }
             await Task.CompletedTask;
         }
@@ -594,8 +621,15 @@ namespace RPBot.EventOps
             try
             {
                 await Task.Delay(delay, ct);
-                if (ct.IsCancellationRequested) return;
+                if (ct.IsCancellationRequested)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] RunReminder1h: cancelled до срабатывания guild={entry.GuildId} event={entry.EventId}");
+                    return;
+                }
 
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] RunReminder1h: сработал, шлём reminder guild={entry.GuildId} event={entry.EventId}");
                 await SendReminderAsync(entry);
             }
             catch (OperationCanceledException) { /* штатно */ }
@@ -611,8 +645,15 @@ namespace RPBot.EventOps
             try
             {
                 await Task.Delay(delay, ct);
-                if (ct.IsCancellationRequested) return;
+                if (ct.IsCancellationRequested)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] RunDeleteReminder15m: cancelled до срабатывания guild={entry.GuildId} event={entry.EventId}");
+                    return;
+                }
 
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] RunDeleteReminder15m: сработал, удаляем reminder-сообщения guild={entry.GuildId} event={entry.EventId}");
                 await DeleteReminderMessagesAsync(entry);
             }
             catch (OperationCanceledException) { /* штатно */ }
