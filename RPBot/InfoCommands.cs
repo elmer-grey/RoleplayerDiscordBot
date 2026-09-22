@@ -2,6 +2,7 @@
 using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
+using RPBot.Common;
 using RPBot.Util;
 using System;
 using System.IO;
@@ -44,7 +45,12 @@ namespace RPBot
         [Command("serverinfo")]
         public async Task ServerInfo(SocketSlashCommand command)
         {
-            await command.DeferAsync();
+            try { await command.DeferAsync(); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("ServerInfo", ex, command);
+                return;
+            }
             var server = (command.Channel as SocketGuildChannel)?.Guild;
 
             if (server == null)

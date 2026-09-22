@@ -3,6 +3,7 @@ using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
 using RPBot;
+using RPBot.Common;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
@@ -153,7 +154,7 @@ namespace RPBot
             try { await command.DeferAsync().ConfigureAwait(false); }
             catch (Exception ex)
             {
-                LogDeferFailure("RollDice", ex, command, input);
+                DeferFailureLogger.Log("RollDice", ex, command, input);
                 return;
             }
 
@@ -453,7 +454,7 @@ namespace RPBot
             try { await command.DeferAsync().ConfigureAwait(false); }
             catch (Exception ex)
             {
-                LogDeferFailure("Roll20", ex, command, input: null);
+                DeferFailureLogger.Log("Roll20", ex, command, input: null);
                 return;
             }
 
@@ -619,47 +620,6 @@ namespace RPBot
             }
 
             return new Color(r, g, b);
-        }
-
-        /// <summary>
-        /// Подробный лог ошибки DeferAsync. Помимо типа/сообщения исключения
-        /// выводит контекст: какая команда, кто вызвал, в каком канале/гильдии,
-        /// когда был создан interaction (насколько «поздно» мы пытаемся дефернуть),
-        /// и возможные причины (сетевая ошибка vs 3-секундный таймаут vs unknown
-        /// interaction после рестарта). Логируется на уровне Error — такие
-        /// случаи волнуют игроков («нажал — ничего не произошло»), и нам важно
-        /// по логу понимать, что именно случилось.
-        /// </summary>
-        private static void LogDeferFailure(string commandName, Exception ex, SocketSlashCommand command, string? input)
-        {
-            var userId = command.User?.Id ?? 0;
-            var userName = command.User?.GlobalName ?? command.User?.Username ?? "<unknown>";
-            ulong guildId = 0;
-            ulong channelId = 0;
-            try
-            {
-                guildId = (command.Channel as SocketGuildChannel)?.Guild.Id ?? 0;
-                channelId = command.Channel?.Id ?? 0;
-            }
-            catch { /* контекст — best effort */ }
-
-            var interactionId = command.Id;
-            var token = command.Token;
-            // Discord даёт 3 секунды на первый ACK; HttpException 10062 = Unknown interaction
-            // (interaction уже отвалился по таймауту, либо бот перезапустился и
-            // не успел ответить). Простое текстовое сообщение ex уже объясняет это,
-            // но добавим «человеческое» пояснение, чтобы по логу сразу было ясно.
-            string hint = ex switch
-            {
-                TimeoutException => "Discord требует ACK в течение 3 секунд. Скорее всего GC/IO-пауза или долгий старт обработчика; бот опоздал ответить.",
-                Discord.Net.HttpException httpEx when httpEx.HttpCode == System.Net.HttpStatusCode.NotFound
-                    => "Discord вернул 404: interaction уже отвалился (10062 Unknown interaction). Обычно это рестарт бота между нажатием и ответом, либо пользователь нажал дважды.",
-                _ => "Прочее исключение; см. стек ниже."
-            };
-
-            BotLogger.Error(LogCategory.Cmd,
-                $"[{commandName}:DeferAsync] failed user={userName}({userId}) guild={guildId} channel={channelId} " +
-                $"interaction={interactionId} input={input ?? "-"} {ex.GetType().Name}: {ex.Message} | hint: {hint}");
         }
     }
 

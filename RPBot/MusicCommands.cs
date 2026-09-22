@@ -1,5 +1,6 @@
 using Discord;
 using Discord.WebSocket;
+using RPBot.Common;
 using RPBot.Music;
 using System;
 using System.Collections.Generic;
@@ -358,7 +359,12 @@ namespace RPBot
         public async Task HandleMusicAsync(SocketSlashCommand command)
         {
             // Эфемерный defer — только пользователь видит подтверждение
-            await command.DeferAsync(ephemeral: true);
+            try { await command.DeferAsync(ephemeral: true); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("Music", ex, command);
+                return;
+            }
 
             _ = Task.Run(async () =>
             {
@@ -711,7 +717,12 @@ namespace RPBot
         public async Task HandleButtonAsync(SocketMessageComponent component)
         {
             var guildId = (component.Channel as SocketGuildChannel)?.Guild.Id;
-            if (guildId is null) { await component.DeferAsync(); return; }
+            if (guildId is null)
+            {
+                try { await component.DeferAsync(); }
+                catch (Exception ex) { DeferFailureLogger.Log("MusicButton", ex, component, "no_guild"); }
+                return;
+            }
 
             // Модальное окно нельзя открыть после DeferAsync — обрабатываем отдельно
             if (component.Data.CustomId == "music_queue_goto")
@@ -720,7 +731,12 @@ namespace RPBot
                 return;
             }
 
-            await component.DeferAsync(ephemeral: true);
+            try { await component.DeferAsync(ephemeral: true); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("MusicButton", ex, component, component.Data.CustomId);
+                return;
+            }
 
             _ = Task.Run(async () =>
             {
@@ -1086,7 +1102,12 @@ namespace RPBot
                 return;
             }
 
-            await modal.DeferAsync(ephemeral: true);
+            try { await modal.DeferAsync(ephemeral: true); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("MusicGoTo", ex, modal, modal.Data.CustomId);
+                return;
+            }
             var result = await _lavalink.GoToTrackNumberAsync(guildId, trackNumber);
             await modal.FollowupAsync(result, ephemeral: true);
         }
@@ -1291,7 +1312,12 @@ namespace RPBot
 
         public async Task HandleMusicPlaylistAsync(SocketSlashCommand command)
         {
-            await command.DeferAsync(ephemeral: true);
+            try { await command.DeferAsync(ephemeral: true); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("MusicPlaylist", ex, command);
+                return;
+            }
             _ = Task.Run(async () =>
             {
             var action = command.Data.Options

@@ -2,6 +2,7 @@
 using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
+using RPBot.Common;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -39,7 +40,12 @@ namespace RPBot
         public async Task CloseChat(SocketSlashCommand command)
         {
             // Отложим ответ, чтобы Discord не считал команду "зависшей"
-            await command.DeferAsync();
+            try { await command.DeferAsync(); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("CloseChat", ex, command);
+                return;
+            }
 
             await LogStartup($"Команда '/close_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 
@@ -138,7 +144,12 @@ namespace RPBot
         public async Task OpenChat(SocketSlashCommand command)
         {
             // Отложим ответ, чтобы Discord не считал команду "зависшей"
-            await command.DeferAsync();
+            try { await command.DeferAsync(); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("OpenChat", ex, command);
+                return;
+            }
 
             await LogStartup($"Команда '/open_chat' вызвана пользователем {command.User.Username} ({command.User.Id}).");
 

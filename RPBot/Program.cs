@@ -8,6 +8,7 @@ using RPBot.EventOps;
 using RPBot.Startup;
 using RPBot.Util;
 using RPBot.Web;
+using RPBot.Common;
 using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
@@ -4547,7 +4548,13 @@ await Task.CompletedTask;
                         return;
                     }
 
-                    await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
+                    try { await modal.DeferAsync(ephemeral: true).ConfigureAwait(false); }
+                    catch (Exception ex)
+                    {
+                        DeferFailureLogger.Log("PredictionCreate3", ex, modal, modal.Data.CustomId);
+                        ScheduleDeleteOriginalResponse(modal);
+                        return;
+                    }
 
                     if (modal.User == null)
                     {
@@ -4708,7 +4715,13 @@ await Task.CompletedTask;
                             return;
                         }
 
-                        await modal.DeferAsync(ephemeral: true).ConfigureAwait(false);
+                        try { await modal.DeferAsync(ephemeral: true).ConfigureAwait(false); }
+                        catch (Exception ex)
+                        {
+                            DeferFailureLogger.Log("PredictionCreate5", ex, modal, modal.Data.CustomId);
+                            ScheduleDeleteOriginalResponse(modal);
+                            return;
+                        }
 
                         if (modal.User == null)
                         {

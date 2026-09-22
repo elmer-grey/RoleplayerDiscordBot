@@ -49,7 +49,7 @@ public async Task<int?> SendPhotoReturningMessageIdAsync(ulong guildId, string p
 
     if (!string.IsNullOrWhiteSpace(caption))
     {
-    payload["caption"] = EscapeHtml(caption);
+        payload["caption"] = EscapeHtmlPreservingTags(caption);
     payload["parse_mode"] = "HTML";
     payload["disable_web_page_preview"] = true;
     }
@@ -360,7 +360,7 @@ public async Task<(bool, string?)> EditMessageTextWithDetailsAsync(ulong guildId
     {
         ["chat_id"] = cfg.TelegramChatId,
         ["message_id"] = messageId,
-        ["text"] = EscapeHtml(text),
+        ["text"] = EscapeHtmlPreservingTags(text),
         ["parse_mode"] = "HTML",
         ["disable_web_page_preview"] = true
     };
@@ -404,7 +404,7 @@ public async Task<(bool ok, string? error)> EditMessageCaptionWithDetailsAsync(u
     {
         ["chat_id"] = cfg.TelegramChatId,
         ["message_id"] = messageId,
-        ["caption"] = EscapeHtml(caption),
+        ["caption"] = EscapeHtmlPreservingTags(caption),
         ["parse_mode"] = "HTML",
         ["disable_web_page_preview"] = true
     };
@@ -444,13 +444,6 @@ private static int? TryParseTelegramMessageId(string json)
     return send.messageId.HasValue;
 }
 
-private static string EscapeHtml(string text)
-{
-    return text
-    .Replace("&", "&amp;", StringComparison.Ordinal)
-    .Replace("<", "&lt;", StringComparison.Ordinal)
-    .Replace(">", "&gt;", StringComparison.Ordinal);
-}
 
 /// <summary>
 /// Экранирует &, <, > в HTML-фрагменте, но НЕ трогает сами теги Telegram:

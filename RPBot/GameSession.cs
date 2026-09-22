@@ -2,6 +2,7 @@ using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using RPBot;
+using RPBot.Common;
 using RPBot.Startup;
 using RPBot.Util;
 using System;
@@ -1079,7 +1080,12 @@ namespace RPBot
             SocketUser? masterUser = null,
             string? gameComment = null)
         {
-            await command.DeferAsync();
+            try { await command.DeferAsync(); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("StartGame", ex, command);
+                return;
+            }
             var guildId = (command.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null) return;
 
@@ -1213,7 +1219,12 @@ namespace RPBot
                     case "confirm_stop":
                     case "cancel_stop":
                     case "toggle_rolls":
-                        await component.DeferAsync();
+                        try { await component.DeferAsync(); }
+                        catch (Exception ex)
+                        {
+                            DeferFailureLogger.Log("GameSessionButton", ex, component, parts[0]);
+                            return;
+                        }
                         break;
                 }
 
@@ -1394,7 +1405,12 @@ namespace RPBot
 
         public async Task HandleEditModal(SocketModal modal)
         {
-            await modal.DeferAsync();
+            try { await modal.DeferAsync(); }
+            catch (Exception ex)
+            {
+                DeferFailureLogger.Log("EditGameModal", ex, modal, modal.Data.CustomId);
+                return;
+            }
             var guildId = (modal.Channel as SocketGuildChannel)?.Guild.Id;
             if (guildId == null) return;
 
