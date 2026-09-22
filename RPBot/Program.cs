@@ -3007,9 +3007,15 @@ private static BotUI? _ui;
                             continue;
 
                         await LogStartup($"[EVENT][RESYNC] Обнаружено новое событие (оффлайн): guild={guild.Id} event={guildEvent.Id} name='{guildEvent.Name}'");
-                        if (_eventAnnouncer != null)
-                            await _eventAnnouncer.AnnounceCreatedAsync(guildEvent);
-                        announced++;
+                                                // Идём через Orchestrator, чтобы HandleCreatedAsync lifecycle-сервиса
+                                                // поставил reminder1h. Раньше звали Announcer напрямую — reminder
+                                                // для оффлайн-события не ставился до следующего Update/Ready
+                                                // (audit bug #4).
+                                                if (_eventOpsOrchestrator != null)
+                                                    await _eventOpsOrchestrator.HandleCreatedAsync(guildEvent);
+                                                else if (_eventAnnouncer != null)
+                                                    await _eventAnnouncer.AnnounceCreatedAsync(guildEvent);
+                                                announced++;
                     }
                 }
                 catch (Exception ex)

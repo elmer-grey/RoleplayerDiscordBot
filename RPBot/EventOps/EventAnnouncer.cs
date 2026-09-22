@@ -216,8 +216,50 @@ namespace RPBot.EventOps
             Log($"[EVENT] announce sent discord_channel guild={guild.Id} event={guildEvent.Id} channel={announceChannel.Id} msg={announceMsg.Id}");
             Log($"[EVENT] AnnounceCreatedInternalAsync: announce message sent, proceeding to telegram/dm/store");
 
-            int? tgMessageId = null;
-            var tgHasPhoto = false;
+                        // ─── Upsert в стор СРАЗУ после анонса в канале ─────────────────────
+                        // Раньше Upsert стоял после Telegram и DM-цикла. Если TG или хоть
+                        // один из DM бросал исключение выше своего try/catch — запись в стор
+                        // не появлялась, и HandleCreatedAsync lifecycle-сервиса в Orchestrator
+                        // видел entry == null, не ставил reminder1h. На следующее Updated —
+                        // становилось, но меджу — пропавший reminder. Теперь фиксируем
+                        // минимальный entry (channel/msg/snapshot) сразу после SendMessageAsync
+                        // (audit bug #3). TG и DM-идентификаторы добавляются через
+                        // UpdateEntry ниже своими try/catch — они не должны ломать нам
+                        // регистрацию события в сторе.
+                        int? tgMessageId = null;
+                        var tgHasPhoto = false;
+                        if (_store != null)
+                        {
+                            var entry = _store.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                            {
+                                GuildId = guild.Id,
+                                EventId = guildEvent.Id
+                            };
+                            entry.AnnounceChannelId = announceChannel.Id;
+                            entry.AnnounceMessageId = announceMsg.Id;
+                            entry.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
+                            if (serverConfigs.TryGetValue(guild.Id, out var sc2))
+                            {
+                                entry.TelegramChatId = sc2.TelegramChatId;
+                                entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
+                            }
+                            // Snapshot состояния для будущего diff.
+                            try
+                            {
+                                entry.LastName = guildEvent.Name;
+                                entry.LastDescription = guildEvent.Description;
+                                entry.LastStartTimeUtc = new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
+                                entry.LastEndTimeUtc = guildEvent.EndTime.HasValue
+                                    ? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.EndTime.Value.UtcDateTime, DateTimeKind.Utc))
+                                    : (DateTimeOffset?)null;
+                                entry.LastChannelId = guildEvent.Channel?.Id;
+                                entry.LastLocation = guildEvent.Location;
+                                entry.LastCoverImageUrl = guildEvent.GetCoverImageUrl();
+                            }
+                            catch { }
+                            try { _store.Upsert(entry); }
+                            catch (Exception ex) { Log($"[EVENT] AnnounceCreatedInternalAsync: _store.Upsert ранний упал: {ex.Message}"); }
+                        }
             try
             {
             if (_telegramNotifier != null)
@@ -238,26 +280,23 @@ namespace RPBot.EventOps
                         creatorName = mappedCr;
                         else
                         creatorName = guildEvent.Creator.Username;
-                        }
+                                                }
 
-                        var sb = new StringBuilder();
-                        sb.Append("📅 Новое событие: ").Append(guildEvent.Name).Append('\n');
-                        sb.Append("🕒 Когда: ").Append(startMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        sb.Append("📍 Где: ").Append(guild.Name).Append(" → ").Append(whereTextPlain).Append('\n');
-                        if (!string.IsNullOrWhiteSpace(creatorName))
-                            sb.Append("👤 Создал: ").Append(creatorName).Append('\n');
+                                                var descTruncated = !string.IsNullOrWhiteSpace(guildEvent.Description)
+                                                    ? guildEvent.Description.Trim().Length <= 800
+                                                        ? guildEvent.Description.Trim()
+                                                        : guildEvent.Description.Trim().Substring(0, 799) + "…"
+                                                    : null;
 
-                        if (!string.IsNullOrWhiteSpace(guildEvent.Description))
-            {
-                            var desc = guildEvent.Description.Trim();
-                            if (desc.Length > 800) desc = desc.Substring(0, 799) + "…";
-                            sb.Append('\n').Append(desc).Append('\n');
-                        }
-
-                        sb.Append('\n');
-                        sb.Append("🔗 ").Append(eventUrl);
-
-                        var tgText = sb.ToString();
+                                                var tgText = BuildEventTelegramText(
+                                                    header: $"📅 <b>Новое событие:</b> {guildEvent.Name}",
+                                                    whenLineOrLines: new[] { $"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)" },
+                                                    whereText: $"{guild.Name} → {whereTextPlain}",
+                                                    whoLabel: "Создал:",
+                                                    whoText: creatorName,
+                                                    description: descTruncated,
+                                                    changesText: null,
+                                                    eventUrl: eventUrl);
 
                         if (!string.IsNullOrWhiteSpace(imageUrl))
                         {
@@ -312,42 +351,31 @@ namespace RPBot.EventOps
             }
 
             if (_store != null)
-            {
-            var entry = _store.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
-            {
-            GuildId = guild.Id,
-            EventId = guildEvent.Id
-            };
-            entry.AnnounceChannelId = announceChannel.Id;
-            entry.AnnounceMessageId = announceMsg.Id;
-            entry.DmMessageIdsByUserId = dmMap;
-            if (serverConfigs.TryGetValue(guild.Id, out var sc2))
-            {
-            entry.TelegramChatId = sc2.TelegramChatId;
-            entry.TelegramMessageThreadId = sc2.TelegramMessageThreadId;
-            }
-            if (tgMessageId.HasValue)
-            {
-            entry.TelegramMessageId = tgMessageId.Value;
-            entry.TelegramHasPhoto = tgHasPhoto;
-            }
-            // Сохраняем snapshot состояния для будущего diff (создание/детект изменений).
-            try
-            {
-            entry.LastName = guildEvent.Name;
-            entry.LastDescription = guildEvent.Description;
-            entry.LastStartTimeUtc = new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
-            entry.LastEndTimeUtc = guildEvent.EndTime.HasValue
-            ? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.EndTime.Value.UtcDateTime, DateTimeKind.Utc))
-            : (DateTimeOffset?)null;
-            entry.LastChannelId = guildEvent.Channel?.Id;
-            entry.LastLocation = guildEvent.Location;
-            entry.LastCoverImageUrl = guildEvent.GetCoverImageUrl();
-            }
-            catch { }
-            _store.Upsert(entry);
-            }
-        }
+                        {
+                            // Запись уже в сторе (ранний Upsert после SendMessageAsync).
+                            // Досылаем DM-идентификаторы и TG-идентификаторы через UpdateEntry —
+                            // это идемпотентный путь и не должен упасть.
+                            try
+                            {
+                                var entry = _store.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                                {
+                                    GuildId = guild.Id,
+                                    EventId = guildEvent.Id
+                                };
+                                entry.DmMessageIdsByUserId = dmMap;
+                                if (tgMessageId.HasValue)
+                                {
+                                    entry.TelegramMessageId = tgMessageId.Value;
+                                    entry.TelegramHasPhoto = tgHasPhoto;
+                                }
+                                _store.UpdateEntry(entry);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"[EVENT] AnnounceCreatedInternalAsync: _store.UpdateEntry (dm/tg) упал: {ex.Message}");
+                            }
+                        }
+                    }
 
         public async Task AnnounceUpdatedInternalAsync(Cacheable<SocketGuildEvent, ulong> beforeCache, SocketGuildEvent guildEvent)
         {
@@ -462,22 +490,35 @@ namespace RPBot.EventOps
 
             // Сохраняем маркер обновления и состояние в store, чтобы UI мог показать,
             // что анонс был обновлён ботом (а не остался прежним).
-            try
-            {
-            entry.LastUpdatedMark = updatedMark;
-            entry.LastUpdatedAt = DateTime.UtcNow;
-            entry.LastName = guildEvent.Name;
-            entry.LastDescription = guildEvent.Description;
-            entry.LastStartTimeUtc = new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
-            entry.LastEndTimeUtc = guildEvent.EndTime.HasValue
-            ? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.EndTime.Value.UtcDateTime, DateTimeKind.Utc))
-            : (DateTimeOffset?)null;
-            entry.LastChannelId = guildEvent.Channel?.Id;
-            entry.LastLocation = guildEvent.Location;
-            entry.LastCoverImageUrl = guildEvent.GetCoverImageUrl();
-            _store.UpdateEntry(entry);
-            }
-            catch { }
+                        //
+                        // ВАЖНО: не затираем LastUpdatedMark, если событие уже в
+                        // финальном/started-статусе. RebuildFromStoreAsync lifecycle'а
+                        // читает эту метку как «completed/cancelled → поставить cleanup24h»
+                        // и «started → …». Если Update затёр бы метку на «Обновлено: …»,
+                        // cleanup никогда бы не сработал (audit bug #1).
+                        // Snapshot-поля (LastName, LastDescription, LastStartTimeUtc, …)
+                        // обновляем в любом случае — они нужны для ресинка и диффа.
+                        try
+                        {
+                            var existingMark = entry.LastUpdatedMark;
+                            entry.LastUpdatedMark = (existingMark == "completed"
+                                                 || existingMark == "cancelled"
+                                                 || existingMark == "started")
+                                ? existingMark
+                                : updatedMark;
+                            entry.LastUpdatedAt = DateTime.UtcNow;
+                            entry.LastName = guildEvent.Name;
+                            entry.LastDescription = guildEvent.Description;
+                            entry.LastStartTimeUtc = new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
+                            entry.LastEndTimeUtc = guildEvent.EndTime.HasValue
+                            ? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.EndTime.Value.UtcDateTime, DateTimeKind.Utc))
+                            : (DateTimeOffset?)null;
+                            entry.LastChannelId = guildEvent.Channel?.Id;
+                            entry.LastLocation = guildEvent.Location;
+                            entry.LastCoverImageUrl = guildEvent.GetCoverImageUrl();
+                            _store.UpdateEntry(entry);
+                        }
+                        catch { }
 
             try
             {
@@ -542,40 +583,30 @@ namespace RPBot.EventOps
                         string? creatorName = null;
                         if (guildEvent.Creator != null)
                         {
-                        if (serverConfigs != null && serverConfigs.TryGetValue(guild.Id, out var scUp)
-                            && scUp.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedUp) == true
-                            && !string.IsNullOrWhiteSpace(mappedUp))
-                        creatorName = mappedUp;
-                        else
-                        creatorName = guildEvent.Creator.Username;
-                        }
+                                                if (serverConfigs != null && serverConfigs.TryGetValue(guild.Id, out var scUp)
+                                                    && scUp.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedUp) == true
+                                                    && !string.IsNullOrWhiteSpace(mappedUp))
+                                                creatorName = mappedUp;
+                                                else
+                                                creatorName = guildEvent.Creator.Username;
+                                                }
 
-                        var sb = new StringBuilder();
-                        sb.Append("📅 Событие обновлено: ").Append(guildEvent.Name).Append('\n');
-                        sb.Append("🕒 Когда: ").Append(startMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        sb.Append("📍 Где: ").Append(guild.Name).Append(" → ").Append(whereTextPlain).Append('\n');
-                        if (!string.IsNullOrWhiteSpace(creatorName))
-                            sb.Append("👤 Создал: ").Append(creatorName).Append('\n');
+                                                var descTruncated = !string.IsNullOrWhiteSpace(guildEvent.Description)
+                                                    ? guildEvent.Description.Trim().Length <= 800
+                                                        ? guildEvent.Description.Trim()
+                                                        : guildEvent.Description.Trim().Substring(0, 799) + "…"
+                                                    : null;
 
-                        if (!string.IsNullOrWhiteSpace(guildEvent.Description))
-                        {
-                            var desc = guildEvent.Description.Trim();
-                            if (desc.Length > 800) desc = desc.Substring(0, 799) + "…";
-                            sb.Append('\n').Append(desc).Append('\n');
-                        }
-
-                        sb.Append('\n');
-                        if (changes.Count > 0)
-                        {
-                            sb.Append("✏️ Изменения:\n");
-                            // changesMsk уже включает префикс "- " для каждой записи (см. FormatChangesMsk),
-                            // поэтому здесь не добавляем "- " ещё раз.
-                            sb.Append(changesMsk).Append('\n');
-                        }
-                        sb.Append("ℹ️ ").Append(updatedMarkMsk).Append('\n');
-                        sb.Append("🔗 ").Append(eventUrl);
-
-                        var tgText = sb.ToString();
+                                                var tgText = BuildEventTelegramText(
+                                                    header: $"📅 <b>Событие обновлено:</b> {guildEvent.Name}",
+                                                    whenLineOrLines: new[] { $"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)" },
+                                                    whereText: $"{guild.Name} → {whereTextPlain}",
+                                                    whoLabel: "Создал:",
+                                                    whoText: creatorName,
+                                                    description: descTruncated,
+                                                    changesText: changes.Count > 0 ? changesMsk : null,
+                                                    eventUrl: eventUrl)
+                                                    + $"\n\nℹ️ {updatedMarkMsk}";
 
                         var (ok, err) = entry.TelegramHasPhoto
                         ? await _telegramNotifier.EditMessageCaptionWithDetailsAsync(guild.Id, entry.TelegramMessageId, tgText)
@@ -837,7 +868,67 @@ namespace RPBot.EventOps
                 completedMskParam = mskCompleted;
             }
 
-            var tgText = BuildStatusTelegramText(guildEvent, prefix, statusText, whereTextPlain, eventUrl, markMsk, startMsk, isStarted, isCompleted, isCancelled, serverConfigs, actualStartMsk, completedMskParam);
+            var whenLines = new List<string>();
+            string statusHeader;
+
+            if (isStarted)
+            {
+                statusHeader = $"✅ <b>Событие началось:</b> {guildEvent.Name}";
+                whenLines.Add($"🕒 <b>Начало:</b> {mskNow.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+            }
+            else if (isCompleted)
+            {
+                statusHeader = $"✅ <b>Событие завершено:</b> {guildEvent.Name}";
+                var actualStartMskForTg = actualStartMsk ?? startMsk;
+                                whenLines.Add($"🕒 <b>Начало:</b> {actualStartMskForTg.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                var completedForTg = completedMskParam ?? (mskNow);
+                whenLines.Add($"🛑 <b>Завершение:</b> {completedForTg.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+            }
+            else if (isCancelled)
+            {
+                statusHeader = $"❌ <b>Событие отменено:</b> {guildEvent.Name}";
+                whenLines.Add($"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+            }
+            else
+            {
+                statusHeader = $"📅 <b>{statusText}:</b> {guildEvent.Name}";
+                whenLines.Add($"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                whenLines.Add($"⏳ <b>Статус:</b> {markMsk}");
+            }
+
+            // whoText для status:
+            string? creatorNameStatus = null;
+            if (guildEvent.Creator != null)
+            {
+                if (serverConfigs != null && serverConfigs.TryGetValue(guild.Id, out var scSt)
+                    && scSt.MasterNameMap?.TryGetValue(guildEvent.Creator.Id.ToString(), out var mappedSt) == true
+                    && !string.IsNullOrWhiteSpace(mappedSt))
+                {
+                    creatorNameStatus = mappedSt;
+                }
+                else
+                {
+                    creatorNameStatus = guildEvent.Creator.Username;
+                }
+            }
+
+            var descTruncatedStatus = !string.IsNullOrWhiteSpace(guildEvent.Description)
+                ? guildEvent.Description.Trim().Length <= 800
+                    ? guildEvent.Description.Trim()
+                    : guildEvent.Description.Trim().Substring(0, 799) + "…"
+                : null;
+
+            var changesForStatus = isCancelled ? $"- {markMsk}" : null;
+
+            var tgText = BuildEventTelegramText(
+                header: statusHeader,
+                whenLineOrLines: whenLines,
+                whereText: whereTextPlain,
+                whoLabel: (isStarted || isCompleted || isCancelled) ? "Мастер:" : "Создал:",
+                whoText: creatorNameStatus,
+                description: descTruncatedStatus,
+                changesText: changesForStatus,
+                eventUrl: eventUrl);
 
             bool ok;
                         string? error = null;
@@ -951,23 +1042,35 @@ namespace RPBot.EventOps
             var markMsk = $"{prefix} {statusText}: {mskNow:dd.MM.yyyy HH:mm} (по МСК)";
 
             // Канал анонса: для embed используем Discord-упоминание канала из REST (ChannelId).
-            string whereText;
-            string whereTextPlain;
-            if (restEvent.ChannelId.HasValue && restEvent.ChannelId.Value != 0)
+                        // Для TG — пытаемся достать имя через guild.GetTextChannelAsync; если не
+                        // получилось — fallback на ID (редкий кейс, лучше показать что-то, чем
+                        // ничего). Audit cosmetic #1: раньше TG-блок печатал «1399301816017096874»
+                        // сырым ID-ом канала.
+                        string whereText;
+                        string whereTextPlain;
+                        string? channelName = null;
+                        if (restEvent.ChannelId.HasValue && restEvent.ChannelId.Value != 0)
             {
-                whereText = $"<#{restEvent.ChannelId.Value}>";
-                whereTextPlain = restEvent.ChannelId.Value.ToString();
-            }
-            else if (!string.IsNullOrWhiteSpace(restEvent.Location))
-            {
-                whereText = restEvent.Location;
-                whereTextPlain = whereText;
-            }
-            else
-            {
-                whereText = "не указано";
-                whereTextPlain = whereText;
-            }
+                            whereText = $"<#{restEvent.ChannelId.Value}>";
+                            try
+                            {
+                                var ch = await client.Rest.GetChannelAsync(restEvent.ChannelId.Value);
+                                if (ch is IGuildChannel gc && !string.IsNullOrWhiteSpace(gc.Name))
+                                    channelName = "#" + gc.Name;
+                            }
+                            catch { /* имя канала недоступно — оставляем ID */ }
+                            whereTextPlain = channelName ?? restEvent.ChannelId.Value.ToString();
+                        }
+                        else if (!string.IsNullOrWhiteSpace(restEvent.Location))
+                        {
+                            whereText = restEvent.Location;
+                            whereTextPlain = whereText;
+                        }
+                        else
+                        {
+                            whereText = "не указано";
+                            whereTextPlain = whereText;
+                        }
 
             string? coverUrl = restEvent.CoverImageId != null
                 ? $"https://cdn.discordapp.com/guild-events/{restEvent.Id}/{restEvent.CoverImageId}.png?size=1024"
@@ -1086,56 +1189,61 @@ namespace RPBot.EventOps
                         entry.TelegramMessageThreadId = liveCfg.TelegramMessageThreadId;
                     }
 
-                    var sb = new System.Text.StringBuilder();
-                    sb.Append(prefix).Append(' ').Append(statusText).Append(": ").Append(restEvent.Name).Append('\n');
+                                        // Готовим список строк «Когда/Начало/Завершение» и шапку под единый формат.
+                                        var whenLines = new List<string>();
+                                        string header;
 
-                    if (isStarted)
-                    {
-                        sb.Append("🕒 Начало: ").Append(mskNow.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                    }
-                    else if (isCompleted)
-                    {
-                        var startMskActual = actualStartMsk ?? startMsk;
-                        sb.Append("🕒 Начало: ").Append(startMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        // «Завершение» — из entry.CompletedAtUtc (см. embed выше).
-                        DateTime completedMsk;
-                        if (entry.CompletedAtUtc.HasValue
-                            && TryGetMoscowTime(entry.CompletedAtUtc.Value.UtcDateTime, out var mskCompletedRest))
-                        {
-                            completedMsk = mskCompletedRest;
-                        }
-                        else
-                        {
-                            completedMsk = TryGetMoscowTime(DateTime.UtcNow, out var mskNowC) ? mskNowC : DateTime.Now;
-                        }
-                        sb.Append("🛑 Завершение: ").Append(completedMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                    }
-                    else
-                    {
-                        sb.Append("🕒 Когда: ").Append(startMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                    }
+                                        if (isStarted)
+                                        {
+                                            header = $"✅ <b>Событие началось:</b> {restEvent.Name}";
+                                            whenLines.Add($"🕒 <b>Начало:</b> {mskNow.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                                        }
+                                        else if (isCompleted)
+                                        {
+                                            header = $"✅ <b>Событие завершено:</b> {restEvent.Name}";
+                                            var startMskActual = actualStartMsk ?? startMsk;
+                                            whenLines.Add($"🕒 <b>Начало:</b> {startMskActual.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                                            DateTime completedMsk;
+                                            if (entry.CompletedAtUtc.HasValue
+                                                && TryGetMoscowTime(entry.CompletedAtUtc.Value.UtcDateTime, out var mskCompletedRest))
+                                            {
+                                                completedMsk = mskCompletedRest;
+                                            }
+                                            else
+                                            {
+                                                completedMsk = TryGetMoscowTime(DateTime.UtcNow, out var mskNowC) ? mskNowC : DateTime.Now;
+                                            }
+                                            whenLines.Add($"🛑 <b>Завершение:</b> {completedMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                                        }
+                                        else if (isCancelled)
+                                        {
+                                            header = $"❌ <b>Событие отменено:</b> {restEvent.Name}";
+                                            whenLines.Add($"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                                        }
+                                        else
+                                        {
+                                            // Fallback — никогда не сюда в норме, но пусть будет.
+                                            header = $"📅 <b>{statusText}:</b> {restEvent.Name}";
+                                            whenLines.Add($"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
+                                        }
 
-                    sb.Append("📍 Где: ").Append(guild.Name).Append(" → ").Append(whereTextPlain).Append('\n');
+                                        var descTruncated = !string.IsNullOrWhiteSpace(restEvent.Description)
+                                            ? restEvent.Description.Trim().Length <= 800
+                                                ? restEvent.Description.Trim()
+                                                : restEvent.Description.Trim().Substring(0, 799) + "…"
+                                            : null;
 
-                    if (!string.IsNullOrWhiteSpace(displayName))
-                        sb.Append(isStarted ? "👤 Мастер: " : "👤 Создал: ").Append(displayName).Append('\n');
+                                        var changesTruncated = isCancelled ? $"- {markMsk}" : null;
 
-                    if (!string.IsNullOrWhiteSpace(restEvent.Description))
-                    {
-                        var desc = restEvent.Description.Trim();
-                        if (desc.Length > 800) desc = desc.Substring(0, 799) + "…";
-                        sb.Append('\n').Append(desc).Append('\n');
-                    }
-
-                    sb.Append('\n');
-                    if (isCancelled)
-                    {
-                        sb.Append("✏️ Изменения:\n");
-                        sb.Append("- ").Append(markMsk).Append('\n');
-                    }
-                    sb.Append("🔗 ").Append(eventUrl);
-
-                    var tgText = sb.ToString();
+                                        var tgText = BuildEventTelegramText(
+                                            header: header,
+                                            whenLineOrLines: whenLines,
+                                            whereText: $"{guild.Name} → {whereTextPlain}",
+                                            whoLabel: isStarted ? "Мастер:" : "Создал:",
+                                            whoText: displayName,
+                                            description: descTruncated,
+                                            changesText: changesTruncated,
+                                            eventUrl: eventUrl);
 
                     bool ok;
                     string? error = null;
@@ -1173,140 +1281,12 @@ namespace RPBot.EventOps
             // Удаление произойдёт позже в EventOpsLifecycleService.RunCleanup24hAsync
             // через 24ч — это даёт шанс пережить рестарт бота.
             entry.LastUpdatedMark = status;
-            entry.LastUpdatedAt = DateTime.UtcNow;
-            try { _store.UpdateEntry(entry); } catch { }
-        }
-
-                    /// <summary>
-                    /// Собирает текст Телеграм-сообщения для изменения статуса события
-                    /// в формате «Шапка → Когда/Где/Кто → пустая строка → описание →
-                    /// пустая строка → [изменения] + метка + ссылка».
-                    /// Для started/completed блок «Изменения» не выводится — сам факт
-                    /// старта/завершения уже виден в шапке. Для cancelled — метка
-                    /// отмены попадает в «Изменения» как доп. контекст.
-                    /// Имя мастера при status='started' берётся из активной сессии,
-                    /// затем из MasterNameMap, иначе — из Creator.Username.
-                    /// Имя создателя для остальных статусов — из MasterNameMap,
-                    /// иначе — из Creator.Username.
-                    /// </summary>
-                    private static string BuildStatusTelegramText(
-                        SocketGuildEvent guildEvent,
-                        string prefix,
-                        string statusText,
-                        string whereTextPlain,
-                        string eventUrl,
-                        string markMsk,
-                        DateTime startMsk,
-                        bool isStarted,
-                        bool isCompleted,
-                        bool isCancelled,
-                        IReadOnlyDictionary<ulong, ServerConfig>? serverConfigs,
-                        DateTime? actualStartMsk = null,
-                        DateTime? completedMsk = null)
-                    {
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append(prefix).Append(' ').Append(statusText).Append(": ").Append(guildEvent.Name).Append('\n');
-
-                        // Для started/completed — показываем «Начало» (фактическое время старта)
-                        // и «Завершение» (фактическое время завершения). Для started
-                        // используем момент сейчас, а не плановое startMsk — иначе
-                        // пользователь видит путаницу «вроде началось, а время будущее».
-                        if (isStarted)
-                        {
-                            var startedMskNow = TryGetMoscowTime(DateTime.UtcNow, out var mskNowStarted) ? mskNowStarted : DateTime.Now;
-                            sb.Append("🕒 Начало: ").Append(startedMskNow.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        }
-                        else if (isCompleted)
-                        {
-                            // «Начало» показываем фактическое (когда событие реально стартовало),
-                            // а не плановое. Если ActualStartTimeUtc не сохранилось
-                            // (например, бот пропустил started) — fallback на плановое.
-                            var startMskActual = actualStartMsk ?? startMsk;
-                            sb.Append("🕒 Начало: ").Append(startMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                            // «Завершение» — из сохранённого completedMsk (передан
-                            // вызывающим кодом из entry.CompletedAtUtc). Это гарантирует,
-                            // что при рестарте/resync TG-сообщение не перезапишется
-                            // моментом рестарта. Fallback на DateTime.UtcNow —
-                            // только для редкого кейса «completed минуя started».
-                            DateTime completedMskActual;
-                            if (completedMsk.HasValue)
-                            {
-                                completedMskActual = completedMsk.Value;
-                            }
-                            else
-                            {
-                                completedMskActual = TryGetMoscowTime(DateTime.UtcNow, out var mskNowC) ? mskNowC : DateTime.Now;
-                            }
-                            sb.Append("🛑 Завершение: ").Append(completedMskActual.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        }
-                        else
-                        {
-                            sb.Append("🕒 Когда: ").Append(startMsk.ToString("dd.MM.yyyy HH:mm")).Append(" (по МСК)\n");
-                        }
-
-                        sb.Append("📍 Где: ").Append(guildEvent.Guild?.Name ?? "?").Append(" → ").Append(whereTextPlain).Append('\n');
-
-                        string? displayName = null;
-                        if (guildEvent.Creator != null)
-                        {
-                            var creatorIdStr = guildEvent.Creator.Id.ToString();
-
-                            if (isStarted)
-                            {
-                                // Для started имя берём из активной сессии.
-                                if (GameSessionCommands._sessions.TryGetValue(guildEvent.Guild!.Id, out var guildSessions))
-                                {
-                                    var linked = guildSessions.Values.FirstOrDefault(s => s.EventId == guildEvent.Id && !s.IsStopped);
-                                    if (linked != null && !string.IsNullOrWhiteSpace(linked.MasterName))
-                                        displayName = linked.MasterName;
-                                }
-                            }
-
-                            if (displayName == null
-                                && serverConfigs != null
-                                && serverConfigs.TryGetValue(guildEvent.Guild!.Id, out var sc)
-                                && sc.MasterNameMap?.TryGetValue(creatorIdStr, out var mapped) == true
-                                && !string.IsNullOrWhiteSpace(mapped))
-                            {
-                                displayName = mapped;
-                            }
-
-                            displayName ??= guildEvent.Creator.Username;
-
-                            sb.Append(isStarted ? "👤 Мастер: " : "👤 Создал: ").Append(displayName).Append('\n');
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(guildEvent.Description))
-                        {
-                            var desc = guildEvent.Description.Trim();
-                            if (desc.Length > 800) desc = desc.Substring(0, 799) + "…";
-                            sb.Append('\n').Append(desc).Append('\n');
-                        }
-
-                        sb.Append('\n');
-                        // Блок «Изменения» для started/completed опускаем: сам факт
-                        // старта/завершения уже виден в шапке. Для cancelled —
-                        // показываем метку отмены в «Изменениях», чтобы пользователь
-                        // видел контекст, что событие было именно отменено.
-                        if (isCancelled)
-                        {
-                            sb.Append("✏️ Изменения:\n");
-                            sb.Append("- ").Append(markMsk).Append('\n');
-                        }
-                        sb.Append("🔗 ").Append(eventUrl);
-
-                        return sb.ToString();
+                        entry.LastUpdatedAt = DateTime.UtcNow;
+                        try { _store.UpdateEntry(entry); } catch { }
                     }
 
-                    private static string Truncate(string? value, int max)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-            value = value.Trim();
-            return value.Length <= max ? value : value.Substring(0, max - 1) + "…";
-        }
-
-        /// <summary>
-        /// Преобразует список изменений в МСК-вариант.
+                    /// <summary>
+                    /// Преобразует список изменений в МСК-вариант.
         /// Заменяет все вхождения dd.MM.yyyy HH:mm → dd.MM.yyyy HH:mm (по МСК).
         /// Diff-функции используют startLocal при формировании текста, так что на
         /// летнее/зимнее время преобразование этих строк должно быть точным.
@@ -1357,6 +1337,13 @@ namespace RPBot.EventOps
 
         private static bool TryGetMoscowTime(DateTime utc, out DateTime msk)
             => MoscowTime.TryConvertFromUtc(utc, out msk);
+
+                private static string Truncate(string? value, int max)
+                {
+                    if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+                    value = value.Trim();
+                    return value.Length <= max ? value : value.Substring(0, max - 1) + "…";
+                }
 
         private static void Log(string msg)
         {
@@ -1509,5 +1496,66 @@ namespace RPBot.EventOps
             changesDiscord.Add("Изображение изменено");
             }
         }
-    }
-}
+
+                    /// <summary>
+                    /// Единый шаблон Telegram-сообщения об анонсе события (для create/update/
+                    /// started/completed/cancelled/reminder). Все метки — жирным (HTML), ссылка
+                    /// кликабельная, формат одинаков во всех путях. Это исправляет разнобой,
+                    /// когда TG-блоки create/status/reminder выглядели по-разному (жирные то
+                    /// были, то нет; ссылка то URL, то текст «🔗 https://...»).
+                    /// </summary>
+                    /// <param name="header">Шапка. Уже с эмодзи и экранированными HTML-тегами (например, «📅 Новое событие: X»).</param>
+                    /// <param name="whenLineOrLines">Одна или несколько строк блока «Когда» (могут быть «Начало»/«Завершение»). Уже с жирной меткой «<b>…</b>».</param>
+                    /// <param name="whereText">Канал/локация — plain text (уже с #channel-name или текстом, без экранирования).</param>
+                    /// <param name="whoLabel">«Мастер:» / «Создал:» (зависит от контекста).</param>
+                    /// <param name="whoText">Имя мастера/создателя, null если не нужно.</param>
+                    /// <param name="description">Описание (для create/update), null если нет.</param>
+                    /// <param name="changesText">Блок «Изменения» (для update), null если не нужен. Без префикса «✏️ Изменения:» — он добавляется здесь.</param>
+                    /// <param name="eventUrl">Ссылка на событие.</param>
+                    internal static string BuildEventTelegramText(
+                        string header,
+                        IEnumerable<string> whenLineOrLines,
+                        string whereText,
+                        string whoLabel,
+                        string? whoText,
+                        string? description,
+                        string? changesText,
+                        string eventUrl)
+                    {
+                        var sb = new StringBuilder();
+
+                        // 1) Шапка + пустая строка.
+                        sb.Append(header).Append('\n').Append('\n');
+
+                        // 2) Когда / Где / Кто — жирные метки.
+                        foreach (var line in whenLineOrLines)
+                        {
+                            if (string.IsNullOrEmpty(line)) continue;
+                            sb.Append(line).Append('\n');
+                        }
+                        sb.Append("📍 <b>Где:</b> ").Append(whereText).Append('\n');
+                        if (!string.IsNullOrWhiteSpace(whoText))
+                        {
+                            sb.Append("👤 <b>").Append(whoLabel).Append("</b> ").Append(whoText).Append('\n');
+                        }
+
+                        // 3) Пустая строка + описание (если есть).
+                        if (!string.IsNullOrWhiteSpace(description))
+                        {
+                            sb.Append('\n').Append(description.Trim()).Append('\n');
+                        }
+
+                        // 4) Изменения (если есть).
+                        if (!string.IsNullOrWhiteSpace(changesText))
+                        {
+                            sb.Append('\n').Append("✏️ <b>Изменения:</b>\n").Append(changesText).Append('\n');
+                        }
+
+                        // 5) Пустая строка + кликабельная ссылка.
+                        sb.Append('\n');
+                        sb.Append("🔗 <a href=\"").Append(eventUrl).Append("\">Ссылка на событие в Discord</a>");
+
+                        return sb.ToString();
+                    }
+                }
+            }

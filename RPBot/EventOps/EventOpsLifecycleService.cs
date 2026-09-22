@@ -77,7 +77,30 @@ namespace RPBot.EventOps
         public void Cancel()
         {
             try { _shutdownCts.Cancel(); } catch { }
-        }
+
+                    // ВАЖНО: _shutdownCts сам по себе не связан с per-event CTSs в _timers
+                    // (они живут независимыми CancellationTokenSource'ами на каждое
+                    // событие). Без явного обхода словаря таймеры продолжали бы
+                    // тикать после дисконнекта/рестарта — утечка CTS, дублирующиеся
+                    // Task.Delay и потенциально двойные cleanup'ы при повторном Ready
+                    // (audit bug #2).
+                    foreach (var kv in _timers)
+                    {
+                        var slot = kv.Value;
+                        try { slot.Reminder1hCts?.Cancel(); } catch { }
+                        try { slot.Reminder1hCts?.Dispose(); } catch { }
+                        slot.Reminder1hCts = null;
+                        slot.Reminder1hAtUtc = null;
+
+                        try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
+                        try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
+                        slot.DeleteReminder15mCts = null;
+
+                        try { slot.Cleanup24hCts?.Cancel(); } catch { }
+                        try { slot.Cleanup24hCts?.Dispose(); } catch { }
+                        slot.Cleanup24hCts = null;
+                    }
+                }
 
         /// <summary>
         /// Привязка к <see cref="EventOpsOrchestrator"/>. Вызывать один раз после создания.
@@ -873,19 +896,17 @@ namespace RPBot.EventOps
                         whereTextTg = "(локация не указана)";
                     }
 
-                    // Стиль — как BuildStatusTelegramText (EventAnnouncer.cs:1180+):
-                    // одна шапка с эмодзи ⏰, время по МСК, жирные «Когда»/«Где»,
-                    // кликабельная ссылка на событие. Реальный HTML для parse_mode=HTML.
-                    // Экранирование &, <, > внутри пользовательских данных выполняет
-                    // сам TelegramNotifier.BuildSendMessagePayload через
-                    // EscapeHtmlPreservingTags — поэтому здесь подставляем eventName,
-                    // whenText, whereTextTg, eventUrl БЕЗ предварительного EscapeHtml.
-                    // Двойное экранирование даёт &amp;amp; и ломает вывод.
-                    var tgText =
-                        $"⏰ <b>Напоминание:</b> через час начнётся событие <b>{eventName}</b>, не пропустите!\n\n" +
-                        $"🕒 <b>Когда:</b> {whenText}\n" +
-                        $"📍 <b>Где:</b> {whereTextTg}\n\n" +
-                        $"🔗 <a href=\"{eventUrl}\">Открыть событие в Discord</a>";
+                    // Стиль — единый с другими TG-анонсами (см. EventAnnouncer.BuildEventTelegramText):
+                                        // жирные метки «Когда»/«Где», кликабельная ссылка. parse_mode=HTML.
+                                        // Экранирование &, <, > внутри пользовательских данных выполняет
+                                        // сам TelegramNotifier.BuildSendMessagePayload — поэтому здесь
+                                        // подставляем eventName/whenText/whereTextTg/eventUrl без
+                                        // предварительного EscapeHtml (двойное экранирование ломает вывод).
+                                        var tgText =
+                                            $"⏰ <b>Напоминание:</b> через час начнётся событие <b>{eventName}</b>, не пропустите!\n\n" +
+                                            $"🕒 <b>Когда:</b> {whenText}\n" +
+                                            $"📍 <b>Где:</b> {whereTextTg}\n\n" +
+                                            $"🔗 <a href=\"{eventUrl}\">Ссылка на событие в Discord</a>";
 
                     // SendMessageReturningMessageIdAsync: вернёт messageId,
                     // кладём его в ReminderTelegramMessageId чтобы потом удалить.
