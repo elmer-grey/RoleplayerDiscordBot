@@ -908,8 +908,26 @@ namespace RPBot.EventOps
             var guild = client.GetGuild(entry.GuildId);
             if (guild == null)
             {
-                Log($"[EVENT] status-from-rest {status} skipped (guild not in cache) guild={entry.GuildId} event={entry.EventId}");
-                return;
+                Log($"[EVENT] status-from-rest {status} skipped (guild not in cache) guild={entry.GuildId} event={entry.EventId}, retrying up to 15s");
+                // Guild мог ещё не попасть в кэш после рестарта/ready. Ждём до 15с
+                // — если за это время появится, перерисуем анонс. Если нет — выходим;
+                // cleanup24h всё равно поставится через RebuildFromStoreAsync.
+                // Без этого фикса guild-not-in-cache при resync completed приводит к
+                // тому, что анонс остаётся со старым embed, а участники видят
+                // «событие активно», хотя в Discord оно уже завершено.
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                while (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(500);
+                    guild = client.GetGuild(entry.GuildId);
+                    if (guild != null) break;
+                }
+                if (guild == null)
+                {
+                    Log($"[EVENT] status-from-rest {status} giveup (guild still not in cache) guild={entry.GuildId} event={entry.EventId}");
+                    return;
+                }
+                Log($"[EVENT] status-from-rest {status} retry ok guild={entry.GuildId} event={entry.EventId}");
             }
 
             if (entry.DmMessageIdsByUserId == null)

@@ -93,6 +93,81 @@ namespace RPBot.EventOps
         }
 
         /// <summary>
+        /// Одноразовый backfill CompletedAtUtc/CancelledAtUtc для записей, у которых
+        /// это поле null, но LastUpdatedMark == completed/cancelled. Вызывается из
+        /// RebuildFromStoreAsync при старте бота.
+        ///
+        /// Для CancelledAtUtc: если LastUpdatedMark == cancelled, а CancelledAtUtc
+        /// пуст — заполняем LastUpdatedAt (он обновляется в AnnounceStatusChangedInternalAsync
+        /// в момент observed cancelled).
+        ///
+        /// Для CompletedAtUtc: если LastUpdatedMark == completed, а CompletedAtUtc
+        /// пуст — заполняем LastUpdatedAt. Это «лучшее приближение» момента
+        /// завершения: AnnounceStatusChangedInternalAsync пишет LastUpdatedAt
+        /// в момент observed completed.
+        ///
+        /// Если LastUpdatedAt по какой-то причине пуст — fallback на LastUpdatedAtUtc
+        /// или DateTimeOffset.UtcNow.
+        ///
+        /// Backfill идемпотентен: если поле уже заполнено — не трогаем.
+        /// </summary>
+        private void BackfillMissingTimestamps()
+        {
+            try
+            {
+                var entries = _store.GetEntriesSnapshot();
+                int backfilledCancelled = 0, backfilledCompleted = 0;
+                foreach (var e in entries)
+                {
+                    var mark = e.LastUpdatedMark;
+                    if (string.IsNullOrEmpty(mark)) continue;
+
+                    DateTimeOffset? approx = null;
+                    if (e.LastUpdatedAt.HasValue)
+                    {
+                        approx = new DateTimeOffset(DateTime.SpecifyKind(e.LastUpdatedAt.Value, DateTimeKind.Utc));
+                    }
+                    else if (e.LastUpdatedAtUtc != default)
+                    {
+                        approx = e.LastUpdatedAtUtc;
+                    }
+
+                    if (!approx.HasValue) continue;
+
+                    if (mark == "cancelled" && !e.CancelledAtUtc.HasValue)
+                    {
+                        var updated = _store.TryGet(e.GuildId, e.EventId);
+                        if (updated != null)
+                        {
+                            updated.CancelledAtUtc = approx;
+                            try { _store.UpdateEntry(updated); backfilledCancelled++; } catch { }
+                        }
+                    }
+                    else if (mark == "completed" && !e.CompletedAtUtc.HasValue)
+                    {
+                        var updated = _store.TryGet(e.GuildId, e.EventId);
+                        if (updated != null)
+                        {
+                            updated.CompletedAtUtc = approx;
+                            try { _store.UpdateEntry(updated); backfilledCompleted++; } catch { }
+                        }
+                    }
+                }
+
+                if (backfilledCancelled > 0 || backfilledCompleted > 0)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] BackfillMissingTimestamps: cancelled={backfilledCancelled}, completed={backfilledCompleted}");
+                }
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Discord,
+                    $"[EventOpsLifecycle] BackfillMissingTimestamps error: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Одноразовый проход по всем записям стора после старта бота.
         /// Восстанавливает таймеры для активных/запланированных событий.
         /// Повторные вызовы (reconnect/Ready) — single-flight, защита от дублей.
@@ -110,6 +185,17 @@ namespace RPBot.EventOps
             {
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, _shutdownCts.Token);
                 var ct = linkedCts.Token;
+
+                // Backfill исторических cancelled/completed записей без CompletedAtUtc.
+                // До фикса evt-bug3 таких полей не было в схеме, и при status-from-rest
+                // для старых completed-событий поле «Завершение» в анонсе рендерилось
+                // моментом рестарта бота. Backfill заполняет поле «правдоподобным»
+                // значением: для cancelled → CancelledAtUtc ?? LastUpdatedAt,
+                // для completed → CompletedAtUtc из LastUpdatedAt (≈ момент,
+                // когда бот последний раз обновлял запись — для completed-событий
+                // это и есть момент завершения, потому что AnnounceStatusChangedInternalAsync
+                // пишет LastUpdatedAt = DateTime.UtcNow).
+                BackfillMissingTimestamps();
 
                 var entries = _store.GetEntriesSnapshot();
                 BotLogger.Info(LogCategory.Discord,
@@ -414,6 +500,7 @@ namespace RPBot.EventOps
             // для completed-событий, у которых ActualStartTimeUtc был null: cleanup считался от
             // планового LastStartTimeUtc, а не от фактического завершения.
             DateTimeOffset cleanupAt;
+            var nowUtc = DateTimeOffset.UtcNow;
             if (entry.CleanupAtUtc.HasValue)
             {
                 cleanupAt = entry.CleanupAtUtc.Value;
@@ -424,13 +511,26 @@ namespace RPBot.EventOps
                       ?? entry.CancelledAtUtc
                       ?? entry.ActualStartTimeUtc
                       ?? entry.LastStartTimeUtc;
-                if (!at.HasValue) return false;
-                cleanupAt = at.Value.AddHours(24);
+                if (!at.HasValue)
+                {
+                    // Запись в сторе без единой временной метки — такого быть не должно
+                    // (AnnounceCreatedInternalAsync всегда проставляет LastStartTimeUtc),
+                    // но если очень старый анонс без дат или данные повредились — лучше
+                    // удалить сейчас, чем держать анонс вечно. Это совпадает с веткой
+                    // «cleanupAt <= nowUtc» ниже, но тут мы ещё и логируем, что случай
+                    // аномальный.
+                    BotLogger.Warn(LogCategory.Discord,
+                        $"[EventOpsLifecycle] ScheduleCleanup24h: нет временных меток для cleanup guild={entry.GuildId} event={entry.EventId}, ставлю немедленное удаление");
+                    cleanupAt = nowUtc.AddSeconds(2);
+                }
+                else
+                {
+                    cleanupAt = at.Value.AddHours(24);
+                }
                 entry.CleanupAtUtc = cleanupAt;
                 try { _store.UpdateEntry(entry); } catch { }
             }
 
-            var nowUtc = DateTimeOffset.UtcNow;
             if (cleanupAt <= nowUtc)
             {
                 // Момент уже в прошлом — выполним через 2 секунды (фон).
@@ -651,7 +751,15 @@ namespace RPBot.EventOps
             // ── Telegram: в канал/топик из ServerConfig ───────────────────────
             // Telegram reminder: время в МСК-формате (как в основном анонсе),
             // «Где» — plain text в стиле основного анонса (BuildStatusTelegramText).
-            if (_telegramNotifier != null && entry.TelegramChatId != 0)
+            //
+            // Берём liveCfg из ServerConfig, а не снимок из entry.TelegramChatId.
+            // ServerConfig может меняться в рантайме (мастер перенастроил топик),
+            // и если бы мы слали в снимок — reminder уходил бы в старый чат/топик.
+            // По аналогии с тем, как уже сделано в EventAnnouncer.
+            var liveCfg = _serverConfigsProvider()?.TryGetValue(entry.GuildId, out var lc) == true ? lc : null;
+            var tgChatId = liveCfg?.TelegramChatId ?? entry.TelegramChatId;
+            var tgThreadId = liveCfg?.TelegramMessageThreadId ?? entry.TelegramMessageThreadId;
+            if (_telegramNotifier != null && tgChatId != 0)
             {
                 try
                 {
@@ -711,6 +819,9 @@ namespace RPBot.EventOps
 
                     // SendMessageReturningMessageIdAsync: вернёт messageId,
                     // кладём его в ReminderTelegramMessageId чтобы потом удалить.
+                    // TelegramNotifier сам возьмёт chatId/threadId из текущего
+                    // ServerConfig — entry.TelegramChatId/Thread мы лишь фиксируем
+                    // для последующего удаления и аудита.
                     var tgMsgId = await _telegramNotifier.SendMessageReturningMessageIdAsync(
                         entry.GuildId, tgText);
 
@@ -718,12 +829,17 @@ namespace RPBot.EventOps
                     {
                         var updated = _store.TryGet(entry.GuildId, entry.EventId) ?? entry;
                         updated.ReminderTelegramMessageId = tgMsgId.Value;
-                        updated.ReminderTelegramChatId = entry.TelegramChatId;
-                        updated.ReminderTelegramThreadId = entry.TelegramMessageThreadId;
+                        // Фиксируем chat/thread, в который реально ушёл reminder
+                        // (liveCfg или fallback к entry). При последующем удалении
+                        // через DeleteReminderMessagesAsync нужно знать, откуда
+                        // удалять — без этого мы можем попытаться удалить сообщение
+                        // не из того чата.
+                        updated.ReminderTelegramChatId = tgChatId;
+                        updated.ReminderTelegramThreadId = tgThreadId;
                         _store.UpdateEntry(updated);
 
                         BotLogger.Info(LogCategory.Discord,
-                            $"[EventOpsLifecycle] reminder Telegram отправлен guild={entry.GuildId} event={entry.EventId} msg={tgMsgId.Value}");
+                            $"[EventOpsLifecycle] reminder Telegram отправлен guild={entry.GuildId} event={entry.EventId} chat={tgChatId} thread={tgThreadId} msg={tgMsgId.Value}");
                     }
                 }
                 catch (Exception ex)
