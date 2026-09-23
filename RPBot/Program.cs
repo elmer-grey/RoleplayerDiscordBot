@@ -1459,17 +1459,87 @@ public Task RestartAsync()
     }
 
     /// <summary>
+    /// Подчищает застрявшие *.lock sidecar'ы в Data/. Удаляем только файлы старше 30 мин
+    /// (свежий .lock = живой параллельный процесс, его нельзя трогать). Безопасно даже
+    /// если файл лежит легитимно — после 30 мин простоя считаем процесс мёртвым.
+    /// </summary>
+    public static void CleanupStaleSidecarLocks()
+    {
+        try
+        {
+            var dataDir = BotConfig.ResolvePath(BotConfig.DataFolderName);
+            if (!Directory.Exists(dataDir)) return;
+
+            var nowUtc = DateTimeOffset.UtcNow;
+            var staleThreshold = TimeSpan.FromMinutes(30);
+            int removed = 0;
+            foreach (var lockPath in Directory.EnumerateFiles(dataDir, "*.lock", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var info = new FileInfo(lockPath);
+                    if (nowUtc - info.LastWriteTimeUtc < staleThreshold) continue;
+
+                    // На всякий случай: проверяем, не держит ли файл кто-то прямо сейчас.
+                    // Если занят — кто-то живой, пропускаем. Иначе удаляем.
+                    using (var probe = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite,
+                                                       FileShare.None, 0, FileOptions.DeleteOnClose))
+                    {
+                        // Если мы смогли открыть с FileShare.None — значит никто другой не держит.
+                        // Dispose закроет; DeleteOnClose удалит файл.
+                    }
+                    removed++;
+                }
+                catch (IOException)
+                {
+                    // Занят другим процессом — пропускаем, он живой.
+                }
+                catch { }
+            }
+            if (removed > 0)
+            {
+                BotLogger.Warn(LogCategory.System,
+                    $"[Program] CleanupStaleSidecarLocks: удалено {removed} застрявших *.lock старше 30 мин в {dataDir}");
+            }
+        }
+        catch (Exception ex)
+        {
+            BotLogger.Warn(LogCategory.System,
+                $"[Program] CleanupStaleSidecarLocks: ошибка обхода: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Снимает флаг «идёт рестарт» после успешного Ready.
-    /// Вызывается из PredictionService.
+    /// Вызывается из PredictionService и OnReady.
     /// </summary>
     public static void ClearRestartPendingFlag()
     {
-    try
-    {
         var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
-        if (File.Exists(path)) File.Delete(path);
-    }
-    catch { /* ignore */ }
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // 🩹 prod-sidecar-stuck: раньше проглатывали молча, и если файл
+                // был занят другим процессом (например, параллельной dev-машиной
+                // или антивирусом), он висел вечно. Теперь ретраим 3 раза и
+                // логируем, если так и не получилось.
+                if (attempt == 3)
+                {
+                    BotLogger.Warn(LogCategory.System,
+                        $"[Program] ClearRestartPendingFlag: не удалось удалить {path} после 3 попыток: {ex.GetType().Name}: {ex.Message}");
+                }
+                else
+                {
+                    try { Thread.Sleep(200); } catch { }
+                }
+            }
+        }
     }
 
         private async Task RestartWithReasonAsync(string initiator, string reason)
@@ -3455,6 +3525,16 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                     // predictions и активных каналов. Идемпотентно: если файла нет —
                     // File.Exists/File.Delete просто ничего не сделают.
                     try { ClearRestartPendingFlag(); } catch { }
+
+                    // 🩹 prod-sidecar-stuck: за прошлые сессии иногда остаются
+                    // висящие sidecar'ы (sessions_state.json.lock, *.json.lock) —
+                    // типично, когда предыдущий процесс был убит (kill / OOM / BSOD)
+                    // до ReleaseLock(). SafeJsonIO.ReleaseLock этот .lock обычно
+                    // снимает, но если процесс убит — никто не вызвал ReleaseLock.
+                    // Подчищаем «подозрительные» sidecar'ы: только файлы старше 30 мин
+                    // и только .lock (никогда не трогаем *.json), чтобы не удалить
+                    // легитимный лок параллельного живого процесса.
+                    try { CleanupStaleSidecarLocks(); } catch { }
 
                                 // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
                                 // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.

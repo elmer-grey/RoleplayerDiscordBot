@@ -212,9 +212,36 @@ namespace RPBot.EventOps
             embedBuilder.WithFooter("Чтобы это сообщение видеть и в личке: /event_notify action: Подписаться на уведомления");
             var embed = embedBuilder.Build();
 
-            var announceMsg = await announceChannel.SendMessageAsync(embed: embed);
-            Log($"[EVENT] announce sent discord_channel guild={guild.Id} event={guildEvent.Id} channel={announceChannel.Id} msg={announceMsg.Id}");
-            Log($"[EVENT] AnnounceCreatedInternalAsync: announce message sent, proceeding to telegram/dm/store");
+            // ─── SendMessageAsync с retry ───────────────────────────────────────────
+            // DNS-fail на прод-машине (discord.com:443 → "Этот хост неизвестен") иногда
+            // проходит между GetChannelAsync (использует кеш) и реальным SendMessageAsync
+            // (требует HTTP). Один короткий retry через 3с лечит транзиентный сбой; если
+            // и retry не помог — всё равно регистрируем entry ниже с AnnounceMessageId=0,
+            // чтобы lifecycle HandleCreatedAsync мог поставить reminder1h. Без этого при
+            // DNS-сбое событие пропадало из стора, reminder не уходил никогда.
+            IUserMessage? announceMsg = null;
+            var sendAttempts = 0;
+            while (sendAttempts < 2)
+            {
+                try
+                {
+                    announceMsg = await announceChannel.SendMessageAsync(embed: embed);
+                    Log($"[EVENT] announce sent discord_channel guild={guild.Id} event={guildEvent.Id} channel={announceChannel.Id} msg={announceMsg.Id}");
+                    break;
+                }
+                catch (Exception sendEx) when (sendAttempts == 0)
+                {
+                    Log($"[EVENT] announce SendMessageAsync failed (attempt 1/2) guild={guild.Id} event={guildEvent.Id}: {sendEx.Message}");
+                    await Task.Delay(3000);
+                    sendAttempts++;
+                }
+                catch (Exception sendEx)
+                {
+                    Log($"[EVENT] announce SendMessageAsync окончательно упал (attempt 2/2) guild={guild.Id} event={guildEvent.Id}: {sendEx.Message}");
+                    sendAttempts++;
+                }
+            }
+            Log($"[EVENT] AnnounceCreatedInternalAsync: announce message sent (or failed), proceeding to telegram/dm/store");
 
                         // ─── Upsert в стор СРАЗУ после анонса в канале ─────────────────────
                         // Раньше Upsert стоял после Telegram и DM-цикла. Если TG или хоть
@@ -236,7 +263,13 @@ namespace RPBot.EventOps
                                 EventId = guildEvent.Id
                             };
                             entry.AnnounceChannelId = announceChannel.Id;
-                            entry.AnnounceMessageId = announceMsg.Id;
+                            // Если SendMessageAsync упал (DNS-fail, etc) — announceMsg==null,
+                            // но AnnounceChannelId уже валидный. Кладём entry в стор с
+                            // AnnounceMessageId=0, чтобы lifecycle HandleCreatedAsync мог
+                            // поставить reminder1h. Без этого при сетевом сбое событие
+                            // полностью пропадало из стора и reminder не уходил никогда
+                            // (см. audit bug #3 + prod DNS-fail 2026-09-23).
+                            entry.AnnounceMessageId = announceMsg?.Id ?? 0;
                             entry.DmMessageIdsByUserId = new Dictionary<ulong, ulong>();
                             if (serverConfigs.TryGetValue(guild.Id, out var sc2))
                             {

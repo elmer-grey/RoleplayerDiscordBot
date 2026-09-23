@@ -230,7 +230,7 @@ namespace RPBot.EventOps
                 BotLogger.Info(LogCategory.Discord,
                     $"[EventOpsLifecycle] RebuildFromStoreAsync старт, записей: {entries.Count}");
 
-                int scheduledCleanup = 0, scheduledReminder = 0, skipped = 0;
+                int scheduledCleanup = 0, scheduledReminder = 0, scheduledBackfillCompleted = 0, skipped = 0;
                 foreach (var entry in entries)
                 {
                     if (ct.IsCancellationRequested) break;
@@ -263,6 +263,44 @@ namespace RPBot.EventOps
                             scheduledReminder++;
                         else
                             skipped++;
+
+                        // 🩹 prod-cleanup-stuck: если событие Scheduled/Started (нет mark),
+                        // но LastStartTimeUtc уже давно в прошлом (>= 4ч назад) — значит
+                        // бот пропустил и Started, и Completed (либо был выключен, либо
+                        // был offline). Без нашего вмешательства событие навсегда зависнет
+                        // в сторе как «активное» — ни reminder, ни cleanup24h не сработают.
+                        // Переводим запись в completed «лениво»: CompletedAtUtc =
+                        // max(LastStartTimeUtc + 2ч, LastEndTimeUtc ?? LastStartTimeUtc + 2ч),
+                        // LastUpdatedMark = "completed". Дальше ScheduleCleanup24h (см. ветку
+                        // выше на следующей итерации цикла) поставит удаление через 24ч от
+                        // момента завершения. Сами вызываем ScheduleCleanup24h здесь же —
+                        // иначе до следующего рестарта запись провисит ещё 24ч.
+                        if (entry.LastUpdatedMark is null or "started" or "scheduled"
+                            && entry.LastStartTimeUtc.HasValue
+                            && entry.CompletedAtUtc is null
+                            && entry.CancelledAtUtc is null
+                            && entry.LastStartTimeUtc.Value <= DateTimeOffset.UtcNow.AddHours(-4))
+                        {
+                            // Пытаемся прикинуть «фактическое» время завершения.
+                            // Берём max из планового LastEndTimeUtc и эвристики LastStartTimeUtc + 2ч.
+                            // Если LastEndTimeUtc < LastStartTimeUtc (битые данные) — fallback на эвристику.
+                            var plannedEnd = entry.LastEndTimeUtc;
+                            var heuristicEnd = entry.LastStartTimeUtc.Value.AddHours(2);
+                            var completedAt = (plannedEnd.HasValue && plannedEnd.Value >= entry.LastStartTimeUtc.Value)
+                                ? plannedEnd.Value
+                                : heuristicEnd;
+
+                            entry.CompletedAtUtc = completedAt;
+                            entry.LastUpdatedMark = "completed";
+                            entry.LastUpdatedAt = DateTime.UtcNow;
+                            try { _store.UpdateEntry(entry); } catch { }
+
+                            BotLogger.Warn(LogCategory.Discord,
+                                $"[EventOpsLifecycle] RebuildFromStoreAsync: перевёл застрявшее событие в completed (prod-cleanup-stuck) guild={entry.GuildId} event={entry.EventId} start={entry.LastStartTimeUtc:o} completedAt={completedAt:o}");
+
+                            if (ScheduleCleanup24h(entry))
+                                scheduledBackfillCompleted++;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -273,7 +311,7 @@ namespace RPBot.EventOps
                 }
 
                 BotLogger.Info(LogCategory.Discord,
-                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, skipped={skipped}");
+                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, skipped={skipped}");
             }
             finally
             {
