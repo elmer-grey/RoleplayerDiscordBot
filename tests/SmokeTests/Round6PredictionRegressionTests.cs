@@ -116,26 +116,33 @@ public class Round6PredictionRegressionTests : IDisposable
             Bets = new Dictionary<ulong, PredictionBet>(),
         };
 
-        // Закидываем в _active через рефлексию.
-        var activeField = typeof(PredictionService).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var activeDict = (ConcurrentDictionary<ulong, ActivePrediction>)activeField.GetValue(svc)!;
-        activeDict[pred.GuildId] = pred;
+            // ✅ pred-parallelization: _active — вложенный словарь
+            // ConcurrentDictionary<ulong /*guild*/, ConcurrentDictionary<ulong /*channel*/, ActivePrediction>>.
+            var activeField = typeof(PredictionService).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var activeDict = (ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, ActivePrediction>>)activeField.GetValue(svc)!;
+            activeDict[pred.GuildId] = new ConcurrentDictionary<ulong, ActivePrediction>(
+                new[] { new KeyValuePair<ulong, ActivePrediction>(pred.ChannelId, pred) });
 
-        var pointsService = pts;
-        // Зачисляем много юзеров, чтобы хватило очков.
-        for (ulong u = 1; u <= 50; u++)
-            pointsService.Add(pred.GuildId, u, 1000);
+            var pointsService = pts;
+            // Зачисляем много юзеров, чтобы хватило очков.
+            for (ulong u = 1; u <= 50; u++)
+                pointsService.Add(pred.GuildId, u, 1000);
 
-        // Атакуем PlaceBetAsync из 50 потоков. До фикса: каждый из них
-        // сначала проверял время (уже истекло), но перед `Sync.WaitAsync()`
-        // монитор мог ещё не поставить IsLocked, и в гонке проходили ставки.
-        // После фикса: `Sync.WaitAsync()` захватывается первым, и хотя бы
-        // однократно при попытке первый поток увидит истёкший дедлайн,
-        // поставит IsLocked=true, и весь следующий трафик отклонится.
-        var placeBetMethod = typeof(PredictionService).GetMethod("PlaceBetAsync")!;
+            // Атакуем PlaceBetAsync из 50 потоков. До фикса: каждый из них
+            // сначала проверял время (уже истекло), но перед `Sync.WaitAsync()`
+            // монитор мог ещё не поставить IsLocked, и в гонке проходили ставки.
+            // После фикса: `Sync.WaitAsync()` захватывается первым, и хотя бы
+            // однократно при попытке первый поток увидит истёкший дедлайн,
+            // поставит IsLocked=true, и весь следующий трафик отклонится.
+            // ✅ pred-parallelization: ищем overload с (ActivePrediction, ulong, int, long)
+            // — main API, на нём проверяется race condition, как и до рефакторинга.
+            var placeBetMethod = typeof(PredictionService).GetMethods()
+                .First(m => m.Name == "PlaceBetAsync"
+                    && m.GetParameters().Length == 4
+                    && m.GetParameters()[0].ParameterType == typeof(ActivePrediction));
         var tasks = Enumerable.Range(1, 50).Select(async i =>
         {
-            return await (Task<(bool, string)>)placeBetMethod.Invoke(svc, new object[] { pred.GuildId, (ulong)i, 1, 50L })!;
+                    return await (Task<(bool, string)>)placeBetMethod.Invoke(svc, new object[] { pred, (ulong)i, 1, 50L })!;
         }).ToArray();
         await Task.WhenAll(tasks);
 
@@ -261,43 +268,52 @@ public class Round6PredictionRegressionTests : IDisposable
             BetsCloseAtUtc = DateTimeOffset.UtcNow.AddMinutes(3),
             Bets = new Dictionary<ulong, PredictionBet>(),
         };
-        var activeField = typeof(PredictionService).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var activeDict = (ConcurrentDictionary<ulong, ActivePrediction>)activeField.GetValue(svc)!;
-        activeDict[pred.GuildId] = pred;
+            // ✅ pred-parallelization: _active — вложенный словарь.
+            var activeField = typeof(PredictionService).GetField("_active", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var activeDict = (ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, ActivePrediction>>)activeField.GetValue(svc)!;
+            activeDict[pred.GuildId] = new ConcurrentDictionary<ulong, ActivePrediction>(
+                new[] { new KeyValuePair<ulong, ActivePrediction>(pred.ChannelId, pred) });
 
-        // Дёргаем ResolveAsync и CancelAsync напрямую.
-        var resolveMethod = typeof(PredictionService).GetMethod("ResolveAsync")!;
-        var cancelMethod = typeof(PredictionService).GetMethod("CancelAsync")!;
+            // Дёргаем ResolveAsync и CancelAsync напрямую.
+            // ✅ pred-parallelization: теперь есть перегрузка с ActivePrediction — основная.
+            var resolveMethod = typeof(PredictionService).GetMethods()
+                .First(m => m.Name == "ResolveAsync"
+                    && m.GetParameters()[0].ParameterType == typeof(ActivePrediction));
+            var cancelMethod = typeof(PredictionService).GetMethods()
+                .First(m => m.Name == "CancelAsync"
+                    && m.GetParameters()[0].ParameterType == typeof(ActivePrediction));
 
-        // Resolve (won't actually post result to channel since ChannelId=0)
-        var resolveTask = (Task)resolveMethod.Invoke(svc, new object[] { pred.GuildId, (ulong)77, true, 1 })!;
-        try { resolveTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
+            // Resolve (won't actually post result to channel since ChannelId=0)
+            var resolveTask = (Task)resolveMethod.Invoke(svc, new object[] { pred, (ulong)77, true, 1 })!;
+            try { resolveTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
 
-        // Cancel с новым прогнозом.
-        activeDict[pred.GuildId] = new ActivePrediction
-        {
-            GuildId = pred.GuildId,
-            CreatorId = pred.CreatorId,
-            ChannelId = 0,
-            Title = "events test 2",
-            Outcomes = new List<PredictionOutcome>
+            // Cancel с новым прогнозом.
+            var pred2 = new ActivePrediction
             {
-                new() { Id = 1, Name = "A", TotalStake = 0 },
-                new() { Id = 2, Name = "B", TotalStake = 0 },
-            },
-            CreatedAtUtc = DateTimeOffset.UtcNow,
-            BetsCloseAtUtc = DateTimeOffset.UtcNow.AddMinutes(3),
-            Bets = new Dictionary<ulong, PredictionBet>(),
-        };
-        var cancelTask = (Task)cancelMethod.Invoke(svc, new object[] { pred.GuildId, (ulong)77, true, null })!;
-        try { cancelTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
+                GuildId = pred.GuildId,
+                CreatorId = pred.CreatorId,
+                ChannelId = 0,
+                Title = "events test 2",
+                Outcomes = new List<PredictionOutcome>
+                {
+                    new() { Id = 1, Name = "A", TotalStake = 0 },
+                    new() { Id = 2, Name = "B", TotalStake = 0 },
+                },
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                BetsCloseAtUtc = DateTimeOffset.UtcNow.AddMinutes(3),
+                Bets = new Dictionary<ulong, PredictionBet>(),
+            };
+            activeDict[pred.GuildId] = new ConcurrentDictionary<ulong, ActivePrediction>(
+                new[] { new KeyValuePair<ulong, ActivePrediction>(pred2.ChannelId, pred2) });
+            var cancelTask = (Task)cancelMethod.Invoke(svc, new object[] { pred2, (ulong)77, true, null })!;
+            try { cancelTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
 
-        Assert.Contains(pred.GuildId, resolvedGuilds);
-        Assert.Contains(pred.GuildId, cancelledGuilds);
+            Assert.Contains(pred.GuildId, resolvedGuilds);
+            Assert.Contains(pred.GuildId, cancelledGuilds);
 
-        svc.Shutdown();
+            svc.Shutdown();
+        }
     }
-}
 
 /// <summary>
 /// Минимальная обёртка, чтобы reflection из Round6PredictionRegressionTests

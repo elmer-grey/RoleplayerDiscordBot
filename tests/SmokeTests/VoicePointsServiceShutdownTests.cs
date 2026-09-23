@@ -38,42 +38,44 @@ public class VoicePointsServiceShutdownTests : IDisposable
     {
         var client = NewClient();
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "");
+            // ✅ pred-parallelization: добавлен 5-й параметр isActiveEventOnChannel.
+            // Тестам на shutdown его поведение не важно — поэтому фиктивный Func.
+            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
 
-        svc.Shutdown();
+            svc.Shutdown();
+        }
+
+        [Fact]
+        public void Shutdown_CalledTwice_DoesNotThrow()
+        {
+            var client = NewClient();
+            var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+
+            svc.Shutdown();
+            svc.Shutdown();
+        }
+
+        [Fact]
+        public void Shutdown_CalledManyTimes_DoesNotThrow()
+        {
+            var client = NewClient();
+            var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+
+            for (int i = 0; i < 10; i++) svc.Shutdown();
+        }
+
+        [Fact]
+        public void DisposeClient_AfterShutdown_DoesNotThrow()
+        {
+            var client = NewClient();
+            var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
+            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+
+            svc.Shutdown();
+            // Если отписка от событий не сработала — этот Dispose мог бы кинуть NRE
+            // (от подписки на уже освобождённый handler внутри client-цепочки).
+            client.Dispose();
+        }
     }
-
-    [Fact]
-    public void Shutdown_CalledTwice_DoesNotThrow()
-    {
-        var client = NewClient();
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "");
-
-        svc.Shutdown();
-        svc.Shutdown();
-    }
-
-    [Fact]
-    public void Shutdown_CalledManyTimes_DoesNotThrow()
-    {
-        var client = NewClient();
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "");
-
-        for (int i = 0; i < 10; i++) svc.Shutdown();
-    }
-
-    [Fact]
-    public void DisposeClient_AfterShutdown_DoesNotThrow()
-    {
-        var client = NewClient();
-        var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "");
-
-        svc.Shutdown();
-        // Если отписка от событий не сработала — этот Dispose мог бы кинуть NRE
-        // (от подписки на уже освобождённый handler внутри client-цепочки).
-        client.Dispose();
-    }
-}

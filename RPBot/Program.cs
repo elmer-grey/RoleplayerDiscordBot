@@ -2625,9 +2625,10 @@ private static BotUI? _ui;
                 catch { }
 
                 // ✅ Round 7-C8: отменяем связанный с событием прогноз (если он был создан
-                // во время этого события). Используем CancelPredictionForEventAsync вместо
-                // AutoCancelPredictionOnEventEnd, чтобы не зацепить прогноз, привязанный
-                // к другому событию той же гильдии.
+                // во время этого события). CancelPredictionForEventAsync ищет прогноз по
+                // eventId среди всех активных — это важно в параллельном режиме, когда
+                // на гильдии может одновременно существовать несколько прогнозов в разных
+                // голосовых каналах (по одному на каждое активное событие).
                 if (guildEvent.Guild != null && _predictionService != null)
                 {
                     var (ok, error) = await _predictionService.CancelPredictionForEventAsync(
@@ -2691,9 +2692,10 @@ private static BotUI? _ui;
                 catch { }
 
                 // ✅ Round 7-C8: отменяем связанный с событием прогноз (если он был создан
-                // во время этого события). Используем CancelPredictionForEventAsync вместо
-                // AutoCancelPredictionOnEventEnd, чтобы не зацепить прогноз, привязанный
-                // к другому событию той же гильдии.
+                // во время этого события). CancelPredictionForEventAsync ищет прогноз по
+                // eventId среди всех активных — это важно в параллельном режиме, когда
+                // на гильдии может одновременно существовать несколько прогнозов в разных
+                // голосовых каналах (по одному на каждое активное событие).
                 if (guildEvent.Guild != null && _predictionService != null)
                 {
                     var (ok, error) = await _predictionService.CancelPredictionForEventAsync(
@@ -2834,41 +2836,6 @@ private static BotUI? _ui;
             catch (Exception ex)
             {
                 BotLogger.Warn(LogCategory.System, $"[MasterGuide] Не удалось сохранить историю отправок: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Автоматическая отмена активного прогноза при завершении/отмене события
-        /// </summary>
-        private async Task AutoCancelPredictionOnEventEnd(ulong guildId, string reason)
-        {
-            try
-            {
-                var predictionService = _predictionService;
-                if (predictionService == null) return;
-                var prediction = predictionService.GetActive(guildId);
-                if (prediction != null && !prediction.IsResolved)
-                {
-                    // Отменяем прогноз от имени системы с административным доступом
-                    var (ok, error) = await predictionService.CancelAsync(
-                        guildId,
-                        resolverId: prediction.CreatorId, // используем ID создателя
-                        isAdminOverride: true, // административная отмена
-                        cancelReason: $"⚠️ {reason}. Все ставки возвращены.");
-
-                    if (ok)
-                    {
-                        Console.WriteLine($"[PREDICTION] Auto-cancelled prediction for guild={guildId} reason='{reason}'");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[PREDICTION] Failed to auto-cancel prediction for guild={guildId}: {error}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                await LogError($"Ошибка в AutoCancelPredictionOnEventEnd: {ex.Message}");
             }
         }
 
