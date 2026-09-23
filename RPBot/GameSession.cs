@@ -205,7 +205,7 @@ namespace RPBot
                             }
                             finally
                             {
-                                lockHandle?.Dispose();
+                                SafeJsonIO.ReleaseLock(lockHandle, _sessionsStatePath);
                             }
 
                             if (sessionsToSave.Count > 0)

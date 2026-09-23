@@ -230,7 +230,7 @@ private void SaveLocked()
         }
         finally
         {
-            lockHandle?.Dispose();
+            SafeJsonIO.ReleaseLock(lockHandle, _path);
         }
     }
     catch (Exception ex)

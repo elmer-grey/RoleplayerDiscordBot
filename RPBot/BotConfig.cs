@@ -560,7 +560,7 @@ public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
         }
         finally
         {
-        defaultLockHandle?.Dispose();
+        SafeJsonIO.ReleaseLock(defaultLockHandle, resolvedPath);
         }
         return config;
             }
@@ -589,7 +589,7 @@ public bool DailyRestartPreferMoscowTimeWhenLocalIsMoscow { get; set; } = true;
                 }
                 finally
                 {
-                    lockHandle?.Dispose();
+                    SafeJsonIO.ReleaseLock(lockHandle, resolvedPath);
                 }
             }
             catch (Exception ex)

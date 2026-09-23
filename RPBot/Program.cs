@@ -681,7 +681,7 @@ private Task? _dailyRestartTask;
                                 }
                                 finally
                                 {
-                                    lockHandle?.Dispose();
+                                    SafeJsonIO.ReleaseLock(lockHandle, _bwonkFilePath);
                                 }
             }
             catch { }
@@ -3447,6 +3447,17 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
         private async Task OnReady()
                 {
                     _readyTime = DateTime.UtcNow;
+
+                    // ✅ Bug audit: ClearRestartPendingFlag вызывался ТОЛЬКО из
+                    // PredictionService.AnnounceOnlineAsync при условии, что у гильдии
+                    // есть активный prediction channel. На гильдиях без predictions (и в
+                    // первые секунды после Ready, до того как успеет отработать
+                    // AnnounceOnlineAsync) флаг .restart_pending лежал вечно, и watchdog
+                    // мог некорректно интерпретировать состояние. Снимаем здесь сразу
+                    // после первого Ready — гарантирует очистку независимо от наличия
+                    // predictions и активных каналов. Идемпотентно: если файла нет —
+                    // File.Exists/File.Delete просто ничего не сделают.
+                    try { ClearRestartPendingFlag(); } catch { }
 
                                 // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
                                 // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.

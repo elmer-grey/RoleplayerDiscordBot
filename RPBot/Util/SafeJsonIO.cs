@@ -177,5 +177,30 @@ namespace RPBot.Util
                 return null;
             }
         }
+
+        /// <summary>
+        /// Освобождает межпроцессную блокировку, полученную через <see cref="AcquireLock"/>
+        /// или <see cref="AcquireLockAsync"/>, и удаляет sidecar-файл "<paramref name="targetPath"/>.lock"
+        /// с диска.
+        /// Раньше все вызовы делали просто <c>lockHandle?.Dispose()</c>: FileStream.Dispose
+        /// закрывает дескриптор, но файл ".lock" остаётся на диске. После многих записей
+        /// в Data/ копились застрявшие .lock файлы (audit bug: event_announcements.json.lock
+        /// висел 3 дня). Удаление sidecar'а безопасно: после Dispose() блокировка уже снята
+        /// (FileStream с FileShare.None закрыт), значит никакой другой процесс не зависит
+        /// от наличия этого файла — следующий AcquireLock создаст новый.
+        /// Если <paramref name="lockHandle"/> == null (AcquireLock не смог взять блокировку
+        /// за retries попыток) — просто пытаемся удалить файл, если он почему-то остался.
+        /// Ошибки удаления игнорируются — это косметика, не критично для работы.
+        /// </summary>
+        public static void ReleaseLock(FileStream? lockHandle, string targetPath)
+        {
+            try { lockHandle?.Dispose(); } catch { }
+            try
+            {
+                var lockPath = targetPath + ".lock";
+                if (File.Exists(lockPath)) File.Delete(lockPath);
+            }
+            catch { }
+        }
     }
 }

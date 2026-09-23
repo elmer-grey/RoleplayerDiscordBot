@@ -202,7 +202,7 @@ private void SaveSnapshot(EventNotificationStateDto dto)
         }
         finally
         {
-        lockHandle?.Dispose();
+        SafeJsonIO.ReleaseLock(lockHandle, _statePath);
         }
     }
     catch (Exception ex)
