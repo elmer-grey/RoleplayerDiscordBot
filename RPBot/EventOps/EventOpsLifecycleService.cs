@@ -230,7 +230,7 @@ namespace RPBot.EventOps
                 BotLogger.Info(LogCategory.Discord,
                     $"[EventOpsLifecycle] RebuildFromStoreAsync старт, записей: {entries.Count}");
 
-                int scheduledCleanup = 0, scheduledReminder = 0, scheduledBackfillCompleted = 0, sentCatchupReminder = 0, skipped = 0;
+                int scheduledCleanup = 0, scheduledReminder = 0, scheduledBackfillCompleted = 0, sentCatchupReminder = 0, sentCatchupReminderDelete = 0, skipped = 0;
                 foreach (var entry in entries)
                 {
                     if (ct.IsCancellationRequested) break;
@@ -312,6 +312,60 @@ namespace RPBot.EventOps
                                                     }
                                                 }
 
+                                                                                                        // 🩹 disconnect-no-rehydrate (deleteReminder15m): если reminder
+                                                                                                        // в сторе ещё висит (DM/канал-announce/Telegram), а момент
+                                                                                                        // «start+15мин» уже прошёл — чистим в канале/DM/Telegram напрямую.
+                                                                                                        //
+                                                                                                        // Сценарий (23.09.2026, run.log):
+                                                                                                        // 1) бот онлайн, событие Running, идёт HandleStartedAsync →
+                                                                                                        //    удалось зашедулить deleteReminder15m через Task.Delay(14min);
+                                                                                                        // 2) Discord WebSocket отвалился (run.log: «Отключение: WebSocket
+                                                                                                        //    ошибка» в 21:10:24). Program.OnDisconnected вызвал
+                                                                                                        //    _eventOpsLifecycle.Cancel() — ВСЕ per-event CTS, включая
+                                                                                                        //    DeleteReminder15mCts, отменены. Task.Delay бросает
+                                                                                                        //    OperationCanceledException, который проглатывается штатным
+                                                                                                        //    catch;
+                                                                                                        // 3) бот реконнектился через 6 секунд (Discord.NET recovered),
+                                                                                                        //    но HandleStartedAsync уже отработал и в Discord больше
+                                                                                                        //    не придёт — таймер никто не переставит;
+                                                                                                        // 4) reminder-сообщение в канале анонса висит до того момента,
+                                                                                                        //    пока пользователь сам не завершит событие (а тогда
+                                                                                                        //    HandleCompletedAsync → DeleteReminderMessagesAsync).
+                                                                                                        //
+                                                                                                        // Правило: если в сторе есть хоть один reminder-ID (DM, канал
+                                                                                                        // анонса, Telegram), и ActualStartTimeUtc ?? LastStartTimeUtc
+                                                                                                        // + 15мин ≤ now — пора дропать, независимо от того, дожил ли
+                                                                                                        // in-memory Task.Delay до своего хвоста.
+                                                                                                        {
+                                                                                                            var actual = entry.ActualStartTimeUtc ?? entry.LastStartTimeUtc;
+                                                                                                            if (actual.HasValue)
+                                                                                                            {
+                                                                                                                var deleteAt = actual.Value.AddMinutes(15);
+                                                                                                                var nowUtc = DateTimeOffset.UtcNow;
+                                                                                                                var dmIds = entry.ReminderDmMessageIdsByUserId;
+                                                                                                                bool hasReminder =
+                                                                                                                    (dmIds != null && dmIds.Count > 0)
+                                                                                                                    || entry.ReminderAnnounceMessageId != 0
+                                                                                                                    || (entry.ReminderTelegramMessageId != 0
+                                                                                                                        && entry.ReminderTelegramChatId != 0);
+                                                                                                                if (hasReminder && nowUtc >= deleteAt)
+                                                                                                                {
+                                                                                                                    BotLogger.Info(LogCategory.Discord,
+                                                                                                                        $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up deleteReminder15m (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={actual:o} deleteAt={deleteAt:o} now={nowUtc:o}");
+                                                                                                                    try
+                                                                                                                    {
+                                                                                                                        await DeleteReminderMessagesAsync(entry);
+                                                                                                                        sentCatchupReminderDelete++;
+                                                                                                                    }
+                                                                                                                    catch (Exception exD)
+                                                                                                                    {
+                                                                                                                        BotLogger.Warn(LogCategory.Discord,
+                                                                                                                            $"[EventOpsLifecycle] catch-up deleteReminder failed: {exD.Message}");
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+
                         // 🩹 prod-cleanup-stuck v2: если событие Scheduled/Started (нет mark),
                         // но LastStartTimeUtc уже давно в прошлом (>= 4ч назад) — значит
                         // бот пропустил и Started, и Completed (либо был выключен, либо
@@ -384,7 +438,7 @@ namespace RPBot.EventOps
                 }
 
                 BotLogger.Info(LogCategory.Discord,
-                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, catchup={sentCatchupReminder}, skipped={skipped}");
+                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, catchup={sentCatchupReminder}, catchupDel={sentCatchupReminderDelete}, skipped={skipped}");
             }
             finally
             {
