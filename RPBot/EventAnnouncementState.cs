@@ -120,5 +120,24 @@ public int ReminderTelegramThreadId { get; set; }
 // с анонсом; через 15 мин после ActualStartTimeUtc удаляется именно оно,
 // а не сам анонс.
 public ulong ReminderAnnounceMessageId { get; set; }
+
+// Абсолютный момент UTC, в который должен сработать reminder1h
+// (LastStartTimeUtc - 1ч). Выставляется EventOpsLifecycleService и
+// сохраняется в JSON, чтобы пережить рестарт бота/дисконнект:
+// RebuildFromStoreAsync читает поле и либо ставит Task.Delay на остаток,
+// либо, если момент уже в прошлом, шлёт reminder немедленно
+// (превращается в catch-up для случая «пока бот был оффлайн, прошло
+// reminder-окно»). null означает «не запланировано».
+public DateTimeOffset? Reminder1hAtUtc { get; set; }
+
+// Абсолютный момент UTC, в который нужно удалить reminder-сообщения
+// (DM/канал анонса/Telegram). Считается как ActualStartTimeUtc ?? LastStartTimeUtc
+// + 15мин в HandleStartedAsync и сохраняется в JSON, чтобы пережить рестарт
+// бота/дисконнект: RebuildFromStoreAsync читает поле и либо ставит
+// Task.Delay на остаток, либо, если момент уже в прошлом, чистит
+// reminder-месседжи напрямую через DeleteReminderMessagesAsync (catch-up
+// для случая «пока бот был оффлайн, прошло 15-мин окно»). null — не
+// запланировано.
+public DateTimeOffset? DeleteReminder15mAtUtc { get; set; }
 }
 }

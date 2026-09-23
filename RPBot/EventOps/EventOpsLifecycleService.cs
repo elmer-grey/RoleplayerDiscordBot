@@ -196,6 +196,166 @@ namespace RPBot.EventOps
             }
         }
 
+                            /// <summary>
+                            /// Безопасный проход по стору для реконнекта: только установка таймеров.
+                            /// Не делает полный resync (для этого — RebuildFromStoreAsync); запускается
+                            /// из обработчиков реконнекта в Program.cs и страхует Catch-up после
+                            /// OnDisconnected→Cancel(), который убил все per-event CTS.
+                            ///
+                            /// Сценарий использования (run.log 23.09.2026):
+                            /// 21:03:39 Started, поставлен deleteReminder15m через Task.Delay(14min);
+                            /// 21:10:24 OnDisconnected → _eventOpsLifecycle.Cancel() → DeleteReminder15mCts
+                            ///        отменён, Task.Delay проглотил OperationCanceledException;
+                            /// 21:10:30 Клиент восстановился сам — никто не переставляет CTS, потому что
+                            ///        HandleStartedAsync уже отработал, Discord OnStarted повторно не придёт.
+                            ///
+                            /// Поведение по Reminder1hAtUtc:
+                            /// • null → ничего не делаем (напоминание уже отправлено или не планировалось);
+                            /// • в прошлом — отправляем reminder немедленно через SendReminderAsync;
+                            /// • в будущем — ставим Task.Run с Task.Delay на остаток.
+                            ///
+                            /// Поведение по DeleteReminder15mAtUtc:
+                            /// • null → ничего (напоминание уже удалено или не было);
+                            /// • в прошлом — DeleteReminderMessagesAsync напрямую;
+                            /// • в будущем — Task.Run с Task.Delay на остаток.
+                            ///
+                            /// Не вызывает RECONCILE/catch-up для completed/cancelled/pending_announce —
+                            /// этим занимается RebuildFromStoreAsync. Сейчас метод сфокусирован только
+                            /// на двух «живых» таймерах, которые наиболее уязвимы к OnDisconnected.
+                            /// </summary>
+                            public async Task RehydrateTimersAsync(CancellationToken externalCt = default)
+                            {
+                                if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+                                {
+                                    BotLogger.Warn(LogCategory.Discord,
+                                        "[EventOpsLifecycle] RehydrateTimersAsync уже выполняется или RebuildFromStoreAsync в процессе — повторный вызов игнорирован");
+                                    return;
+                                }
+
+                                try
+                                {
+                                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, _shutdownCts.Token);
+                                    var ct = linkedCts.Token;
+                                    var entries = _store.GetEntriesSnapshot();
+
+                                    int rehydratedReminder = 0, rehydratedDelete = 0, sentNowReminder = 0, sentNowDelete = 0;
+
+                                    foreach (var entry in entries)
+                                    {
+                                        if (ct.IsCancellationRequested) break;
+
+                                        // (1) Reminder1h: если момент в сторе — решаем немедленно/Task.Delay.
+                                        if (entry.Reminder1hAtUtc.HasValue)
+                                        {
+                                            var reminderAt = entry.Reminder1hAtUtc.Value;
+                                            var nowUtc = DateTimeOffset.UtcNow;
+                                            if (nowUtc >= reminderAt)
+                                            {
+                                                // Окно уже прошло (бот был оффлайн всю часовую пометку).
+                                                // Если reminder ещё не отправлен (Dm ids пуст ИЛИ Announce-id=0) — шлём сразу.
+                                                var dmIds = entry.ReminderDmMessageIdsByUserId;
+                                                var alreadySent = (dmIds != null && dmIds.Count > 0)
+                                                                  || entry.ReminderAnnounceMessageId != 0
+                                                                  || entry.ReminderTelegramMessageId != 0;
+                                                if (!alreadySent)
+                                                {
+                                                    BotLogger.Info(LogCategory.Discord,
+                                                        $"[EventOpsLifecycle] RehydrateTimers: шлю reminder1h (окно прошло в оффлайне) guild={entry.GuildId} event={entry.EventId} reminderAt={reminderAt:o} now={nowUtc:o}");
+                                                    try { await SendReminderAsync(entry); sentNowReminder++; }
+                                                    catch (Exception exR)
+                                                    {
+                                                        BotLogger.Warn(LogCategory.Discord,
+                                                            $"[EventOpsLifecycle] RehydrateTimers: SendReminderAsync failed: {exR.Message}");
+                                                    }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // В будущем — ставим Task.Delay на остаток.
+                                                var delay = reminderAt - nowUtc;
+                                                var key = (entry.GuildId, entry.EventId);
+                                                var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
+                                                CancellationTokenSource cts;
+                                                lock (slot.Lock)
+                                                {
+                                                    try { slot.Reminder1hCts?.Cancel(); } catch { }
+                                                    try { slot.Reminder1hCts?.Dispose(); } catch { }
+                                                    cts = new CancellationTokenSource();
+                                                    slot.Reminder1hCts = cts;
+                                                    slot.Reminder1hAtUtc = reminderAt;
+                                                }
+                                                _ = Task.Run(() => RunReminder1hAsync(entry, cts.Token, delay), cts.Token);
+                                                rehydratedReminder++;
+                                                BotLogger.Info(LogCategory.Discord,
+                                                    $"[EventOpsLifecycle] RehydrateTimers: переставлен reminder1h guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {reminderAt:u})");
+                                            }
+                                        }
+
+                                        // (2) DeleteReminder15m: тоже — если момент в сторе, решаем немедленно/Task.Delay.
+                                        if (entry.DeleteReminder15mAtUtc.HasValue)
+                                        {
+                                            var deleteAt = entry.DeleteReminder15mAtUtc.Value;
+                                            var nowUtc = DateTimeOffset.UtcNow;
+                                            if (nowUtc >= deleteAt)
+                                            {
+                                                // Окно прошло. Если reminder-месседжи ещё есть — дропаем.
+                                                var dmIds = entry.ReminderDmMessageIdsByUserId;
+                                                var anyReminder = (dmIds != null && dmIds.Count > 0)
+                                                                  || entry.ReminderAnnounceMessageId != 0
+                                                                  || entry.ReminderTelegramMessageId != 0;
+                                                if (anyReminder)
+                                                {
+                                                    BotLogger.Info(LogCategory.Discord,
+                                                        $"[EventOpsLifecycle] RehydrateTimers: чищу reminder-месседжи (окно 15мин прошло в оффлайне) guild={entry.GuildId} event={entry.EventId} deleteAt={deleteAt:o} now={nowUtc:o}");
+                                                    try { await DeleteReminderMessagesAsync(entry); sentNowDelete++; }
+                                                    catch (Exception exD)
+                                                    {
+                                                        BotLogger.Warn(LogCategory.Discord,
+                                                            $"[EventOpsLifecycle] RehydrateTimers: DeleteReminderMessagesAsync failed: {exD.Message}");
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // Просто зачищаем теперь уже ненужный момент в сторе.
+                                                    entry.DeleteReminder15mAtUtc = null;
+                                                    try { _store.UpdateEntry(entry); } catch { }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                var delay = deleteAt - nowUtc;
+                                                var key = (entry.GuildId, entry.EventId);
+                                                var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
+                                                CancellationTokenSource cts;
+                                                lock (slot.Lock)
+                                                {
+                                                    try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
+                                                    try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
+                                                    cts = new CancellationTokenSource();
+                                                    slot.DeleteReminder15mCts = cts;
+                                                }
+                                                _ = Task.Run(() => RunDeleteReminder15mAsync(entry, cts.Token, delay), cts.Token);
+                                                rehydratedDelete++;
+                                                BotLogger.Info(LogCategory.Discord,
+                                                    $"[EventOpsLifecycle] RehydrateTimers: переставлен deleteReminder15m guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {deleteAt:u})");
+                                            }
+                                        }
+                                    }
+
+                                    BotLogger.Info(LogCategory.Discord,
+                                        $"[EventOpsLifecycle] RehydrateTimers завершено: reminderDelay={rehydratedReminder}, deleteDelay={rehydratedDelete}, reminderNow={sentNowReminder}, deleteNow={sentNowDelete}");
+                                }
+                                catch (Exception ex)
+                                {
+                                    BotLogger.Error(LogCategory.Discord,
+                                        $"[EventOpsLifecycle] RehydrateTimers error: {ex.GetType().Name}: {ex.Message}");
+                                }
+                                finally
+                                {
+                                    Interlocked.Exchange(ref _running, 0);
+                                }
+                            }
+
         /// <summary>
         /// Одноразовый проход по всем записям стора после старта бота.
         /// Восстанавливает таймеры для активных/запланированных событий.
@@ -702,29 +862,47 @@ namespace RPBot.EventOps
 
             _ = Task.Run(() => RunReminder1hAsync(entry, cts.Token, delay), cts.Token);
 
-            BotLogger.Info(LogCategory.Discord,
-                $"[EventOpsLifecycle] запланирован reminder1h: guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {reminderAt:u})");
-            return true;
-        }
+                        // 🩹 reminder-survives-restart: пишем абсолютный момент напоминания в стор,
+                        // чтобы он пережил рестарт бота/дисконнект/exception в RunReminder1h.
+                        // RebuildFromStoreAsync читает это поле на старте и досылает reminder, если
+                        // окно уже прошло, либо пере-регистрирует Task.Delay на остаток.
+                        entry.Reminder1hAtUtc = reminderAt;
+                        try { _store.UpdateEntry(entry); } catch { }
+
+                        BotLogger.Info(LogCategory.Discord,
+                            $"[EventOpsLifecycle] запланирован reminder1h: guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {reminderAt:u})");
+                        return true;
+                    }
 
         private void CancelReminder1h(EventAnnouncementEntry entry)
-        {
-            var key = (entry.GuildId, entry.EventId);
-            if (!_timers.TryGetValue(key, out var slot)) return;
-
-                        // Bug #7: lock — атомарная отмена Reminder1hCts под блокировкой слота,
-                        // чтобы параллельный ScheduleReminder1h не отменил только что созданный CTS.
-                        lock (slot.Lock)
-                        {
-                            if (slot.Reminder1hCts != null)
-                            {
-                                try { slot.Reminder1hCts.Cancel(); } catch { }
-                                try { slot.Reminder1hCts.Dispose(); } catch { }
-                                slot.Reminder1hCts = null;
-                                slot.Reminder1hAtUtc = null;
-                            }
-                        }
+                {
+                    var key = (entry.GuildId, entry.EventId);
+                    if (_timers.TryGetValue(key, out var slot))
+                    {
+                                // Bug #7: lock — атомарная отмена Reminder1hCts под блокировкой слота,
+                                // чтобы параллельный ScheduleReminder1h не отменил только что созданный CTS.
+                                lock (slot.Lock)
+                                {
+                                    if (slot.Reminder1hCts != null)
+                                    {
+                                        try { slot.Reminder1hCts.Cancel(); } catch { }
+                                        try { slot.Reminder1hCts.Dispose(); } catch { }
+                                        slot.Reminder1hCts = null;
+                                        slot.Reminder1hAtUtc = null;
+                                    }
+                                }
                     }
+
+                    // 🩹 reminder-survives-restart: если event был в стор-записи, но слот ушёл
+                    // (например, после полного Cancel() в OnDisconnected) — всё равно зачищаем
+                    // абсолютный момент в сторе, чтобы RebuildFromStoreAsync не подобрал
+                    // «фантомный» reminder для уже стартовавшего события.
+                    if (entry.Reminder1hAtUtc.HasValue)
+                    {
+                        entry.Reminder1hAtUtc = null;
+                        try { _store.UpdateEntry(entry); } catch { }
+                    }
+                }
 
         private void ScheduleDeleteReminder15m(EventAnnouncementEntry entry)
         {
@@ -735,44 +913,69 @@ namespace RPBot.EventOps
 
             var deleteAt = at.Value.AddMinutes(15);
             var nowUtc = DateTimeOffset.UtcNow;
-            if (deleteAt <= nowUtc) return; // Уже прошло.
-
-            var key = (entry.GuildId, entry.EventId);
-            var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
-
-                        // См. Bug #7 в ScheduleReminder1h — атомарная перестановка CTS под lock.
-                        CancellationTokenSource cts;
-                        lock (slot.Lock)
-                        {
-                            try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
-                            try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
-
-                            cts = new CancellationTokenSource();
-                            slot.DeleteReminder15mCts = cts;
-                        }
-
-            var delay = deleteAt - nowUtc;
-            _ = Task.Run(() => RunDeleteReminder15mAsync(entry, cts.Token, delay), cts.Token);
-
-            BotLogger.Info(LogCategory.Discord,
-                $"[EventOpsLifecycle] запланирован deleteReminder15m: guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин");
-        }
-
-        private void CancelDeleteReminder15m(EventAnnouncementEntry entry)
-        {
-            var key = (entry.GuildId, entry.EventId);
-            if (!_timers.TryGetValue(key, out var slot)) return;
-
-                    // Bug #7: lock — иначе может прийти параллельный ScheduleDeleteReminder15m
-                    // и либо прочитать старый отменённый CTS, либо наоборот — отменить наш.
-                    lock (slot.Lock)
+                    if (deleteAt <= nowUtc)
                     {
-                        if (slot.DeleteReminder15mCts != null)
-                        {
-                            try { slot.DeleteReminder15mCts.Cancel(); } catch { }
-                            try { slot.DeleteReminder15mCts.Dispose(); } catch { }
-                            slot.DeleteReminder15mCts = null;
-                        }
+                        // Уже прошло — но всё равно фиксируем момент в стор, чтобы повторные
+                        // вызовы (например, при duplicate resync) шли через DeleteReminderMessagesAsync
+                        // в RebuildFromStoreAsync, а не полагались на Task.Delay (он бы не сработал).
+                        entry.DeleteReminder15mAtUtc = deleteAt;
+                        try { _store.UpdateEntry(entry); } catch { }
+                        return;
+                    }
+
+                    var key = (entry.GuildId, entry.EventId);
+                    var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
+
+                                // См. Bug #7 в ScheduleReminder1h — атомарная перестановка CTS под lock.
+                                CancellationTokenSource cts;
+                                lock (slot.Lock)
+                                {
+                                    try { slot.DeleteReminder15mCts?.Cancel(); } catch { }
+                                    try { slot.DeleteReminder15mCts?.Dispose(); } catch { }
+
+                                    cts = new CancellationTokenSource();
+                                    slot.DeleteReminder15mCts = cts;
+                                }
+
+                    var delay = deleteAt - nowUtc;
+                    _ = Task.Run(() => RunDeleteReminder15mAsync(entry, cts.Token, delay), cts.Token);
+
+                    // 🩹 reminder-survives-restart: сохраняем абсолютный момент в стор. Если
+                    // Task.Delay потеряется (OnDisconnected/Cancel, kill -9, исключение) — при
+                    // следующем рестарте RebuildFromStoreAsync проверит поле и либо поставит
+                    // новый Task.Delay на остаток, либо досрочно вызовет DeleteReminderMessagesAsync.
+                    entry.DeleteReminder15mAtUtc = deleteAt;
+                    try { _store.UpdateEntry(entry); } catch { }
+
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] запланирован deleteReminder15m: guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {deleteAt:u})");
+                }
+
+                private void CancelDeleteReminder15m(EventAnnouncementEntry entry)
+                {
+                    var key = (entry.GuildId, entry.EventId);
+                    if (_timers.TryGetValue(key, out var slot))
+                    {
+                            // Bug #7: lock — иначе может прийти параллельный ScheduleDeleteReminder15m
+                            // и либо прочитать старый отменённый CTS, либо наоборот — отменить наш.
+                            lock (slot.Lock)
+                            {
+                                if (slot.DeleteReminder15mCts != null)
+                                {
+                                    try { slot.DeleteReminder15mCts.Cancel(); } catch { }
+                                    try { slot.DeleteReminder15mCts.Dispose(); } catch { }
+                                    slot.DeleteReminder15mCts = null;
+                                }
+                            }
+                    }
+
+                    // 🩹 reminder-survives-restart: зачищаем абсолютный момент в сторе даже если
+                    // слот пропал (OnDisconnected → Cancel()). Без этого RebuildFromStoreAsync
+                    // мог бы повторно запланировать удаление для уже завершённого события.
+                    if (entry.DeleteReminder15mAtUtc.HasValue)
+                    {
+                        entry.DeleteReminder15mAtUtc = null;
+                        try { _store.UpdateEntry(entry); } catch { }
                     }
                 }
 
@@ -1090,8 +1293,11 @@ namespace RPBot.EventOps
                                 if (ulong.TryParse(idText, out var cid))
                                     updated.LastCreatorId = cid;
                             }
-                            _store.UpdateEntry(updated);
-                        }
+                                                // reminder уже отправлен — чистим Reminder1hAtUtc, чтобы
+                                                // RebuildFromStoreAsync не прислал его повторно после рестарта.
+                                                updated.Reminder1hAtUtc = null;
+                                                _store.UpdateEntry(updated);
+                                            }
 
             // ── Telegram: в канал/топик из ServerConfig ───────────────────────
             // Telegram reminder: время в МСК-формате (как в основном анонсе),
@@ -1277,8 +1483,12 @@ namespace RPBot.EventOps
             updated.ReminderTelegramChatId = 0;
             updated.ReminderTelegramThreadId = 0;
             updated.ReminderAnnounceMessageId = 0;
-            _store.UpdateEntry(updated);
-        }
+                        // 🩹 reminder-survives-restart: reminder-месседжи удалены — фиксируем факт
+                        // удаления, обнулив абсолютный момент в сторе. Без этого RebuildFromStoreAsync
+                        // мог бы повторно «удалить» уже удалённые месседжи на следующем рестарте.
+                        updated.DeleteReminder15mAtUtc = null;
+                        _store.UpdateEntry(updated);
+                    }
 
                     /// <summary>
                     /// Дослать анонс для записи со статусом "pending_announce" (Created пришёл,

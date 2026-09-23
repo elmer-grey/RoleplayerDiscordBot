@@ -3394,15 +3394,36 @@ private static BotUI? _ui;
                 if (recon == null) return;
                 var info = recon.ConnectionInfo;
 
-                // Отправляем уведомление об успешном реконнекте
-                try
-                {
-                    if (_statusNotifier != null)
-                        await _statusNotifier.SendReconnectSuccess(
-                            info.ReconnectAttempts,
-                            info.LastDisconnectReason
-                        );
-                }
+                            // 🩹 reminder-survives-restart: после OnDisconnected → Cancel() все per-event
+                            // CTS в EventOpsLifecycleService умерли, а вместе с ними — Task.Delay для
+                            // reminder1h и deleteReminder15m. В сторе остались абсолютные моменты
+                            // (Reminder1hAtUtc / DeleteReminder15mAtUtc), теперь переставляем таймеры
+                            // обратно в _timers и досылаем/дочищаем всё, что пропустили за время даунтайма.
+                            // Запускаем в фоне, чтобы OnReconnectCompleted быстро завершился.
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false); // даём клиенту полностью устаканиться
+                                    if (_eventOpsLifecycle != null)
+                                        await _eventOpsLifecycle.RehydrateTimersAsync().ConfigureAwait(false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    BotLogger.Warn(LogCategory.Discord,
+                                        $"[Reconnect] RehydrateTimersAsync failed: {ex.GetType().Name}: {ex.Message}");
+                                }
+                            });
+
+                            // Отправляем уведомление об успешном реконнекте
+                            try
+                            {
+                                if (_statusNotifier != null)
+                                    await _statusNotifier.SendReconnectSuccess(
+                                        info.ReconnectAttempts,
+                                        info.LastDisconnectReason
+                                    );
+                            }
                 catch (Exception ex)
                 {
                     await LogStartup($"Ошибка при отправке уведомления о переподключении: {ex.Message}");

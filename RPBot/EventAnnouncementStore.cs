@@ -80,8 +80,10 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
         ReminderTelegramMessageId = e.ReminderTelegramMessageId,
         ReminderTelegramChatId = e.ReminderTelegramChatId,
         ReminderTelegramThreadId = e.ReminderTelegramThreadId,
-        ReminderAnnounceMessageId = e.ReminderAnnounceMessageId
-        });
+        ReminderAnnounceMessageId = e.ReminderAnnounceMessageId,
+                Reminder1hAtUtc = e.Reminder1hAtUtc,
+                DeleteReminder15mAtUtc = e.DeleteReminder15mAtUtc
+                });
     }
     }
 
