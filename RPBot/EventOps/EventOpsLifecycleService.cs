@@ -331,8 +331,28 @@ namespace RPBot.EventOps
                 // Created и Started (типичный случай: событие создаётся и висит долго без
                 // правок) — reminder1h вообще никогда не планировался, и игроки не получали
                 // напоминалку. Теперь ставим reminder сразу в Created.
-                var entry = _store.TryGet(ev.Guild.Id, ev.Id);
-                if (entry == null) return;
+                //
+                // Retry TryGet: HandleCreatedAsync вызывается из multicast OnCreatedAsync,
+                // где Announcer стоит первым. CLR запускает обоих подписчиков
+                // последовательно, но Announcer — async, и CLR переходит к следующему
+                // подписчику сразу после первого await в Announcer (не дожидаясь
+                // _store.Upsert). Без retry Lifecycle читает entry == null и молча
+                // выходит (audit bug #1). Несколько коротких попыток по 200мс — дешевле,
+                // чем рефакторинг multicast на явный список обработчиков, и
+                // гарантированно ловит созданный Announcer'ом entry.
+                EventAnnouncementEntry? entry = null;
+                for (int i = 0; i < 10 && entry == null; i++)
+                {
+                    entry = _store.TryGet(ev.Guild.Id, ev.Id);
+                    if (entry == null)
+                        await Task.Delay(200).ConfigureAwait(false);
+                }
+                if (entry == null)
+                {
+                    BotLogger.Warn(LogCategory.Discord,
+                        $"[EventOpsLifecycle] HandleCreatedAsync: entry не появился в сторе за 2с: guild={ev.Guild.Id} event={ev.Id} (Announcer, вероятно, упал до Upsert)");
+                    return;
+                }
 
                 ScheduleReminder1h(entry);
                 BotLogger.Info(LogCategory.Discord,
@@ -343,7 +363,6 @@ namespace RPBot.EventOps
                 BotLogger.Error(LogCategory.Discord,
                     $"[EventOpsLifecycle] HandleCreatedAsync error: {ex.Message}");
             }
-            await Task.CompletedTask;
         }
 
         private async Task HandleStartedAsync(SocketGuildEvent ev)
