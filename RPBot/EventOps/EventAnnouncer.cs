@@ -132,30 +132,95 @@ namespace RPBot.EventOps
             ITextChannel? announceChannel = null;
             try
             {
-            announceChannel = await client.GetChannelAsync(config.GeneralRGChannelID) as ITextChannel;
-            Log($"[EVENT] AnnounceCreatedInternalAsync: GetChannelAsync returned {announceChannel?.Id.ToString() ?? "null"}");
-            }
-            catch (Exception ex)
-            {
-            Log($"[EVENT] announce GetChannel failed guild={guild.Id} event={guildEvent.Id}: {ex.Message}");
-            // Если провалилось из-за "не залогинен" — попробуем ещё раз через 2с.
-            // REST клиента иногда тупит на старте даже когда ConnectionState=Connected.
-            if (ex.Message?.IndexOf("not logged in", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-            await Task.Delay(2000);
-            try
-            {
-            Log($"[EVENT] AnnounceCreatedInternalAsync retry GetChannelAsync state={client.ConnectionState} login={client.LoginState}");
-            announceChannel = await client.GetChannelAsync(config.GeneralRGChannelID) as ITextChannel;
-            Log($"[EVENT] AnnounceCreatedInternalAsync retry returned {announceChannel?.Id.ToString() ?? "null"}");
-            }
-            catch (Exception ex2)
-            {
-            Log($"[EVENT] announce GetChannel retry failed: {ex2.Message}");
-            }
-            }
-            }
-            if (announceChannel == null) { Log("[EVENT] AnnounceCreatedInternalAsync: announceChannel is null, return"); return; }
+                            var getChannelAttempts = 0;
+                            while (getChannelAttempts < 3)
+                            {
+                                try
+                                {
+                                    announceChannel = await client.GetChannelAsync(config.GeneralRGChannelID) as ITextChannel;
+                                    Log($"[EVENT] AnnounceCreatedInternalAsync: GetChannelAsync returned {announceChannel?.Id.ToString() ?? "null"} (attempt {getChannelAttempts + 1}/3)");
+                                    break;
+                                }
+                                catch (HttpRequestException httpEx) when (getChannelAttempts < 2)
+                                {
+                                    // DNS / TLS / TCP-timeout — ретраим с backoff. На проде ловили
+                                    // "Этот хост неизвестен. (discord.com:443)" в момент между Ready
+                                    // и реальной отправкой. Раньше ловилось только подстрокой
+                                    // "not logged in" и без ретрая; всё остальное (DNS/HTTP) шло
+                                    // на выход без записи в стор → событие терялось до рестарта.
+                                    Log($"[EVENT] announce GetChannel HTTP-fail (attempt {getChannelAttempts + 1}/3) guild={guild.Id} event={guildEvent.Id}: {httpEx.Message}");
+                                    await Task.Delay(TimeSpan.FromSeconds(3 * (getChannelAttempts + 1)));
+                                    getChannelAttempts++;
+                                }
+                                catch (Exception ex) when (ex.Message?.IndexOf("not logged in", StringComparison.OrdinalIgnoreCase) >= 0 && getChannelAttempts < 2)
+                                {
+                                    // REST клиента иногда тупит на старте даже когда ConnectionState=Connected.
+                                    Log($"[EVENT] announce GetChannel 'not logged in' (attempt {getChannelAttempts + 1}/3) guild={guild.Id} event={guildEvent.Id}: {ex.Message}");
+                                    await Task.Delay(2000);
+                                    getChannelAttempts++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"[EVENT] announce GetChannel outer-fail guild={guild.Id} event={guildEvent.Id}: {ex.Message}");
+                        }
+
+                        // 🩹 announcer-getchannel-no-retry / announcer-reconnect-15s-giveup:
+                        // даже если announceChannel == null (giveup после 15с ожидания коннекта,
+                        // или DNS-fail без успешного retry), РАНЬШЕ сохраняли минимальный entry в стор.
+                        // Без этого Lifecycle.HandleCreatedAsync не видел entry, retry TryGet за 2с
+                        // не помогал, reminder1h не планировался и событие пропадало. Теперь:
+                        //   - Snapshot LastName/LastStartTimeUtc/LastChannelId/LastLocation/LastCover
+                        //     известны уже на этом этапе (из самого SocketGuildEvent).
+                        //   - AnnounceChannelId/AnnounceMessageId = 0 — заполнятся на SendMessageAsync
+                        //     ниже или при следующем RebroadcastFromStoreAsync.
+                        //   - LastUpdatedMark = "pending_announce" — чтобы RebuildFromStoreAsync на
+                        //     рестарте увидел «событие есть в сторе, но анонс в канал не ушёл»
+                        //     и дослал его.
+                        if (_store != null)
+                        {
+                            try
+                            {
+                                var earlyEntry = _store.TryGet(guild.Id, guildEvent.Id) ?? new EventAnnouncementEntry
+                                {
+                                    GuildId = guild.Id,
+                                    EventId = guildEvent.Id
+                                };
+                                // AnnounceChannelId/AnnounceMessageId = 0 — пока ничего не отправили.
+                                earlyEntry.AnnounceChannelId = announceChannel?.Id ?? 0;
+                                earlyEntry.AnnounceMessageId = 0;
+                                earlyEntry.DmMessageIdsByUserId ??= new Dictionary<ulong, ulong>();
+                                if (serverConfigs.TryGetValue(guild.Id, out var scEarly))
+                                {
+                                    earlyEntry.TelegramChatId = scEarly.TelegramChatId;
+                                    earlyEntry.TelegramMessageThreadId = scEarly.TelegramMessageThreadId;
+                                }
+                                // Snapshot — обязательно до любых return (даже если giveup ниже).
+                                earlyEntry.LastName = guildEvent.Name;
+                                earlyEntry.LastDescription = guildEvent.Description;
+                                earlyEntry.LastStartTimeUtc = new DateTimeOffset(DateTime.SpecifyKind(guildEvent.StartTime.UtcDateTime, DateTimeKind.Utc));
+                                earlyEntry.LastEndTimeUtc = guildEvent.EndTime.HasValue
+                                    ? new DateTimeOffset(DateTime.SpecifyKind(guildEvent.EndTime.Value.UtcDateTime, DateTimeKind.Utc))
+                                    : (DateTimeOffset?)null;
+                                earlyEntry.LastChannelId = guildEvent.Channel?.Id;
+                                earlyEntry.LastLocation = guildEvent.Location;
+                                earlyEntry.LastCoverImageUrl = guildEvent.GetCoverImageUrl();
+                                earlyEntry.LastCreatorId = guildEvent.Creator?.Id ?? 0;
+                                if (announceChannel == null)
+                                {
+                                    earlyEntry.LastUpdatedMark = "pending_announce";
+                                }
+                                _store.Upsert(earlyEntry);
+                                Log($"[EVENT] AnnounceCreatedInternalAsync: ранний Upsert (announceChannel={(announceChannel != null ? announceChannel.Id.ToString() : "null")}) guild={guild.Id} event={guildEvent.Id}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"[EVENT] AnnounceCreatedInternalAsync: ранний _store.Upsert упал: {ex.Message}");
+                            }
+                        }
+
+                        if (announceChannel == null) { Log("[EVENT] AnnounceCreatedInternalAsync: announceChannel is null, return (entry в стор уже сохранён, см. ранний Upsert)"); return; }
 
             var eventUrl = $"https://discord.com/events/{guild.Id}/{guildEvent.Id}";
             var startLocal = guildEvent.StartTime.ToLocalTime();
@@ -1411,27 +1476,41 @@ namespace RPBot.EventOps
         /// Сравнение текущего события с последним сохранённым snapshot.
         /// Возвращает true, если состояние идентично (нечего обновлять).
         /// Используется для подавления дублей при resync.
-        /// </summary>
-        private static bool IsUnchangedSinceLastUpdate(EventAnnouncementEntry snapshot, SocketGuildEvent current)
-        {
-            // Если у записи нет snapshot — это не resync, а реальное обновление.
-            if (snapshot.LastName == null && snapshot.LastStartTimeUtc == null)
-            return false;
+                ///
+                /// Сравниваются «содержательные» поля анонса: имя / описание / плановое
+                /// начало и конец / канал / локация / обложка.
+                /// Не сравниваем Status / Creator / EntityType — статус обрабатывается
+                /// в AnnounceStatusChangedInternalAsync отдельным путём; Creator поменять
+                /// нельзя (это просто для информации).
+                /// </summary>
+                private static bool IsUnchangedSinceLastUpdate(EventAnnouncementEntry snapshot, SocketGuildEvent current)
+                {
+                    // Если у записи нет snapshot — это не resync, а реальное обновление.
+                    if (snapshot.LastName == null && snapshot.LastStartTimeUtc == null)
+                    return false;
 
-            if (!string.Equals(snapshot.LastName, current.Name, StringComparison.Ordinal))
+                    if (!string.Equals(snapshot.LastName, current.Name, StringComparison.Ordinal))
             return false;
-            if (!string.Equals(snapshot.LastDescription ?? string.Empty, current.Description ?? string.Empty, StringComparison.Ordinal))
+                    if (!string.Equals(snapshot.LastDescription ?? string.Empty, current.Description ?? string.Empty, StringComparison.Ordinal))
             return false;
-            if (snapshot.LastStartTimeUtc.HasValue && snapshot.LastStartTimeUtc.Value.UtcDateTime != current.StartTime.UtcDateTime)
+                    if (snapshot.LastStartTimeUtc.HasValue && snapshot.LastStartTimeUtc.Value.UtcDateTime != current.StartTime.UtcDateTime)
             return false;
-            if (snapshot.LastChannelId != (current.Channel?.Id ?? 0))
-            return false;
-            if (!string.Equals(snapshot.LastLocation ?? string.Empty, current.Location ?? string.Empty, StringComparison.Ordinal))
-            return false;
-            if (!string.Equals(snapshot.LastCoverImageUrl ?? string.Empty, current.GetCoverImageUrl() ?? string.Empty, StringComparison.Ordinal))
-            return false;
-            return true;
-        }
+                    // 🩹 unchanged-detector: добавили сравнение LastEndTimeUtc — раньше сдвиг
+                    // только конца события (без сдвига начала) проскакивал как «unchanged»
+                    // и AnnounceUpdatedInternalAsync выходил без редактирования embed.
+                    if (snapshot.LastEndTimeUtc.HasValue && current.EndTime.HasValue
+                        && snapshot.LastEndTimeUtc.Value.UtcDateTime != current.EndTime.Value.UtcDateTime)
+                    return false;
+                    if (!snapshot.LastEndTimeUtc.HasValue && current.EndTime.HasValue)
+                    return false;
+                    if (snapshot.LastChannelId != (current.Channel?.Id ?? 0))
+                    return false;
+                    if (!string.Equals(snapshot.LastLocation ?? string.Empty, current.Location ?? string.Empty, StringComparison.Ordinal))
+                    return false;
+                    if (!string.Equals(snapshot.LastCoverImageUrl ?? string.Empty, current.GetCoverImageUrl() ?? string.Empty, StringComparison.Ordinal))
+                    return false;
+                    return true;
+                }
 
         private static void DiffBeforeVsAfter(
             SocketGuildEvent before,

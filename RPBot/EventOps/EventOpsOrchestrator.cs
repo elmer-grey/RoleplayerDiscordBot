@@ -80,7 +80,7 @@ namespace RPBot.EventOps
                 catch (Exception ex)
                 {
                     BotLogger.Error(LogCategory.Discord,
-                        $"[EventOps] {opName} handler #{i} ({single.Method.DeclaringType?.Name}.{single.Method.Name}) error: {ex.GetType().Name}: {ex.Message}");
+                                            $"[EventOps] {opName} handler #{i} ({(single.Method.DeclaringType?.Name is { Length: >0 } d ? d + "." + single.Method.Name : single.Method.Name)}) error: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
@@ -99,7 +99,7 @@ namespace RPBot.EventOps
                 catch (Exception ex)
                 {
                     BotLogger.Error(LogCategory.Discord,
-                        $"[EventOps] {opName} handler #{i} ({single.Method.DeclaringType?.Name}.{single.Method.Name}) error: {ex.GetType().Name}: {ex.Message}");
+                                            $"[EventOps] {opName} handler #{i} ({(single.Method.DeclaringType?.Name is { Length: >0 } d ? d + "." + single.Method.Name : single.Method.Name)}) error: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }

@@ -230,33 +230,47 @@ namespace RPBot.EventOps
                 BotLogger.Info(LogCategory.Discord,
                     $"[EventOpsLifecycle] RebuildFromStoreAsync старт, записей: {entries.Count}");
 
-                int scheduledCleanup = 0, scheduledReminder = 0, scheduledBackfillCompleted = 0, skipped = 0;
+                int scheduledCleanup = 0, scheduledReminder = 0, scheduledBackfillCompleted = 0, sentCatchupReminder = 0, skipped = 0;
                 foreach (var entry in entries)
                 {
                     if (ct.IsCancellationRequested) break;
 
                     try
                     {
-                        // Нам интересны события, для которых есть анонс в канале
-                        // (иначе удалять нечего) и которые НЕ в финальном статусе
-                        // (Completed/Cancelled) — для них сразу ставим cleanup24h.
-                        var mark = entry.LastUpdatedMark;
-                        if (mark == "completed" || mark == "cancelled")
-                        {
-                            if (ScheduleCleanup24h(entry))
-                                scheduledCleanup++;
+                                            // Финальные/устаревшие статусы — сразу ставим cleanup24h
+                                            // и подчищаем reminder-сообщения с прошлой сессии.
+                                            //
+                                            // pending_announce — наш новый маркер (v2 announcer-fix): Created
+                                            // поступил, но Discord-announce не ушёл. На рестарте попробуем
+                                            // дослать через ReconcilePendingAnnounce ниже.
+                                            // abandoned — пометка v2 prod-cleanup-stuck: бот не видел Started/
+                                            // Completed, но LastStartTimeUtc далеко в прошлом. Через 24ч после
+                                            // старта запись можно удалять.
+                                            var mark = entry.LastUpdatedMark;
+                                            if (mark == "completed" || mark == "cancelled" || mark == "abandoned" || mark == "pending_announce")
+                                            {
+                                                if (ScheduleCleanup24h(entry))
+                                                    scheduledCleanup++;
 
-                            // Подчищаем reminder-сообщения (канал/DM/Telegram), если
-                            // они остались с предыдущей сессии. Типичный сценарий:
-                            // reminder1h был отправлен, потом событие отменили до
-                            // того, как отработал DeleteReminder15m — после рестарта
-                            // reminder-сообщение висит в канале/DM, а timer уже умер.
-                            // DeleteReminderMessagesAsync идемпотентен: если сообщений
-                            // нет или уже удалены — молча выходит.
-                            await DeleteReminderMessagesAsync(entry);
+                                                // Подчищаем reminder-сообщения (канал/DM/Telegram), если
+                                                // они остались с предыдущей сессии. Типичный сценарий:
+                                                // reminder1h был отправлен, потом событие отменили до
+                                                // того, как отработал DeleteReminder15m — после рестарта
+                                                // reminder-сообщение висит в канале/DM, а timer уже умер.
+                                                // DeleteReminderMessagesAsync идемпотентен: если сообщений
+                                                // нет или уже удалены — молча выходит.
+                                                await DeleteReminderMessagesAsync(entry);
 
-                            continue;
-                        }
+                                                // pending_announce — отдельно пытаемся дослать анонс и
+                                                // переотправить reminder/TG/DM с нуля. abandoned —
+                                                // очищаем сообщения и уходим.
+                                                if (mark == "pending_announce")
+                                                {
+                                                    await ReconcilePendingAnnounceAsync(entry);
+                                                }
+
+                                                continue;
+                                            }
 
                         // Scheduled/Started: ставим reminder1h (если ещё актуально).
                         if (entry.LastStartTimeUtc.HasValue && ScheduleReminder1h(entry))
@@ -264,43 +278,102 @@ namespace RPBot.EventOps
                         else
                             skipped++;
 
-                        // 🩹 prod-cleanup-stuck: если событие Scheduled/Started (нет mark),
+                                                // 🩹 disconnect-no-rehydrate: catch-up reminder для событий, чьё
+                                                // окно reminder (LastStartTimeUtc - 1ч) попало в даунтайм бота.
+                                                //
+                                                // Сценарий: событие создано (reminder запланирован на T-1ч).
+                                                // Бот реконнект/рестартился через 30мин после reminder-окна;
+                                                // reminder-таймер отменился в OnDisconnected, новый на рестарте
+                                                // уже видит LastStartTimeUtc в прошлом → ScheduleReminder1h
+                                                // возвращает false (вы ниже не попадаете), reminder не уходит.
+                                                //
+                                                // Правило: если now внутри окна [Start-1ч, Start+30мин] и
+                                                // reminder ещё не отправлялся (ReminderDmMessageIdsByUserId
+                                                // пустой ИЛИ вообще не было этой записи) — досылаем.
+                                                if (entry.LastStartTimeUtc.HasValue)
+                                                {
+                                                    var startUtc = entry.LastStartTimeUtc.Value;
+                                                    var reminderAt = startUtc.AddHours(-1);
+                                                    var nowUtc = DateTimeOffset.UtcNow;
+                                                    var reminderAlreadySent = entry.ReminderDmMessageIdsByUserId != null
+                                                        && entry.ReminderDmMessageIdsByUserId.Count > 0;
+                                                    if (!reminderAlreadySent
+                                                        && nowUtc >= reminderAt
+                                                        && nowUtc <= startUtc.AddMinutes(30))
+                                                    {
+                                                        BotLogger.Info(LogCategory.Discord,
+                                                            $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up reminder1h (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={startUtc:o} now={nowUtc:o}");
+                                                        try { await SendReminderAsync(entry); sentCatchupReminder++; }
+                                                        catch (Exception exR)
+                                                        {
+                                                            BotLogger.Warn(LogCategory.Discord,
+                                                                $"[EventOpsLifecycle] catch-up reminder failed: {exR.Message}");
+                                                        }
+                                                    }
+                                                }
+
+                        // 🩹 prod-cleanup-stuck v2: если событие Scheduled/Started (нет mark),
                         // но LastStartTimeUtc уже давно в прошлом (>= 4ч назад) — значит
                         // бот пропустил и Started, и Completed (либо был выключен, либо
                         // был offline). Без нашего вмешательства событие навсегда зависнет
-                        // в сторе как «активное» — ни reminder, ни cleanup24h не сработают.
-                        // Переводим запись в completed «лениво»: CompletedAtUtc =
-                        // max(LastStartTimeUtc + 2ч, LastEndTimeUtc ?? LastStartTimeUtc + 2ч),
-                        // LastUpdatedMark = "completed". Дальше ScheduleCleanup24h (см. ветку
-                        // выше на следующей итерации цикла) поставит удаление через 24ч от
-                        // момента завершения. Сами вызываем ScheduleCleanup24h здесь же —
-                        // иначе до следующего рестарта запись провисит ещё 24ч.
-                        if (entry.LastUpdatedMark is null or "started" or "scheduled"
-                            && entry.LastStartTimeUtc.HasValue
-                            && entry.CompletedAtUtc is null
-                            && entry.CancelledAtUtc is null
-                            && entry.LastStartTimeUtc.Value <= DateTimeOffset.UtcNow.AddHours(-4))
-                        {
-                            // Пытаемся прикинуть «фактическое» время завершения.
-                            // Берём max из планового LastEndTimeUtc и эвристики LastStartTimeUtc + 2ч.
-                            // Если LastEndTimeUtc < LastStartTimeUtc (битые данные) — fallback на эвристику.
-                            var plannedEnd = entry.LastEndTimeUtc;
-                            var heuristicEnd = entry.LastStartTimeUtc.Value.AddHours(2);
-                            var completedAt = (plannedEnd.HasValue && plannedEnd.Value >= entry.LastStartTimeUtc.Value)
-                                ? plannedEnd.Value
-                                : heuristicEnd;
+                                                // в сторе как «активное».
+                                                //
+                                                // v1 переводило запись в completed с эвристикой LastStartTimeUtc+2ч,
+                                                // и cleanup24h считался от этого «фейкового» момента. Проблема:
+                                                // длительность события неизвестна — могло быть 30 мин, могло 6ч.
+                                                // Эвристика обрезала длительные события и чистила анонс раньше времени.
+                                                //
+                                                // v2 (от 23.09.2026 по решению пользователя): событие, которое бот
+                                                // реально не видел в Started/Completed, для нас «потерянное».
+                                                // Помечаем его как abandoned — НЕ как completed (Completed-маркер
+                                                // нужен только для случая, когда Completed поступил от Discord через
+                                                // Started+Completed-пару). cleanup24h считается от
+                                                // LastStartTimeUtc + 24ч: событие уже прошло, через сутки никто не
+                                                // вспомнит — запись можно удалять. Если LastEndTimeUtc есть и попадает
+                                                // в окно [LastStartTimeUtc, +24ч], cleanup считается от end+24ч для
+                                                // единообразия (на случай, если событие шло меньше суток).
+                                                // Дополнительно: «pending_announce» — наш новый маркер записей, у
+                                                // которых Created пришёл, но Discord-announce не ушёл (giveup). Их
+                                                // тоже считаем зависшими и помечаем abandoned, если старт далеко
+                                                // в прошлом или pending висит дольше часа (ReconcilePendingAnnounce
+                                                // ниже попробует доотправить).
+                                                if (entry.LastUpdatedMark is null or "started" or "scheduled" or "pending_announce"
+                                                    && entry.LastStartTimeUtc.HasValue
+                                                    && entry.CompletedAtUtc is null
+                                                    && entry.CancelledAtUtc is null
+                                                    && entry.LastStartTimeUtc.Value <= DateTimeOffset.UtcNow.AddHours(-4))
+                                                {
+                                                    // Берём LastEndTimeUtc, только если он >= LastStartTimeUtc
+                                                    // (битые данные типа EndTime раньше StartTime игнорируем).
+                                                    DateTimeOffset? cleanupSeed = null;
+                                                    if (entry.LastEndTimeUtc.HasValue
+                                                        && entry.LastEndTimeUtc.Value >= entry.LastStartTimeUtc.Value
+                                                        && entry.LastEndTimeUtc.Value <= entry.LastStartTimeUtc.Value.AddHours(24))
+                                                    {
+                                                        // cleanup = end + 24ч, в пределах 24ч от старта
+                                                        cleanupSeed = entry.LastEndTimeUtc.Value;
+                                                    }
+                                                    else
+                                                    {
+                                                        // cleanup = start + 24ч (если событие было «без конца»
+                                                        // или длилось дольше суток — берём максимальный разумный
+                                                        // интервал и считаем от старта; событие уже в прошлом).
+                                                        cleanupSeed = entry.LastStartTimeUtc.Value.AddHours(24);
+                                                    }
 
-                            entry.CompletedAtUtc = completedAt;
-                            entry.LastUpdatedMark = "completed";
-                            entry.LastUpdatedAt = DateTime.UtcNow;
-                            try { _store.UpdateEntry(entry); } catch { }
+                                                    entry.CompletedAtUtc = entry.LastEndTimeUtc
+                                                        ?? entry.LastStartTimeUtc.Value;
+                                                    entry.LastUpdatedMark = "abandoned";
+                                                    entry.LastUpdatedAt = DateTime.UtcNow;
+                                                    entry.CleanupAtUtc = cleanupSeed;
+                                                    try { _store.UpdateEntry(entry); } catch { }
 
-                            BotLogger.Warn(LogCategory.Discord,
-                                $"[EventOpsLifecycle] RebuildFromStoreAsync: перевёл застрявшее событие в completed (prod-cleanup-stuck) guild={entry.GuildId} event={entry.EventId} start={entry.LastStartTimeUtc:o} completedAt={completedAt:o}");
+                                                    BotLogger.Warn(LogCategory.Discord,
+                                                        $"[EventOpsLifecycle] RebuildFromStoreAsync: пометил застрявшее событие как abandoned (prod-cleanup-stuck v2) guild={entry.GuildId} event={entry.EventId} start={entry.LastStartTimeUtc:o} end={(entry.LastEndTimeUtc?.ToString("o") ?? "null")} cleanupAt={cleanupSeed:o}");
 
-                            if (ScheduleCleanup24h(entry))
-                                scheduledBackfillCompleted++;
-                        }
+                                                    if (ScheduleCleanup24h(entry))
+                                                        scheduledBackfillCompleted++;
+                                                }
                     }
                     catch (Exception ex)
                     {
@@ -311,7 +384,7 @@ namespace RPBot.EventOps
                 }
 
                 BotLogger.Info(LogCategory.Discord,
-                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, skipped={skipped}");
+                    $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, catchup={sentCatchupReminder}, skipped={skipped}");
             }
             finally
             {
@@ -832,17 +905,38 @@ namespace RPBot.EventOps
                 : (!string.IsNullOrWhiteSpace(entry.LastLocation) ? entry.LastLocation : "локация не указана");
             var creatorText = "(автор неизвестен)";
 
-            // Пытаемся достать создателя из REST.
-            try
-            {
-                var restGuild = await client.Rest.GetGuildAsync(entry.GuildId);
-                var restEvent = await restGuild.GetEventAsync(entry.EventId);
-                if (restEvent?.Creator != null)
-                {
-                    creatorText = MentionUtils.MentionUser(restEvent.Creator.Id);
-                }
+                        // 🩹 rest-per-reminder: приоритет — LastCreatorId из стора (запомнили на Created
+                        // или LastUpdatedAnnounceAsync). Это убирает на каждом reminder блокирующий
+                        // REST-запрос GetGuildAsync + GetEventAsync. Раньше они шли всегда, и при
+                        // медленном REST reminders скапливались на dispatcher'е. Если LastCreatorId
+                        // неизвестен (старые записи до этого изменения) — fallback на REST, но с
+                        // таймаутом 2с (Task.WhenAny), чтобы не блокировать DM/TG-рассылку.
+                        if (entry.LastCreatorId is ulong storedCreatorId && storedCreatorId != 0)
+                        {
+                            creatorText = MentionUtils.MentionUser(storedCreatorId);
             }
-            catch { /* REST не ответил — это не критично */ }
+                        else
+                        {
+                            var restTask = TryFetchCreatorViaRestAsync(client, entry);
+                            var timeoutTask = Task.Delay(2000);
+                            var winner = await Task.WhenAny(restTask, timeoutTask);
+                            if (winner == restTask)
+                            {
+                                var fetched = await restTask;
+                                if (fetched is ulong fetchedId && fetchedId != 0)
+                                {
+                                    creatorText = MentionUtils.MentionUser(fetchedId);
+                                    // Запомним на будущее (чтобы следующие reminders этого же
+                                    // события уже не дёргали REST).
+                                    entry.LastCreatorId = fetchedId;
+                                }
+                            }
+                            else
+                            {
+                                BotLogger.Warn(LogCategory.Discord,
+                                    $"[EventOpsLifecycle] SendReminderAsync: REST creator-lookup таймаут 2с guild={entry.GuildId} event={entry.EventId}, шлём без создателя");
+                            }
+                        }
 
             // ── Discord DM: тем, кому дошёл оригинальный анонс ────────────────
             // Шлём только тем, у кого уже есть запись в DmMessageIdsByUserId —
@@ -931,8 +1025,19 @@ namespace RPBot.EventOps
                     updated.ReminderDmMessageIdsByUserId = new Dictionary<ulong, ulong>(dmSent);
                 if (announceReminderMsgId.HasValue)
                     updated.ReminderAnnounceMessageId = announceReminderMsgId.Value;
-                _store.UpdateEntry(updated);
-            }
+                            // 🩹 rest-per-reminder: подхватить LastCreatorId, если только что
+                            // узнали его через REST-fallback. Следующие reminders этого же
+                            // события (если такие будут) уже не дёрнут REST.
+                            if (entry.LastCreatorId is null && updated.LastCreatorId is null
+                                && creatorText != "(автор неизвестен)"
+                                && creatorText.StartsWith("<@") && creatorText.EndsWith(">"))
+                            {
+                                var idText = creatorText.Substring(2, creatorText.Length - 3);
+                                if (ulong.TryParse(idText, out var cid))
+                                    updated.LastCreatorId = cid;
+                            }
+                            _store.UpdateEntry(updated);
+                        }
 
             // ── Telegram: в канал/топик из ServerConfig ───────────────────────
             // Telegram reminder: время в МСК-формате (как в основном анонсе),
@@ -1121,6 +1226,38 @@ namespace RPBot.EventOps
             _store.UpdateEntry(updated);
         }
 
+                    /// <summary>
+                    /// Дослать анонс для записи со статусом "pending_announce" (Created пришёл,
+                    /// но в прошлую сессию Discord-announce не ушёл — giveup из-за DNS-fail /
+                    /// реконнекта). Используется только из RebuildFromStoreAsync.
+                    ///
+                    /// Стратегия: минимальная, без обращений к приватным методам Announcer.
+                    /// 1) Снимаем "pending_announce" — entry считается «обычной Scheduled».
+                    /// 2) Lifecycle уже поставил reminder1h в HandleCreatedAsync при Created —
+                    ///    он не зависит от наличия embed в канале (см. SendReminderAsync).
+                    /// 3) Discord пришлёт следующее Updated / Started / Completed для события —
+                    ///    тогда Announcer отредактирует или отправит embed заново.
+                    ///
+                    /// Если Discord Updated/Started не придёт (событие отменено без апдейта)
+                    /// — запись будет удалена через cleanup24h по ветке abandoned ниже.
+                    /// </summary>
+                    private async Task ReconcilePendingAnnounceAsync(EventAnnouncementEntry entry)
+                    {
+                        try
+                        {
+                            entry.LastUpdatedMark = null;
+                            try { _store.UpdateEntry(entry); } catch { }
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsLifecycle] ReconcilePendingAnnounceAsync: pending_announce снят (reminder уже запланирован), ждём следующего Updated/Started/Completed от Discord guild={entry.GuildId} event={entry.EventId}");
+                            await Task.CompletedTask;
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.Discord,
+                                $"[EventOpsLifecycle] ReconcilePendingAnnounceAsync: {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
+
         private async Task CleanupAnnouncementAsync(EventAnnouncementEntry entry)
         {
             var client = SafeGetClient();
@@ -1239,6 +1376,25 @@ namespace RPBot.EventOps
             try { return await client.Rest.GetUserAsync(userId); }
             catch { return null; }
         }
+
+                /// <summary>
+                /// Получить ID создателя Discord-события через REST.
+                /// Возвращает ulong? — null при любом сбое, 0 если Creator пуст.
+                /// Используется как fallback в <c>SendReminderAsync</c>, если в сторе
+                /// ещё нет LastCreatorId (записи, сохранённые до этого изменения).
+                /// </summary>
+                private static async Task<ulong?> TryFetchCreatorViaRestAsync(DiscordSocketClient client, EventAnnouncementEntry entry)
+                {
+                    try
+                    {
+                        var restGuild = await client.Rest.GetGuildAsync(entry.GuildId);
+                        var restEvent = await restGuild.GetEventAsync(entry.EventId);
+                        if (restEvent?.Creator != null)
+                            return restEvent.Creator.Id;
+                    }
+                    catch { /* REST не ответил — это не критично */ }
+                    return null;
+                }
 
         private sealed class ScheduledTimers
         {

@@ -67,6 +67,12 @@ public DateTimeOffset? LastEndTimeUtc { get; set; }
 public ulong? LastChannelId { get; set; }
 public string? LastLocation { get; set; }
 public string? LastCoverImageUrl { get; set; }
+/// <summary>
+/// ID создателя события (Discord user). Запоминается в сторе при Created,
+/// чтобы SendReminderAsync не дёргал client.Rest.GetGuildAsync/GetEventAsync
+/// на каждом напоминании ради creatorId (см. rest-per-reminder).
+/// </summary>
+public ulong? LastCreatorId { get; set; }
 public string? LastUpdatedMark { get; set; }
 public DateTime? LastUpdatedAt { get; set; }
 

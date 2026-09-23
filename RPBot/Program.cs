@@ -1073,16 +1073,16 @@ private void SaveServerConfigs()
     _telegramNotifier,
     _eventAnnouncementStore,
     _eventNotifications!);
-    _eventOpsOrchestrator.OnCreatedAsync = e => _eventAnnouncer!.AnnounceCreatedAsync(e);
-    _eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(default, current);
-    _eventOpsOrchestrator.OnStartedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "started");
+    _eventOpsOrchestrator.OnCreatedAsync = AnnouncerOnCreatedAsync;
+        _eventOpsOrchestrator.OnUpdatedAsync = AnnouncerOnUpdatedAsync;
+        _eventOpsOrchestrator.OnStartedAsync = AnnouncerOnStartedAsync;
     // ВАЖНО: Announcer назначается первым (=), а Lifecycle подключается ПОСЛЕ через +=.
     // Тогда multicast-делегат = [Announcer → Lifecycle]. Announcer успевает
     // проставить LastUpdatedMark и сохранить запись, потом Lifecycle читает её и
     // планирует cleanup24h. Если Lifecycle вызвался бы раньше — store.TryGet вернул
     // бы ещё-не-обновлённую запись и таймер бы не встал.
-    _eventOpsOrchestrator.OnCancelledAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "cancelled");
-    _eventOpsOrchestrator.OnCompletedAsync = e => _eventAnnouncer!.AnnounceStatusChangedAsync(e, "completed");
+        _eventOpsOrchestrator.OnCancelledAsync = AnnouncerOnCancelledAsync;
+        _eventOpsOrchestrator.OnCompletedAsync = AnnouncerOnCompletedAsync;
 
     // EventOpsLifecycleService — отложенные напоминания и автоудаление анонсов.
     // Подключается к тому же оркестратору (его хэндлеры добавляются ПОСЛЕ базовых).
@@ -1093,6 +1093,18 @@ private void SaveServerConfigs()
         _eventNotifications!,
         () => _serverConfigs!);
     _eventOpsLifecycle.Attach(_eventOpsOrchestrator);
+
+        // 🩹 safeinvoke-lambda-name: раньше OnCreatedAsync/OnUpdatedAsync/...
+        // назначались лямбдами `e => _eventAnnouncer!.AnnounceCreatedAsync(e)`.
+        // Multicast `GetInvocationList()` в EventOpsOrchestrator.SafeInvokeAsync
+        // логирует `single.Method.DeclaringType.Name.single.Method.Name` —
+        // для лямбды это `<<>c__DisplayClass…>`, в логах полная муть.
+        // Теперь подписчики — локальные функции с человеко-читаемыми именами:
+        //   AnnouncerOnCreatedAsync / AnnouncerOnUpdatedAsync / ...
+        //   (методы добавлены рядом с OnGuildScheduledEventCreated).
+        // Orchestrator для остальных подписчиков выводит их Method.Name.
+        // Для Lifecycle подписчиков он работает так же (HandleCreatedAsync/HandleUpdatedAsync/...),
+        // потому что Attach делает += на методы напрямую.
 
     BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: создаю WebDashboardService на 0.0.0.0:5057");
     _webDashboard = new WebDashboardService(
@@ -2789,6 +2801,40 @@ private static BotUI? _ui;
                 await LogError($"Ошибка в OnGuildScheduledEventCompleted: {ex.Message}");
             }
         }
+
+                        // 🩹 safeinvoke-lambda-name: именованные обёртки для multicast-подписчиков
+                        // EventOpsOrchestrator. В логах SafeInvokeAsync печатает Method.Name — для
+                        // лямбд это что-то вроде <<>9__0_0>, для этих методов — человекопонятные
+                        // имена (см. комментарий в Program ctor).
+                        private Task AnnouncerOnCreatedAsync(SocketGuildEvent e)
+                        {
+                            if (_eventAnnouncer == null) return Task.CompletedTask;
+                            return _eventAnnouncer.AnnounceCreatedAsync(e);
+                        }
+
+                        private Task AnnouncerOnUpdatedAsync(SocketGuildEvent current, SocketGuildEvent? previous)
+                        {
+                            if (_eventAnnouncer == null) return Task.CompletedTask;
+                            return _eventAnnouncer.AnnounceUpdatedAsync(default, current);
+                        }
+
+                        private Task AnnouncerOnStartedAsync(SocketGuildEvent e)
+                        {
+                            if (_eventAnnouncer == null) return Task.CompletedTask;
+                            return _eventAnnouncer.AnnounceStatusChangedAsync(e, "started");
+                        }
+
+                        private Task AnnouncerOnCancelledAsync(SocketGuildEvent e)
+                        {
+                            if (_eventAnnouncer == null) return Task.CompletedTask;
+                            return _eventAnnouncer.AnnounceStatusChangedAsync(e, "cancelled");
+                        }
+
+                        private Task AnnouncerOnCompletedAsync(SocketGuildEvent e)
+                        {
+                            if (_eventAnnouncer == null) return Task.CompletedTask;
+                            return _eventAnnouncer.AnnounceStatusChangedAsync(e, "completed");
+                        }
 
         private async Task OnGuildMemberUpdated(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
         {
