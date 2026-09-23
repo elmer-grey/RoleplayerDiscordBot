@@ -28,8 +28,14 @@ public ulong? SuperUserRoleId { get; set; } = null;
 public bool PredictionsEnabled { get; set; } = true;
         // Использовать ли картинки при выводе бросков, если они доступны
         public bool RollPicturesEnabled { get; set; } = true;
-// Голосовой канал события (event), в котором начисляются костяшки
-public ulong EventVoiceChannelID { get; set; }
+// Голосовой канал события (event), в котором начисляются костяшки.
+        // ✅ pred-parallelization: DEPRECATED — раньше на гильдии был только один прогноз,
+        // привязанный к этому каналу. Теперь прогнозы работают в ЛЮБОМ voice-канале,
+        // где активно событие (один event — один прогноз, несколько events — несколько).
+        // Поле оставлено для обратной совместимости с конфигами и для случаев,
+        // где мастер хочет явно указать «дефолтный» канал (например, для announcements).
+        [Obsolete("EventVoiceChannelID устарело. Костяшки и прогнозы теперь работают в любом voice-канале, где активно событие. Поле оставлено только для обратной совместимости с конфигами.")]
+        public ulong EventVoiceChannelID { get; set; }
 
         // === TELEGRAM (уведомления о событиях) ===
         public bool TelegramEnabled { get; set; } = false;

@@ -48,41 +48,48 @@ namespace RPBot
                 var action = (actionOpt ?? string.Empty).ToLowerInvariant();
                 var isVoiceChannelChat = command.Channel is SocketVoiceChannel;
 
-                bool IsActiveEventOnChannel(ulong channelId) => guildChannel.Guild.Events.Any(e =>
-                    e.Status == GuildScheduledEventStatus.Active &&
-                    e.Channel != null &&
-                    e.Channel.Id == channelId);
+                // ✅ pred-parallelization: один прогноз — на один event-канал.
+                                // На каждой гильдии может быть несколько параллельных прогнозов (в разных
+                                // голосовых каналах). Ищем прогноз именно в канале команды.
+                                ulong commandChannelId = guildChannel.Id;
 
-                if (action is "create" or "bet" or "resolve" or "cancel")
-                {
-                    if (!isVoiceChannelChat)
-                    {
-                        await command.RespondAsync("Эта команда доступна только в чате голосового канала.", ephemeral: true);
-                        return;
-                    }
-                }
+                                bool IsActiveEventOnChannel(ulong channelId) => guildChannel.Guild.Events.Any(e =>
+                                    e.Status == GuildScheduledEventStatus.Active &&
+                                    e.Channel != null &&
+                                    e.Channel.Id == channelId);
 
-                // Если прогноз активен, но событие на его канале уже не активно — принудительно отменяем с возвратом ставок
-                var activePrediction = predictionService.GetActive(guildId);
-                if (activePrediction != null && !IsActiveEventOnChannel(activePrediction.ChannelId))
-                {
-                    var resolverId = _client?.CurrentUser?.Id ?? 0;
-                    var (closed, closeError) = await predictionService.CancelAsync(
-                        guildId,
-                        resolverId,
-                        isAdminOverride: true,
-                        cancelReason: "Событие завершено. Прогноз принудительно закрыт, все ставки возвращены участникам.");
+                                if (action is "create" or "bet" or "resolve" or "cancel")
+                                {
+                                    if (!isVoiceChannelChat)
+                                    {
+                                        await command.RespondAsync("Эта команда доступна только в чате голосового канала.", ephemeral: true);
+                                        return;
+                                    }
+                                }
 
-                    if (closed)
-                    {
-                        await command.RespondAsync("Событие завершено: активный прогноз автоматически закрыт, ставки возвращены.", ephemeral: true);
-                    }
-                    else
-                    {
-                        await command.RespondAsync($"Авто-закрытие прогноза не выполнено: {closeError}", ephemeral: true);
-                    }
-                    return;
-                }
+                                // ✅ pred-parallelization: для команды важен только прогноз в её канале.
+                                // Если прогноз в этом канале активен, но событие на нём уже не активно —
+                                // принудительно отменяем с возвратом ставок.
+                                var activePrediction = predictionService.GetActive(guildId, commandChannelId);
+                                if (activePrediction != null && !IsActiveEventOnChannel(activePrediction.ChannelId))
+                                {
+                                    var resolverId = _client?.CurrentUser?.Id ?? 0;
+                                    var (closed, closeError) = await predictionService.CancelAsync(
+                                        activePrediction,
+                                        resolverId,
+                                        isAdminOverride: true,
+                                        cancelReason: "Событие завершено. Прогноз принудительно закрыт, все ставки возвращены участникам.");
+
+                                    if (closed)
+                                    {
+                                        await command.RespondAsync("Событие завершено: активный прогноз автоматически закрыт, ставки возвращены.", ephemeral: true);
+                                    }
+                                    else
+                                    {
+                                        await command.RespondAsync($"Авто-закрытие прогноза не выполнено: {closeError}", ephemeral: true);
+                                    }
+                                    return;
+                                }
 
                 switch (action)
                 {
@@ -102,57 +109,29 @@ namespace RPBot
                             return;
                         }
 
-                        // Open modal for creating prediction (friendly UI)
-                        // Require user to be in a voice channel and that channel has an active scheduled event
-                        var guildUser = command.User as SocketGuildUser;
-                        var userVoiceChannel = guildUser?.VoiceChannel;
-                        var commandVoiceChannel = command.Channel as SocketVoiceChannel;
-                        var eventVoiceChannelId = sconfig.EventVoiceChannelID;
+                        // ✅ pred-parallelization: событие должно быть активно на канале команды.
+                                                // EventVoiceChannelID из конфига теперь deprecated — используем динамический канал.
+                                                var commandVoiceChannel = command.Channel as SocketVoiceChannel;
+                                                var guildUser = command.User as SocketGuildUser;
+                                                var userVoiceChannel = guildUser?.VoiceChannel;
 
-                        if (eventVoiceChannelId == 0)
-                        {
-                            await command.RespondAsync("Для этого сервера не настроен `EventVoiceChannelID`. Укажите голосовой канал события в настройках сервера.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                                                // ✅ pred-parallelization: разрешаем /prediction в любом voice-канале,
+                                                // где сейчас активно событие. Создатель обязан физически находиться в этом канале.
+                                                if (!IsActiveEventOnChannel(commandChannelId))
+                                                {
+                                                    await command.RespondAsync("Создавать прогнозы можно только в голосовом канале с активным событием.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
-                        if (commandVoiceChannel == null || commandVoiceChannel.Id != eventVoiceChannelId)
-                        {
-                            var expectedChannel = guildChannel.Guild.GetVoiceChannel(eventVoiceChannelId);
-                            var expectedText = expectedChannel != null ? $"{expectedChannel.Mention}" : $"канал с ID {eventVoiceChannelId}";
-                            await command.RespondAsync($"Создавать предикты можно только из чата канала события: {expectedText}.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
-
-                        if (userVoiceChannel == null || userVoiceChannel.Id != eventVoiceChannelId)
-                        {
-                            var expectedChannel = guildChannel.Guild.GetVoiceChannel(eventVoiceChannelId);
-                            var expectedText = expectedChannel != null ? $"{expectedChannel.Mention}" : $"канал с ID {eventVoiceChannelId}";
-                            await command.RespondAsync($"Чтобы создать прогноз, нужно находиться в голосовом канале события: {expectedText}.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
-
-                        // Diagnostic logging to help understand why modal may be shown unexpectedly
-                        try
-                        {
-                            await LogInfo($"Prediction create invoked: guild={guildId} user={command.User.Id} action=create commandChannel={command.Channel.Id} userVoiceChannelId={(userVoiceChannel?.Id.ToString() ?? "null")} eventVoiceChannelId={eventVoiceChannelId}");
-                            var evs = guildChannel.Guild.Events.Select(e => new { e.Id, e.Name, e.Status, ChannelId = (e.Channel != null ? e.Channel.Id : 0UL), e.Location }).ToList();
-                            await LogInfo($"Guild events count: {evs.Count}");
-                            foreach (var ev in evs)
-                            {
-                                await LogInfo($"Event: id={ev.Id} name='{ev.Name}' status={ev.Status} channelId={ev.ChannelId} location='{ev.Location}'");
-                            }
-                        }
-                        catch { }
-
-                        if (userVoiceChannel != null && !IsActiveEventOnChannel(userVoiceChannel.Id))
-                        {
-                            await command.RespondAsync("Чтобы создать прогноз, вы должны находиться в голосовом канале с активным событием.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                                                if (userVoiceChannel == null || userVoiceChannel.Id != commandChannelId)
+                                                {
+                                                    var expectedChannel = guildChannel.Guild.GetVoiceChannel(commandChannelId);
+                                                    var expectedText = expectedChannel != null ? $"{expectedChannel.Mention}" : $"канал с ID {commandChannelId}";
+                                                    await command.RespondAsync($"Чтобы создать прогноз, нужно находиться в голосовом канале события: {expectedText}.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
                         var targetMessageChannel = command.Channel as ISocketMessageChannel;
                         if (targetMessageChannel == null)
@@ -162,14 +141,15 @@ namespace RPBot
                             return;
                         }
 
-                        // ✅ БАГ 8: Проверка наличия активного прогноза ПЕРЕД показом кнопок
-                        var existingPrediction = predictionService.GetActive(guildId);
-                        if (existingPrediction != null)
-                        {
-                            await command.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                        // ✅ БАГ 8: Проверка наличия активного прогноза ПЕРЕД показом кнопок.
+                                                // ✅ pred-parallelization: ищем прогноз именно в канале команды.
+                                                var existingPrediction = predictionService.GetActive(guildId, commandChannelId);
+                                                if (existingPrediction != null)
+                                                {
+                                                    await command.RespondAsync("В этом голосовом канале уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
                         // ✅ НОВОЕ: Показываем кнопки выбора количества исходов
                         var buttonsBuilder = new ComponentBuilder()
@@ -204,8 +184,8 @@ namespace RPBot
                             return;
                         }
 
-                        // ✅ Проверка: исход существует
-                        var activePred = predictionService.GetActive(guildId);
+                        // ✅ pred-parallelization: ищем прогноз именно в канале команды.
+                                                var activePred = predictionService.GetActive(guildId, commandChannelId);
                         if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
                         {
                             var maxOutcome = activePred?.Outcomes.Count ?? 2;
@@ -214,18 +194,32 @@ namespace RPBot
                             return;
                         }
 
-                        if (!long.TryParse(amountOpt.ToString(), out var amount) || amount <= 0)
-                        {
-                            await command.RespondAsync("Сумма должна быть положительным числом.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                                                // ✅ pred-parallelization: проверяем, что юзер сидит в канале прогноза.
+                                                var guildUserForBet = command.User as SocketGuildUser;
+                                                var userVoice = guildUserForBet?.VoiceChannel;
+                                                if (userVoice == null || userVoice.Id != activePred.ChannelId)
+                                                {
+                                                    var expectedChannel = guildChannel.Guild.GetVoiceChannel(activePred.ChannelId);
+                                                    var expectedText = expectedChannel != null ? $"{expectedChannel.Mention}" : $"канал с ID {activePred.ChannelId}";
+                                                    await command.RespondAsync($"Ставить можно только находясь в голосовом канале прогноза: {expectedText}.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
-                        var (ok, error) = await predictionService.PlaceBetAsync(guildId, user.Id, outcomeNum, amount);
-                        await command.RespondAsync(ok ? $"Ставка {amount} костяшек на исход {outcomeNum} принята." : error, ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
-                        break;
-                    }
+                                                if (!long.TryParse(amountOpt.ToString(), out var amount) || amount <= 0)
+                                                {
+                                                    await command.RespondAsync("Сумма должна быть положительным числом.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
+
+                                                // ✅ pred-parallelization: PlaceBetAsync с явным prediction — гарантирует,
+                                                // что ставка идёт в прогноз именно этого канала.
+                                                var (ok, error) = await predictionService.PlaceBetAsync(activePred, user.Id, outcomeNum, amount);
+                                                await command.RespondAsync(ok ? $"Ставка {amount} костяшек на исход {outcomeNum} принята." : error, ephemeral: true);
+                                                ScheduleDeleteOriginalResponse(command);
+                                                break;
+                                            }
 
                     case "resolve":
                     {
@@ -244,37 +238,51 @@ namespace RPBot
                         }
 
                         // ✅ Проверка: исход существует
-                        var activePred = predictionService.GetActive(guildId);
-                        if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
-                        {
-                            var maxOutcome = activePred?.Outcomes.Count ?? 2;
-                            await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                                                // ✅ pred-parallelization: ищем прогноз в канале команды.
+                                                var activePred = predictionService.GetActive(guildId, commandChannelId);
+                                                if (activePred == null || activePred.GetOutcomeById(outcomeNum) == null)
+                                                {
+                                                    var maxOutcome = activePred?.Outcomes.Count ?? 2;
+                                                    await command.RespondAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
-                        var isAdmin = user.GuildPermissions.Administrator;
-                        var (ok, error) = await predictionService.ResolveAsync(guildId, user.Id, isAdmin, outcomeNum);
-                        await command.RespondAsync(ok ? "Прогноз завершён." : error, ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
-                        break;
-                    }
+                                                var isAdmin = user.GuildPermissions.Administrator;
+                                                // ✅ pred-parallelization: resolve работает с конкретным прогнозом.
+                                                // Создатель может завершить свой прогноз (он автоматически в этом канале —
+                                                // т.к. создание требовало нахождения в voice-канале).
+                                                var (ok, error) = await predictionService.ResolveAsync(activePred, user.Id, isAdmin, outcomeNum);
+                                                await command.RespondAsync(ok ? "Прогноз завершён." : error, ephemeral: true);
+                                                ScheduleDeleteOriginalResponse(command);
+                                                break;
+                                            }
 
-                    case "cancel":
-                    {
-                        if (user == null)
-                        {
-                            await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
-                            ScheduleDeleteOriginalResponse(command);
-                            return;
-                        }
+                                            case "cancel":
+                                            {
+                                                if (user == null)
+                                                {
+                                                    await command.RespondAsync("Не удалось определить пользователя.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
 
-                        var isAdmin = user.GuildPermissions.Administrator;
-                        var (ok, error) = await predictionService.CancelAsync(guildId, user.Id, isAdmin);
-                        await command.RespondAsync(ok ? "Прогноз отменён. Все ставки возвращены." : error, ephemeral: true);
-                        ScheduleDeleteOriginalResponse(command);
-                        break;
-                    }
+                                                // ✅ pred-parallelization: ищем прогноз в канале команды.
+                                                var activePredForCancel = predictionService.GetActive(guildId, commandChannelId);
+                                                if (activePredForCancel == null)
+                                                {
+                                                    await command.RespondAsync("В этом голосовом канале нет активного прогноза.", ephemeral: true);
+                                                    ScheduleDeleteOriginalResponse(command);
+                                                    return;
+                                                }
+
+                                                var isAdmin = user.GuildPermissions.Administrator;
+                                                // ✅ pred-parallelization: cancel работает с конкретным прогнозом.
+                                                var (ok, error) = await predictionService.CancelAsync(activePredForCancel, user.Id, isAdmin);
+                                                await command.RespondAsync(ok ? "Прогноз отменён. Все ставки возвращены." : error, ephemeral: true);
+                                                ScheduleDeleteOriginalResponse(command);
+                                                break;
+                                            }
 
                     case "info": // Баланс и текущий прогноз
                     {
@@ -293,7 +301,8 @@ namespace RPBot
                         }
                         catch { }
 
-                        var prediction = predictionService.GetActive(guildId);
+                        // ✅ pred-parallelization: /prediction info — показываем только прогноз в канале команды.
+                        var prediction = predictionService.GetActive(guildId, commandChannelId);
                         var balance = _pointsService.GetBalance(guildId, user.Id);
                         var sb = new StringBuilder();
 

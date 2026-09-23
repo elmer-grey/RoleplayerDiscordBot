@@ -259,99 +259,105 @@ private Task? _dailyRestartTask;
         }
         private async Task HandlePredictionBetButton(SocketMessageComponent component, string[] parts)
         {
-            // customId: pred_bet:<guildId>
-            if (parts.Length < 2) return;
-            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            // customId: pred_bet:<guildId>:<channelId>
+                        // ✅ pred-parallelization: добавлен channelId, т.к. кнопка привязана к конкретному
+                        // prediction-каналу, а не ко всей гильдии.
+                        if (parts.Length < 3) return;
+                        if (!ulong.TryParse(parts[1], out var guildId)) return;
+                        if (!ulong.TryParse(parts[2], out var channelId)) return;
 
-            var user = component.User as SocketGuildUser;
-            if (user == null)
-            {
-                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
-                return;
-            }
-        try
-            {
-                _pointsUserIndex.UpsertFromUser(guildId, user);
-                _ = Task.Run(() => _pointsUserIndex.SaveAsync());
-            }
-            catch { }
-            var predictionService = _predictionService;
-            var active = predictionService?.GetActive(guildId);
-            if (active == null || active.IsResolved)
-            {
-                try { await component.RespondAsync("Сейчас нет активного прогноза.", ephemeral: true); } catch { }
-                ScheduleDeleteOriginalResponse(component);
-                return;
-            }
+                        var user = component.User as SocketGuildUser;
+                        if (user == null)
+                        {
+                            await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                            return;
+                        }
+                    try
+                        {
+                            _pointsUserIndex.UpsertFromUser(guildId, user);
+                            _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                        }
+                        catch { }
+                        var predictionService = _predictionService;
+                        var active = predictionService?.GetActive(guildId, channelId);
+                        if (active == null || active.IsResolved)
+                        {
+                            try { await component.RespondAsync("Сейчас нет активного прогноза в этом канале.", ephemeral: true); } catch { }
+                            ScheduleDeleteOriginalResponse(component);
+                            return;
+                        }
 
-            var balance = _pointsService.GetBalance(guildId, component.User.Id);
-            var cb = new ComponentBuilder()
-                .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}", style: ButtonStyle.Primary);
+                        var balance = _pointsService.GetBalance(guildId, component.User.Id);
+                        var cb = new ComponentBuilder()
+                            .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}:{channelId}", style: ButtonStyle.Primary);
 
-            try { await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
-            ScheduleDeleteOriginalResponse(component);
-        }
+                        try { await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
+                        ScheduleDeleteOriginalResponse(component);
+                    }
 
         private async Task HandlePredictionBetConfirmButton(SocketMessageComponent component, string[] parts)
         {
-            // customId: pred_bet_confirm:<guildId>
-            if (parts.Length < 2) return;
-            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            // customId: pred_bet_confirm:<guildId>:<channelId>
+                        // ✅ pred-parallelization: добавлен channelId — кнопка живёт в конкретном канале,
+                        // и обработчик modal'а должен знать, в каком именно.
+                        if (parts.Length < 3) return;
+                        if (!ulong.TryParse(parts[1], out var guildId)) return;
+                        if (!ulong.TryParse(parts[2], out var channelId)) return;
 
-            var user = component.User as SocketGuildUser;
-            if (user == null)
-            {
-                await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
-                return;
-            }
+                        var user = component.User as SocketGuildUser;
+                        if (user == null)
+                        {
+                            await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                            return;
+                        }
 
-            _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
+                        _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
 
-            var active = _predictionService?.GetActive(guildId);
-            PredictionBet? existingBet = null;
-            var hasExistingBet = active != null && active.Bets.TryGetValue(component.User.Id, out existingBet);
+                        var active = _predictionService?.GetActive(guildId, channelId);
+                        PredictionBet? existingBet = null;
+                        var hasExistingBet = active != null && active.Bets.TryGetValue(component.User.Id, out existingBet);
 
-            // Open modal to input bet
-            Modal modal;
-            if (hasExistingBet && existingBet != null)
-            {
-                // ✅ Обновлено: динамический поиск имени исхода
-                var existingOutcome = active!.GetOutcomeById(existingBet!.OutcomeId);
-                var existingOutcomeName = existingOutcome?.Name ?? $"Исход {existingBet.OutcomeId}";
+                        // Open modal to input bet
+                        Modal modal;
+                        if (hasExistingBet && existingBet != null)
+                        {
+                            // ✅ Обновлено: динамический поиск имени исхода
+                            var existingOutcome = active!.GetOutcomeById(existingBet!.OutcomeId);
+                            var existingOutcomeName = existingOutcome?.Name ?? $"Исход {existingBet.OutcomeId}";
 
-                modal = new ModalBuilder()
-                    .WithTitle("Увеличить ставку")
-                    .WithCustomId($"pred_bet_add_modal:{guildId}")
-                    .AddTextInput($"Ваш исход: {existingOutcomeName}", "amount", TextInputStyle.Short, placeholder: "Сколько ещё поставить")
-                    .Build();
-            }
-            else
-            {
-                // ✅ Обновлено: показываем список исходов с названиями
-                var outcomeCount = active?.Outcomes.Count ?? 2;
-                var outcomesList = active != null 
-                    ? string.Join(", ", active.Outcomes.Select(o => $"{o.Id}: {o.Name}"))
-                    : "1: Исход 1, 2: Исход 2";
+                            modal = new ModalBuilder()
+                                .WithTitle("Увеличить ставку")
+                                .WithCustomId($"pred_bet_add_modal:{guildId}:{channelId}")
+                                .AddTextInput($"Ваш исход: {existingOutcomeName}", "amount", TextInputStyle.Short, placeholder: "Сколько ещё поставить")
+                                .Build();
+                        }
+                        else
+                        {
+                            // ✅ Обновлено: показываем список исходов с названиями
+                            var outcomeCount = active?.Outcomes.Count ?? 2;
+                            var outcomesList = active != null 
+                                ? string.Join(", ", active.Outcomes.Select(o => $"{o.Id}: {o.Name}"))
+                                : "1: Исход 1, 2: Исход 2";
 
-                var useCompactOutcomeLabels = active?.UseCompactOutcomeLabels ?? false;
-                var outcomePlaceholder = useCompactOutcomeLabels
-                    ? $"Выберите 1-{outcomeCount}"
-                    : outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
+                            var useCompactOutcomeLabels = active?.UseCompactOutcomeLabels ?? false;
+                            var outcomePlaceholder = useCompactOutcomeLabels
+                                ? $"Выберите 1-{outcomeCount}"
+                                : outcomeCount == 2 ? "1 или 2" : $"1 до {outcomeCount}";
 
-                var label = useCompactOutcomeLabels
-                    ? "Исход"
-                    : $"Исход ({outcomesList})";
+                            var label = useCompactOutcomeLabels
+                                ? "Исход"
+                                : $"Исход ({outcomesList})";
 
-                modal = new ModalBuilder()
-                    .WithTitle("Сделать ставку")
-                    .WithCustomId($"pred_bet_modal:{guildId}")
-                    .AddTextInput(label, "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
-                    .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
-                    .Build();
-            }
+                            modal = new ModalBuilder()
+                                .WithTitle("Сделать ставку")
+                                .WithCustomId($"pred_bet_modal:{guildId}:{channelId}")
+                                .AddTextInput(label, "outcome", TextInputStyle.Short, placeholder: outcomePlaceholder, maxLength: 2)
+                                .AddTextInput("Сумма", "amount", TextInputStyle.Short, placeholder: "Количество костяшек")
+                                .Build();
+                        }
 
-            await component.RespondWithModalAsync(modal);
-        }
+                        await component.RespondWithModalAsync(modal);
+                    }
 
         /// <summary>
         /// Проверяет наличие активного события на указанном голосовом канале
@@ -394,12 +400,13 @@ private Task? _dailyRestartTask;
                     return;
                 }
 
-                var existingPrediction = _predictionService?.GetActive(guildId);
-                if (existingPrediction != null)
-                {
-                    await component.RespondAsync("На этом сервере уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
-                    return;
-                }
+                // ✅ pred-parallelization: ищем прогноз именно в канале команды (а не любой на гильдии).
+                                var existingPrediction = _predictionService?.GetActive(guildId, channelId);
+                                if (existingPrediction != null)
+                                {
+                                    await component.RespondAsync("В этом голосовом канале уже есть активный прогноз. Дождитесь его завершения или отмените.", ephemeral: true);
+                                    return;
+                                }
 
                 if (outcomesCount == 3)
                 {
@@ -560,49 +567,68 @@ private Task? _dailyRestartTask;
 
         private async Task HandlePredictionCancelButton(SocketMessageComponent component, string[] parts)
         {
-            // customId: pred_cancel:<guildId>
-            if (parts.Length < 2) return;
-            if (!ulong.TryParse(parts[1], out var guildId)) return;
+            // customId: pred_cancel:<guildId>:<channelId>
+                        // ✅ pred-parallelization: добавлен channelId — кнопка привязана к конкретному прогнозу в канале.
+                        if (parts.Length < 3) return;
+                        if (!ulong.TryParse(parts[1], out var guildId)) return;
+                        if (!ulong.TryParse(parts[2], out var channelId)) return;
 
-            var user = component.User as SocketGuildUser;
-            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+                        var user = component.User as SocketGuildUser;
+                        var isAdmin = user?.GuildPermissions.Administrator ?? false;
 
-            var resolverId = user?.Id ?? 0UL;
-            var predictionService = _predictionService;
-            if (predictionService == null)
-            {
-                try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
-                return;
-            }
-            var (ok, error) = await predictionService.CancelAsync(guildId, resolverId, isAdmin);
-                        if (ok)
+                        var resolverId = user?.Id ?? 0UL;
+                        var predictionService = _predictionService;
+                        if (predictionService == null)
                         {
-                            try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+                            try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                            return;
                         }
-                        else
+
+                        var activePrediction = predictionService.GetActive(guildId, channelId);
+                        if (activePrediction == null)
                         {
-                            try { await component.RespondAsync(error, ephemeral: true); } catch { }
+                            try { await component.RespondAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
+                            return;
                         }
-                    }
 
-        private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
-        {
-            // customId: pred_resolve:<guildId>:<outcomeId>
-            if (parts.Length < 3) return;
-            if (!ulong.TryParse(parts[1], out var guildId)) return;
-            if (!int.TryParse(parts[2], out var outcomeId)) return;
+                        var (ok, error) = await predictionService.CancelAsync(activePrediction, resolverId, isAdmin);
+                                    if (ok)
+                                    {
+                                        try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+                                    }
+                                    else
+                                    {
+                                        try { await component.RespondAsync(error, ephemeral: true); } catch { }
+                                    }
+                                }
 
-            var user = component.User as SocketGuildUser;
-            var isAdmin = user?.GuildPermissions.Administrator ?? false;
+                    private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
+                    {
+                        // customId: pred_resolve:<guildId>:<channelId>:<outcomeId>
+                        if (parts.Length < 4) return;
+                        if (!ulong.TryParse(parts[1], out var guildId)) return;
+                        if (!ulong.TryParse(parts[2], out var channelId)) return;
+                        if (!int.TryParse(parts[3], out var outcomeId)) return;
 
-            var resolverId = user?.Id ?? 0UL;
-            var predictionService = _predictionService;
-            if (predictionService == null)
-            {
-                try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
-                return;
-            }
-            var (ok, error) = await predictionService.ResolveAsync(guildId, resolverId, isAdmin, outcomeId);
+                        var user = component.User as SocketGuildUser;
+                        var isAdmin = user?.GuildPermissions.Administrator ?? false;
+
+                        var resolverId = user?.Id ?? 0UL;
+                        var predictionService = _predictionService;
+                        if (predictionService == null)
+                        {
+                            try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                            return;
+                        }
+
+                        var activePrediction = predictionService.GetActive(guildId, channelId);
+                        if (activePrediction == null)
+                        {
+                            try { await component.RespondAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
+                            return;
+                        }
+
+                        var (ok, error) = await predictionService.ResolveAsync(activePrediction, resolverId, isAdmin, outcomeId);
                         if (!ok)
                         {
                             // Avoid responding if the original message was deleted — try update quietly
@@ -823,7 +849,9 @@ private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotC
                 SwearFilterEnabled = overrides.SwearFilterEnabled,
                 PredictionsEnabled = overrides.PredictionsEnabled,
                 RollPicturesEnabled = overrides.RollPicturesEnabled,
-                EventVoiceChannelID = overrides.EventVoiceChannelID != 0 ? overrides.EventVoiceChannelID : defaults.EventVoiceChannelID,
+                #pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete, но используется в fallback-логике конфига
+                                EventVoiceChannelID = overrides.EventVoiceChannelID != 0 ? overrides.EventVoiceChannelID : defaults.EventVoiceChannelID,
+                #pragma warning restore CS0618
 
                 MasterGuideEnabled = overrides.MasterGuideEnabled,
                 MasterGuideTemplate = !string.IsNullOrWhiteSpace(overrides.MasterGuideTemplate)
@@ -1311,7 +1339,7 @@ private void SaveServerConfigs()
             // чтобы cleanup осиротевших сессий мог отменить связанный
             // с событием прогноз.
             GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
-        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
+        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath, IsActiveEventOnChannel);
 
     // Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
     if (_config.Music.Enabled)
@@ -1880,11 +1908,13 @@ public Task ReloadServerConfigsAsync()
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var rp)) sconfig.RollPicturesEnabled = rp;
                     break;
                 case "event_voice_channel":
-                    {
-                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value, requireVoice: true);
-                        if (resolved.HasValue) sconfig.EventVoiceChannelID = resolved.Value;
-                    }
-                    break;
+                #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated setter, сохраняем для обратной совместимости /config set
+                                    {
+                                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value, requireVoice: true);
+                                        if (resolved.HasValue) sconfig.EventVoiceChannelID = resolved.Value;
+                                    }
+                #pragma warning restore CS0618
+                                    break;
     default:
     break;
     }
@@ -2364,7 +2394,7 @@ private static BotUI? _ui;
                                                 // чтобы cleanup осиротевших сессий мог отменить связанный
                                                 // с событием прогноз.
                                                 GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
-                        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath);
+                        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath, IsActiveEventOnChannel);
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -4339,134 +4369,161 @@ await Task.CompletedTask;
                     return;
                 }
 
-                // Handle bet modal: pred_bet_modal:<guildId>
-                if (parts[0] == "pred_bet_modal")
-                {
-                    if (parts.Length < 2)
+                // Handle bet modal: pred_bet_modal:<guildId>:<channelId>
+                                // ✅ pred-parallelization: добавлен channelId — модал привязан к конкретному прогнозу.
+                                if (parts[0] == "pred_bet_modal")
+                                {
+                                    if (parts.Length < 3)
+                                    {
+                                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
+                                        return;
+                                    }
+
+                                    if (!ulong.TryParse(parts[1], out var guildId))
+                                    {
+                                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
+                                        return;
+                                    }
+
+                                    if (!ulong.TryParse(parts[2], out var channelId))
                     {
-                        await modal.RespondAsync("Неверный модал.", ephemeral: true);
-                        return;
+                                        await modal.RespondAsync("Неверный идентификатор канала.", ephemeral: true);
+                                        return;
+                                    }
+
+                                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
+                                    try
+                                    {
+                                        if (modal.User != null && _pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
+                                        {
+                                            try { await pending!.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
+                                        }
+                                    }
+                                    catch { }
+
+                                    // Extract fields from modal components (flat)
+                                    string outcomeStr = string.Empty;
+                                    string amountStr = string.Empty;
+                                    foreach (var comp in modal.Data.Components)
+                                    {
+                                        if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
+                                        else if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
                     }
 
-                    if (!ulong.TryParse(parts[1], out var guildId))
-                    {
-                        await modal.RespondAsync("Неверный идентификатор сервера.", ephemeral: true);
-                        return;
-                    }
+                                    if (!int.TryParse(outcomeStr, out var outcomeNum) || outcomeNum < 1)
+                                    {
+                                        await modal.FollowupAsync("Неверный номер исхода.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
-                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
-                    try
-                    {
-                        if (modal.User != null && _pendingBetUi.TryRemove($"{guildId}:{modal.User.Id}", out var pending))
-                        {
-                            try { await pending!.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
-                        }
-                    }
-                    catch { }
-
-                    // Extract fields from modal components (flat)
-                    string outcomeStr = string.Empty;
-                    string amountStr = string.Empty;
-                    foreach (var comp in modal.Data.Components)
-                    {
-                        if (string.Equals(comp.CustomId, "outcome", StringComparison.OrdinalIgnoreCase)) outcomeStr = comp.Value ?? string.Empty;
-                        else if (string.Equals(comp.CustomId, "amount", StringComparison.OrdinalIgnoreCase)) amountStr = comp.Value ?? string.Empty;
-                    }
-
-                    if (!int.TryParse(outcomeStr, out var outcomeNum) || outcomeNum < 1)
-                    {
-                        await modal.FollowupAsync("Неверный номер исхода.", ephemeral: true).ConfigureAwait(false);
+                                    // ✅ Проверка: исход существует в активном прогнозе В этом канале.
+                                    var activePrediction = _predictionService!.GetActive(guildId, channelId);
+                                    if (activePrediction == null || activePrediction.GetOutcomeById(outcomeNum) == null)
+                                    {
+                                        var maxOutcome = activePrediction?.Outcomes.Count ?? 2;
+                                        await modal.FollowupAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true).ConfigureAwait(false);
                         ScheduleDeleteOriginalResponse(modal);
                         return;
                     }
 
-                    // ✅ Проверка: исход существует в активном прогнозе
-                    var activePrediction = _predictionService!.GetActive(guildId);
-                    if (activePrediction == null || activePrediction.GetOutcomeById(outcomeNum) == null)
-                    {
-                        var maxOutcome = activePrediction?.Outcomes.Count ?? 2;
-                        await modal.FollowupAsync($"Исход должен быть от 1 до {maxOutcome}.", ephemeral: true).ConfigureAwait(false);
+                                    // ✅ pred-parallelization: проверяем, что юзер сидит в канале прогноза.
+                                    var guildUserForBet = modal.User as SocketGuildUser;
+                                    var userVoice = guildUserForBet?.VoiceChannel;
+                                    if (userVoice == null || userVoice.Id != activePrediction.ChannelId)
+                                    {
+                                        var expectedChannel = _client?.GetGuild(guildId)?.GetVoiceChannel(activePrediction.ChannelId);
+                                        var expectedText = expectedChannel != null ? $"{expectedChannel.Mention}" : $"канал с ID {activePrediction.ChannelId}";
+                                        await modal.FollowupAsync($"Ставить можно только находясь в голосовом канале прогноза: {expectedText}.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
+
+                                    if (!long.TryParse(amountStr, out var amount) || amount <= 0)
+                                    {
+                                        await modal.FollowupAsync("Сумма должна быть положительна.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
+
+                                    var userId = modal.User?.Id ?? 0;
+                                    if (modal.User != null)
+                                    {
+                                        try
+                                        {
+                                            _pointsUserIndex.UpsertFromUser(guildId, modal.User);
+                                            _ = Task.Run(() => _pointsUserIndex.SaveAsync());
+                                        }
+                                        catch { }
+                                    }
+                                    if (userId != 0)
+                                    {
+                                        var res = await _predictionService!.PlaceBetAsync(activePrediction, userId, outcomeNum, amount);
+                                        await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
+                                        if (res.ok)
+                                        {
+                                            try { await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true).ConfigureAwait(false); } catch { }
+                                        }
+                                        else
+                                        {
+                                            try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
+                                        }
+
                         ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
+                                    }
 
-                    if (!long.TryParse(amountStr, out var amount) || amount <= 0)
-                    {
-                        await modal.FollowupAsync("Сумма должна быть положительна.", ephemeral: true).ConfigureAwait(false);
-                        ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
+                                    return;
+                                }
 
-                    var userId = modal.User?.Id ?? 0;
-                    if (modal.User != null)
-                    {
-                        try
-                        {
-                            _pointsUserIndex.UpsertFromUser(guildId, modal.User);
-                            _ = Task.Run(() => _pointsUserIndex.SaveAsync());
-                        }
-                        catch { }
-                    }
-                    if (userId != 0)
-                    {
-                        var res = await _predictionService!.PlaceBetAsync(guildId, userId, outcomeNum, amount);
-                        await LogInfo($"PlaceBet result: ok={res.ok} error={res.error}");
-                        if (res.ok)
-                        {
-                            try { await modal.RespondAsync($"Ставка {amount} на исход {outcomeNum} принята.", ephemeral: true).ConfigureAwait(false); } catch { }
-                        }
-                        else
-                        {
-                            try { await modal.RespondAsync(res.error, ephemeral: true).ConfigureAwait(false); } catch { }
-                        }
+                                // Handle bet add modal: pred_bet_add_modal:<guildId>:<channelId>
+                                // ✅ pred-parallelization: добавлен channelId, чтобы найти именно тот прогноз, к которому добавлена ставка.
+                                if (parts[0] == "pred_bet_add_modal")
+                                {
+                                    if (parts.Length < 3)
+                                    {
+                                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
-                        ScheduleDeleteOriginalResponse(modal);
-                    }
+                                    if (!ulong.TryParse(parts[1], out var guildId))
+                                    {
+                                        await modal.FollowupAsync("Неверный идентификатор сервера.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
-                    return;
-                }
+                                    if (!ulong.TryParse(parts[2], out var channelId))
+                                    {
+                                        await modal.FollowupAsync("Неверный идентификатор канала.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
-                // Handle bet add modal: pred_bet_add_modal:<guildId>
-                if (parts[0] == "pred_bet_add_modal")
-                {
-                    if (parts.Length < 2)
-                    {
-                        await modal.FollowupAsync("Неверный модал.", ephemeral: true).ConfigureAwait(false);
-                        ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
+                                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
+                                    try
+                                    {
+                                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User?.Id}", out var pending) && pending != null)
+                                        {
+                                            try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
+                                        }
+                                    }
+                                    catch { }
 
-                    if (!ulong.TryParse(parts[1], out var guildId))
-                    {
-                        await modal.FollowupAsync("Неверный идентификатор сервера.", ephemeral: true).ConfigureAwait(false);
-                        ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
+                                    var active = _predictionService?.GetActive(guildId, channelId);
+                                    if (active == null || active.IsResolved)
+                                    {
+                                        await modal.FollowupAsync("Сейчас нет активного прогноза в этом канале.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
-                    // Remove the earlier ephemeral "balance + continue" UI right after modal submit.
-                    try
-                    {
-                        if (_pendingBetUi.TryRemove($"{guildId}:{modal.User?.Id}", out var pending) && pending != null)
-                        {
-                            try { await pending.DeleteOriginalResponseAsync().ConfigureAwait(false); } catch { }
-                        }
-                    }
-                    catch { }
-
-                    var active = _predictionService?.GetActive(guildId);
-                    if (active == null || active.IsResolved)
-                    {
-                        await modal.FollowupAsync("Сейчас нет активного прогноза.", ephemeral: true).ConfigureAwait(false);
-                        ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
-
-                    if (modal.User == null || !active.Bets.TryGetValue(modal.User.Id, out var existingBet) || existingBet == null)
-                    {
-                        await modal.FollowupAsync("Вы ещё не делали ставку. Используйте обычную ставку.", ephemeral: true).ConfigureAwait(false);
-                        ScheduleDeleteOriginalResponse(modal);
-                        return;
-                    }
+                                    if (modal.User == null || !active.Bets.TryGetValue(modal.User.Id, out var existingBet) || existingBet == null)
+                                    {
+                                        await modal.FollowupAsync("Вы ещё не делали ставку. Используйте обычную ставку.", ephemeral: true).ConfigureAwait(false);
+                                        ScheduleDeleteOriginalResponse(modal);
+                                        return;
+                                    }
 
                     string amountStr = string.Empty;
                     foreach (var comp in modal.Data.Components)
@@ -4494,7 +4551,7 @@ await Task.CompletedTask;
                     }
                     if (_predictionService != null && modal.User != null)
                     {
-                        var res = await _predictionService.PlaceBetAsync(guildId, modal.User.Id, outcomeNum, amount);
+                                            var res = await _predictionService.PlaceBetAsync(active, modal.User.Id, outcomeNum, amount);
                         await LogInfo($"PlaceBet(add) result: ok={res.ok} error={res.error}");
                         if (res.ok)
                         {
@@ -5973,7 +6030,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         sb.AppendLine($"swear_words: {(sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : "")}");
         sb.AppendLine($"predictions: {sconfig.PredictionsEnabled}");
                         sb.AppendLine($"roll_pictures: {sconfig.RollPicturesEnabled}");
-        sb.AppendLine($"event_voice_channel: {sconfig.EventVoiceChannelID}");
+                        #pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete, но поле отображается в info о сервере
+                                sb.AppendLine($"event_voice_channel (deprecated): {sconfig.EventVoiceChannelID}");
+                        #pragma warning restore CS0618
         await command.RespondAsync(sb.ToString(), ephemeral: true);
         ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
     }
@@ -6004,7 +6063,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         "swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
         "predictions" => sconfig.PredictionsEnabled.ToString(),
                             "roll_pictures" => sconfig.RollPicturesEnabled.ToString(),
-                            "event_voice_channel" => sconfig.EventVoiceChannelID.ToString(),
+        #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated, но /config get продолжает работать
+                                    "event_voice_channel" => sconfig.EventVoiceChannelID.ToString() + " (deprecated)",
+        #pragma warning restore CS0618
         _ => "Неизвестный ключ"
         };
 
@@ -6063,8 +6124,10 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                                             sconfig.RecordChannelID = id.Value;
                                             break;
                                         case "event_voice_channel":
-                                            sconfig.EventVoiceChannelID = id.Value;
-                                            break;
+                                        #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated setter, сохраняем для обратной совместимости /config set
+                                                                                    sconfig.EventVoiceChannelID = id.Value;
+                                        #pragma warning restore CS0618
+                                                                                    break;
                                     }
 
                                     SaveServerConfigs();

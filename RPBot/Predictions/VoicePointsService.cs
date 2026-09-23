@@ -20,7 +20,10 @@ namespace RPBot
         private readonly DiscordSocketClient _client;
         private readonly PointsService _points;
         private readonly Func<ulong, ServerConfig?> _getServerConfig;
-                private readonly object _shutdownLock = new();
+            // ✅ pred-parallelization: вместо жёстко зашитого cfg.EventVoiceChannelID проверяем,
+            // активно ли событие на канале — костяшки начисляются в ЛЮБОМ event-активном голосовом канале.
+            private readonly Func<ulong, ulong, bool> _isActiveEventOnChannel;
+                    private readonly object _shutdownLock = new();
                 private int _shutdownStarted; // 0 = running, 1 = shutting down (Interlocked guard)
 
                 private const int BasePointsPerTick = 10;
@@ -48,11 +51,12 @@ namespace RPBot
                     public CancellationTokenSource? TimerCts { get; set; }
                 }
 
-                public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, string logPath)
+                public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, string logPath, Func<ulong, ulong, bool> isActiveEventOnChannel)
                 {
                     _client = client;
                     _points = points;
                     _getServerConfig = getServerConfig;
+                    _isActiveEventOnChannel = isActiveEventOnChannel;
 
                     _client.UserVoiceStateUpdated += OnUserVoiceStateUpdatedAsync;
                     _client.GuildScheduledEventStarted += OnGuildScheduledEventStartedAsync;
@@ -138,14 +142,15 @@ namespace RPBot
 
                 var guildId = guildEvent.Guild.Id;
                 var cfg = _getServerConfig(guildId);
-                if (cfg == null || !cfg.PredictionsEnabled || cfg.EventVoiceChannelID == 0)
+                                if (cfg == null || !cfg.PredictionsEnabled)
                     return Task.CompletedTask;
 
                 if (guildEvent.Channel is not SocketVoiceChannel voice)
                     return Task.CompletedTask;
 
-                if (voice.Id != cfg.EventVoiceChannelID)
-                    return Task.CompletedTask;
+                                // ✅ pred-parallelization: теперь костяшки начисляются в любом event-канале.
+                                if (!_isActiveEventOnChannel(guildId, voice.Id))
+                                    return Task.CompletedTask;
 
                 var guildStates = _userStates.GetOrAdd(guildId, _ => new ConcurrentDictionary<ulong, UserState>());
                 foreach (var u in voice.ConnectedUsers.Where(x => !x.IsBot))
@@ -169,24 +174,30 @@ namespace RPBot
             foreach (var guild in _client.Guilds)
             {
                 var cfg = _getServerConfig(guild.Id);
-                if (cfg == null || !cfg.PredictionsEnabled || cfg.EventVoiceChannelID == 0)
+                        if (cfg == null || !cfg.PredictionsEnabled)
                     continue;
 
-                var eventVoice = guild.GetVoiceChannel(cfg.EventVoiceChannelID);
-                if (eventVoice == null)
-                    continue;
+                        // ✅ pred-parallelization: для каждой гильдии обходим ВСЕ активные события
+                        // и начисляем костяшки в их каналах (раньше был только один cfg.EventVoiceChannelID).
+                        var activeEventChannels = guild.Events
+                            .Where(e => e.Status == GuildScheduledEventStatus.Active && e.Channel is SocketVoiceChannel)
+                            .Select(e => (SocketVoiceChannel)e.Channel!)
+                            .ToList();
 
-                var guildStates = _userStates.GetOrAdd(guild.Id, _ => new ConcurrentDictionary<ulong, UserState>());
+                        var guildStates = _userStates.GetOrAdd(guild.Id, _ => new ConcurrentDictionary<ulong, UserState>());
 
-                foreach (var user in eventVoice.ConnectedUsers.Where(u => !u.IsBot))
-                {
-                    if (guildStates.ContainsKey(user.Id))
-                        continue;
+                        foreach (var channel in activeEventChannels)
+                        {
+                            foreach (var user in channel.ConnectedUsers.Where(u => !u.IsBot))
+                            {
+                                if (guildStates.ContainsKey(user.Id))
+                                    continue;
 
-                    StartTrackingUser(guild.Id, user.Id, cfg.EventVoiceChannelID, guildStates);
+                                StartTrackingUser(guild.Id, user.Id, channel.Id, guildStates);
+                            }
+                        }
+                    }
                 }
-            }
-        }
 
         private async Task OnUserVoiceStateUpdatedAsync(SocketUser user, SocketVoiceState before, SocketVoiceState after)
         {
@@ -201,29 +212,49 @@ namespace RPBot
 
             var guildId = guild.Id;
             var cfg = _getServerConfig(guildId);
-            if (cfg == null || !cfg.PredictionsEnabled || cfg.EventVoiceChannelID == 0)
+                        if (cfg == null || !cfg.PredictionsEnabled)
                 return;
 
-            var eventChannelId = cfg.EventVoiceChannelID;
-            var guildStates = _userStates.GetOrAdd(guildId, _ => new ConcurrentDictionary<ulong, UserState>());
+                        var guildStates = _userStates.GetOrAdd(guildId, _ => new ConcurrentDictionary<ulong, UserState>());
 
-            // Пользователь покинул ивент-канал
-            if (after.VoiceChannel == null || after.VoiceChannel.Id != eventChannelId)
-            {
-                if (guildStates.TryRemove(user.Id, out var oldState))
-                {
-                    oldState.TimerCts?.Cancel();
-                    await LogAsync($"VOICE_TRACK_STOP guild={guildId} user={user.Id} channel={eventChannelId}");
-                }
-                return;
-            }
+                        // ✅ pred-parallelization: определяем, в каком канале сейчас пользователь
+                        // и активен ли там event. Если активен — начисляем; если нет — удаляем из трекинга.
+                        var afterChannel = after.VoiceChannel;
+                        var beforeChannel = before.VoiceChannel;
 
-            // Пользователь зашёл в ивент-канал
-            if (!guildStates.ContainsKey(user.Id))
-            {
-                StartTrackingUser(guildId, user.Id, eventChannelId, guildStates);
-            }
-        }
+                        // Пользователь ушёл из ивент-канала и не пришёл в другой ивент-канал — стопаем трекинг.
+                        if (beforeChannel != null && _isActiveEventOnChannel(guildId, beforeChannel.Id))
+                        {
+                            // Если пользователь перешёл в другой voice-канал, который тоже event-активный —
+                            // перерегистрируем на новый канал (новый NextAwardUtc).
+                            if (afterChannel != null && afterChannel.Id != beforeChannel.Id && _isActiveEventOnChannel(guildId, afterChannel.Id))
+                            {
+                                if (guildStates.TryRemove(user.Id, out var oldState))
+                                {
+                                    oldState?.TimerCts?.Cancel();
+                                }
+                                StartTrackingUser(guildId, user.Id, afterChannel.Id, guildStates);
+                                return;
+                            }
+
+                            // Иначе — пользователь покинул ивент-канал.
+                            if (guildStates.TryRemove(user.Id, out var oldState2))
+                            {
+                                oldState2?.TimerCts?.Cancel();
+                                await LogAsync($"VOICE_TRACK_STOP guild={guildId} user={user.Id} channel={beforeChannel.Id}");
+                            }
+                            return;
+                        }
+
+                        // Пользователь вошёл в ивент-канал (или ранее не был в нём) — начинаем трекинг.
+                        if (afterChannel != null && _isActiveEventOnChannel(guildId, afterChannel.Id))
+                        {
+                            if (!guildStates.ContainsKey(user.Id))
+                            {
+                                StartTrackingUser(guildId, user.Id, afterChannel.Id, guildStates);
+                            }
+                        }
+                    }
 
         private void StartTrackingUser(ulong guildId, ulong userId, ulong eventChannelId, ConcurrentDictionary<ulong, UserState> guildStates)
         {
@@ -265,17 +296,25 @@ namespace RPBot
                     if (!guildStates.TryGetValue(userId, out var currentState)) break;
 
                     var cfg = _getServerConfig(guildId);
-                    if (cfg == null || !cfg.PredictionsEnabled || cfg.EventVoiceChannelID == 0)
+                                        if (cfg == null || !cfg.PredictionsEnabled)
                         break;
 
-                    // Проверяем, что пользователь всё ещё в нужном голосовом канале
-                    var socketGuild = _client.GetGuild(guildId);
-                    var guildUser = socketGuild?.GetUser(userId);
-                    if (guildUser?.VoiceChannel == null || guildUser.VoiceChannel.Id != cfg.EventVoiceChannelID)
-                    {
-                        guildStates.TryRemove(userId, out _);
-                        break;
-                    }
+                                        // ✅ pred-parallelization: проверяем наличие активного события на канале,
+                                        // за которым следим (state.VoiceChannelId). Если событие кончилось — стопаем трекинг.
+                                        if (!_isActiveEventOnChannel(guildId, state.VoiceChannelId))
+                                        {
+                                            guildStates.TryRemove(userId, out _);
+                                            break;
+                                        }
+
+                                        // Проверяем, что пользователь всё ещё в нужном голосовом канале
+                                        var socketGuild = _client.GetGuild(guildId);
+                                        var guildUser = socketGuild?.GetUser(userId);
+                                        if (guildUser?.VoiceChannel == null || guildUser.VoiceChannel.Id != state.VoiceChannelId)
+                                        {
+                                            guildStates.TryRemove(userId, out _);
+                                            break;
+                                        }
 
                     var amount = CalculatePointsForUser(guildUser, BasePointsPerTick);
                     _points.Add(guildId, userId, amount);
@@ -308,7 +347,7 @@ namespace RPBot
                         var guildStates = g.Value;
 
                         var cfg = _getServerConfig(guildId);
-                        if (cfg == null || !cfg.PredictionsEnabled || cfg.EventVoiceChannelID == 0)
+                                                if (cfg == null || !cfg.PredictionsEnabled)
                             continue;
 
                         var socketGuild = _client.GetGuild(guildId);
@@ -322,12 +361,20 @@ namespace RPBot
                             if (now < state.NextAwardUtc)
                                 continue;
 
-                            var guildUser = socketGuild.GetUser(userId);
-                            if (guildUser?.VoiceChannel == null || guildUser.VoiceChannel.Id != cfg.EventVoiceChannelID)
-                            {
-                                guildStates.TryRemove(userId, out _);
-                                continue;
-                            }
+                                                    // ✅ pred-parallelization: трекаем канал по state, а не по cfg.
+                                                    // Также проверяем, что событие всё ещё активно на этом канале.
+                                                    if (!_isActiveEventOnChannel(guildId, state.VoiceChannelId))
+                                                    {
+                                                        guildStates.TryRemove(userId, out _);
+                                                        continue;
+                                                    }
+
+                                                    var guildUser = socketGuild.GetUser(userId);
+                                                    if (guildUser?.VoiceChannel == null || guildUser.VoiceChannel.Id != state.VoiceChannelId)
+                                                    {
+                                                        guildStates.TryRemove(userId, out _);
+                                                        continue;
+                                                    }
 
                             var amount = CalculatePointsForUser(guildUser, BasePointsPerTick);
                             _points.Add(guildId, userId, amount);

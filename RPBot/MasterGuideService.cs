@@ -104,15 +104,19 @@ namespace RPBot
         {
             var raw = string.IsNullOrWhiteSpace(template) ? GetBuiltinTemplate(guild, master, config) : template;
 
-            return raw
-                .Replace("{GuildName}", guild.Name ?? "(без названия)")
-                .Replace("{MasterMention}", master.Mention)
-                .Replace("{MasterName}", master.DisplayName ?? master.Username ?? "Мастер")
-                .Replace("{RollChannel}", ChannelOrPlaceholder(config.RollChannelID, guild))
-                .Replace("{RecordChannel}", ChannelOrPlaceholder(config.RecordChannelID, guild))
-                .Replace("{StatsChannel}", ChannelOrPlaceholder(config.StatsChannelID, guild))
-                .Replace("{SessionChannel}", ChannelOrPlaceholder(config.EventVoiceChannelID, guild))
-                .Replace("{MasterRoleMention}", MasterRoleMention(config, guild));
+                    // ✅ pred-parallelization: EventVoiceChannelID помечен как Obsolete,
+                    // но {SessionChannel} placeholder используется в уже созданных шаблонах — сохраняем обратную совместимость.
+        #pragma warning disable CS0618
+                    return raw
+                        .Replace("{GuildName}", guild.Name ?? "(без названия)")
+                        .Replace("{MasterMention}", master.Mention)
+                        .Replace("{MasterName}", master.DisplayName ?? master.Username ?? "Мастер")
+                        .Replace("{RollChannel}", ChannelOrPlaceholder(config.RollChannelID, guild))
+                        .Replace("{RecordChannel}", ChannelOrPlaceholder(config.RecordChannelID, guild))
+                        .Replace("{StatsChannel}", ChannelOrPlaceholder(config.StatsChannelID, guild))
+                        .Replace("{SessionChannel}", ChannelOrPlaceholder(config.EventVoiceChannelID, guild))
+                        .Replace("{MasterRoleMention}", MasterRoleMention(config, guild));
+        #pragma warning restore CS0618
             // Плейсхолдер {MasterRoleMention} оставлен для обратной совместимости с уже созданными файлами,
             // но в дефолтном шаблоне не используется (в ЛС упоминания ролей не работают).
         }
@@ -135,11 +139,14 @@ namespace RPBot
             sb.AppendLine($"• Канал бросков: {ChannelOrPlaceholder(config.RollChannelID, guild)}");
             sb.AppendLine($"• Канал записей: {ChannelOrPlaceholder(config.RecordChannelID, guild)}");
             sb.AppendLine($"• Канал статистики: {ChannelOrPlaceholder(config.StatsChannelID, guild)}");
-            sb.AppendLine($"• Канал игровых сессий: {ChannelOrPlaceholder(config.EventVoiceChannelID, guild)}");
-            sb.AppendLine();
-            sb.AppendLine("Если что-то не работает, обратись к администратору сервера.");
-            return sb.ToString();
-        }
+                    // ✅ pred-parallelization: EventVoiceChannelID — deprecated, но плейсхолдер оставлен для обратной совместимости с шаблонами.
+        #pragma warning disable CS0618
+                    sb.AppendLine($"• Канал игровых сессий (deprecated): {ChannelOrPlaceholder(config.EventVoiceChannelID, guild)}");
+        #pragma warning restore CS0618
+                    sb.AppendLine();
+                    sb.AppendLine("Если что-то не работает, обратись к администратору сервера.");
+                    return sb.ToString();
+                }
 
         public static string GetTemplatePath(ulong guildId)
         {

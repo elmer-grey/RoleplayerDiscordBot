@@ -630,7 +630,11 @@ namespace RPBot
         AddCommandOutput($"Канал бросков: {selectedGuild.GetTextChannel(cfg.RollChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Канал статистики: {selectedGuild.GetTextChannel(cfg.StatsChannelID)?.Name ?? "не задан"}");
         AddCommandOutput($"Канал записей: {selectedGuild.GetTextChannel(cfg.RecordChannelID)?.Name ?? "не задан"}");
-                        AddCommandOutput($"Event-голосовой канал: {selectedGuild.GetVoiceChannel(cfg.EventVoiceChannelID)?.Name ?? "не задан"}");
+                                // ✅ pred-parallelization: помечено как "(deprecated)" — единого event-канала больше нет,
+                                // костяшки и прогнозы работают в любом voice-канале, где активно событие.
+        #pragma warning disable CS0618 // Type or member is obsolete (DEPRECATED для обратной совместимости UI)
+                                AddCommandOutput($"Event-голосовой канал (deprecated): {selectedGuild.GetVoiceChannel(cfg.EventVoiceChannelID)?.Name ?? "не задан"}");
+        #pragma warning restore CS0618
         AddCommandOutput($"Приветственное сообщение: {cfg.WelcomeMessage}");
         AddCommandOutput($"Сообщение для команды LINE: {cfg.LineMessage}");
         AddCommandOutput($"Роль по умолчанию: {cfg.DefaultRoleID}");
@@ -687,7 +691,9 @@ namespace RPBot
         "roll_channel" => cfg.RollChannelID.ToString(),
         "stats_channel" => cfg.StatsChannelID.ToString(),
         "record_channel" => cfg.RecordChannelID.ToString(),
-        "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
+        #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated, no-op
+                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString() + " (deprecated)",
+#pragma warning restore CS0618
         "welcome_message" => cfg.WelcomeMessage ?? "",
         "line_message" => cfg.LineMessage ?? "",
         "default_role" => cfg.DefaultRoleID.ToString(),
@@ -1793,7 +1799,9 @@ namespace RPBot
                                             AddCommandOutput($"roll_channel: {cfg.RollChannelID}");
                                             AddCommandOutput($"stats_channel: {cfg.StatsChannelID}");
                                             AddCommandOutput($"record_channel: {cfg.RecordChannelID}");
+                                            #pragma warning disable CS0618
                                             AddCommandOutput($"event_voice_channel: {cfg.EventVoiceChannelID}");
+#pragma warning restore CS0618
                                             AddCommandOutput($"welcome_message: {cfg.WelcomeMessage}");
                                             AddCommandOutput($"line_message: {cfg.LineMessage}");
                                             AddCommandOutput($"default_role: {cfg.DefaultRoleID}");
@@ -1835,7 +1843,9 @@ namespace RPBot
                                             "roll_channel" => cfg.RollChannelID.ToString(),
                                             "stats_channel" => cfg.StatsChannelID.ToString(),
                                             "record_channel" => cfg.RecordChannelID.ToString(),
-                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString(),
+                                            #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated, no-op
+                                            "event_voice_channel" => cfg.EventVoiceChannelID.ToString() + " (deprecated)",
+#pragma warning restore CS0618
                                             "welcome_message" => cfg.WelcomeMessage ?? "",
                                             "line_message" => cfg.LineMessage ?? "",
                                             "default_role" => cfg.DefaultRoleID.ToString(),

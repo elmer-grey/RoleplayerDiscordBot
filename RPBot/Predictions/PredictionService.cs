@@ -20,8 +20,18 @@ namespace RPBot
     {
         private readonly DiscordSocketClient _client;
         private readonly PointsService _points;
-        private readonly ConcurrentDictionary<ulong, ActivePrediction> _active = new();
-        private readonly ConcurrentDictionary<ulong, ISocketMessageChannel> _activeChannels = new();
+        // ✅ pred-parallelization: вложенный словарь активных прогнозов.
+        // Раньше на гильдию мог быть только ОДИН прогноз (привязан к EventVoiceChannelID).
+        // Теперь на одной гильдии может быть НЕСКОЛЬКО прогнозов — по одному на каждый
+        // голосовой канал, где сейчас активно Discord-событие. Внешний ключ — guildId,
+        // внутренний — channelId (он же key в _activeChannels). Это позволяет мастерам
+        // параллельно делать прогнозы в разных каналах, а игрокам — ставить только в
+        // своём канале.
+        private readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, ActivePrediction>> _active = new();
+        // ✅ pred-parallelization: каналы сообщений для каждого (guildId, channelId).
+        // Ключ композитный — guildId:channelId (строкой), потому что ConcurrentDictionary
+        // не поддерживает tuple-ключи «из коробки».
+        private readonly ConcurrentDictionary<string, ISocketMessageChannel> _activeChannels = new();
         private readonly CancellationTokenSource _cts = new();
         private readonly string _stateFilePath;
         private readonly SemaphoreSlim _stateFileGate = new(1, 1);
@@ -221,9 +231,8 @@ namespace RPBot
                                                                                                                                     // факт прибытия и выходит.
                                                                                                                                     try
                                                                                                                                     {
-                                                                                                                                    foreach (var kv in _active.ToArray())
+                                                                                                                                    foreach (var p in SnapshotAllActive())
                                                                                                                                     {
-                                                                                                                                        var p = kv.Value;
                                                                                                                                         if (p.IsResolved) continue;
                                                                                                                                     }
                                                                                                                                     }
@@ -236,9 +245,8 @@ namespace RPBot
                                                                 {
                                                                     try
                                                                     {
-                                                                        foreach (var kv in _active.ToArray())
+                                                                        foreach (var p in SnapshotAllActive())
                                                                         {
-                                                                            var p = kv.Value;
                                                                             if (!p.IsResolved)
                                                                             {
                                                                                 // ✅ Bug 5: фиксируем момент ухода в offline для последующего
@@ -338,9 +346,8 @@ namespace RPBot
                                 {
                                     _shutdownInProgress = true;
                                     var nowUtc = DateTimeOffset.UtcNow;
-                                    foreach (var kv in _active.ToArray())
+                                    foreach (var p in SnapshotAllActive())
                                     {
-                                        var p = kv.Value;
                                         if (p.IsResolved) continue;
                                         // (1) Фиксируем moment offline + обновляем embed ДО _client.StopAsync(),
                                         // пока HttpClient ещё жив. Раньше этот шаг жил в OnClientDisconnected,
@@ -412,9 +419,8 @@ namespace RPBot
                 private async Task AnnounceOnlineForRestoredAsync()
         {
             var nowUtc = DateTimeOffset.UtcNow;
-            foreach (var kv in _active.ToArray())
+            foreach (var p in SnapshotAllActive())
             {
-                var p = kv.Value;
                 if (p.IsResolved) continue;
 
                 // Сдвиг BetsCloseAtUtc, если был offline.
@@ -521,9 +527,8 @@ namespace RPBot
         private async Task ValidateActiveAfterReadyAsync()
         {
             if (_active.IsEmpty) return;
-            foreach (var kv in _active.ToArray())
+            foreach (var p in SnapshotAllActive())
             {
-                var p = kv.Value;
                 if (p.IsResolved) continue;
 
                 // ✅ Round 7-C3: на первом Ready локальный кеш Discord ещё может
@@ -560,8 +565,8 @@ namespace RPBot
                     // должен быть виден в ЭТАП 3/4.
                     AppendRestoreReport($"RESTORE_FAIL_PHASE2 guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count}");
                     await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
-                    _active.TryRemove(p.GuildId, out _);
-                    _activeChannels.TryRemove(p.GuildId, out _);
+                    // ✅ pred-parallelization: RemovePrediction чистит вложенный словарь.
+                    RemovePrediction(p);
                     continue;
                 }
 
@@ -581,8 +586,8 @@ namespace RPBot
                         if (msgAttempts >= 4)
                         {
                             await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
-                            _active.TryRemove(p.GuildId, out _);
-                            _activeChannels.TryRemove(p.GuildId, out _);
+                            // ✅ pred-parallelization: RemovePrediction чистит вложенный словарь.
+                            RemovePrediction(p);
                             msg = null;
                             break;
                         }
@@ -593,7 +598,7 @@ namespace RPBot
                     }
                     msgAttempts++;
                 }
-                if (msg == null && !_active.TryGetValue(p.GuildId, out _))
+                if (msg == null && GetActive(p.GuildId, p.ChannelId) == null)
                 {
                     // уже отменён через catch выше
                     continue;
@@ -603,12 +608,13 @@ namespace RPBot
                     // ✅ Round 7-C5: RESTORE_FAIL_PHASE2 should also surface in ЭТАП 3/4.
                     AppendRestoreReport($"RESTORE_FAIL_PHASE2 guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count}");
                     await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
-                    _active.TryRemove(p.GuildId, out _);
-                    _activeChannels.TryRemove(p.GuildId, out _);
+                    // ✅ pred-parallelization: RemovePrediction чистит вложенный словарь.
+                    RemovePrediction(p);
                     continue;
                 }
 
-                _activeChannels[p.GuildId] = ch;
+                // ✅ pred-parallelization: сохраняем канал сообщений по составному ключу.
+                _activeChannels[ChannelKey(p.GuildId, p.ChannelId)] = ch;
                 AppendRestoreReport($"RESTORE_OK_PHASE2 guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={p.Bets.Count} pool={p.TotalPool}");
 
                                 // ✅ Round 7-C8 bugfix: после успешной валидации прогноза проверить,
@@ -623,7 +629,9 @@ namespace RPBot
                                     // CancelAsync удаляет прогноз из _active. Если он уже отменён,
                                     // пропускаем остальные шаги (embed/online-анонс) — этого
                                     // прогноза больше нет в системе.
-                                    if (!_active.TryGetValue(p.GuildId, out var stillActive) || stillActive != p)
+                                    // ✅ pred-parallelization: сравниваем по (guildId, channelId).
+                                    var stillActive = GetActive(p.GuildId, p.ChannelId);
+                                    if (stillActive != p)
                                     {
                                         continue;
                                     }
@@ -725,9 +733,8 @@ namespace RPBot
                     {
                         try
                         {
-                            foreach (var kv in _active.ToArray())
+                            foreach (var p in SnapshotAllActive())
                             {
-                                var p = kv.Value;
                                 if (!p.IsResolved)
                                 {
                                     // ✅ Bug 6: фиксируем длительность offline для embed'а
@@ -951,7 +958,8 @@ namespace RPBot
             {
                 await Task.Delay(delay).ConfigureAwait(false);
                 // Проверяем, что прогноз ещё существует и ID всё ещё актуален.
-                if (!_active.TryGetValue(p.GuildId, out var current) || current != p)
+                // ✅ pred-parallelization: сравниваем по (guildId, channelId).
+                if (GetActive(p.GuildId, p.ChannelId) != p)
                     return;
                 var channel = GetActiveMessageChannel(p);
                 if (channel == null) return;
@@ -1046,48 +1054,66 @@ namespace RPBot
                                                 //      во второй итерации _active ещё пуст, а LoadStateAsync ещё не звался.
                                                 //   2) hadContent && !firstValidated: классический safe-mode из R7-C3.
                                                 // Если оба условия сработали, не пишем ничего в файл.
-                                                if (!_weLoadedStateAlready && _active.IsEmpty)
+                                                // ✅ pred-parallelization: _active теперь вложенный. Проверка IsEmpty
+                                                // должна идти по всем гильдиям и всем каналам.
+                                                bool allEmpty = true;
+                                                foreach (var kv in _active)
+                                                {
+                                                    if (kv.Value != null && !kv.Value.IsEmpty)
+                                                    {
+                                                        allEmpty = false;
+                                                        break;
+                                                    }
+                                                }
+                                                if (!_weLoadedStateAlready && allEmpty)
                                                 {
                                                     AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_load");
                                                     return;
                                                 }
-                                                if (_active.IsEmpty && _stateFileHadContentOnStartup && !_firstReadyValidated)
+                                                if (allEmpty && _stateFileHadContentOnStartup && !_firstReadyValidated)
                                                 {
-                                                    // ✅ Round 7-C5: лог идёт в буфер ЭТАП 3/4 (там пользователь
-                                                    // увидит, что safe-mode сработал), а не в Predict.log.
                                                     AppendRestoreReport("SAVE_STATE_BLOCKED reason=_active_empty_pre_ready");
                                                     return;
                                                 }
-                        var snapshot = new Dictionary<ulong, PersistentPrediction>();
+                        // ✅ pred-parallelization: вложенный snapshot. Внешний ключ — guildId,
+                        // внутренний — channelId. Это позволяет иметь несколько прогнозов
+                        // на одной гильдии (по одному на каждый активный голосовой канал).
+                        var snapshot = new Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>();
                         foreach (var kv in _active)
                         {
-                            var v = kv.Value;
-                            snapshot[kv.Key] = new PersistentPrediction
+                            if (kv.Value == null) continue;
+                            var guildDict = new Dictionary<ulong, PersistentPrediction>();
+                            foreach (var inner in kv.Value)
                             {
-                                GuildId = v.GuildId,
-                                CreatorId = v.CreatorId,
-                                ChannelId = v.ChannelId,
-                                MessageId = v.MessageId,
-                                Title = v.Title,
-                                Outcomes = v.Outcomes, // ✅ Сохраняем новый формат
-                                EventId = v.EventId, // ✅ Round 7-C8: связь прогноза с событием
-                                CreatedAtUtc = v.CreatedAtUtc,
-                                BetsCloseAtUtc = v.BetsCloseAtUtc,
-                                BotOfflineAtUtc = v.BotOfflineAtUtc,
-                                LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
-                                WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
-                                OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
-                                OfflineAnnouncementMessageIds = v.OfflineAnnouncementMessageIds != null
-                                    ? new List<ulong>(v.OfflineAnnouncementMessageIds)
-                                    : new List<ulong>(),
-                                OnlineAnnouncementMessageIds = v.OnlineAnnouncementMessageIds != null
-                                    ? v.OnlineAnnouncementMessageIds.Select(o => new OnlineAnnouncementMessage { MessageId = o.MessageId, SentAtUtc = o.SentAtUtc }).ToList()
-                                    : new List<OnlineAnnouncementMessage>(),
-                                IsLocked = v.IsLocked,
-                                IsResolved = v.IsResolved,
-                                WinningOutcomeId = v.WinningOutcomeId,
-                                Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
-                            };
+                                var v = inner.Value;
+                                guildDict[inner.Key] = new PersistentPrediction
+                                {
+                                    GuildId = v.GuildId,
+                                    CreatorId = v.CreatorId,
+                                    ChannelId = v.ChannelId,
+                                    MessageId = v.MessageId,
+                                    Title = v.Title,
+                                    Outcomes = v.Outcomes,
+                                    EventId = v.EventId,
+                                    CreatedAtUtc = v.CreatedAtUtc,
+                                    BetsCloseAtUtc = v.BetsCloseAtUtc,
+                                    BotOfflineAtUtc = v.BotOfflineAtUtc,
+                                    LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
+                                    WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
+                                    OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
+                                    OfflineAnnouncementMessageIds = v.OfflineAnnouncementMessageIds != null
+                                        ? new List<ulong>(v.OfflineAnnouncementMessageIds)
+                                        : new List<ulong>(),
+                                    OnlineAnnouncementMessageIds = v.OnlineAnnouncementMessageIds != null
+                                        ? v.OnlineAnnouncementMessageIds.Select(o => new OnlineAnnouncementMessage { MessageId = o.MessageId, SentAtUtc = o.SentAtUtc }).ToList()
+                                        : new List<OnlineAnnouncementMessage>(),
+                                    IsLocked = v.IsLocked,
+                                    IsResolved = v.IsResolved,
+                                    WinningOutcomeId = v.WinningOutcomeId,
+                                    Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
+                                };
+                            }
+                            snapshot[kv.Key] = guildDict;
                         }
 
                         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
@@ -1143,6 +1169,70 @@ namespace RPBot
                                                 [Obsolete("Use RunStage3RestoreAsync from ЭТАП 3/4 instead.")]
                                                 public Task LoadStateOnStartupAsync() => LoadStateAsync(validate: false);
 
+        /// <summary>
+        /// ✅ pred-parallelization: десериализация нового вложенного формата.
+        /// Если структура не подходит (это старый формат) — возвращаем null и
+        /// вызывающий код пробует <see cref="MigrateLegacyFormat"/>.
+        /// </summary>
+        private static Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>? TryDeserializeNested(string json)
+        {
+            try
+            {
+                var result = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>>(json);
+                if (result == null) return null;
+                // Эвристика: если хоть одна value — это PersistentPrediction напрямую
+                // (а не вложенный dict), значит формат старый. JsonSerializer десериализует
+                // и то, и другое без ошибок — отличить можно по наличию поля ChannelId
+                // на верхнем уровне. Используем try-каст через проверку.
+                foreach (var kv in result)
+                {
+                    foreach (var inner in kv.Value)
+                    {
+                        if (inner.Value != null) return result;
+                    }
+                    // пустой внутренний dict — не считаем ошибкой, но и не сигнализируем.
+                }
+                return result;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: миграция старого формата (один прогноз на гильдию)
+        /// в новый вложенный. ChannelId берётся из PersistentPrediction.ChannelId.
+        /// Если десериализация не удалась — возвращаем пустой словарь.
+        /// </summary>
+        private static Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>? MigrateLegacyFormat(string json)
+        {
+            try
+            {
+                var legacy = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
+                if (legacy == null) return new Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>();
+                var nested = new Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>();
+                foreach (var kv in legacy)
+                {
+                    if (kv.Value == null) continue;
+                    var guildId = kv.Value.GuildId != 0 ? kv.Value.GuildId : kv.Key;
+                    var channelId = kv.Value.ChannelId != 0 ? kv.Value.ChannelId : 0UL;
+                    if (channelId == 0) continue;
+                    if (!nested.TryGetValue(guildId, out var inner))
+                    {
+                        inner = new Dictionary<ulong, PersistentPrediction>();
+                        nested[guildId] = inner;
+                    }
+                    inner[channelId] = kv.Value;
+                }
+                return nested;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
                         private async Task LoadStateAsync(bool validate = true)
         {
                                     await _stateFileGate.WaitAsync().ConfigureAwait(false);
@@ -1166,199 +1256,227 @@ namespace RPBot
                                                             _stateFileHadContentOnStartup = len > 2; // больше "{}"
                                                         }
                                                         catch { _stateFileHadContentOnStartup = false; }
-                                                        var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<ulong, PersistentPrediction>>(json);
-                                                                                                                // ✅ Round 7-C7: отметить, что LoadStateAsync отработал в этом ЖЦ —
-                                                                                                                // с этого момента SaveStateAsync может писать.
-                                                                                                                _weLoadedStateAlready = true;
-                                                                                                                if (dict == null) return;
+                                                        // ✅ pred-parallelization: новый формат — вложенный словарь.
+                                                        // Для обратной совместимости со СТАРЫМ форматом (один прогноз
+                                                        // на гильдию) пробуем сначала новый формат, при неудаче —
+                                                        // старый, и мигрируем «на лету».
+                                                        Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>? nested =
+                                                            TryDeserializeNested(json)
+                                                            ?? MigrateLegacyFormat(json);
+                                                        // ✅ Round 7-C7: отметить, что LoadStateAsync отработал в этом ЖЦ —
+                                                        // с этого момента SaveStateAsync может писать.
+                                                        _weLoadedStateAlready = true;
+                                                        if (nested == null) return;
+                                                        // ✅ pred-parallelization: track каналы, которые были удалены из-за
+                                                        // RESTORE_FAIL, чтобы потом пересохранить очищенный snapshot.
+                                                        var dirtyGuilds = new HashSet<ulong>();
 
-                foreach (var kv in dict)
+                foreach (var guildKv in nested)
                 {
-                    try
+                    var guildId = guildKv.Key;
+                    foreach (var channelKv in guildKv.Value)
                     {
-                        var p = kv.Value;
-
-                        // Skip already resolved/cancelled items.
-                        if (p.IsResolved)
-                            continue;
-
-                        var ap = new ActivePrediction
-                        {
-                            GuildId = p.GuildId,
-                            CreatorId = p.CreatorId,
-                            ChannelId = p.ChannelId,
-                            MessageId = p.MessageId,
-                            Title = p.Title,
-                            EventId = p.EventId, // ✅ Round 7-C8: связь прогноза с событием
-                            CreatedAtUtc = p.CreatedAtUtc,
-                            // ✅ Bug 5: сдвигаем BetsCloseAtUtc на длительность offline,
-                            // чтобы приём ставок не закрылся сразу же после рестарта.
-                            BetsCloseAtUtc = p.BetsCloseAtUtc,
-                            BotOfflineAtUtc = p.BotOfflineAtUtc,
-                            LastOfflineDurationMinutes = p.LastOfflineDurationMinutes,
-                            WasBotOfflineOnShutdown = p.WasBotOfflineOnShutdown,
-                            // ✅ Bug 6: восстанавливаем лог offline-событий
-                            OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>(),
-                            // ✅ Bug 6: восстанавливаем список ID offline-сообщений,
-                            // чтобы удалить их после возвращения бота в сеть (Round 7-C3).
-                            OfflineAnnouncementMessageIds = p.OfflineAnnouncementMessageIds ?? new List<ulong>(),
-                            // ✅ Round 7-C4: восстанавливаем ID online-сообщений для
-                            // отложенного удаления через 5 минут.
-                            OnlineAnnouncementMessageIds = p.OnlineAnnouncementMessageIds ?? new List<OnlineAnnouncementMessage>(),
-                            IsLocked = p.IsLocked,
-                            IsResolved = p.IsResolved,
-                            WinningOutcomeId = p.WinningOutcomeId,
-                            Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
-                        };
-
-                        // ✅ БАГ 7: Логируем для диагностики потери ставок
-                        AppendRestoreReport($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}");
-
-                        // ✅ Bug 5: если бот был офлайн во время приёма ставок — сдвигаем таймер
-                        // на длительность offline. Только для ещё не закрытых прогнозов.
-                        if (!ap.IsLocked && !ap.IsResolved && p.BotOfflineAtUtc.HasValue && p.WasBotOfflineOnShutdown)
-                        {
-                            var offlineAt = p.BotOfflineAtUtc.Value;
-                            var nowUtc = DateTimeOffset.UtcNow;
-                            var offlineDuration = nowUtc - offlineAt;
-                            if (offlineDuration > TimeSpan.Zero)
-                            {
-                                var oldCloseAt = ap.BetsCloseAtUtc;
-                                ap.BetsCloseAtUtc = oldCloseAt + offlineDuration;
-                                ap.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
-                                AppendRestoreReport(
-                                    $"OFFLINE_SHIFT guild={p.GuildId} channel={p.ChannelId} offlineAt='{offlineAt:yyyy-MM-dd HH:mm:ss}' " +
-                                    $"offlineDuration={offlineDuration} oldClose='{oldCloseAt:HH:mm:ss}' newClose='{ap.BetsCloseAtUtc:HH:mm:ss}'");
-                            }
-                            // Сбрасываем признаки offline: бот снова онлайн, окно учтено.
-                            ap.BotOfflineAtUtc = null;
-                            ap.WasBotOfflineOnShutdown = false;
-                        }
-
-                        // ✅ Обновлено: загрузка исходов (поддержка старого и нового формата)
-                        if (p.Outcomes != null && p.Outcomes.Count > 0)
-                        {
-                            // Новый формат: используем Outcomes
-                            ap.Outcomes = p.Outcomes;
-                        }
-                        else
-                        {
-                            // Старый формат: используем Outcome1 и Outcome2
-                            ap.Outcomes.Add(p.Outcome1 ?? new PredictionOutcome { Id = 1 });
-                            ap.Outcomes.Add(p.Outcome2 ?? new PredictionOutcome { Id = 2 });
-                        }
-
-                        // Normalize: recompute totals from bets to avoid zeroed pools after restart.
-                        foreach (var outcome in ap.Outcomes)
-                        {
-                            outcome.TotalStake = 0;
-                        }
-
-                        foreach (var b in ap.Bets.Values)
-                        {
-                            var outcome = ap.GetOutcomeById(b.OutcomeId);
-                            if (outcome != null)
-                            {
-                                outcome.TotalStake += b.Amount;
-                            }
-                        }
-
-                        var restoredOutcomesList = string.Join(", ", ap.Outcomes.Select(o => $"{o.Id}: {o.Name}"));
-                        ap.UseCompactOutcomeLabels = $"Исход ({restoredOutcomesList})".Length > 45;
-                        ap.UseInlineOutcomeFields = ap.Outcomes.Count <= 3
-                            && ap.Outcomes.All(o => $"📊 Исход {o.Id}: {o.Name}".Length <= 256);
-
-                                                // ✅ Bug C / Round 7-C2: фаза 1 (validate=false) загружает состояние
-                                                // БЕЗ обращения к Discord API — клиент ещё не залогинен на этом этапе.
-                                                // Валидация канала/сообщения будет выполнена в ValidateActiveAfterReadyAsync
-                                                // после первого Ready.
-                                                if (!validate)
-                                                {
-                                                    _active[p.GuildId] = ap;
-                                                    AppendRestoreReport($"RESTORE_PHASE1 guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool} deferred=true");
-                                                    continue;
-                                                }
-
-                                                // Validate message existence. If the original message is gone, auto-cancel and refund.
-                        ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
-                            ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
-
-                        // Cache might not be warm yet after reconnect/restart; try async fetch once.
-                        if (ch == null)
-                        {
-                            try
-                            {
-                                var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
-                                ch = fetched as ISocketMessageChannel;
-                            }
-                catch (Exception ex)
-                {
-                    await PredictionErrorLogger.LogAsync("AutoCancelRestoredPredictionAsync:NotifyChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
-                }
-                        }
-
-                        if (ch == null || p.MessageId == 0)
-                        {
-                            AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
-                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
-
-                            // Remove from persisted state so it doesn't keep re-triggering on next restart.
-                            try
-                            {
-                                dict.Remove(kv.Key);
-                            }
-                            catch { }
-
-                            continue;
-                        }
-
                         try
                         {
-                            var msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
-                            if (msg == null)
-                            {
-                                AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
-                                await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                            var p = channelKv.Value;
 
-                                try { dict.Remove(kv.Key); } catch { }
+                            // Skip already resolved/cancelled items.
+                            if (p.IsResolved)
+                                continue;
+
+                            var ap = new ActivePrediction
+                            {
+                                GuildId = p.GuildId,
+                                CreatorId = p.CreatorId,
+                                ChannelId = p.ChannelId,
+                                MessageId = p.MessageId,
+                                Title = p.Title,
+                                EventId = p.EventId,
+                                CreatedAtUtc = p.CreatedAtUtc,
+                                BetsCloseAtUtc = p.BetsCloseAtUtc,
+                                BotOfflineAtUtc = p.BotOfflineAtUtc,
+                                LastOfflineDurationMinutes = p.LastOfflineDurationMinutes,
+                                WasBotOfflineOnShutdown = p.WasBotOfflineOnShutdown,
+                                OfflineEvents = p.OfflineEvents ?? new List<OfflineEvent>(),
+                                OfflineAnnouncementMessageIds = p.OfflineAnnouncementMessageIds ?? new List<ulong>(),
+                                OnlineAnnouncementMessageIds = p.OnlineAnnouncementMessageIds ?? new List<OnlineAnnouncementMessage>(),
+                                IsLocked = p.IsLocked,
+                                IsResolved = p.IsResolved,
+                                WinningOutcomeId = p.WinningOutcomeId,
+                                Bets = p.Bets ?? new Dictionary<ulong, PredictionBet>()
+                            };
+
+                            AppendRestoreReport($"RESTORE_DEBUG guild={p.GuildId} betsFromFile={p.Bets?.Count ?? 0} betsInAP={ap.Bets.Count}");
+
+                            if (!ap.IsLocked && !ap.IsResolved && p.BotOfflineAtUtc.HasValue && p.WasBotOfflineOnShutdown)
+                            {
+                                var offlineAt = p.BotOfflineAtUtc.Value;
+                                var nowUtc = DateTimeOffset.UtcNow;
+                                var offlineDuration = nowUtc - offlineAt;
+                                if (offlineDuration > TimeSpan.Zero)
+                                {
+                                    var oldCloseAt = ap.BetsCloseAtUtc;
+                                    ap.BetsCloseAtUtc = oldCloseAt + offlineDuration;
+                                    ap.LastOfflineDurationMinutes = Math.Round(offlineDuration.TotalMinutes, 2);
+                                    AppendRestoreReport(
+                                        $"OFFLINE_SHIFT guild={p.GuildId} channel={p.ChannelId} offlineAt='{offlineAt:yyyy-MM-dd HH:mm:ss}' " +
+                                        $"offlineDuration={offlineDuration} oldClose='{oldCloseAt:HH:mm:ss}' newClose='{ap.BetsCloseAtUtc:HH:mm:ss}'");
+                                }
+                                ap.BotOfflineAtUtc = null;
+                                ap.WasBotOfflineOnShutdown = false;
+                            }
+
+                            if (p.Outcomes != null && p.Outcomes.Count > 0)
+                            {
+                                ap.Outcomes = p.Outcomes;
+                            }
+                            else
+                            {
+                                ap.Outcomes.Add(p.Outcome1 ?? new PredictionOutcome { Id = 1 });
+                                ap.Outcomes.Add(p.Outcome2 ?? new PredictionOutcome { Id = 2 });
+                            }
+
+                            foreach (var outcome in ap.Outcomes)
+                            {
+                                outcome.TotalStake = 0;
+                            }
+
+                            foreach (var b in ap.Bets.Values)
+                            {
+                                var outcome = ap.GetOutcomeById(b.OutcomeId);
+                                if (outcome != null)
+                                {
+                                    outcome.TotalStake += b.Amount;
+                                }
+                            }
+
+                            var restoredOutcomesList = string.Join(", ", ap.Outcomes.Select(o => $"{o.Id}: {o.Name}"));
+                            ap.UseCompactOutcomeLabels = $"Исход ({restoredOutcomesList})".Length > 45;
+                            ap.UseInlineOutcomeFields = ap.Outcomes.Count <= 3
+                                && ap.Outcomes.All(o => $"📊 Исход {o.Id}: {o.Name}".Length <= 256);
+
+                            if (!validate)
+                            {
+                                // ✅ pred-parallelization: добавляем во вложенный словарь.
+                                var byChannel = _active.GetOrAdd(ap.GuildId, _ => new ConcurrentDictionary<ulong, ActivePrediction>());
+                                byChannel[ap.ChannelId] = ap;
+                                AppendRestoreReport($"RESTORE_PHASE1 guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool} deferred=true");
                                 continue;
                             }
+
+                            ISocketMessageChannel? ch = _client.GetChannel(p.ChannelId) as ISocketMessageChannel
+                                ?? _client.GetGuild(p.GuildId)?.GetChannel(p.ChannelId) as ISocketMessageChannel;
+
+                            if (ch == null)
+                            {
+                                try
+                                {
+                                    var fetched = await _client.GetChannelAsync(p.ChannelId).ConfigureAwait(false);
+                                    ch = fetched as ISocketMessageChannel;
+                                }
+                                catch (Exception ex)
+                                {
+                                    await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                }
+                            }
+
+                            if (ch == null || p.MessageId == 0)
+                            {
+                                AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=channel_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
+                                await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза не найдено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                                dirtyGuilds.Add(guildId);
+                                continue;
+                            }
+
+                            try
+                            {
+                                var msg = await ch.GetMessageAsync(p.MessageId).ConfigureAwait(false);
+                                if (msg == null)
+                                {
+                                    AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_missing channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
+                                    await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: сообщение прогноза удалено. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                                    dirtyGuilds.Add(guildId);
+                                    continue;
+                                }
+                            }
+                            catch
+                            {
+                                AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
+                                await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
+                                dirtyGuilds.Add(guildId);
+                                continue;
+                            }
+
+                            // ✅ pred-parallelization: добавляем во вложенный словарь и
+                            // регистрируем канал по составному ключу.
+                            var byCh = _active.GetOrAdd(ap.GuildId, _ => new ConcurrentDictionary<ulong, ActivePrediction>());
+                            byCh[ap.ChannelId] = ap;
+                            _activeChannels[ChannelKey(ap.GuildId, ap.ChannelId)] = ch;
+
+                            AppendRestoreReport($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}");
                         }
-                        catch
+                        catch (Exception ex)
                         {
-                            AppendRestoreReport($"RESTORE_FAIL guild={p.GuildId} reason=message_check_error channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count}");
-                            await AutoCancelRestoredPredictionAsync(ap, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
-                            continue;
+                            await PredictionErrorLogger.LogAsync("LoadStateAsync:entry", ex, $"guild={guildKv.Key} channel={channelKv.Key}").ConfigureAwait(false);
                         }
-
-                        // Ensure Sync is new
-                        // Add to active dictionaries
-                        _active[p.GuildId] = ap;
-
-                        _activeChannels[p.GuildId] = ch;
-
-                        AppendRestoreReport($"RESTORE_OK guild={p.GuildId} channelId={p.ChannelId} messageId={p.MessageId} bets={ap.Bets.Count} pool={ap.TotalPool}");
-                    }
-                    catch (Exception ex)
-                    {
-                        await PredictionErrorLogger.LogAsync("LoadStateAsync:entry", ex, $"guild={kv.Key}").ConfigureAwait(false);
                     }
                 }
 
                 _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
 
-                // If we removed any broken entries, persist the cleaned dict too.
-                try
+                // Если были удалены сломанные записи — пересохраняем очищенный snapshot.
+                // Это делается автоматически через _ = Task.Run выше, дополнительно явно
+                // сериализуем только если были dirty-гильдии (на случай гонки).
+                if (dirtyGuilds.Count > 0)
                 {
-                    var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                    var cleanedJson = System.Text.Json.JsonSerializer.Serialize(dict, options);
-                                    // ✅ R6 fix: атомарная запись (был прямой File.WriteAllTextAsync).
-                                    await SafeJsonIO.WriteAtomicAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
-                                }
-                                catch (Exception ex)
+                    try
+                    {
+                        var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                        var snapshot = new Dictionary<ulong, Dictionary<ulong, PersistentPrediction>>();
+                        foreach (var kv in _active)
+                        {
+                            if (kv.Value == null) continue;
+                            var guildDict = new Dictionary<ulong, PersistentPrediction>();
+                            foreach (var inner in kv.Value)
+                            {
+                                var v = inner.Value;
+                                guildDict[inner.Key] = new PersistentPrediction
                                 {
-                                    await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
-                                }
+                                    GuildId = v.GuildId,
+                                    CreatorId = v.CreatorId,
+                                    ChannelId = v.ChannelId,
+                                    MessageId = v.MessageId,
+                                    Title = v.Title,
+                                    Outcomes = v.Outcomes,
+                                    EventId = v.EventId,
+                                    CreatedAtUtc = v.CreatedAtUtc,
+                                    BetsCloseAtUtc = v.BetsCloseAtUtc,
+                                    BotOfflineAtUtc = v.BotOfflineAtUtc,
+                                    LastOfflineDurationMinutes = v.LastOfflineDurationMinutes,
+                                    WasBotOfflineOnShutdown = v.WasBotOfflineOnShutdown,
+                                    OfflineEvents = v.OfflineEvents?.ToList() ?? new List<OfflineEvent>(),
+                                    OfflineAnnouncementMessageIds = v.OfflineAnnouncementMessageIds != null
+                                        ? new List<ulong>(v.OfflineAnnouncementMessageIds)
+                                        : new List<ulong>(),
+                                    OnlineAnnouncementMessageIds = v.OnlineAnnouncementMessageIds != null
+                                        ? v.OnlineAnnouncementMessageIds.Select(o => new OnlineAnnouncementMessage { MessageId = o.MessageId, SentAtUtc = o.SentAtUtc }).ToList()
+                                        : new List<OnlineAnnouncementMessage>(),
+                                    IsLocked = v.IsLocked,
+                                    IsResolved = v.IsResolved,
+                                    WinningOutcomeId = v.WinningOutcomeId,
+                                    Bets = new Dictionary<ulong, PredictionBet>(v.Bets)
+                                };
+                            }
+                            snapshot[kv.Key] = guildDict;
+                        }
+                        var cleanedJson = System.Text.Json.JsonSerializer.Serialize(snapshot, options);
+                        await SafeJsonIO.WriteAtomicAsync(_stateFilePath, cleanedJson).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -1415,10 +1533,75 @@ namespace RPBot
             return command.RespondAsync("Команда prediction временно недоступна.", ephemeral: true);
         }
 
+        /// <summary>
+        /// ✅ pred-parallelization: итерация по ВСЕМ активным прогнозам на ВСЕХ гильдиях
+        /// во вложенном словаре. Возвращает плоский список для удобства foreach.
+        /// </summary>
+        private IEnumerable<ActivePrediction> EnumerateAllActive()
+        {
+            foreach (var guildKv in _active)
+            {
+                if (guildKv.Value == null) continue;
+                foreach (var innerKv in guildKv.Value)
+                {
+                    if (innerKv.Value != null) yield return innerKv.Value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: то же самое, но как ToArray-снимок (безопасно для
+        /// асинхронной работы внутри цикла).
+        /// </summary>
+        private ActivePrediction[] SnapshotAllActive()
+        {
+            var list = new List<ActivePrediction>();
+            foreach (var p in EnumerateAllActive()) list.Add(p);
+            return list.ToArray();
+        }
+
+        // ✅ pred-parallelization: составной ключ для _activeChannels. Прогнозов может
+        // быть несколько на одной гильдии, поэтому ключ — это пара (guildId, channelId).
+        internal static string ChannelKey(ulong guildId, ulong channelId) => $"{guildId}:{channelId}";
+
+        // ✅ pred-parallelization: основной метод получения прогноза. Возвращает прогноз
+        // для конкретного голосового канала. Если такого нет — null. Используется везде,
+        // где раньше был `GetActive(guildId)`, но с дополнительным знанием channelId.
+        public ActivePrediction? GetActive(ulong guildId, ulong channelId)
+        {
+            if (_active.TryGetValue(guildId, out var byChannel) && byChannel != null)
+            {
+                if (byChannel.TryGetValue(channelId, out var p)) return p;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: legacy-метод для обратной совместимости со старыми
+        /// вызовами (info/profile/buttons). Возвращает ЛЮБОЙ активный прогноз на гильдии
+        /// (первый по внутреннему словарю). Новый код должен использовать перегрузку с
+        /// channelId или <see cref="GetAllActive"/>.
+        /// </summary>
         public ActivePrediction? GetActive(ulong guildId)
         {
-            _active.TryGetValue(guildId, out var p);
-            return p;
+            if (_active.TryGetValue(guildId, out var byChannel) && byChannel != null && !byChannel.IsEmpty)
+            {
+                foreach (var p in byChannel.Values) return p;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: вернуть все активные прогнозы на гильдии. Используется
+        /// в info/profile для отображения списка, а также во внутренних итерациях.
+        /// </summary>
+        public IReadOnlyList<ActivePrediction> GetAllActive(ulong guildId)
+        {
+            if (_active.TryGetValue(guildId, out var byChannel) && byChannel != null)
+            {
+                return byChannel.Values.ToList();
+            }
+            return Array.Empty<ActivePrediction>();
         }
 
         public async Task<(bool ok, string error, ActivePrediction? prediction)> CreateAsync(
@@ -1478,8 +1661,18 @@ namespace RPBot
             TimeSpan duration,
             ulong? eventId)
         {
-            if (_active.ContainsKey(guildId))
-                return (false, "Уже есть активный прогноз на этом сервере.", null);
+            // ✅ pred-parallelization: проверяем наличие прогноза в КОНКРЕТНОМ канале,
+            // а не на всей гильдии. Теперь на одной гильдии может быть несколько
+            // параллельных прогнозов в разных каналах.
+            if (targetChannel == null)
+            {
+                await LogAsync($"CREATE_FAIL_CHANNEL guild={guildId} creator={creatorId} channelId=0 rawType=null rawName='(без имени)'");
+                return (false, "Не удалось найти канал для создания прогноза.", null);
+            }
+
+            var channelId = targetChannel.Id;
+            if (GetActive(guildId, channelId) != null)
+                return (false, "В этом голосовом канале уже есть активный прогноз.", null);
 
             if (outcomeNames == null || outcomeNames.Length < 2)
                 return (false, "Должно быть минимум 2 исхода.", null);
@@ -1489,14 +1682,6 @@ namespace RPBot
 
             if (duration <= TimeSpan.Zero)
                 duration = TimeSpan.FromMinutes(1);
-
-            if (targetChannel == null)
-            {
-                await LogAsync($"CREATE_FAIL_CHANNEL guild={guildId} creator={creatorId} channelId=0 rawType=null rawName='(без имени)'");
-                return (false, "Не удалось найти канал для создания прогноза.", null);
-            }
-
-            var channelId = targetChannel.Id;
             var now = DateTimeOffset.UtcNow;
             var closeAt = now + duration;
 
@@ -1545,9 +1730,14 @@ namespace RPBot
             var message = await targetChannel.SendMessageAsync(embed: embed, components: components.Build()).ConfigureAwait(false);
             prediction.MessageId = message.Id;
 
-            if (_active.TryAdd(guildId, prediction))
+            // ✅ pred-parallelization: добавляем во вложенный словарь по (guildId, channelId).
+            // GetOrAdd гарантирует, что для одной гильдии всегда один inner-словарь,
+            // и TryAdd на inner-уровне — атомарно. Если TryAdd вернул false (гонка с
+            // другим создателем), откатываем отправленное сообщение.
+            var byChannel = _active.GetOrAdd(guildId, _ => new ConcurrentDictionary<ulong, ActivePrediction>());
+            if (byChannel.TryAdd(channelId, prediction))
             {
-                _activeChannels[guildId] = targetChannel;
+                _activeChannels[ChannelKey(guildId, channelId)] = targetChannel;
 
                 if (!_userStats.TryGetValue(guildId, out var guildStats))
                 {
@@ -1624,124 +1814,135 @@ namespace RPBot
                     int outcomeId,
                     long amount)
                 {
-                    if (!_active.TryGetValue(guildId, out var p))
+                    // ✅ pred-parallelization: legacy-обёртка, ищет ЛЮБОЙ активный прогноз
+                    // на гильдии. Новая логика (из Program.Prediction.cs) передаёт channelId
+                    // через перегрузку ниже, чтобы ставка точно попала в прогноз нужного канала.
+                    var p = GetActive(guildId);
+                    if (p == null)
                         return (false, "Активного прогноза нет.");
+                    return await PlaceBetAsync(p, userId, outcomeId, amount).ConfigureAwait(false);
+                }
 
-                    // ✅ R6 fix: lock first, then re-check time/locked state. This closes
-                    // the race where MonitorLoopAsync sets IsLocked=true between our
-                    // time check and Sync.WaitAsync() — without the lock the user could
-                    // slip a bet through in the gap.
-                    await p.Sync.WaitAsync().ConfigureAwait(false);
-                    try
+        /// <summary>
+        /// ✅ pred-parallelization: основной метод ставки. Прогноз передаётся явно,
+        /// чтобы ставка шла именно в канал, в котором сидит игрок (а не в любой
+        /// активный прогноз на гильдии). Канал-валидация (user.VoiceChannel?.Id ==
+        /// p.ChannelId) выполняется на стороне Program.Prediction.cs до вызова.
+        /// </summary>
+        public async Task<(bool ok, string error)> PlaceBetAsync(
+            ActivePrediction p,
+            ulong userId,
+            int outcomeId,
+            long amount)
+        {
+            await p.Sync.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (p.IsLocked)
+                    return (false, "Приём ставок уже завершён.");
+
+                if (DateTimeOffset.UtcNow >= p.BetsCloseAtUtc)
+                {
+                    p.IsLocked = true;
+                    await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
+                    _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                    var betsDuration = DateTimeOffset.UtcNow - p.CreatedAtUtc;
+                    await LogAsync($"LOCK guild={p.GuildId} channel={p.ChannelId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
+
+                    return (false, "Время приёма ставок истекло.");
+                }
+
+                if (amount <= 0)
+                    return (false, "Сумма ставки должна быть положительной.");
+
+                var guildId = p.GuildId;
+
+                // Если пользователь уже ставил
+                if (p.Bets.TryGetValue(userId, out var existing))
+                {
+                    // Разрешаем только добавление на тот же исход
+                    if (existing.OutcomeId != outcomeId)
+                        return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
+
+                    // Тратим дополнительные очки
+                    if (!_points.TrySpend(guildId, userId, amount))
+                        return (false, "Недостаточно костяшек для этой ставки.");
+
+                    existing.Amount += amount;
+
+                    var outcome = p.GetOutcomeById(outcomeId);
+                    if (outcome == null)
+                        return (false, "Неверный ID исхода.");
+
+                    outcome.TotalStake += amount;
+                    if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
                     {
-                        if (p.IsLocked)
-                            return (false, "Приём ставок уже завершён.");
-
-                        if (DateTimeOffset.UtcNow >= p.BetsCloseAtUtc)
-                        {
-                            p.IsLocked = true;
-                            await UpdateMessageAsync(p, showLocked: true).ConfigureAwait(false);
-                            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-
-                            // ✅ НОВОЕ: Логируем закрытие приёма ставок
-                            var betsDuration = DateTimeOffset.UtcNow - p.CreatedAtUtc;
-                            await LogAsync($"LOCK guild={guildId} title='{p.Title}' bets={p.Bets.Count} duration={betsDuration.TotalSeconds:F0}s totalPool={p.TotalPool}");
-
-                            return (false, "Время приёма ставок истекло.");
-                        }
-
-                        if (amount <= 0)
-                            return (false, "Сумма ставки должна быть положительной.");
-
-                        // Если пользователь уже ставил
-                        if (p.Bets.TryGetValue(userId, out var existing))
-                        {
-                            // Разрешаем только добавление на тот же исход
-                            if (existing.OutcomeId != outcomeId)
-                                return (false, "Вы уже сделали ставку на другой исход — изменить её нельзя.");
-
-                            // Тратим дополнительные очки
-                            if (!_points.TrySpend(guildId, userId, amount))
-                                return (false, "Недостаточно костяшек для этой ставки.");
-
-                            existing.Amount += amount;
-
-                            // ✅ Обновлено: поиск исхода по ID
-                            var outcome = p.GetOutcomeById(outcomeId);
-                            if (outcome == null)
-                                return (false, "Неверный ID исхода.");
-
-                            outcome.TotalStake += amount;
-                            if (!outcome.TopUserId.HasValue || existing.Amount > outcome.TopUserStake)
-                            {
-                                outcome.TopUserId = userId;
-                                outcome.TopUserStake = existing.Amount;
-                            }
-
-                            await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-
-                            // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после увеличения ставки
-                            _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-
-                            await LogAsync($"BET_ADD guild={guildId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
-                            return (true, string.Empty);
-                        }
-
-                        // Новая ставка
-                        if (!_points.TrySpend(guildId, userId, amount))
-                            return (false, "Недостаточно костяшек для этой ставки.");
-
-                        var bet = new PredictionBet
-                        {
-                            UserId = userId,
-                            OutcomeId = outcomeId,
-                            Amount = amount
-                        };
-
-                        p.Bets[userId] = bet;
-
-                        if (!_userStats.TryGetValue(guildId, out var guildStats))
-                        {
-                            guildStats = new Dictionary<ulong, UserPredictionStats>();
-                            _userStats[guildId] = guildStats;
-                        }
-
-                        if (!guildStats.TryGetValue(userId, out var userStats))
-                        {
-                            userStats = new UserPredictionStats { UserId = userId };
-                            guildStats[userId] = userStats;
-                        }
-
-                        if (p.Bets.Count == 1)
-                        {
-                            userStats.FirstBets++;
-                        }
-
-                        // ✅ Обновлено: поиск исхода по ID
-                        var outcomeNew = p.GetOutcomeById(outcomeId);
-                        if (outcomeNew == null)
-                            return (false, "Неверный ID исхода.");
-
-                        outcomeNew.TotalStake += amount;
-                        if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
-                        {
-                            outcomeNew.TopUserId = userId;
-                            outcomeNew.TopUserStake = amount;
-                        }
-
-                        await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
-
-                        // ✅ БАГ 7 ИСПРАВЛЕН: Сохраняем состояние после новой ставки
-                        _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
-
-                        await LogAsync($"BET guild={guildId} user={userId} outcome={outcomeId} amount={amount}");
-                        return (true, string.Empty);
+                        outcome.TopUserId = userId;
+                        outcome.TopUserStake = existing.Amount;
                     }
-                    finally
-                    {
-                        p.Sync.Release();
-                    }
-                                }
+
+                    await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                    _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                    await LogAsync($"BET_ADD guild={guildId} channel={p.ChannelId} user={userId} outcome={outcomeId} added={amount} total={existing.Amount}");
+                    return (true, string.Empty);
+                }
+
+                // Новая ставка
+                if (!_points.TrySpend(guildId, userId, amount))
+                    return (false, "Недостаточно костяшек для этой ставки.");
+
+                var bet = new PredictionBet
+                {
+                    UserId = userId,
+                    OutcomeId = outcomeId,
+                    Amount = amount
+                };
+
+                p.Bets[userId] = bet;
+
+                if (!_userStats.TryGetValue(guildId, out var guildStats))
+                {
+                    guildStats = new Dictionary<ulong, UserPredictionStats>();
+                    _userStats[guildId] = guildStats;
+                }
+
+                if (!guildStats.TryGetValue(userId, out var userStats))
+                {
+                    userStats = new UserPredictionStats { UserId = userId };
+                    guildStats[userId] = userStats;
+                }
+
+                if (p.Bets.Count == 1)
+                {
+                    userStats.FirstBets++;
+                }
+
+                var outcomeNew = p.GetOutcomeById(outcomeId);
+                if (outcomeNew == null)
+                    return (false, "Неверный ID исхода.");
+
+                outcomeNew.TotalStake += amount;
+                if (!outcomeNew.TopUserId.HasValue || amount > outcomeNew.TopUserStake)
+                {
+                    outcomeNew.TopUserId = userId;
+                    outcomeNew.TopUserStake = amount;
+                }
+
+                await UpdateMessageAsync(p, showLocked: false).ConfigureAwait(false);
+
+                _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
+
+                await LogAsync($"BET guild={guildId} channel={p.ChannelId} user={userId} outcome={outcomeId} amount={amount}");
+                return (true, string.Empty);
+            }
+            finally
+            {
+                p.Sync.Release();
+            }
+        }
 
                                 public async Task<(bool ok, string error)> ResolveAsync(
                                     ulong guildId,
@@ -1749,9 +1950,29 @@ namespace RPBot
                                     bool isAdminOverride,
                                     int winningOutcomeId)
                                 {
-                                    if (!_active.TryGetValue(guildId, out var p))
+                                    // ✅ pred-parallelization: без channelId — отменяем ЛЮБОЙ
+                                    // активный прогноз, где resolverId является создателем или
+                                    // передаётся admin-флаг. Используется из info-кнопок и
+                                    // auto-cancel (CancelPredictionForEventAsync вызывает
+                                    // Resolve-сценарий только когда знает channelId/eventId).
+                                    var p = GetActive(guildId);
+                                    if (p == null)
                                         return (false, "Активного прогноза нет.");
+                                    return await ResolveAsync(p, resolverId, isAdminOverride, winningOutcomeId).ConfigureAwait(false);
+                                }
 
+                                /// <summary>
+                                /// ✅ pred-parallelization: основной Resolve — принимает конкретный
+                                /// прогноз. Команда /prediction resolve должна сначала найти
+                                /// прогноз через GetActive(guildId, channelId), затем передать сюда.
+                                /// </summary>
+                                public async Task<(bool ok, string error)> ResolveAsync(
+                                    ActivePrediction p,
+                                    ulong resolverId,
+                                    bool isAdminOverride,
+                                    int winningOutcomeId)
+                                {
+                                    var guildId = p.GuildId;
                                     if (p.IsResolved)
                                         return (false, "Прогноз уже завершён.");
 
@@ -1910,8 +2131,8 @@ namespace RPBot
             // ✅ НОВОЕ: Добавляем в историю
             await AddToHistoryAsync(p, winningOutcomeId, wasCancelled: false);
 
-            _active.TryRemove(guildId, out _);
-            _activeChannels.TryRemove(guildId, out _);
+            // ✅ pred-parallelization: удаляем из вложенного словаря по (guildId, channelId).
+            RemovePrediction(p);
             _ = Task.Run(async () => await SaveStateAsync().ConfigureAwait(false));
 
             // ✅ R6 fix: уведомляем владельца (Program.cs) о завершении прогноза,
@@ -1932,9 +2153,46 @@ namespace RPBot
             bool isAdminOverride,
             string? cancelReason = null)
         {
-            if (!_active.TryGetValue(guildId, out var p))
+            // ✅ pred-parallelization: legacy-обёртка. Если есть только один активный
+            // прогноз — отменяет его. Если несколько — отменяет первый, на котором
+            // resolverId является создателем, либо ничего (нужно указывать channelId).
+            var p = GetActive(guildId);
+            if (p == null)
                 return (false, "Активного прогноза нет.");
 
+            // Если resolver не админ и не создатель — пробуем найти «свой» прогноз.
+            if (!isAdminOverride && resolverId != p.CreatorId)
+            {
+                foreach (var candidate in GetAllActive(guildId))
+                {
+                    if (candidate.CreatorId == resolverId)
+                    {
+                        p = candidate;
+                        break;
+                    }
+                }
+                if (!isAdminOverride && resolverId != p.CreatorId)
+                {
+                    return (false, "Отменить прогноз может только создатель или администратор.");
+                }
+            }
+
+            return await CancelAsync(p, resolverId, isAdminOverride, cancelReason).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: основной метод отмены. Принимает конкретный
+        /// ActivePrediction (по channelId). Используется из auto-cancel при
+        /// завершении/отмене события, а также из /prediction cancel после нахождения
+        /// прогноза по каналу.
+        /// </summary>
+        public async Task<(bool ok, string error)> CancelAsync(
+            ActivePrediction p,
+            ulong resolverId,
+            bool isAdminOverride,
+            string? cancelReason = null)
+        {
+            var guildId = p.GuildId;
             if (p.IsResolved)
                 return (false, "Прогноз уже завершён.");
 
@@ -1977,21 +2235,37 @@ namespace RPBot
             }
             catch { }
 
-            // ✅ НОВОЕ: Добавляем в историю
             await AddToHistoryAsync(p, winningOutcomeId: null, wasCancelled: true);
 
-            _active.TryRemove(guildId, out _);
-            _activeChannels.TryRemove(guildId, out _);
+            // ✅ pred-parallelization: удаляем из вложенного словаря по (guildId, channelId).
+            // Если внутренний словарь стал пустым — удаляем и его (чтобы память не утекала).
+            RemovePrediction(p);
 
             // ✅ R6 fix: уведомляем владельца (Program.cs) об отмене прогноза,
             // чтобы тот почистил _pendingBetUi для этой гильдии.
             try { PredictionCancelled?.Invoke(guildId); } catch { }
 
-            // ✅ УЛУЧШЕНО: Логируем с информацией о возвращённых ставках
             var totalBets = p.Bets.Count;
             var totalAmount = p.Bets.Values.Sum(b => b.Amount);
-            await LogAsync($"CANCEL guild={guildId} resolver={resolverId} totalBets={totalBets} refundedAmount={totalAmount} reason='{cancelReason ?? "manual"}'");
+            await LogAsync($"CANCEL guild={guildId} channel={p.ChannelId} resolver={resolverId} totalBets={totalBets} refundedAmount={totalAmount} reason='{cancelReason ?? "manual"}'");
             return (true, string.Empty);
+        }
+
+        /// <summary>
+        /// ✅ pred-parallelization: удаление прогноза из всех внутренних словарей.
+        /// Вызывается из ResolveAsync/CancelAsync/AutoCancelRestoredPredictionAsync.
+        /// </summary>
+        private void RemovePrediction(ActivePrediction p)
+        {
+            if (_active.TryGetValue(p.GuildId, out var byChannel) && byChannel != null)
+            {
+                byChannel.TryRemove(p.ChannelId, out _);
+                if (byChannel.IsEmpty)
+                {
+                    _active.TryRemove(p.GuildId, out _);
+                }
+            }
+            _activeChannels.TryRemove(ChannelKey(p.GuildId, p.ChannelId), out _);
         }
 
         /// <summary>
@@ -2006,17 +2280,27 @@ namespace RPBot
             ulong eventId,
             string cancelReason)
         {
-            if (!_active.TryGetValue(guildId, out var p))
-                return (true, string.Empty); // активного прогноза нет — нечего отменять
-            if (p.IsResolved)
-                return (true, string.Empty);
-            if (p.EventId.HasValue && p.EventId.Value != eventId)
-                return (true, string.Empty); // прогноз привязан к другому событию — не трогаем
+            // ✅ pred-parallelization: ищем прогноз по eventId среди ВСЕХ активных
+            // прогнозов на гильдии (теперь их может быть несколько — по одному
+            // на каждый голосовой канал). Старая логика с _active[guildId] смотрела
+            // только один прогноз и не учитывала остальные.
+            var candidates = GetAllActive(guildId);
+            ActivePrediction? target = null;
+            foreach (var cand in candidates)
+            {
+                if (cand.IsResolved) continue;
+                if (cand.EventId.HasValue && cand.EventId.Value != eventId) continue;
+                target = cand;
+                break;
+            }
+            if (target == null)
+                return (true, string.Empty); // нет подходящего прогноза — выходим тихо
 
-            await LogAsync($"PRED_CANCEL_FOR_EVENT guild={guildId} eventId={eventId} reason='{cancelReason}'");
+            await LogAsync($"PRED_CANCEL_FOR_EVENT guild={guildId} eventId={eventId} channel={target.ChannelId} reason='{cancelReason}'");
             // isAdminOverride=true: событие завершилось системно (не вручную), проверка
-            // создателя/adмина здесь неуместна.
-            return await CancelAsync(guildId, resolverId: 0, isAdminOverride: true, cancelReason: cancelReason).ConfigureAwait(false);
+            // создателя/adмина здесь неуместна. Передаём конкретный прогноз (target),
+            // а не ищем его заново через GetActive(guildId) (который вернёт первый).
+            return await CancelAsync(target, resolverId: 0, isAdminOverride: true, cancelReason: cancelReason).ConfigureAwait(false);
         }
 
         private Embed BuildCancelEmbed(ActivePrediction p, string? cancelReason = null)
@@ -2147,23 +2431,25 @@ namespace RPBot
 
             if (!p.IsLocked && !p.IsResolved)
             {
-                // Пока приём ставок открыт: кнопки сделать ставку и отменить
-                mb.WithButton("Сделать ставку", customId: $"pred_bet:{p.GuildId}", style: ButtonStyle.Primary);
-                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
-            }
-            else if (p.IsLocked && !p.IsResolved)
-            {
-                // ✅ Обновлено: динамические кнопки для всех исходов
-                foreach (var outcome in p.Outcomes.Take(5)) // Discord позволяет макс 5 кнопок в ряду
-                {
-                    mb.WithButton(
-                        $"Выбрать: {outcome.Name}", 
-                        customId: $"pred_resolve:{p.GuildId}:{outcome.Id}", 
-                        style: ButtonStyle.Success);
-                }
+                            // Пока приём ставок открыт: кнопки сделать ставку и отменить.
+                            // ✅ pred-parallelization: передаём ChannelId в customId, чтобы обработчики могли
+                            // найти именно этот прогноз во вложенном словаре (а не первый попавшийся на гильдии).
+                            mb.WithButton("Сделать ставку", customId: $"pred_bet:{p.GuildId}:{p.ChannelId}", style: ButtonStyle.Primary);
+                            mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}:{p.ChannelId}", style: ButtonStyle.Danger);
+                        }
+                        else if (p.IsLocked && !p.IsResolved)
+                        {
+                            // ✅ Обновлено: динамические кнопки для всех исходов
+                            foreach (var outcome in p.Outcomes.Take(5)) // Discord позволяет макс 5 кнопок в ряду
+                            {
+                                mb.WithButton(
+                                    $"Выбрать: {outcome.Name}", 
+                                    customId: $"pred_resolve:{p.GuildId}:{p.ChannelId}:{outcome.Id}", 
+                                    style: ButtonStyle.Success);
+                            }
 
-                mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}", style: ButtonStyle.Danger);
-            }
+                            mb.WithButton("Отменить прогноз", customId: $"pred_cancel:{p.GuildId}:{p.ChannelId}", style: ButtonStyle.Danger);
+                        }
 
             return mb;
         }
@@ -2273,7 +2559,8 @@ namespace RPBot
 
         private ISocketMessageChannel? GetActiveMessageChannel(ActivePrediction p)
         {
-            if (_activeChannels.TryGetValue(p.GuildId, out var activeChannel) && activeChannel != null)
+            // ✅ pred-parallelization: ключ теперь составной — (guildId, channelId).
+            if (_activeChannels.TryGetValue(ChannelKey(p.GuildId, p.ChannelId), out var activeChannel) && activeChannel != null)
                 return activeChannel;
 
             return _client.GetChannel(p.ChannelId) as ISocketMessageChannel
@@ -2288,9 +2575,8 @@ namespace RPBot
                 try
                 {
                     var now = DateTimeOffset.UtcNow;
-                    foreach (var kv in _active.ToArray())
+                    foreach (var p in SnapshotAllActive())
                     {
-                        var p = kv.Value;
                         try
                         {
                             if (!p.IsLocked)
@@ -2924,9 +3210,8 @@ namespace RPBot
                                                 try
                                                 {
                                                     var nowUtc = DateTimeOffset.UtcNow;
-                                                    foreach (var kv in _active.ToArray())
+                                                    foreach (var p in SnapshotAllActive())
                                                     {
-                                                        var p = kv.Value;
                                                         if (!p.IsResolved && !p.IsLocked && !p.BotOfflineAtUtc.HasValue)
                                                         {
                                                             p.BotOfflineAtUtc = nowUtc;

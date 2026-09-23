@@ -686,6 +686,7 @@ namespace RPBot.Web
                                                                                                             }
                                                                                                             catch { }
                                                                                                         return new
+                                                                                                        #pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete
                                                                                                         {
                                                                                                             GuildId = x.Key,
                                                                                                             GuildName = g?.Name,
@@ -705,6 +706,7 @@ namespace RPBot.Web
                                                                                                             x.Value.RollPicturesEnabled,
                                                                                                             x.Value.SwearFilterEnabled,
                                                                                                             x.Value.MasterGuideEnabled,
+                                                                                                            #pragma warning restore CS0618
                                                                                                         };
                                                                                                     })
                                                                                                     .ToList();
