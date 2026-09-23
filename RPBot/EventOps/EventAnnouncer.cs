@@ -168,7 +168,7 @@ namespace RPBot.EventOps
             if (guildEvent.Channel != null)
             {
             whereText = $"<#{guildEvent.Channel.Id}>";
-            whereTextPlain = guildEvent.Channel.Name;
+                        whereTextPlain = guildEvent.Channel.Name;
             }
             else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
             {
@@ -291,7 +291,7 @@ namespace RPBot.EventOps
                                                 var tgText = BuildEventTelegramText(
                                                     header: $"📅 <b>Новое событие:</b> {guildEvent.Name}",
                                                     whenLineOrLines: new[] { $"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)" },
-                                                    whereText: $"{guild.Name} → {whereTextPlain}",
+                                                                                                    whereText: whereTextPlain,
                                                     whoLabel: "Создал:",
                                                     whoText: creatorName,
                                                     description: descTruncated,
@@ -454,7 +454,7 @@ namespace RPBot.EventOps
             if (guildEvent.Channel != null)
             {
             whereText = $"<#{guildEvent.Channel.Id}>";
-            whereTextPlain = guildEvent.Channel.Name;
+                        whereTextPlain = guildEvent.Channel.Name;
             }
             else if (!string.IsNullOrWhiteSpace(guildEvent.Location))
             {
@@ -600,7 +600,7 @@ namespace RPBot.EventOps
                                                 var tgText = BuildEventTelegramText(
                                                     header: $"📅 <b>Событие обновлено:</b> {guildEvent.Name}",
                                                     whenLineOrLines: new[] { $"🕒 <b>Когда:</b> {startMsk.ToString("dd.MM.yyyy HH:mm")} (по МСК)" },
-                                                    whereText: $"{guild.Name} → {whereTextPlain}",
+                                                                                                    whereText: whereTextPlain,
                                                     whoLabel: "Создал:",
                                                     whoText: creatorName,
                                                     description: descTruncated,
@@ -1054,13 +1054,26 @@ namespace RPBot.EventOps
                             whereText = $"<#{restEvent.ChannelId.Value}>";
                             try
                             {
-                                var ch = await client.Rest.GetChannelAsync(restEvent.ChannelId.Value);
-                                if (ch is IGuildChannel gc && !string.IsNullOrWhiteSpace(gc.Name))
-                                    channelName = "#" + gc.Name;
-                            }
-                            catch { /* имя канала недоступно — оставляем ID */ }
-                            whereTextPlain = channelName ?? restEvent.ChannelId.Value.ToString();
-                        }
+                                            // Сначала пробуем Rest (доступно и offline-friendly),
+                                            // затем Socket (на случай если REST не успел закэшировать
+                                            // канал на старте сессии — имя уже могло появиться).
+                                            var ch = await client.Rest.GetChannelAsync(restEvent.ChannelId.Value);
+                                            if (ch is IGuildChannel gc && !string.IsNullOrWhiteSpace(gc.Name))
+                                                channelName = gc.Name;
+                                            else
+                                            {
+                                                try
+                                                {
+                                                    var sockCh = await client.GetChannelAsync(restEvent.ChannelId.Value) as SocketChannel;
+                                                    if (sockCh is IGuildChannel sg && !string.IsNullOrWhiteSpace(sg.Name))
+                                                        channelName = sg.Name;
+                                                }
+                                                catch { /* имя канала недоступно — оставляем ID */ }
+                                            }
+                                        }
+                                        catch { /* имя канала недоступно — оставляем ID */ }
+                                        whereTextPlain = channelName ?? restEvent.ChannelId.Value.ToString();
+                                    }
                         else if (!string.IsNullOrWhiteSpace(restEvent.Location))
                         {
                             whereText = restEvent.Location;
@@ -1238,7 +1251,7 @@ namespace RPBot.EventOps
                                         var tgText = BuildEventTelegramText(
                                             header: header,
                                             whenLineOrLines: whenLines,
-                                            whereText: $"{guild.Name} → {whereTextPlain}",
+                                                                                    whereText: whereTextPlain,
                                             whoLabel: isStarted ? "Мастер:" : "Создал:",
                                             whoText: displayName,
                                             description: descTruncated,

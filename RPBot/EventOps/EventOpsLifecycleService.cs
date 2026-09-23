@@ -940,7 +940,7 @@ namespace RPBot.EventOps
                                 channelDisplay = gc.Name;
                         }
                         catch { /* имя канала недоступно — оставляем id */ }
-                        whereTextTg = "#" + channelDisplay;
+                                                whereTextTg = channelDisplay;
                     }
                     else if (!string.IsNullOrWhiteSpace(entry.LastLocation))
                     {
