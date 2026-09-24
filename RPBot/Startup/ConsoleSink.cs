@@ -9,9 +9,10 @@ namespace RPBot.Startup
     /// Пишет в консоль. Один экземпляр на процесс. Внутри — SemaphoreSlim(1,1),
     /// чтобы цвет-ломающие Console.WriteLine(ы) из других потоков не разрывали блок.
     /// </summary>
-    public sealed class ConsoleSink : IStartupSink
+    public sealed class ConsoleSink : IStartupSink, IDisposable
     {
         private readonly SemaphoreSlim _gate = new(1, 1);
+            private bool _disposed;
 
         public Task WriteAsync(StartupLogRecord record, CancellationToken ct)
         {
@@ -62,5 +63,15 @@ namespace RPBot.Startup
                         _                     => $"    {r.Text}",
                     };
                 }
-    }
-}
+
+                // ✅ Audit-leaks #7: идемпотентный Dispose для SemaphoreSlim _gate.
+                // WriteAsync безопасно работает с disposed-экземпляром: catch (Exception)
+                // проглатывает ObjectDisposedException, и Debug.WriteLine оставит след.
+                public void Dispose()
+                {
+                    if (_disposed) return;
+                    _disposed = true;
+                    try { _gate.Dispose(); } catch { /* идемпотентно */ }
+                }
+                    }
+                }

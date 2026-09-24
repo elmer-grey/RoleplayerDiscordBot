@@ -476,20 +476,29 @@ namespace RPBot
         /// Идемпотентен.
         /// </summary>
         public static void Shutdown(string reason)
-        {
-            lock (_initLock)
-            {
-                _ = AppendToFileAsync(LogCategory.Boot,
-                    FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
-                _paths.Clear();
-                _logDirectory = null;
-                _unifiedLogPath = null;
-                // ✅ Round 7-C10: per-session run.log продолжает жить внутри своей папки
-                // и после Shutdown — пользователь всё ещё может его открыть. Ничего
-                // дополнительно не делаем: WriteUnifiedLineAsync смотрит на _logDirectory,
-                // и когда он null, запись просто игнорируется.
-            }
-        }
+                {
+                    lock (_initLock)
+                    {
+                        _ = AppendToFileAsync(LogCategory.Boot,
+                            FormatLine(LogLevel.Info, LogCategory.Boot, $"=== Логгер завершён: {reason} ==="));
+                        _paths.Clear();
+                        _logDirectory = null;
+                        _unifiedLogPath = null;
+                        // ✅ Audit-leaks #6: Dispose семафоров категорийных локов.
+                        // Без этого при горячем рестарте _locks накапливает SemaphoreSlim-ы
+                        // (на каждый Foreach(Enum.GetValues<LogCategory>()) — новый набор).
+                        // AppendToFileAsync уже корректно обрабатывает ObjectDisposedException.
+                        foreach (var kv in _locks)
+                        {
+                            try { kv.Value.Dispose(); } catch { /* идемпотентно */ }
+                        }
+                        _locks.Clear();
+                        // ✅ Round 7-C10: per-session run.log продолжает жить внутри своей папки
+                        // и после Shutdown — пользователь всё ещё может его открыть. Ничего
+                        // дополнительно не делаем: WriteUnifiedLineAsync смотрит на _logDirectory,
+                        // и когда он null, запись просто игнорируется.
+                    }
+                }
 
         // ───── Хвост из run.log удалён. Дашборд подписан напрямую на observer
         // BotLogger (см. RegisterObserver) — это надёжнее, чем парсить файл.
