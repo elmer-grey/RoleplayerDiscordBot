@@ -396,8 +396,15 @@ public async Task<(bool, string?)> EditMessageTextWithDetailsAsync(ulong guildId
     {
         return (true, null);
     }
-    return (false, FormatTelegramFailure(send.body));
-}
+        // Telegram API: «message is not modified» — это не ошибка, сообщение уже
+        // в нужном состоянии. Возвращаем (true, null), чтобы вызывающий не
+        // логировал warn «telegram fail» на resync.
+        if (IsMessageNotModified(send.body))
+        {
+            return (true, null);
+        }
+        return (false, FormatTelegramFailure(send.body));
+    }
 
 public async Task<bool> EditMessageCaptionAsync(ulong guildId, int messageId, string caption, CancellationToken ct = default)
 {
@@ -437,8 +444,10 @@ public async Task<(bool ok, string? error)> EditMessageCaptionWithDetailsAsync(u
 
     var send = await PostJsonAsync(url, payload, ct).ConfigureAwait(false);
     if (send.ok) return (true, null);
-    return (false, FormatTelegramFailure(send.body));
-}
+        // «message is not modified» для caption — это тоже не ошибка.
+        if (IsMessageNotModified(send.body)) return (true, null);
+        return (false, FormatTelegramFailure(send.body));
+    }
 
 private static int? TryParseTelegramMessageId(string json)
 {
@@ -458,6 +467,38 @@ private static int? TryParseTelegramMessageId(string json)
     return null;
     }
 }
+
+    /// <summary>
+    /// Telegram Bot API возвращает 400 с описанием «message is not modified»,
+    /// когда мы пытаемся отредактировать сообщение, у которого и текст, и
+    /// reply markup уже совпадают с новыми. Идиоматически это УЖЕ успех
+    /// (сообщение в нужном состоянии), просто делать HTTP-запрос было лишним.
+    /// EditMessageXxx-вызовы ловят это и возвращают (true, null) вместо fail —
+    /// иначе resync на старте плодит warn'ы «code=400 | message is not modified»
+    /// для каждого анонса, к которому ранее уже отредактировали содержимое.
+    /// </summary>
+    internal static bool IsMessageNotModified(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("error_code", out var ec)
+                || ec.GetInt32() != 400)
+                return false;
+            if (doc.RootElement.TryGetProperty("description", out var desc))
+            {
+                var s = desc.GetString();
+                if (s != null && s.Contains("message is not modified", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch
+        {
+            // Не JSON / другая ошибка парсинга — считаем, что это не no-op.
+        }
+        return false;
+    }
 
         public async Task<bool> SendMessageAsync(ulong guildId, string text, CancellationToken ct = default)
 {
