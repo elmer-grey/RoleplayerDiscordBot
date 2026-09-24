@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.IO;
 using System.Linq;
@@ -45,7 +45,7 @@ public class VoicePointsServiceTimerDisposeTests : IDisposable
     {
         var client = NewClient();
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+        var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
         var userStatesField = typeof(VoicePointsService).GetField("_userStates",
             BindingFlags.NonPublic | BindingFlags.Instance);
@@ -68,7 +68,7 @@ public class VoicePointsServiceTimerDisposeTests : IDisposable
     {
         var client = NewClient();
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+        var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
         svc.Shutdown();
         svc.Shutdown();

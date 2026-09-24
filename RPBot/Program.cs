@@ -79,6 +79,7 @@ namespace RPBot
         private ReconnectionService? _reconnectionService;
         private ConnectionPredictor? _connectionPredictor;
         private StatusNotifier? _statusNotifier;
+        private LogDayRolloverService? _logDayRollover;
 private PointsService _pointsService;
         private PointsUserIndex _pointsUserIndex;
 private PredictionService? _predictionService;
@@ -995,18 +996,25 @@ private void SaveServerConfigs()
         BotLogger.Initialize(logDirEarly, DateTime.Now);
         _loggerInitialized = true;
         BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
+        // ✅ Суточные папки логов: планировщик запускаем сразу после Initialize,
+        // чтобы он работал даже если RunBotAsync() не дойдёт (например, фатальная ошибка
+        // конфига до конструктора UI). Это гарантирует, что в 06:00 логи переключатся
+        // на новую папку независимо от того, в какой стадии инициализации находится бот.
+        _logDayRollover?.Dispose();
+        _logDayRollover = new LogDayRolloverService(logDirEarly);
+        _logDayRollover.Start();
     }
 
     // Критическая проверка: GuildIDs должен быть задан в config.json
-    if (_config.GuildIDs == null || _config.GuildIDs.Count == 0)
-    {
-    Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
-    Console.WriteLine("Укажите список ID серверов, например:");
-    Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
-    Console.ResetColor();
-    throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
-    }
+                if (_config?.GuildIDs is null || _config.GuildIDs.Count == 0)
+            {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
+            Console.WriteLine("Укажите список ID серверов, например:");
+            Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
+            Console.ResetColor();
+            throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
+            }
 
     _serverConfigsPath = BotConfig.ResolvePath(Path.Combine("Settings", "serverconfigs.json"));
             LoadServerConfigs();
@@ -1333,8 +1341,7 @@ private void SaveServerConfigs()
     _pointsUserIndex = new PointsUserIndex(pointsUsersPath);
     _pointsUserIndex.LoadAsync().GetAwaiter().GetResult();
 
-    var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
-    _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+    _predictionService = new PredictionService(_client!, _pointsService);
         // ✅ R6 fix: подписываемся на resolve/cancel прогноза, чтобы почистить _pendingBetUi
         // для затронутой гильдии (удаляем «висящие» кнопки «Продолжить»).
         if (_predictionService != null)
@@ -1351,7 +1358,7 @@ private void SaveServerConfigs()
             // чтобы cleanup осиротевших сессий мог отменить связанный
             // с событием прогноз.
             GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
-        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath, IsActiveEventOnChannel);
+        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, IsActiveEventOnChannel);
 
     // Инициализация музыкального сервиса (задел: запуск будет выполнен в OnReady)
     if (_config.Music.Enabled)
@@ -1675,6 +1682,9 @@ private async Task StopInternalAsync(string initiator, string startupLogMessage,
     _shouldExit = true;
         StopDailyRestartScheduler();
         _reconnectionService?.Shutdown();
+
+        // Останавливаем планировщик суточных папок логов
+        try { _logDayRollover?.Dispose(); _logDayRollover = null; } catch { }
 
         // Отменяем фоновый мониторинг
         try { _backgroundMonitoringCts?.Cancel(); } catch { }
@@ -2330,6 +2340,16 @@ private static BotUI? _ui;
     // поэтому для пользователя в терминале нужна явная запись отсюда.
     BotLogger.Info(LogCategory.Boot, "=== Бот запускается ===");
 
+    // ✅ Суточные папки логов: планировщик уже запущен в constructor-е Program
+    // сразу после BotLogger.Initialize (см. RunBotAsync preamble). Здесь только
+    // подстраховываемся на случай, если первый Initialize не отработал
+    // (например, тестовый путь выполнения).
+    if (_logDayRollover == null)
+    {
+        _logDayRollover = new LogDayRolloverService(logDir);
+        _logDayRollover.Start();
+    }
+
     _ui = new BotUI(
     _client!,
     this,
@@ -2462,8 +2482,7 @@ private static BotUI? _ui;
                             return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
                         });
 
-                        var predictionsLogPath = BotConfig.ResolvePath(Path.Combine(_config!.LogDirectory ?? "Logs", "predictions.log"));
-                        _predictionService = new PredictionService(_client!, _pointsService, predictionsLogPath);
+                        _predictionService = new PredictionService(_client!, _pointsService);
                                                 // ✅ R6 fix: см. первичную инициализацию — обработчики тоже подписываем.
                                                 if (_predictionService != null)
                                                 {
@@ -2477,7 +2496,7 @@ private static BotUI? _ui;
                                                 // чтобы cleanup осиротевших сессий мог отменить связанный
                                                 // с событием прогноз.
                                                 GameSessionPredictionBridge.PredictionServiceAccessor = () => _predictionService;
-                        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, predictionsLogPath, IsActiveEventOnChannel);
+                        _voicePointsService = new VoicePointsService(_client!, _pointsService, GetServerConfigInternal, IsActiveEventOnChannel);
                         _reconnectionService.OnDisconnectDetected += OnDisconnectDetected;
                         _reconnectionService.OnReconnectStarted += OnReconnectStarted;
                         _reconnectionService.OnReconnectCompleted += OnReconnectCompleted;
@@ -3372,15 +3391,19 @@ private static BotUI? _ui;
 
             if (exception is not GatewayReconnectException)
             {
-                await LogStartup($"Отключение: {reason}");
+                            // Дисконнект от Discord — это ВСЕГДА инцидент (либо сеть,
+                            // либо токен, либо серверный реконнект). Помечаем как WARN
+                            // через префикс ⚠️, чтобы LogStartup направил это в правильный
+                            // канал (а не в Stage/Info, как было до этого фикса).
+                            await LogStartup($"⚠️ Отключение: {reason}");
 
-                if (_statusNotifier != null)
-                    await _statusNotifier.SendConnectionIssue(
-                        reason,
-                        recon.ConnectionInfo.ReconnectAttempts + 1
-                    );
-            }
-        }
+                            if (_statusNotifier != null)
+                                await _statusNotifier.SendConnectionIssue(
+                                    reason,
+                                    recon.ConnectionInfo.ReconnectAttempts + 1
+                                );
+                        }
+                    }
 
         private async Task OnReconnectStarted(string message)
         {
@@ -4311,7 +4334,7 @@ await Task.CompletedTask;
                                 // Выполняется только если флаг RemigratedOnce не выставлен. После
                                 // успешного прохода флаг сохраняется в event_announcements.json,
                                 // и при следующих рестартах этот блок будет пропускаться.
-                                if (!_eventAnnouncementStore.IsRemigratedOnce())
+                                                                if (_eventAnnouncementStore is { } store && !store.IsRemigratedOnce())
                                 {
                                     _ = Task.Run(async () =>
                                     {
@@ -5462,10 +5485,20 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
             // пока мы идём в switch и далее в обработчик команды.
             await Task.Yield();
 
-            var name = command?.Data?.Name ?? "<null>";
-            try
-            {
-                switch (command.Data.Name)
+                        if (command == null)
+                                                {
+                                                    BotLogger.Warn(LogCategory.Cmd, "[OnSlashCommandExecuted] Получен пустой command — пропускаю.");
+                                                    return;
+                                                }
+                                                var name = command.Data?.Name ?? "<null>";
+                                                                                                if (command.Data is null)
+                                                {
+                                                                                                    BotLogger.Warn(LogCategory.Cmd, $"[OnSlashCommandExecuted] command.Data is null, name={name} — пропускаю.");
+                                                                                                    return;
+                                                                                                }
+                                                                                                try
+                                                                                                {
+                                                                                                    switch (command.Data.Name)
                 {
                     case "stop_q":
                         await StopQueue(command);
@@ -6625,8 +6658,21 @@ catch (Exception ex)
 
 private Task LogStartup(string message)
     {
-    StartupRenderer.Instance.WriteLine(message);
-    return Task.CompletedTask;
+        // Маршрутизация в правильный канал по эмодзи-префиксу:
+        //   • "⚠️ …" → WriteWarn  (жёлтый уровень, WARN);
+        //   • "❌ …" → WriteError (красный уровень, ERROR);
+        //   • всё остальное → WriteLine (Info/Stage).
+        // Это восстанавливает уровень семантики в run.log — раньше
+        // ВСЁ шло через Stage, и в логе получалось "[INFO] Отключение:"
+        // без сигнальной отметки, по которой можно было бы заметить
+        // инцидент глазами.
+        if (message.Contains("❌"))
+            StartupRenderer.Instance.WriteError(message);
+        else if (message.Contains("⚠️"))
+            StartupRenderer.Instance.WriteWarn(message);
+        else
+            StartupRenderer.Instance.WriteLine(message);
+        return Task.CompletedTask;
     }
 
         private async Task LogShutdownState(bool isRestart, string initiator)

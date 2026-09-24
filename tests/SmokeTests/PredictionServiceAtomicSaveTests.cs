@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -18,6 +18,7 @@ namespace RPBot.SmokeTests;
 /// Чтобы не поднимать полноценный сервис, тестируем атомарную запись и
 /// поведение Shutdown через сконструированный сценарий.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class PredictionServiceAtomicSaveTests : IDisposable
 {
     private readonly string _tmpDir;
@@ -96,7 +97,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     public void PredictionService_Shutdown_IsIdempotent()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
 
         svc.Shutdown();
         svc.Shutdown();
@@ -107,7 +108,7 @@ public class PredictionServiceAtomicSaveTests : IDisposable
     public async Task PredictionService_EnsureStateFile_AfterShutdown_DoesNotThrow()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
         svc.Shutdown();
 
         // Должен либо корректно создать файл, либо тихо вернуть false — не падать.

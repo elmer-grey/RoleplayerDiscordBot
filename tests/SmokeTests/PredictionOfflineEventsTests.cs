@@ -21,6 +21,7 @@ namespace RPBot.SmokeTests;
 ///   * восстановление лога через LoadStateAsync;
 ///   * отображение в embed'е (BuildEmbed возвращает Color.Red и footer "Бот неактивен").
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class PredictionOfflineEventsTests : IDisposable
 {
     private readonly string _tmpDir;

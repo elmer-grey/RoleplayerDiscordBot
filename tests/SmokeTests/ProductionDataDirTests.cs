@@ -9,6 +9,7 @@ namespace RPBot.SmokeTests;
 /// чтобы пользовательские данные не терялись при `dotnet clean` / пересборке.
 /// Поддерживается переопределение через переменную окружения RPBOT_DATA_DIR.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class ProductionDataDirTests : IDisposable
 {
     private readonly string? _savedEnv;

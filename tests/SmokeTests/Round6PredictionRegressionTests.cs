@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -35,6 +35,7 @@ namespace RPBot.SmokeTests;
 /// срабатывают на resolve/cancel и подписчик может почистить
 /// связанный UI-state.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class Round6PredictionRegressionTests : IDisposable
 {
     private readonly string _tmpDir;
@@ -94,7 +95,7 @@ public class Round6PredictionRegressionTests : IDisposable
     public async Task Bug3_PlaceBet_LockBeforeCheck_NoPlaceAfterDeadline()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
 
         // Создаём ActivePrediction напрямую через рефлексию: нам не нужен
         // полноценный Discord-канал, только объект с BetsCloseAtUtc в прошлом.
@@ -177,7 +178,7 @@ public class Round6PredictionRegressionTests : IDisposable
     public async Task Bug5_HistoryStatsAchievements_AllAtomic_NoRemainsTmp()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
 
         var historyPath = (string)HistoryFilePathField.GetValue(svc)!;
         var statsPath = (string)StatsFilePathField.GetValue(svc)!;
@@ -242,10 +243,10 @@ public class Round6PredictionRegressionTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void Bug1_PredictionResolvedAndCancelled_EventsFire()
+        public async Task Bug1_PredictionResolvedAndCancelled_EventsFireAsync()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
 
         var resolvedGuilds = new List<ulong>();
         var cancelledGuilds = new List<ulong>();
@@ -285,7 +286,7 @@ public class Round6PredictionRegressionTests : IDisposable
 
             // Resolve (won't actually post result to channel since ChannelId=0)
             var resolveTask = (Task)resolveMethod.Invoke(svc, new object[] { pred, (ulong)77, true, 1 })!;
-            try { resolveTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
+                        try { await resolveTask; } catch { /* expected: channel=0 */ }
 
             // Cancel с новым прогнозом.
             var pred2 = new ActivePrediction
@@ -305,8 +306,8 @@ public class Round6PredictionRegressionTests : IDisposable
             };
             activeDict[pred.GuildId] = new ConcurrentDictionary<ulong, ActivePrediction>(
                 new[] { new KeyValuePair<ulong, ActivePrediction>(pred2.ChannelId, pred2) });
-            var cancelTask = (Task)cancelMethod.Invoke(svc, new object[] { pred2, (ulong)77, true, null })!;
-            try { cancelTask.GetAwaiter().GetResult(); } catch { /* expected: channel=0 */ }
+                        var cancelTask = (Task)cancelMethod.Invoke(svc, new object[] { pred2, (ulong)77, true, null! })!;
+                        try { await cancelTask; } catch { /* expected: channel=0 */ }
 
             Assert.Contains(pred.GuildId, resolvedGuilds);
             Assert.Contains(pred.GuildId, cancelledGuilds);

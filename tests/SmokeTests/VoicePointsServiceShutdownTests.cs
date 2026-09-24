@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading.Tasks;
 using Discord;
@@ -40,7 +40,7 @@ public class VoicePointsServiceShutdownTests : IDisposable
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
             // ✅ pred-parallelization: добавлен 5-й параметр isActiveEventOnChannel.
             // Тестам на shutdown его поведение не важно — поэтому фиктивный Func.
-            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+            var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
             svc.Shutdown();
         }
@@ -50,7 +50,7 @@ public class VoicePointsServiceShutdownTests : IDisposable
         {
             var client = NewClient();
             var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+            var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
             svc.Shutdown();
             svc.Shutdown();
@@ -61,7 +61,7 @@ public class VoicePointsServiceShutdownTests : IDisposable
         {
             var client = NewClient();
             var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+            var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
             for (int i = 0; i < 10; i++) svc.Shutdown();
         }
@@ -71,7 +71,7 @@ public class VoicePointsServiceShutdownTests : IDisposable
         {
             var client = NewClient();
             var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-            var svc = new VoicePointsService(client, pts, _ => null, "", (_, _) => false);
+            var svc = new VoicePointsService(client, pts, _ => null, (_, _) => false);
 
             svc.Shutdown();
             // Если отписка от событий не сработала — этот Dispose мог бы кинуть NRE

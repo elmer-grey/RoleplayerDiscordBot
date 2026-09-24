@@ -13,6 +13,7 @@ namespace RPBot.SmokeTests;
 /// Изолированные тесты на WebDashboardService: поднимаем HTTP-listener на свободном порту
 /// без подключения к Discord и проверяем поведение rate-limit/health/shutdown.
 /// </summary>
+[Collection(nameof(BotLoggerCollection))]
 public class WebDashboardTests : IAsyncLifetime
 {
     private WebDashboardService? _svc;
@@ -160,5 +161,84 @@ public class WebDashboardTests : IAsyncLifetime
         StartService();
         var resp = await GetAsync(BaseAddress + "/api/does-not-exist");
         Assert.Equal(System.Net.HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task LogsEndpoint_AssignsMonotonicSeq()
+    {
+        // Регрессия: «наслаивание блоков» при бёрсте логов на старте.
+        // MapRecord должен проставлять монотонный seq на каждую запись,
+        // чтобы клиент мог дедуп по seq (timestamp+message могут совпадать
+        // у разных событий, например у двух [WebDashboard] Start observer=…).
+        StartService();
+
+        // Публикуем 5 одинаковых записей через ту же observer-цепочку,
+        // что использует WebDashboard.
+        var observerId = BotLogger.RegisterObserver(rec => { });
+        try
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                BotLogger.Info(LogCategory.System, "[Test] duplicate message");
+            }
+            // Дать observer-у проставиться в _logs.
+            await Task.Delay(100);
+
+            var resp = await GetAsync(BaseAddress + "/api/logs");
+            Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var arr = doc.RootElement.EnumerateArray().ToList();
+            Assert.True(arr.Count >= 5, $"Ожидалось минимум 5 записей в /api/logs, получено {arr.Count}");
+
+            // seq должен быть монотонно возрастающим по ходу логирования.
+            // В /api/logs новые записи идут первыми (LinkedList AddFirst), поэтому
+            // проверяем строгое убывание seq в массиве.
+            var seqs = arr.Take(5).Select(e => e.GetProperty("seq").GetInt64()).ToList();
+            for (var i = 1; i < seqs.Count; i++)
+            {
+                Assert.True(seqs[i] < seqs[i - 1],
+                    $"seq должен убывать в /api/logs (новые впереди), но {seqs[i]} >= {seqs[i - 1]}: [{string.Join(",", seqs)}]");
+            }
+            // Все 5 наших записей должны нести разные seq.
+            var distinctSeq = seqs.Distinct().Count();
+            Assert.Equal(5, distinctSeq);
+        }
+        finally
+        {
+            try { BotLogger.UnregisterObserver(observerId); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task LogsEndpoint_DuplicateContentGetsDifferentSeq()
+    {
+        // Доп. регрессия: даже если сообщение и timestamp совпадают,
+        // разные записи должны иметь разные seq. Без seq клиент не смог бы
+        // их различить и слил бы в дедупе — а это были разные события.
+        StartService();
+
+        var observerId = BotLogger.RegisterObserver(rec => { });
+        try
+        {
+            BotLogger.Info(LogCategory.System, "[DupTest] same content");
+            BotLogger.Info(LogCategory.System, "[DupTest] same content");
+            await Task.Delay(100);
+
+            var resp = await GetAsync(BaseAddress + "/api/logs");
+            using var doc = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var arr = doc.RootElement.EnumerateArray()
+                .Where(e => e.GetProperty("message").GetString() == "[DupTest] same content")
+                .Take(2)
+                .ToList();
+            Assert.Equal(2, arr.Count);
+            var s1 = arr[0].GetProperty("seq").GetInt64();
+            var s2 = arr[1].GetProperty("seq").GetInt64();
+            Assert.NotEqual(s1, s2);
+        }
+        finally
+        {
+            try { BotLogger.UnregisterObserver(observerId); } catch { }
+        }
     }
 }

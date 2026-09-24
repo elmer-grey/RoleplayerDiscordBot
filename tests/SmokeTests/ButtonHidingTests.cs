@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -23,6 +23,7 @@ namespace RPBot.SmokeTests;
 /// симулирует ту же условную логику на уровне POCO + проверяет через
 /// рефлексию приватного BuildComponents, что для offline случая они не строятся.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class ButtonHidingTests : IDisposable
 {
     private readonly string _tmpDir;
@@ -49,7 +50,7 @@ public class ButtonHidingTests : IDisposable
     private static PredictionService NewService()
     {
         var pts = new PointsService(Path.Combine(Path.GetTempPath(), "pts_" + Guid.NewGuid().ToString("N") + ".json"));
-        return new PredictionService(NewClient(), pts, "");
+        return new PredictionService(NewClient(), pts);
     }
 
     private static ActivePrediction MakePrediction(int outcomeCount = 2)

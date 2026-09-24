@@ -268,10 +268,18 @@ namespace RPBot
 
                         await channel.SendMessageAsync(embed: embed.Build());
                     }
-                    catch (Exception ex)
+                                            catch (OperationCanceledException)
                     {
-                        BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex.Message}");
-                    }
+                                                // Штатная отмена при выключении/реконнекте бота —
+                                                // _client.GetChannelAsync возвращает TaskCanceled после
+                                                // остановки шлюза. Не пишем WARN в лог, чтобы не
+                                                // захламлять run.log (раньше каждое выключение давало
+                                                // лишнее "The operation was canceled").
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                BotLogger.Warn(LogCategory.Discord, $"[StatusNotifier] SendShutdownNotification error for {guild.Name}: {ex.Message}");
+                                            }
                 }
             }
         }

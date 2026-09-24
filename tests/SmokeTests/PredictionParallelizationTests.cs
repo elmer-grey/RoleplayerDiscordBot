@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -18,6 +18,7 @@ namespace RPBot.SmokeTests;
 /// который позволяет держать несколько активных прогнозов параллельно
 /// на одной гильдии (по одному на каждый голосовой канал).
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class PredictionParallelizationTests : IDisposable
 {
     private readonly string _tmpDir;
@@ -43,7 +44,7 @@ public class PredictionParallelizationTests : IDisposable
     private static PredictionService NewService(string dir)
     {
         var pts = new PointsService(Path.Combine(dir, "points.json"));
-        return new PredictionService(NewClient(), pts, "");
+        return new PredictionService(NewClient(), pts);
     }
 
     private static ActivePrediction MakePrediction(ulong guildId, ulong channelId, ulong creatorId, ulong? eventId = null) => new()
@@ -161,7 +162,7 @@ public class PredictionParallelizationTests : IDisposable
     public async Task PlaceBet_OnPredictionA_DoesNotMutatePredictionB()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
         try
         {
             var a = MakePrediction(1, 100, 10);
@@ -211,7 +212,7 @@ public class PredictionParallelizationTests : IDisposable
     public async Task CancelPredictionForEventAsync_CancelsOnlyMatchedEvent()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
         try
         {
             // Два прогноза в разных каналах, привязанные к РАЗНЫМ eventId.
@@ -279,7 +280,7 @@ public class PredictionParallelizationTests : IDisposable
     public async Task ResolveAsync_ResolvesOnlyMatchedPrediction()
     {
         var pts = new PointsService(Path.Combine(_tmpDir, "points.json"));
-        var svc = new PredictionService(NewClient(), pts, "");
+        var svc = new PredictionService(NewClient(), pts);
         try
         {
             var predA = MakePrediction(1, 100, 10, eventId: 555);

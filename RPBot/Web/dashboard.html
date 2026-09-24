@@ -466,11 +466,13 @@ function logLineHtml(rec){
 }
 
 function dedupMerge(buffer, incoming){
-  // Свежие впереди — дедуп по timestamp+message, обрезка до 500.
+  // Свежие впереди — дедуп по seq (монотонный id с сервера).
+  // Если у записи нет seq (старый сервер) — fallback на timestamp+message.
+  // Обрезка до 500.
   const seen = new Set();
   const merged = [];
   for (const rec of [...incoming, ...buffer]){
-    const key = (rec.timestamp ?? '') + '|' + (rec.message ?? '');
+    const key = rec.seq != null ? ('s:' + rec.seq) : ((rec.timestamp ?? '') + '|' + (rec.message ?? ''));
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(rec);
@@ -549,6 +551,16 @@ async function startLogsStream(){
       const decoder = new TextDecoder('utf-8');
       let buf = '';
       let bootstrapConsumed = false;
+      // Батч рендера: не перерисовываем DOM на каждую запись, иначе при
+      // бёрсте (старт бота, логи при рестарте) блоки визуально
+      // «наслаиваются» друг на друга. requestAnimationFrame даёт браузеру
+      // выполнить максимум один renderLogs() на кадр (~16 мс).
+      let renderQueued = false;
+      const scheduleRender = () => {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => { renderQueued = false; renderLogs(); });
+      };
       while (!abort.signal.aborted){
         const { value, done } = await reader.read();
         if (done) break;
@@ -565,10 +577,12 @@ async function startLogsStream(){
           if (!bootstrapConsumed && obj && typeof obj === 'object' && Array.isArray(obj.items)){
             window._allLogs = dedupMerge([], obj.items);
             bootstrapConsumed = true;
+            // bootstrap — разовый снимок, рендерим сразу, без батча.
+            renderLogs();
           } else if (obj && typeof obj === 'object' && obj.timestamp){
             window._allLogs = dedupMerge(window._allLogs || [], [obj]);
+            scheduleRender();
           }
-          renderLogs();
         }
       }
     } catch (e){

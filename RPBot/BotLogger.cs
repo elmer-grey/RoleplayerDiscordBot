@@ -79,9 +79,11 @@ namespace RPBot
 
         /// <summary>
         /// Вызывается один раз при запуске/рестарте.
-        /// Создаёт имена файлов вида: <Category>_yyyyMMdd_HHmmss.log
-        /// Дополнительно открывает единый файл терминального лога logs/run.log
-        /// внутри той же сессионной папки — туда зеркалируется всё, что идёт в UI.
+        /// Создаёт пути файлов в подпапке дня: &lt;logDirectory&gt;/yyyyMMdd/&lt;Category&gt;.log
+        /// (а также run.log в той же папке). Если подпапка дня уже существует — дописывает в неё.
+        /// Идентификатор дня считается через <see cref="LogDayResolver"/>: «логический день»
+        /// начинается в LogDayResolver.CutoffHour:00 локального времени, чтобы 24.09 03:00
+        /// ещё относился к логам 23.09, а 24.09 06:00 — уже к 24.09.
         /// </summary>
         public static void Initialize(string logDirectory, DateTime startupTime)
         {
@@ -89,31 +91,22 @@ namespace RPBot
             {
                 _startupStamp = startupTime.ToString("yyyyMMdd_HHmmss");
 
-                // Каждый запуск — своя подпапка: Logs/20250615_143022/
-                var sessionDir = Path.Combine(logDirectory, _startupStamp);
+                // Подпапка дня — НЕ сессии: при рестартах в течение одних суток все пишется
+                // в одну и ту же папку Logs/yyyyMMdd/ и файлы дополняются.
+                var dayKey = LogDayResolver.ResolveDay(startupTime);
+                var sessionDir = Path.Combine(logDirectory, dayKey);
                 Directory.CreateDirectory(sessionDir);
                 _logDirectory = sessionDir;
 
-                // ✅ Round 7-C10: двойная схема логов.
-                //
-                //   1) Общий непрерывный run.log в корне Logs/
-                //      — дописывается с маркером `=== Restart #N: ... ===` между сессиями.
-                //      — удобно, когда нужно увидеть «полный хвост» за дни/недели.
-                //
-                //   2) Копия run.log внутри каждой сессионной папки Logs/<yyyyMMdd_HHmmss>/
-                //      — туда зеркалируется всё содержимое ОБЩЕГО run.log за время этой сессии.
-                //      — удобно, когда нужен только конкретный запуск без хвоста от соседей.
-                //
-                // Пользователь знает оба файла: «общий с маркерами» и «внутри папки запуска».
-                // Оба пишутся строго в порядке записи (через общий _unifiedLock).
-                _unifiedLogPath = Path.Combine(logDirectory, "run.log");
+                // Локальный для этого дня run.log — отдельный файл на сутки (от 06:00 до 06:00).
+                // Если в этот день уже были рестарты — дописываем, без перезаписи заголовка.
+                _unifiedLogPath = Path.Combine(sessionDir, "run.log");
                 try
                 {
                     if (File.Exists(_unifiedLogPath))
                     {
-                        // Считаем, какой по счёту это рестарт — по числу уже записанных маркеров.
-                        // Это грубая эвристика (считаем все вхождения "=== Restart #"), но для
-                        // пользовательского лога этого достаточно.
+                        // Файл уже есть — это рестарт в пределах того же логического дня.
+                        // Пишем маркер рестарта, чтобы отделить сессии визуально.
                         int restartNumber = 1;
                         try
                         {
@@ -128,26 +121,11 @@ namespace RPBot
                         catch { /* если не смогли прочитать — оставляем 1 */ }
                         var marker = $"=== Restart #{restartNumber}: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}";
                         File.AppendAllText(_unifiedLogPath, marker, Encoding.UTF8);
-                        // ✅ Round 7-C10: продублировать тот же маркер в сессионную копию.
-                        // Это первый лайн per-session файла — пользователь сразу видит,
-                        // с какого момента начинается запись внутри Logs/<stamp>/run.log.
-                        try
-                        {
-                            File.AppendAllText(Path.Combine(sessionDir, "run.log"), marker, Encoding.UTF8);
-                        }
-                        catch { }
                     }
                     else
                     {
                         var header = $"=== Бот запускается: {startupTime:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}";
                         File.WriteAllText(_unifiedLogPath, header, Encoding.UTF8);
-                        // ✅ Round 7-C10: первая сессия — общий run.log и per-session run.log
-                        // стартуют с одного и того же заголовка.
-                        try
-                        {
-                            File.WriteAllText(Path.Combine(sessionDir, "run.log"), header, Encoding.UTF8);
-                        }
-                        catch { }
                     }
                 }
                 catch { }
@@ -166,19 +144,43 @@ namespace RPBot
         /// <summary>
         /// Публичный путь к единому лог-файлу. Любой sink (в т.ч. StartupRenderer)
         /// может позвать этот метод и писать туда же, куда пишет BotLogger.
+        /// После введения суточных папок путь указывает на run.log внутри текущей папки дня.
         /// </summary>
         public static string? UnifiedLogPath => _unifiedLogPath;
 
         /// <summary>
-        /// ✅ Round 7-C10: путь к per-session копии run.log внутри сессионной папки.
-        /// Если сессионная папка ещё не создана (Initialize не вызывался) — вернёт null.
+        /// Переключает BotLogger на новую суточную папку <paramref name="logRoot"/>/<paramref name="dayKey"/>.
+        /// Используется планировщиком <see cref="LogDayRolloverService"/> в момент 06:00,
+        /// чтобы последующие записи шли в <c>Logs/yyyyMMdd/</c> нового дня.
+        ///
+        /// В отличие от <see cref="Initialize"/>, метод НЕ очищает пути и НЕ закрывает локеры —
+        /// он просто перенацеливает <c>_paths</c> на новые файлы (которые дополняются с пустого
+        /// состояния, если папка только что создана). Существующие категорийные файлы остаются
+        /// открытыми семафорами на случай гонки с уже идущей записью.
         /// </summary>
-        public static string? SessionRunLogPath
+        public static void RolloverToDay(string logRoot, string dayKey)
         {
-            get
+            if (string.IsNullOrWhiteSpace(logRoot) || string.IsNullOrWhiteSpace(dayKey)) return;
+            lock (_initLock)
             {
-                if (string.IsNullOrEmpty(_logDirectory)) return null;
-                return Path.Combine(_logDirectory, "run.log");
+                var newDir = Path.Combine(logRoot, dayKey);
+                Directory.CreateDirectory(newDir);
+                _logDirectory = newDir;
+                _unifiedLogPath = Path.Combine(newDir, "run.log");
+                try
+                {
+                    var marker = $"=== Rollover: новый день логов {dayKey} ({DateTime.Now:yyyy-MM-dd HH:mm:ss}) ==={Environment.NewLine}";
+                    File.AppendAllText(_unifiedLogPath, marker, Encoding.UTF8);
+                }
+                catch { }
+                foreach (LogCategory cat in Enum.GetValues<LogCategory>())
+                {
+                    if (!_locks.TryGetValue(cat, out var existing))
+                    {
+                        _locks[cat] = new SemaphoreSlim(1, 1);
+                    }
+                    _paths[cat] = Path.Combine(newDir, $"{cat}.log");
+                }
             }
         }
 
@@ -186,7 +188,6 @@ namespace RPBot
         /// Дописывает строку в единый файл-зеркало терминала. Потокобезопасно.
         /// Используется и BotLogger-ом, и внешними sinks (StartupRenderer), чтобы
         /// гарантировать единый порядок строк между источниками.
-        /// ✅ Round 7-C10: пишет и в общий run.log (с маркерами), и в per-session run.log.
         /// </summary>
         public static async Task WriteUnifiedLineAsync(string line)
         {
@@ -197,18 +198,6 @@ namespace RPBot
                 try
                 {
                     File.AppendAllText(_unifiedLogPath, line + Environment.NewLine, Encoding.UTF8);
-                    // ✅ Round 7-C10: параллельная запись в per-session копию.
-                    // Тот же лайн в том же порядке. Делаем best-effort: если per-session
-                    // файл недоступен — общий run.log остаётся источником правды.
-                    var sessionPath = SessionRunLogPath;
-                    if (!string.IsNullOrEmpty(sessionPath) && !string.Equals(sessionPath, _unifiedLogPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try
-                        {
-                            File.AppendAllText(sessionPath, line + Environment.NewLine, Encoding.UTF8);
-                        }
-                        catch { /* per-session файл необязательный */ }
-                    }
                 }
                 catch { }
             }

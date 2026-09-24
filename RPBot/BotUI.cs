@@ -71,9 +71,6 @@ namespace RPBot
         private readonly List<string> _pendingLogLines = new List<string>();
         private readonly List<string> _pendingCommandLines = new List<string>();
 
-        // Чтобы не показывать старые ошибки после успешного рестарта
-        private long _errorLogLengthAtRestart = -1;
-
         public BotUI(
             DiscordSocketClient client,
             IBotController botController,
@@ -352,7 +349,7 @@ namespace RPBot
                     // Ждём сигнализации Init внутри UI-потока (best-effort)
         if (!_uiInitialized.Wait(5000))
         {
-        // Техническая диагностика UI: пишем в отдельный UiErrorLog_yyyyMMdd.txt
+                            // Техническая диагностика UI: пишем в отдельный UiLog_yyyyMMdd.txt
         TryAppendErrorToFile("EnsureUiInitialized: UI thread did not initialize within timeout");
         }
 
@@ -2349,8 +2346,6 @@ namespace RPBot
                 {
                     try
                     {
-                        _errorLogLengthAtRestart = GetErrorLogLength();
-
                         _logLines.Clear();
                         _commandLines.Clear();
                         _logLogicalLines.Clear();
@@ -2390,14 +2385,12 @@ namespace RPBot
             {
                 try
                 {
-                    // По завершении перезапуска не дублируем сообщение о завершении;
-                    // показываем только новые ошибки, если они появились.
-                    var newErrors = ReadErrorLogDelta();
-                    if (!string.IsNullOrWhiteSpace(newErrors))
-                    {
-                        AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines("Ошибки за время перезапуска:"), MaxLogLines);
-                        AppendLinesUnsafe(_logLines, _logPanel, FormatLogLines(newErrors), MaxLogLines);
-                    }
+                    // ✅ Очищено: раньше тут читался дельта-хвост ErrorLog_yyyyMMdd.txt,
+                    // но туда никто не пишет (легаси от старого логгера). Файловые методы
+                    // GetErrorLogPath/GetErrorLogLength/ReadErrorLogDelta удалены, так как
+                    // без писем в этот файл вьювер всегда возвращал пустую строку.
+                    // Реальная трансляция логов в UI идёт через BotLogger._uiSink (см. BotLogger.cs).
+                    _ = initiator;
                 }
                 catch (Exception ex)
                 {
@@ -2584,75 +2577,26 @@ namespace RPBot
         }
 
 // Путь к основному ErrorLog (внутренние ошибки бота), который отображается в UI.
-// Используем тот же шаблон, что и Program.LogError: ErrorLog_yyyyMMdd.txt в LogDirectory.
+// Заглушка на случай, если внешний код ещё ссылается на GetErrorLogPath.
+// Реальный ErrorLog_*.txt больше не пишется: вся диагностика идёт через BotLogger
+// в общий run.log (категория System). Раньше тут был расчёт пути к ErrorLog_yyyyMMdd.txt,
+// но в этот файл никто не пишет (легаси от старого логгера).
 private string GetErrorLogPath()
 {
-    var logDir = BotConfig.Current?.LogDirectory;
-    var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
-    Directory.CreateDirectory(resolvedLogDir);
-    var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-    return Path.Combine(resolvedLogDir, $"ErrorLog_{dateSuffix}.txt");
+    throw new NotSupportedException(
+        "GetErrorLogPath упразднён: см. комментарий в BotLogger.cs. " +
+        "Реальная диагностика идёт через BotLogger.Error/Info.");
 }
 
-private long GetErrorLogLength()
-        {
-            try
-            {
-    var path = GetErrorLogPath();
-                if (!File.Exists(path))
-                    return 0;
-                return new FileInfo(path).Length;
-            }
-            catch
-            {
-                return -1;
-            }
-        }
-
-        private string ReadErrorLogDelta()
-        {
-            try
-            {
-    var path = GetErrorLogPath();
-                if (!File.Exists(path))
-                    return string.Empty;
-
-                var start = _errorLogLengthAtRestart;
-                if (start < 0)
-                    return string.Empty;
-
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                if (fs.Length <= start)
-                    return string.Empty;
-
-                fs.Position = start;
-                using var sr = new StreamReader(fs);
-                return sr.ReadToEnd();
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        private static void TryAppendErrorToFile(string message)
-        {
-            try
-            {
-    var logPath = GetUiErrorLogPath();
-    File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
-            }
-            catch { }
-        }
-
-private static string GetUiErrorLogPath()
+private static void TryAppendErrorToFile(string message)
 {
-    var logDir = BotConfig.Current?.LogDirectory;
-    var resolvedLogDir = BotConfig.ResolvePath(string.IsNullOrWhiteSpace(logDir) ? "Logs" : logDir);
-    Directory.CreateDirectory(resolvedLogDir);
-    // Отдельный лог ошибок UI по дням: UiErrorLog_yyyyMMdd.txt
-    var dateSuffix = DateTime.Now.ToString("yyyyMMdd");
-    return Path.Combine(resolvedLogDir, $"UiErrorLog_{dateSuffix}.txt");
+    try
+    {
+        // UI-диагностика идёт в общий BotLogger (run.log + категория System),
+        // а не в отдельный файл — всё в одном месте, как и остальные логи бота.
+        BotLogger.Info(LogCategory.System, $"[UI] {message}");
+    }
+    catch { /* и тишина — UI-диагностика не должна валить программу */ }
 }
 
         public void Dispose()

@@ -92,7 +92,11 @@ internal static class GameSessionTestAccess
         var field = gm.GetField(
             "_sessions",
             BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic);
-        var sessions = (System.Collections.Concurrent.ConcurrentDictionary<ulong, System.Collections.Concurrent.ConcurrentDictionary<ulong, GameSession>>)field.GetValue(null)!;
-        sessions.TryRemove(guildId, out _);
-    }
+            var raw = field!.GetValue(null) as System.Collections.Concurrent.ConcurrentDictionary<ulong, System.Collections.Concurrent.ConcurrentDictionary<ulong, GameSession>>;
+                        if (raw is null)
+            {
+                return;
+            }
+                        raw!.TryRemove(guildId, out _);
+        }
 }

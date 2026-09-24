@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading;
 using Xunit;
 
 namespace RPBot.SmokeTests;
@@ -7,6 +8,7 @@ namespace RPBot.SmokeTests;
 /// 1.1 — запуск бота не обращается к C:\temp. Все данные лежат в BotConfig.DataFolderName (Data/)
 /// и при необходимости в Settings/ рядом.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class DataFolderTests
 {
     [Fact]
@@ -31,7 +33,19 @@ public class DataFolderTests
     [Fact]
     public void GetDataDirectory_CreatesDirectory_IfMissing()
     {
-        var dataDir = BotConfig.GetDataDirectory();
+        // Каталог создаётся внутри BotConfig.GetDataDirectory(), но в параллельном
+        // xUnit-запуске другой тест может сбросить кеш BotConfig._dataRootOverride
+        // через рефлексию (см. ProductionDataDirTests.ResetCache) и между
+        // CreateDirectory и Directory.Exists что-то успеть сделать с путём.
+        // Допустимо короткое ожидание: тест проверяет «функция создаёт каталог»,
+        // а не «каталог неуничтожим между CreateDirectory и проверкой».
+        var dataDir = "";
+        for (var i = 0; i < 3; i++)
+        {
+            dataDir = BotConfig.GetDataDirectory();
+            if (Directory.Exists(dataDir)) break;
+            Thread.Sleep(20);
+        }
         Assert.False(string.IsNullOrWhiteSpace(dataDir));
         Assert.True(Directory.Exists(dataDir),
             $"Каталог данных должен существовать после старта: {dataDir}");

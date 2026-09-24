@@ -132,7 +132,7 @@ namespace RPBot
         private readonly SemaphoreSlim _statsGate = new(1, 1);
         private readonly SemaphoreSlim _achievementsGate = new(1, 1);
 
-        public PredictionService(DiscordSocketClient client, PointsService points, string logPath)
+        public PredictionService(DiscordSocketClient client, PointsService points)
                 {
                     _client = client;
                     _points = points;

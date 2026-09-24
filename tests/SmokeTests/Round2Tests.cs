@@ -14,6 +14,7 @@ namespace RPBot.SmokeTests;
 ///   * Тест Lavalink retry-логики — проверка, что метод StartLavalinkProcessAsync
 ///     и обёртка StartLavalinkWithRetryAsync доступны и не падают при отменённом токене.
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class Round2Tests : IDisposable
 {
     private readonly string _tmpDir;

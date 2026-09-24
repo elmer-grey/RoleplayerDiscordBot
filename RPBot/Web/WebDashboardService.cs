@@ -296,6 +296,13 @@ namespace RPBot.Web
         private readonly object _logsLock = new();
         private readonly LinkedList<BotLogRecord> _logs = new();
         private readonly int _maxLogs;
+        // Монотонный счётчик записей, прошедших через WebDashboard.OnLog.
+        // Нужен клиенту для надёжной дедупликации при перерендере стрима
+        // (timestamp+message могут совпадать у разных событий, например при
+        // двойном [WebDashboard] Start observer=…). После рестарта сервиса
+        // счёт начинается заново — это нормально, _logs тоже обнуляется.
+        private long _logSeq;
+        private long NextSeq() => Interlocked.Increment(ref _logSeq);
         private readonly object _rateLimitLock = new();
         private readonly Dictionary<string, RateLimitBucket> _rateLimitBuckets = new(StringComparer.Ordinal);
         private readonly int _rateLimitPerMinute;
@@ -875,14 +882,19 @@ namespace RPBot.Web
 
         private void OnLog(BotLogRecord record)
                 {
-                    lock (_logsLock)
-                    {
-                        _logs.AddFirst(record);
-                        while (_logs.Count > _maxLogs)
-                            _logs.RemoveLast();
-                    }
-                    _streamSignal.Set();
-                }
+            // Проставляем монотонный seq ДО добавления в _logs, чтобы
+            // он уже был в LinkedList при первом Take()/MapRecord.
+            // Interlocked.Increment даёт уникальный seq даже при
+            // параллельных вызовах из разных observer-цепочек.
+            var stamped = record with { Seq = Interlocked.Increment(ref _logSeq) };
+            lock (_logsLock)
+            {
+                _logs.AddFirst(stamped);
+                while (_logs.Count > _maxLogs)
+                    _logs.RemoveLast();
+            }
+            _streamSignal.Set();
+        }
 
                 // Сигнал «появились новые записи» для всех открытых /api/logs/stream соединений.
                 // Слабая блокировка (тонкая семафор-нотификация), потому что OnLog вызывается
@@ -1022,8 +1034,9 @@ namespace RPBot.Web
                     }
                 }
 
-                                private static object MapRecord(BotLogRecord x) => new
+                                private object MapRecord(BotLogRecord x) => new
                                 {
+                                    seq = x.Seq,
                                     timestamp = x.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
                                     level = x.Level.ToString(),
                                     category = x.Category.ToString(),

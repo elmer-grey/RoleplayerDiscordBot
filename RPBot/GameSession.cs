@@ -496,13 +496,18 @@ namespace RPBot
                                     {
                                         try
                                         {
-                                            var guild = client.GetGuild(guildId);
-                                            if (guild == null)
-                                            {
-                                                BotLogger.Warn(LogCategory.Session, $"[STALE] Гильдия {guildId} недоступна для сессии {session.SessionId} — пропускаю.");
-                                                continue;
-                                            }
-                                            var guildEvent = await guild.GetEventAsync(session.EventId.Value).ConfigureAwait(false);
+                                                                                if (!session.EventId.HasValue)
+                                                                                {
+                                                                                    BotLogger.Warn(LogCategory.Session, $"[STALE] У сессии {session.SessionId} не задан EventId — пропускаю.");
+                                                                                    continue;
+                                                                                }
+                                                                                var guild = client.GetGuild(guildId);
+                                                                                if (guild == null)
+                                                                                {
+                                                                                    BotLogger.Warn(LogCategory.Session, $"[STALE] Гильдия {guildId} недоступна для сессии {session.SessionId} — пропускаю.");
+                                                                                    continue;
+                                                                                }
+                                                                                var guildEvent = await guild.GetEventAsync(session.EventId.Value).ConfigureAwait(false);
                                             if (guildEvent == null)
                                             {
                                                 // Кэш SocketGuild.GetEventAsync может возвращать null, даже если событие живёт.

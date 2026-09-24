@@ -20,6 +20,7 @@ namespace RPBot.SmokeTests;
 /// (пишем JSON руками и читаем обратно через System.Text.Json, чтобы
 /// убедиться, что SaveStateAsync/LoadStateAsync сохраняют наши поля).
 /// </summary>
+[Collection(nameof(BotConfigCollection))]
 public class PredictionOfflineShiftTests : IDisposable
 {
     private readonly string _tmpDir;

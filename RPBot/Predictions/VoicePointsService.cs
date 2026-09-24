@@ -51,7 +51,7 @@ namespace RPBot
                     public CancellationTokenSource? TimerCts { get; set; }
                 }
 
-                public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, string logPath, Func<ulong, ulong, bool> isActiveEventOnChannel)
+                public VoicePointsService(DiscordSocketClient client, PointsService points, Func<ulong, ServerConfig?> getServerConfig, Func<ulong, ulong, bool> isActiveEventOnChannel)
                 {
                     _client = client;
                     _points = points;

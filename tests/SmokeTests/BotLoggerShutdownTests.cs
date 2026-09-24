@@ -12,6 +12,7 @@ namespace RPBot.SmokeTests;
 ///   * пост-shutdown записи не падают на disposed semaphores;
 ///   * Shutdown обнуляет _paths / _logDirectory так, что следующий Initialize чист.
 /// </summary>
+[Collection(nameof(BotLoggerCollection))]
 public class BotLoggerShutdownTests : IDisposable
 {
     private readonly string _tmpDir;
@@ -25,8 +26,6 @@ public class BotLoggerShutdownTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_tmpDir, true); } catch { }
-        // Вернуть логгер в чистое состояние для следующих тестов.
-        try { BotLogger.Initialize(_tmpDir, DateTime.UtcNow); } catch { }
     }
 
     [Fact]
@@ -76,7 +75,8 @@ public class BotLoggerShutdownTests : IDisposable
         // Должна успешно переинициализировать — старые пути обнулены.
         BotLogger.Initialize(_tmpDir, new DateTime(2026, 1, 2));
 
-        var expected = Path.Combine(_tmpDir, "20260102_000000");
+        // 2026-01-02 00:00 — это до cutoffHour=6, значит день логов = 20260101.
+        var expected = Path.Combine(_tmpDir, "20260101");
         Assert.True(Directory.Exists(expected),
             $"После Initialize после Shutdown должен быть создан каталог {expected}");
     }

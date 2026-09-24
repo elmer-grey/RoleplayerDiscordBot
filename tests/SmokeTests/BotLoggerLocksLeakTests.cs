@@ -15,6 +15,7 @@ namespace RPBot.SmokeTests;
 /// Тесты через рефлексию проверяют, что Shutdown полностью сливает
 /// словарь и Dispose-ит каждый SemaphoreSlim.
 /// </summary>
+[Collection(nameof(BotLoggerCollection))]
 public class BotLoggerLocksLeakTests : IDisposable
 {
     private readonly string _tmpDir;
