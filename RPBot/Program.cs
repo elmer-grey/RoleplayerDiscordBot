@@ -2456,6 +2456,7 @@ private static BotUI? _ui;
                         // TelegramNotifier не зависит от DiscordSocketClient напрямую, но пересоздаём его
                         // вместе с остальными сервисами при рестарте/реконнекте — на случай "протухшего"
                         // HttpClient или устаревшего замыкания на _serverConfigs.
+                        try { _telegramNotifier?.Dispose(); } catch { }
                         _telegramNotifier = new TelegramNotifier(guildId =>
                         {
                             return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;

@@ -8,18 +8,39 @@ using System.Threading.Tasks;
 
 namespace RPBot
 {
-public sealed class TelegramNotifier
+public sealed class TelegramNotifier : IDisposable
 {
         private readonly Func<ulong, ServerConfig?> _serverConfigAccessor;
 private readonly HttpClient _httpClient;
+private readonly bool _ownsHttpClient;
+private bool _disposed;
 
 public sealed record TelegramProbeResult(bool Success, string Message, int? TelegramMessageId = null);
 
 public TelegramNotifier(Func<ulong, ServerConfig?> serverConfigAccessor, HttpClient? httpClient = null)
 {
     _serverConfigAccessor = serverConfigAccessor ?? throw new ArgumentNullException(nameof(serverConfigAccessor));
-    _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+    if (httpClient != null)
+    {
+        _httpClient = httpClient;
+        _ownsHttpClient = false;
+    }
+    else
+    {
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _ownsHttpClient = true;
+    }
 }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_ownsHttpClient)
+            {
+                try { _httpClient.Dispose(); } catch { }
+            }
+        }
 
 public async Task<bool> SendPhotoAsync(ulong guildId, string photoUrl, string? caption = null, CancellationToken ct = default)
 {

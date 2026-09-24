@@ -15,7 +15,7 @@ namespace RPBot
     /// Обработчик команды /music и кнопок плеера.
     /// Все ответы пользователю — эфемерные; embed с управлением отправляется в канал.
     /// </summary>
-    public class MusicCommands
+    public class MusicCommands : IDisposable
     {
         private readonly LavalinkService    _lavalink;
         private readonly MusicPlaylistStore? _playlistStore;
@@ -23,6 +23,7 @@ namespace RPBot
         private readonly MusicStats?        _stats;
         private DiscordSocketClient _discord;
         private Timer? _progressTimer;
+        private bool _disposed;
 
         // ── Кэш результатов поиска: ключ = "guildId:userId", значение = список треков + время создания + сообщение
                 // Обращения в норме идут из gateway-callback'ов Discord.NET (один диспатчер),
@@ -1664,6 +1665,20 @@ namespace RPBot
         private void Log(string message)
         {
             BotLogger.Info(LogCategory.Music, message);
+        }
+
+        /// <summary>
+        /// Bug audit-leaks #4: освобождает _progressTimer и отписывает
+        /// Discord-события. Идемпотентен. В текущем жизненном цикле MusicCommands
+        /// живёт весь процесс и Dispose вызывается только при полном shutdown.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try { _progressTimer?.Dispose(); } catch { }
+            _progressTimer = null;
+            try { _discord.UserVoiceStateUpdated -= OnVoiceStateUpdatedAsync; } catch { }
         }
     }
 }

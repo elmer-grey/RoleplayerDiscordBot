@@ -1832,7 +1832,10 @@ namespace RPBot
 
                 if (session.IsPaused)
                 {
-                    session.PauseReminderCTS?.Cancel();
+                    // Bug audit-leaks #5: Cancel+Dispose — раньше был только Cancel, CTS текла.
+                    try { session.PauseReminderCTS?.Cancel(); } catch { }
+                    try { session.PauseReminderCTS?.Dispose(); } catch { }
+                    session.PauseReminderCTS = null;
                     var lastPause = session.PausePeriods.LastOrDefault();
                     if (lastPause.Start != default)
                         session.PausePeriods[^1] = (lastPause.Start, DateTime.Now);

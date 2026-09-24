@@ -231,7 +231,9 @@ namespace RPBot
                             {
                                 if (guildStates.TryRemove(user.Id, out var oldState))
                                 {
-                                    oldState?.TimerCts?.Cancel();
+                                    // Bug audit-leaks #2: Cancel+Dispose — иначе CTS течёт при каждом переходе.
+                                    try { oldState?.TimerCts?.Cancel(); } catch { }
+                                    try { oldState?.TimerCts?.Dispose(); } catch { }
                                 }
                                 StartTrackingUser(guildId, user.Id, afterChannel.Id, guildStates);
                                 return;
@@ -240,7 +242,9 @@ namespace RPBot
                             // Иначе — пользователь покинул ивент-канал.
                             if (guildStates.TryRemove(user.Id, out var oldState2))
                             {
-                                oldState2?.TimerCts?.Cancel();
+                                // Bug audit-leaks #2: Cancel+Dispose — иначе CTS течёт при каждом выходе.
+                                try { oldState2?.TimerCts?.Cancel(); } catch { }
+                                try { oldState2?.TimerCts?.Dispose(); } catch { }
                                 await LogAsync($"VOICE_TRACK_STOP guild={guildId} user={user.Id} channel={beforeChannel.Id}");
                             }
                             return;

@@ -375,6 +375,12 @@ namespace RPBot
             {
                 if (_uiThread != null && _uiThread.IsAlive) return;
 
+                // Bug audit-leaks #3: отменяем и диспозим предыдущий CTS, иначе течёт
+                // при многократном StartUiThread (теоретически — сейчас он однократный,
+                // но защищаемся от патчей, которые могут перезапускать UI-поток).
+                try { _uiCts?.Cancel(); } catch { }
+                try { _uiCts?.Dispose(); } catch { }
+
                 _uiCts = new CancellationTokenSource();
                 _uiInitialized = new ManualResetEventSlim(false);
 
