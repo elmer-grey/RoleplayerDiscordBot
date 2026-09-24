@@ -57,22 +57,22 @@ namespace RPBot.Web
             }
             if (!OperatingSystem.IsWindows())
             {
-                BotLogger.Info(LogCategory.System, "[UrlAclBootstrap] не Windows — пропуск netsh");
+                            BotLogger.Debug(LogCategory.System, "[UrlAclBootstrap] не Windows — пропуск netsh");
                 return false;
             }
 
-            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] проверка регистрации {prefix}");
+            BotLogger.Debug(LogCategory.System, $"[UrlAclBootstrap] проверка регистрации {prefix}");
                         if (_prefixVerified.TryGetValue(prefix, out var verified) && verified)
                         {
-                            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже подтверждён ранее в этой сессии — пропускаю netsh show");
+                                        BotLogger.Debug(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже подтверждён ранее в этой сессии — пропускаю netsh show");
                             return true;
                         }
                         bool alreadyRegistered = IsRegistered(prefix);
                         if (alreadyRegistered) _prefixVerified[prefix] = true;
-            BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] IsRegistered({prefix}) = {alreadyRegistered}");
+                        BotLogger.Debug(LogCategory.System, $"[UrlAclBootstrap] IsRegistered({prefix}) = {alreadyRegistered}");
             if (alreadyRegistered)
             {
-                BotLogger.Info(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже зарегистрирован");
+                            BotLogger.Debug(LogCategory.System, $"[UrlAclBootstrap] {prefix} уже зарегистрирован");
                 return true;
             }
 
@@ -132,7 +132,7 @@ namespace RPBot.Web
             }
 
             bool finalRegistered = IsRegistered(prefix);
-                        BotLogger.Info(LogCategory.System,
+                                    BotLogger.Debug(LogCategory.System,
                             $"[UrlAclBootstrap] пост-проверка IsRegistered({prefix}) = {finalRegistered}");
                         if (finalRegistered) _prefixVerified[prefix] = true;
                         return finalRegistered;
@@ -262,7 +262,7 @@ namespace RPBot.Web
                                         break;
                                     }
                                 }
-                BotLogger.Info(LogCategory.System,
+                BotLogger.Debug(LogCategory.System,
                     $"[UrlAclBootstrap] IsRegistered: needle='{needle}' (host={needleHost}, port={needlePort}) found={found} exit={p.ExitCode} stderr='{stderr.Trim()}'");
                 return found;
             }

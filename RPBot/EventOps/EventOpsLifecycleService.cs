@@ -46,9 +46,10 @@ namespace RPBot.EventOps
     {
         private readonly EventAnnouncementStore _store;
         private readonly Func<DiscordSocketClient> _clientProvider;
-        private readonly TelegramNotifier? _telegramNotifier;
-        private readonly EventNotificationService _eventNotifications;
-        private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
+                private readonly EventNotificationService _eventNotifications;
+                private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
+                private TelegramNotifier? _telegramNotifier;
+                private readonly object _telegramNotifierLock = new();
 
         private readonly ConcurrentDictionary<(ulong guildId, ulong eventId), ScheduledTimers> _timers = new();
         private readonly CancellationTokenSource _shutdownCts = new();
@@ -69,6 +70,18 @@ namespace RPBot.EventOps
             _eventNotifications = eventNotifications ?? throw new ArgumentNullException(nameof(eventNotifications));
             _serverConfigsProvider = serverConfigsProvider ?? throw new ArgumentNullException(nameof(serverConfigsProvider));
         }
+
+                    /// <summary>
+                    /// Сеттер для TelegramNotifier — синхронно меняет ссылку после реконнекта,
+                    /// чтобы reminder/cleanup-публикации не падали на disposed notifier.
+                    /// </summary>
+                    public void SetTelegramNotifier(TelegramNotifier? notifier)
+                    {
+                        lock (_telegramNotifierLock)
+                        {
+                            _telegramNotifier = notifier;
+                        }
+                    }
 
         /// <summary>
         /// Запрашивает отмену всех таймеров (для shutdown/OnDisconnected).

@@ -2481,8 +2481,15 @@ private static BotUI? _ui;
                         {
                             return _serverConfigs != null && _serverConfigs.TryGetValue(guildId, out var sc) ? sc : null;
                         });
+                                                // ✅ bug-fix: EventAnnouncer._telegramNotifier был readonly,
+                                                // поэтому при реконнекте (или при первом запуске, когда
+                                                // блок if(_client.ConnectionState==Disconnected) сработал)
+                                                // оставался указатель на уже-disposed notifier, и resync на
+                                                // старте падал с ObjectDisposedException на каждой Telegram-публикации.
+                                                _eventAnnouncer?.SetTelegramNotifier(_telegramNotifier);
+                                                _eventOpsLifecycle?.SetTelegramNotifier(_telegramNotifier);
 
-                        _predictionService = new PredictionService(_client!, _pointsService);
+                                                _predictionService = new PredictionService(_client!, _pointsService);
                                                 // ✅ R6 fix: см. первичную инициализацию — обработчики тоже подписываем.
                                                 if (_predictionService != null)
                                                 {

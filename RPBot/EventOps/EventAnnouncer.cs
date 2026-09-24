@@ -17,24 +17,39 @@ namespace RPBot.EventOps
     {
         private readonly DiscordSocketClient _client;
         private readonly Func<IReadOnlyDictionary<ulong, ServerConfig>> _serverConfigsProvider;
-        private readonly TelegramNotifier? _telegramNotifier;
-        private readonly EventAnnouncementStore? _store;
-        private readonly EventNotificationService _eventNotifications;
-        private readonly Func<DiscordSocketClient>? _clientProvider;
+                private readonly EventAnnouncementStore? _store;
+                private readonly EventNotificationService _eventNotifications;
+                private readonly Func<DiscordSocketClient>? _clientProvider;
+                private TelegramNotifier? _telegramNotifier;
+                private readonly object _telegramNotifierLock = new();
 
-        public EventAnnouncer(
-            DiscordSocketClient client,
-            Func<IReadOnlyDictionary<ulong, ServerConfig>> serverConfigsProvider,
-            TelegramNotifier? telegramNotifier,
-            EventAnnouncementStore? store,
-            EventNotificationService eventNotifications)
-        {
-            _client = client;
-            _serverConfigsProvider = serverConfigsProvider;
-            _telegramNotifier = telegramNotifier;
-            _store = store;
-            _eventNotifications = eventNotifications;
-        }
+                public EventAnnouncer(
+                    DiscordSocketClient client,
+                    Func<IReadOnlyDictionary<ulong, ServerConfig>> serverConfigsProvider,
+                    TelegramNotifier? telegramNotifier,
+                    EventAnnouncementStore? store,
+                    EventNotificationService eventNotifications)
+                {
+                    _client = client;
+                    _serverConfigsProvider = serverConfigsProvider;
+                    _telegramNotifier = telegramNotifier;
+                    _store = store;
+                    _eventNotifications = eventNotifications;
+                }
+
+                /// <summary>
+                /// Сеттер для TelegramNotifier — нужен, потому что Program.cs при реконнекте
+                /// пересоздаёт notifier (старый dispose'ится), а EventAnnouncer живёт дольше.
+                /// Без сеттера resync после реконнекта падал с ObjectDisposedException,
+                /// потому что EventAnnouncer продолжал держать старый, уже disposed, notifier.
+                /// </summary>
+                public void SetTelegramNotifier(TelegramNotifier? notifier)
+                {
+                    lock (_telegramNotifierLock)
+                    {
+                        _telegramNotifier = notifier;
+                    }
+                }
 
         /// <summary>
         /// Конструктор с провайдером клиента — для случая, когда клиент пересоздаётся
@@ -1363,24 +1378,36 @@ namespace RPBot.EventOps
                         (ok, error) = entry.TelegramHasPhoto
                             ? await _telegramNotifier.EditMessageCaptionWithDetailsAsync(entry.GuildId, entry.TelegramMessageId, tgText)
                             : await _telegramNotifier.EditMessageTextWithDetailsAsync(entry.GuildId, entry.TelegramMessageId, tgText);
-                        Log($"[EVENT] status-from-rest {status} telegram {(ok ? "ok" : $"fail — {error}")} guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
-                    }
-                    else
-                    {
-                        var sentResult = await _telegramNotifier.SendMessageWithReasonAsync(entry.GuildId, tgText);
-                        ok = sentResult.messageId.HasValue;
-                        var sentId = sentResult.messageId;
-                        if (sentId.HasValue)
-                        {
-                            entry.TelegramMessageId = sentId.Value;
-                            entry.TelegramHasPhoto = false;
-                        }
-                        string sendOutcome;
-                        if (ok) sendOutcome = "sent";
-                        else if (string.IsNullOrEmpty(sentResult.error)) sendOutcome = "skipped: no-config";
-                        else sendOutcome = $"fail — {sentResult.error}";
-                        Log($"[EVENT] status-from-rest {status} telegram {sendOutcome} guild={entry.GuildId} event={entry.EventId} msg={(sentId ?? 0)}");
-                    }
+                                            // ✅ bug-fix: раздельно уровни — ok это Info, fail это Warn
+                                            // (особенно ObjectDisposedException, который раньше молча
+                                            // проскакивал как info и не привлекал внимания).
+                                            if (ok)
+                                                Log($"[EVENT] status-from-rest {status} telegram ok guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
+                                            else
+                                                LogWarn($"[EVENT] status-from-rest {status} telegram fail — {error} guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
+                                        }
+                                        else
+                                        {
+                                            var sentResult = await _telegramNotifier.SendMessageWithReasonAsync(entry.GuildId, tgText);
+                                            ok = sentResult.messageId.HasValue;
+                                            var sentId = sentResult.messageId;
+                                            if (sentId.HasValue)
+                                            {
+                                                entry.TelegramMessageId = sentId.Value;
+                                                entry.TelegramHasPhoto = false;
+                                            }
+                                            string sendOutcome;
+                                            if (ok) sendOutcome = "sent";
+                                            else if (string.IsNullOrEmpty(sentResult.error)) sendOutcome = "skipped: no-config";
+                                                                                        else sendOutcome = $"fail — {sentResult.error}";
+                                                                                        // ok/sent/skipped — info; fail — warn (особенно
+                                                                                        // для disposed-notifier, который раньше выглядел
+                                                                                        // как обычное info-сообщение).
+                                                                                        if (ok || sendOutcome.StartsWith("skipped"))
+                                                                                            Log($"[EVENT] status-from-rest {status} telegram {sendOutcome} guild={entry.GuildId} event={entry.EventId} msg={(sentId ?? 0)}");
+                                                                                        else
+                                                                                            LogWarn($"[EVENT] status-from-rest {status} telegram {sendOutcome} guild={entry.GuildId} event={entry.EventId} msg={(sentId ?? 0)}");
+                                                                                    }
                 }
                 catch (Exception ex)
                 {
@@ -1468,6 +1495,18 @@ namespace RPBot.EventOps
             catch { Console.Error.WriteLine($"[LogError-fallback] {msg}"); }
             return Task.CompletedTask;
             }
+
+                /// <summary>
+                /// Warn-уровень для не-критичных ошибок публикации — например,
+                /// Telegram fail с disposed-notifier или сетевой таймаут.
+                /// Info скрывал их среди обычных событий, и регрессии не
+                /// привлекали внимания при разборе логов.
+                /// </summary>
+                private static void LogWarn(string msg)
+                {
+                    try { BotLogger.Warn(LogCategory.Discord, msg); }
+                    catch { Console.Error.WriteLine($"[LogWarn-fallback] {msg}"); }
+                }
 
         /// <summary>
         /// Diff между двумя живыми объектами SocketGuildEvent.
