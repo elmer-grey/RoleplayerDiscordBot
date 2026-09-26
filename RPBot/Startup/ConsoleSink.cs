@@ -21,25 +21,50 @@ namespace RPBot.Startup
                 _gate.Wait(TimeSpan.FromMilliseconds(250), ct);
                 try
                 {
-                    var prev = Console.ForegroundColor;
-                    Console.ForegroundColor = PickColor(record.Channel);
-                    Console.WriteLine(FormatLine(record));
-                    Console.ForegroundColor = prev;
+                            // Цвета применяем только если stdout — реальный TTY.
+                            // На headless VPS / под systemd / в CI / при редиректе в файл
+                            // ConsoleColor не имеет эффекта (или хуже — на Windows-VPS
+                            // под `nohup` остаются ANSI-коды в run.log). Просто пишем как есть.
+                            if (Console.IsOutputRedirected || !IsStdoutATty())
+                            {
+                                Console.WriteLine(FormatLine(record));
+                            }
+                            else
+                            {
+                                var prev = Console.ForegroundColor;
+                                Console.ForegroundColor = PickColor(record.Channel);
+                                Console.WriteLine(FormatLine(record));
+                                Console.ForegroundColor = prev;
+                            }
+                        }
+                        finally
+                        {
+                            try { _gate.Release(); } catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // не валим старт из-за консоли, но оставляем след в Debug —
+                        // Console.Write может бросить, если stdout перенаправлен и
+                        // пайп закрыт (например, бот запущен как Windows-сервис).
+                        Debug.WriteLine($"[ConsoleSink] write failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+                    return Task.CompletedTask;
                 }
-                finally
+
+                private static bool IsStdoutATty()
                 {
-                    try { _gate.Release(); } catch { }
+                    // Console.IsOutputRedirected — самый простой индикатор.
+                    // Дополнительно проверяем наличие POSIX isatty(1) на Unix,
+                    // потому что в некоторых Mono/рантаймах redirected=false лжёт.
+                    try
+                    {
+                        if (OperatingSystem.IsWindows()) return !Console.IsOutputRedirected;
+                        return !Console.IsOutputRedirected
+                            && Environment.GetEnvironmentVariable("TERM") != "dumb";
+                    }
+                    catch { return false; }
                 }
-            }
-            catch (Exception ex)
-            {
-                // не валим старт из-за консоли, но оставляем след в Debug —
-                // Console.Write может бросить, если stdout перенаправлен и
-                // пайп закрыт (например, бот запущен как Windows-сервис).
-                Debug.WriteLine($"[ConsoleSink] write failed: {ex.GetType().Name}: {ex.Message}");
-            }
-            return Task.CompletedTask;
-        }
 
         private static ConsoleColor PickColor(StartupChannel channel) => channel switch
         {

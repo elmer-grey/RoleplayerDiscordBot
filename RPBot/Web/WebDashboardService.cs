@@ -352,23 +352,39 @@ namespace RPBot.Web
                                                                             //
                                                                             // Urlacl "http://*:PORT/ sddl=D:(A;;GA;;;WD)" покрывает ЛЮБОЙ из них.
                                                                             // HttpListener биндит каждый префикс отдельным сокетом (как Listener.exe).
-                                                                            _prefixes.Clear();
-                                                                            var addresses = UrlAclBootstrap.EnumerateBindableAddresses();
-                                                                            foreach (var ip in addresses)
-                                                                            {
-                                                                                if (ip.Contains(':'))
-                                                                                    _prefixes.Add($"http://[{ip}]:{port}/");
-                                                                                else
-                                                                                    _prefixes.Add($"http://{ip}:{port}/");
-                                                                            }
-                                                                            if (_prefixes.Count == 0)
-                                                                            {
-                                                                                // fallback на loopback
-                                                                                _prefixes.Add($"http://127.0.0.1:{port}/");
-                                                                                _prefixes.Add($"http://[::1]:{port}/");
-                                                                            }
-                                                                            _prefix = string.Join(", ", _prefixes);
-                                                                        }
+                                                                                                                //
+                                                                                                                // На НЕ-Windows (Linux VPS) не делаем wildcard вообще:
+                                                                                                                //   • нет urlacl — HttpListener на публичных IP без root не стартуёт;
+                                                                                                                //   • безопаснее: доступ только через ssh-туннель / nginx-rev-proxy.
+                                                                                                                // Если host пустой/0.0.0.0/* — на Linux ограничиваемся loopback.
+                                                                                                                _prefixes.Clear();
+                                                                                                                if (OperatingSystem.IsWindows())
+                                                                                                                {
+                                                                                                                    var addresses = UrlAclBootstrap.EnumerateBindableAddresses();
+                                                                                                                    foreach (var ip in addresses)
+                                                                                                                    {
+                                                                                                                        if (ip.Contains(':'))
+                                                                                                                            _prefixes.Add($"http://[{ip}]:{port}/");
+                                                                                                                        else
+                                                                                                                            _prefixes.Add($"http://{ip}:{port}/");
+                                                                                                                    }
+                                                                                                                    if (_prefixes.Count == 0)
+                                                                                                                    {
+                                                                                                                        // fallback на loopback
+                                                                                                                        _prefixes.Add($"http://127.0.0.1:{port}/");
+                                                                                                                        _prefixes.Add($"http://[::1]:{port}/");
+                                                                                                                    }
+                                                                                                                }
+                                                                                                                else
+                                                                                                                {
+                                                                                                                    // Linux / macOS — только loopback.
+                                                                                                                    BotLogger.Info(LogCategory.System,
+                                                                                                                        $"[WebDashboard] не Windows — биндим дашборд только на 127.0.0.1:{port}");
+                                                                                                                    _prefixes.Add($"http://127.0.0.1:{port}/");
+                                                                                                                    _prefixes.Add($"http://[::1]:{port}/");
+                                                                                                                }
+                                                                                                                _prefix = string.Join(", ", _prefixes);
+                                                                                                            }
                                     else
                                     {
                                         _prefix = $"http://{host}:{port}/";

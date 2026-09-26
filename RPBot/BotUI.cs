@@ -899,25 +899,42 @@ namespace RPBot
             try
             {
                 // ВАЖНО: Настройка консоли ДО инициализации Terminal.Gui
-                Console.CursorVisible = false; // Скрываем курсор сразу
-                Console.Title = "Discord Bot Control Panel";
+                        // На headless VPS (systemd / nohup) Console.Title / SetWindowSize / CursorVisible
+                        // могут кидать InvalidOperationException. Гардим по ОС и по режиму без UI.
+                        bool noUi = Environment.GetEnvironmentVariable("RPBOT_NO_UI") == "1";
+                        bool isWindows = OperatingSystem.IsWindows();
 
-                // Устанавливаем размер консоли, если нужно
-                try
-                {
-                    if (Console.WindowWidth < 100 || Console.WindowHeight < 30)
-                    {
-                        if (OperatingSystem.IsWindows())
+                        try { Console.CursorVisible = false; } catch { /* headless console */ }
+                        if (isWindows) { try { Console.Title = "Discord Bot Control Panel"; } catch { } }
+
+                        // Headless-режим (RPBOT_NO_UI=1): пропускаем Terminal.Gui полностью.
+                        // Без этого Application.Init() зависнет на VPS без /dev/tty.
+                        // Логи идут через BotLogger в файлы и в WebDashboard.
+                        if (noUi)
                         {
-                            Console.SetWindowSize(120, 35);
-                            Console.SetBufferSize(120, 1000);
+                            TryAppendErrorToFile("Start(): RPBOT_NO_UI=1 — Terminal.Gui пропущен");
+                            _isRunning = false;
+                            // Сигнализируем «UI инициализирован», чтобы зависимый код не завис в Wait().
+                            _uiInitialized.Set();
+                            return;
+                }
+
+                        // Устанавливаем размер консоли, если нужно
+                        try
+                        {
+                            if (Console.WindowWidth < 100 || Console.WindowHeight < 30)
+                            {
+                                if (isWindows)
+                                {
+                                    Console.SetWindowSize(120, 35);
+                                    Console.SetBufferSize(120, 1000);
+                                }
+                            }
                         }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AddLog($"Warning: unable to resize console: {ex.Message}");
-                }
+                        catch (Exception ex)
+                        {
+                            AddLog($"Warning: unable to resize console: {ex.Message}");
+                        }
 
                 // Централизованная инициализация Terminal.Gui
                 EnsureUiInitialized();
