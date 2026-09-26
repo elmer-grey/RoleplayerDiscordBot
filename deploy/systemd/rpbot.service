@@ -1,0 +1,56 @@
+[Unit]
+Description=Roleplayer Discord Bot (.NET 8)
+Documentation=https://github.com/elmer-grey/RoleplayerDiscordBot
+After=network-online.target lavalink.service
+Wants=network-online.target
+# Если Lavalink упал — бот сам перезапустит его (Music.AutoStart=true).
+# lavalink.service нужен только если хочется держать Lavalink как отдельный процесс.
+# Если используешь встроенный запуск Lavalink из бота — убери After=/Wants= выше.
+
+[Service]
+Type=simple
+User=rpbot
+Group=rpbot
+WorkingDirectory=/opt/rpbot/RPBot
+ExecStart=/usr/bin/dotnet /opt/rpbot/RPBot/RPBot.dll
+# Headless-режим: на VPS нет /dev/tty, Terminal.Gui не запустится.
+# Логи и управление — через journalctl и WebDashboard (127.0.0.1:5057).
+Environment=RPBOT_NO_UI=1
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+Environment=DOTNET_NOLOGO=1
+# Переменная для override корня данных. По умолчанию бот использует
+# ~/.local/share/rpbot (XDG_DATA_HOME). Лучше задать явно — путь стабильнее.
+Environment=RPBOT_DATA_DIR=/var/lib/rpbot
+
+# Автоперезапуск при любом падении (включая kill -9 с последующим OOM-возвратом).
+Restart=always
+RestartSec=5
+# Если бот падает слишком часто — не долбить systemd-restart бесконечно.
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+# Лимиты ресурсов. 1 vCPU / 2 GB VPS — для бота хватает с запасом.
+# MemoryMax — выше systemd прибьёт через OOM-killer.
+# CPUQuota=80% от 1 ядра = 0.8 CPU. Lavalink и yt-cipher получают остаток.
+MemoryMax=1500M
+CPUQuota=80%
+# File descriptor limit для HttpListener и одновременных WebSocket-соединений Discord.
+LimitNOFILE=65536
+
+# Hardening — минимально необходимые capabilities, без root.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/rpbot /opt/rpbot
+# Бот читает настройки из /opt/rpbot/Lavalink/application.yml и пишет
+# в /var/lib/rpbot (RPBOT_DATA_DIR). ProtectHome=read-only оставляет /home/*,
+# /root и /run/user доступными на чтение.
+
+# stdout/stderr уходят в journald — основной способ просмотра логов на VPS.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rpbot
+
+[Install]
+WantedBy=multi-user.target
