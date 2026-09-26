@@ -1008,11 +1008,19 @@ private void SaveServerConfigs()
     // Критическая проверка: GuildIDs должен быть задан в config.json
                 if (_config?.GuildIDs is null || _config.GuildIDs.Count == 0)
             {
-            Console.ForegroundColor = ConsoleColor.Red;
+            // Цвет только если stdout — реальный TTY. На headless VPS / под systemd
+            // / при редиректе в файл ConsoleColor всё равно не отрендерится; хуже того —
+            // под `nohup` (Windows-VPS-сценарий) оставит ANSI-коды в run.log.
+            // Подробнее см. ConsoleSink.IsStdoutATty() — здесь дублируем инлайн,
+            // потому что это критический pre-logger старт (BotLogger ещё не активен).
+            bool stdoutIsTty = !Console.IsOutputRedirected
+                && (OperatingSystem.IsWindows()
+                    || Environment.GetEnvironmentVariable("TERM") != "dumb");
+            if (stdoutIsTty) Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("ОШИБКА: GuildIDs не задан в Settings/config.json.");
             Console.WriteLine("Укажите список ID серверов, например:");
             Console.WriteLine("  \"GuildIDs\": [ 123456789012345678 ]");
-            Console.ResetColor();
+            if (stdoutIsTty) Console.ResetColor();
             throw new InvalidOperationException("GuildIDs не задан в config.json. Бот не может запуститься без указания серверов.");
             }
 

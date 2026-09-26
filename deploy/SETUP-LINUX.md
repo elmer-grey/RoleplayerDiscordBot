@@ -80,6 +80,8 @@ cd ..
 sudo -u rpbot cp /opt/rpbot/Lavalink/application.yml.example \
               /opt/rpbot/Lavalink/application.yml
 sudo -u rpbot nano /opt/rpbot/Lavalink/application.yml
+# Файл содержит OAuth refreshToken — обязательно ограничить доступ:
+sudo chmod 600 /opt/rpbot/Lavalink/application.yml
 ```
 
 **Один раз** запустить Lavalink руками для получения YouTube OAuth refreshToken:
@@ -132,7 +134,14 @@ sudo chown -R rpbot:rpbot /var/lib/rpbot/Settings
 > `AutoStart: false` — Lavalink и yt-cipher запускаются как отдельные systemd-юниты
 > (см. шаг 5). Бот только подключается к `127.0.0.1:2333`.
 > Если хочешь встроенный запуск — оставь `AutoStart: true`, тогда юнит
-> `lavalink.service` не нужен.
+> `lavalink.service` не нужен (и в `rpbot.service` уберите `After=/Wants= lavalink.service`).
+
+### 4.3. WebDashboard: bind на Linux
+
+`WebDashboard` на Linux биндится **только на `127.0.0.1`** и не слушает публичные
+IP — это by design (нет urlacl, под обычным юзером `HttpListener` на публичных
+адресах стартует только с `CAP_NET_BIND_SERVICE`). Доступ извне — через
+SSH-туннель или reverse-proxy (см. шаг 7, nginx + Basic Auth).
 
 ---
 
@@ -223,7 +232,17 @@ ssh -L 5057:127.0.0.1:5057 rpbot@<server>
 # Открыть http://127.0.0.1:5057 в браузере
 
 # Или через nginx + Basic Auth (см. deploy/nginx/rpbot-dashboard.conf)
+sudo cp /opt/rpbot/deploy/nginx/rpbot-dashboard.conf \
+        /etc/nginx/sites-available/rpbot-dashboard.conf
+sudo htpasswd -c /etc/nginx/.htpasswd rpbot-admin   # задать пароль
+sudo ln -s /etc/nginx/sites-available/rpbot-dashboard.conf \
+           /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+> Без TLS nginx слушает на 80-м порту открытым текстом — **добавьте Let's Encrypt**
+> (`sudo certbot --nginx -d dashboard.example.com`), иначе пароль Basic Auth
+> уйдёт по сети в открытом виде.
 
 ---
 

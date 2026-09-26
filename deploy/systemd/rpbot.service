@@ -28,6 +28,13 @@ RestartSec=5
 # Если бот падает слишком часто — не долбить systemd-restart бесконечно.
 StartLimitIntervalSec=120
 StartLimitBurst=10
+# Корректный shutdown: Discord.Net гасит WebSocket, WebDashboard закрывается,
+# LavalinkService убивает встроенный процесс Lavalink. 60 секунд хватает с запасом;
+# после этого systemd пошлёт SIGKILL (принудительный, без cleanup).
+TimeoutStopSec=60
+# Посылаем SIGTERM (а не SIGKILL сразу) на остановке — даём процессу шанс отработать
+# CancellationToken'ы в MusicService, GameSession, EventOpsLifecycleService.
+KillSignal=SIGTERM
 
 # Лимиты ресурсов. 1 vCPU / 2 GB VPS — для бота хватает с запасом.
 # MemoryMax — выше systemd прибьёт через OOM-killer.

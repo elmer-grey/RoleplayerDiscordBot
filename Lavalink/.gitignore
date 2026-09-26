@@ -1,6 +1,14 @@
 # Lavalink jar не коммитим — слишком большой (~96 MB)
 Lavalink.jar
 
+# yt-cipher support jar (положенный Lavalink'ом после первой инициализации).
+# Бинарь, в репо не нужен — пересоздаётся на каждой машине.
+youtube-common-*.jar
+
+# YouTube-source plugin — тоже бинарь, подтягивается через dependency
+# в application.yml (репозиторий https://maven.lavalink.dev/releases).
+plugins/youtube-plugin-*.jar
+
 # Логи Lavalink
 logs/
 
