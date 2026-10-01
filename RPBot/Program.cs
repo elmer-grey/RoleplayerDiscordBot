@@ -1421,6 +1421,7 @@ private void SaveServerConfigs()
     .AddSingleton<InfoCommands>()
     .AddSingleton<RollDiceCommands>()
     .AddSingleton<GameSessionCommands>()
+    .AddSingleton<VoiceChannelCommands>()
     .AddSingleton<ModerationCommands>();
 
     if (_googleSheetsService != null)
@@ -3661,6 +3662,9 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                     // легитимный лок параллельного живого процесса.
                     try { CleanupStaleSidecarLocks(); } catch { }
 
+                    // Загружаем ранее созданные /voice-комнаты и возобновляем их мониторинг.
+                    try { await VoiceChannelCommands.LoadPersistedAsync(_client!).ConfigureAwait(false); } catch (Exception ex) { BotLogger.Warn(LogCategory.Discord, $"[Voice] LoadPersistedAsync: {ex.GetType().Name}: {ex.Message}"); }
+
                                 // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
                                 // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.
                                 BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
@@ -5025,6 +5029,7 @@ await Task.CompletedTask;
 
             try
             {
+                BotLogger.Info(LogCategory.Discord, $"[ButtonExecuted] customId={component.Data.CustomId} user={component.User.Id}");
                 await ProcessButtonAsync(component).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -5071,6 +5076,8 @@ await Task.CompletedTask;
         {
             var parts = component.Data.CustomId.Split(':');
             var buttonType = parts.Length > 0 ? parts[0] : component.Data.CustomId;
+
+            BotLogger.Info(LogCategory.Discord, $"[ProcessButton] buttonType={buttonType} customId={component.Data.CustomId}");
 
             switch (buttonType)
             {
@@ -5130,6 +5137,10 @@ await Task.CompletedTask;
                         await _musicCommands.HandleButtonAsync(component);
                     break;
 
+                case var s when s == "voice_limit" && component.Data.CustomId.StartsWith(VoiceChannelCommands.ButtonPrefix, StringComparison.Ordinal):
+                    await new VoiceChannelCommands().HandleLimitButtonAsync(component);
+                    break;
+
                 default:
                     var cid = component.Data.CustomId;
                     if (_musicCommands is not null &&
@@ -5140,6 +5151,10 @@ await Task.CompletedTask;
                         cid.StartsWith("playlist_overwrite_no_")))
                     {
                         await _musicCommands.HandleButtonAsync(component);
+                    }
+                    else
+                    {
+                        BotLogger.Info(LogCategory.Discord, $"[ProcessButton:default] no handler for cid={cid}");
                     }
     break;
     }
@@ -5578,6 +5593,9 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                     case "roll20":
                         await Roll20Command(command);
                         break;
+                    case "voice":
+                        await VoiceCommand(command);
+                        break;
                     case "roll_pictures":
                         await RollPicturesCommand(command);
                         break;
@@ -5848,6 +5866,21 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                 BotLogger.Error(LogCategory.Cmd, $"[RollCommand] {ex.GetType().Name}: {ex.Message}");
                 try { await PredictionErrorLogger.LogAsync("RollCommand", ex).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в RollCommand: {ex.Message}");
+            }
+        }
+
+        private async Task VoiceCommand(SocketSlashCommand command)
+        {
+            try
+            {
+                var voiceModule = _services.GetRequiredService<VoiceChannelCommands>();
+                await voiceModule.VoiceAsync(command);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Error(LogCategory.Cmd, $"[VoiceCommand] {ex.GetType().Name}: {ex.Message}");
+                try { await PredictionErrorLogger.LogAsync("VoiceCommand", ex).ConfigureAwait(false); } catch { }
+                await LogError($"Ошибка в VoiceCommand: {ex.Message}");
             }
         }
 
