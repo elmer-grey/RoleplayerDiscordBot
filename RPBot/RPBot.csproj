@@ -5,6 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
     <NoWarn Condition="'$(Configuration)' == 'Debug'">$(NoWarn);NU1900</NoWarn>
   </PropertyGroup>
 
@@ -39,6 +40,7 @@
 
   <ItemGroup>
     <PackageReference Include="Discord.Net" Version="3.20.1" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
     <PackageReference Include="Google.Apis.Sheets.v4" Version="1.75.0.4178" />
     <PackageReference Include="Lavalink4NET" Version="4.2.2" />
     <PackageReference Include="Lavalink4NET.Discord.NET" Version="4.2.2" />

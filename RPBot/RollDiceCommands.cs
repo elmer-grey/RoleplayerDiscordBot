@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
@@ -151,11 +151,23 @@ namespace RPBot
         {
             // Сразу освобождаем шлюз и подтверждаем взаимодействие. Это нужно, чтобы Discord
             // не показал «Приложение не отвечает», даже если дальнейшая обработка залипнет.
-            try { await command.DeferAsync().ConfigureAwait(false); }
-            catch (Exception ex)
+            //
+            // Если предварительный ACK уже выполнен в Program.OnSlashCommandExecuted
+            // (ранний defer для тяжёлых команд — см. Program._preDeferCommands),
+            // повторно DeferAsync НЕ зовём: он упадёт с «Cannot defer an already deferred interaction».
+            var alreadyDeferred = Program.IsPreDeferDone(command.Id);
+            if (alreadyDeferred)
             {
-                DeferFailureLogger.Log("RollDice", ex, command, input);
-                return;
+                Program.ClearPreDeferDone(command.Id);
+            }
+            else
+            {
+                try { await command.DeferAsync().ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    DeferFailureLogger.Log("RollDice", ex, command, input);
+                    return;
+                }
             }
 
             string user = command.User?.GlobalName ?? "<unknown>";
@@ -395,49 +407,49 @@ namespace RPBot
                 }
                 else
                 {
-                    var embeds = new List<Embed>();
-                    var files = new List<FileAttachment>();
-                    var textResults = new List<string>();
+                    // Несколько кубов: склеиваем в один strip (требование пользователя).
+                    // Цвет embed — по СРЕДНЕМУ значению (требование пользователя).
+                    // Fallback на multi-embed с отдельными эмбедами — если не удалось склеить
+                    // (например, не хватает части файлов).
+                    var stripStream = DiceStripComposer.ComposeStrip(results, numbersDir, diceType, out var missingForStrip);
 
-                    for (int i = 0; i < results.Count; i++)
+                    if (stripStream != null)
                     {
-                        var result = results[i];
-                        var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+                        try
+                        {
+                            var avg = results.Average();
+                            var embed = new EmbedBuilder()
+                                .WithImageUrl("attachment://roll_strip.png")
+                                .WithColor(DiceStripComposer.ColorForAverage(avg, min, max))
+                                .Build();
 
-                        if (File.Exists(filePath))
-                        {
-                            var uniqueFileName = $"{result}_{i + 1}.png";
-                            files.Add(new FileAttachment(filePath, uniqueFileName));
-                            embeds.Add(new EmbedBuilder()
-                                .WithImageUrl($"attachment://{uniqueFileName}")
-                                .WithColor(GetGradientColor(result, 1, max))
-                                .Build());
+                            var label = count == 2
+                                ? "Результаты броска (помеха/преимущество):"
+                                : $"Результаты {count} бросков:";
+
+                            var attachment = new FileAttachment(stripStream, "roll_strip.png");
+                            await command.FollowupWithFilesAsync(
+                                attachments: new[] { attachment },
+                                text: label,
+                                embeds: new[] { embed });
+
+                            if (missingForStrip.Count > 0)
+                                BotLogger.Warn(LogCategory.Rolls,
+                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
+
+                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                            return;
                         }
-                        else
+                        finally
                         {
-                            textResults.Add(result.ToString());
+                            stripStream.Dispose();
                         }
                     }
-
-                    if (files.Count > 0)
+                    else
                     {
-                        var combinedMessage = files.Count switch
-                        {
-                            2 => "Результаты броска с помехой/преимуществом:",
-                            _ => $"Результаты {files.Count} бросков:"
-                        };
-
-                        if (textResults.Count > 0)
-                        {
-                            combinedMessage += $"\n(Без картинок: {string.Join(", ", textResults)})";
-                        }
-
-                        await command.FollowupWithFilesAsync(
-                            attachments: files,
-                            text: combinedMessage,
-                            embeds: embeds.ToArray());
-                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                        return;
+                        // Не получилось склеить (вообще нет файлов). Падаем в общий fallback ниже.
+                        BotLogger.Warn(LogCategory.Rolls,
+                            $"[strip] для {diceType} нет ни одного PNG, fallback на текст.");
                     }
                 }
             }
@@ -451,11 +463,23 @@ namespace RPBot
         public async Task Roll20(SocketSlashCommand command)
         {
             // Сразу подтверждаем взаимодействие, чтобы Discord не показывал «Приложение не отвечает».
-            try { await command.DeferAsync().ConfigureAwait(false); }
-            catch (Exception ex)
+            //
+            // Если предварительный ACK уже выполнен в Program.OnSlashCommandExecuted
+            // (ранний defer для тяжёлых команд — см. Program._preDeferCommands),
+            // повторно DeferAsync НЕ зовём.
+            var alreadyDeferred = Program.IsPreDeferDone(command.Id);
+            if (alreadyDeferred)
             {
-                DeferFailureLogger.Log("Roll20", ex, command, input: null);
-                return;
+                Program.ClearPreDeferDone(command.Id);
+            }
+            else
+            {
+                try { await command.DeferAsync().ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    DeferFailureLogger.Log("Roll20", ex, command, input: null);
+                    return;
+                }
             }
 
             ulong? guildIdNullable = null;

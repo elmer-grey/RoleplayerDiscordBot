@@ -126,6 +126,33 @@ private Task? _dailyRestartTask;
         public static Action<string>? CommandLogSink { get; private set; }
         public static Func<ulong, ServerConfig?>? ServerConfigResolver { get; private set; }
 
+        /// <summary>
+        /// Команды, для которых <see cref="Discord.WebSocket.SocketSlashCommand.DeferAsync"/>
+        /// выполняется заранее — в самом начале <see cref="OnSlashCommandExecuted"/>,
+        /// чтобы исключить «Cannot defer an interaction after 3 seconds!» на проде.
+        /// </summary>
+        private static readonly HashSet<string> _preDeferCommands = new(StringComparer.Ordinal)
+        {
+            "roll",
+            "roll20",
+        };
+
+        /// <summary>
+        /// Interaction-токены, для которых уже выполнен предварительный defer.
+        /// Нужен, чтобы сам обработчик команды (<see cref="RollDiceCommands"/>) не звал
+        /// <c>DeferAsync</c> повторно. Хранится недолго — до прихода в обработчик.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _preDeferDone = new();
+
+        /// <summary>Отметить interaction-токен как предварительно задеференный.</summary>
+        internal static void MarkPreDeferDone(ulong interactionId) => _preDeferDone[interactionId] = 1;
+
+        /// <summary>Был ли предварительный defer выполнен для этого interaction.</summary>
+        public static bool IsPreDeferDone(ulong interactionId) => _preDeferDone.ContainsKey(interactionId);
+
+        /// <summary>Снять отметку после того, как обработчик её увидел.</summary>
+        public static bool ClearPreDeferDone(ulong interactionId) => _preDeferDone.TryRemove(interactionId, out _);
+
         // Флаг, что мы внутри Program.Main — это первый запуск, и AttachSink
         // к StartupRenderer.Instance должен произойти один раз. На рестарте
         // мы НЕ добавляем sinks повторно — иначе в UI одна и та же строка
@@ -5486,6 +5513,13 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
             return 0;
         }
 
+        /// <summary>
+        /// Команды, для которых <see cref="SocketSlashCommand.DeferAsync"/> вызывается заранее,
+        /// в самом начале <see cref="OnSlashCommandExecuted"/>, чтобы исключить
+        /// «Cannot defer an interaction after 3 seconds!» на проде.
+        /// Внутри самих команд двойной defer подавляется — повторно <c>DeferAsync</c> не зовём.
+        /// Список определён на уровне класса (см. <see cref="_preDeferCommands"/>).
+        /// </summary>
         private async Task OnSlashCommandExecuted(SocketSlashCommand command)
         {
             // Сразу освобождаем шлюз, чтобы не блокировать обработку других взаимодействий,
@@ -5493,16 +5527,35 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
             await Task.Yield();
 
                         if (command == null)
-                                                {
-                                                    BotLogger.Warn(LogCategory.Cmd, "[OnSlashCommandExecuted] Получен пустой command — пропускаю.");
-                                                    return;
-                                                }
-                                                var name = command.Data?.Name ?? "<null>";
-                                                                                                if (command.Data is null)
-                                                {
-                                                                                                    BotLogger.Warn(LogCategory.Cmd, $"[OnSlashCommandExecuted] command.Data is null, name={name} — пропускаю.");
+                                                                                                {
+                                                                                                    BotLogger.Warn(LogCategory.Cmd, "[OnSlashCommandExecuted] Получен пустой command — пропускаю.");
                                                                                                     return;
                                                                                                 }
+                                                                                                var name = command.Data?.Name ?? "<null>";
+                                                                                                                                                if (command.Data is null)
+                                                                                                {
+                                                                                                                                                    BotLogger.Warn(LogCategory.Cmd, $"[OnSlashCommandExecuted] command.Data is null, name={name} — пропускаю.");
+                                                                                                    return;
+                                                                                                }
+
+                                                                                                // Предварительный ACK для «тяжёлых» команд — должен пройти
+                                                                                                // ДО switch и до получения сервиса из DI. Discord требует
+                                                                                                // ответ в течение 3 секунд; раньше при GC/IO-паузах
+                                                                                                // _services.GetRequiredService<RollDiceCommands>() не укладывался.
+                                                                                                if (_preDeferCommands.Contains(name))
+                                                                                                {
+                                                                                                    try
+                                                                                                    {
+                                                                                                        await command.DeferAsync().ConfigureAwait(false);
+                                                                                                        MarkPreDeferDone(command.Id);
+                                                                                                    }
+                                                                                                    catch (Exception ex)
+                                                                                                    {
+                                                                                                        DeferFailureLogger.Log($"PreDefer:{name}", ex, command, input: null);
+                                                                                                        // Не падаем — пусть команда попробует обычный путь.
+                                                                                                    }
+                                                                                                }
+
                                                                                                 try
                                                                                                 {
                                                                                                     switch (command.Data.Name)
