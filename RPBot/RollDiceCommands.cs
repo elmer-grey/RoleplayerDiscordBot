@@ -342,7 +342,7 @@ namespace RPBot
                 }
             }
 
-            Random random = new Random();
+            Random random = Random.Shared;
             List<int> results = Enumerable.Range(0, count)
                 .Select(_ => random.Next(min, max + 1))
                 .ToList();
@@ -538,7 +538,7 @@ namespace RPBot
             bool isStatsChannel = statsChannelId != 0 && channelId == statsChannelId;
             bool isRollChannel  = rollChannelId  != 0 && channelId == rollChannelId;
 
-            Random random = new Random();
+            Random random = Random.Shared;
             int result = random.Next(1, 21);
 
             // Если это канал статистики или канал бросков, проверяем сессии.
