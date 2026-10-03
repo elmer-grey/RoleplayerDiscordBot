@@ -205,14 +205,17 @@ private Task? _dailyRestartTask;
                                                                 internal static void StartManualGcLoop()
                                                                 {
                                                                     if (_gcLoopTask != null) return;
-                                                                    _gcLoopCts = new CancellationTokenSource();
-                                                                    var ct = _gcLoopCts.Token;
-                                                                    _gcWatch.Restart();
-                                                                    _lastAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true);
-                                                                    _lastGen0 = GC.CollectionCount(0);
-                                                                    _lastGen1 = GC.CollectionCount(1);
-                                                                    _lastGen2 = GC.CollectionCount(2);
-                                                                    _lastTotalPause = GC.GetTotalPauseDuration();
+                                                                                                                                    try
+                                                                                                                                    {
+                                                                                                                                        BotLogger.Info(LogCategory.System, $"[GC] StartManualGcLoop called");
+                                                                                                                                        _gcLoopCts = new CancellationTokenSource();
+                                                                                                                                        var ct = _gcLoopCts.Token;
+                                                                                                                                        _gcWatch.Restart();
+                                                                                                                                        _lastAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true);
+                                                                                                                                        _lastGen0 = GC.CollectionCount(0);
+                                                                                                                                        _lastGen1 = GC.CollectionCount(1);
+                                                                                                                                        _lastGen2 = GC.CollectionCount(2);
+                                                                                                                                        _lastTotalPause = GC.GetTotalPauseDuration();
                                                                     _gcLoopTask = Task.Run(async () =>
                                                                     {
                                                                         var compactInterval = TimeSpan.FromSeconds(GcCompactIntervalSeconds);
@@ -282,7 +285,12 @@ private Task? _dailyRestartTask;
                                                                         }
                                                                     });
                                                                     BotLogger.Info(LogCategory.System, $"[GC] manual loop запущен, период={GcLoopPeriodSeconds}с, compaction={GcCompactIntervalSeconds}с");
-                                                                }
+                                                                                                                                        }
+                                                                                                                                        catch (Exception ex)
+                                                                                                                                        {
+                                                                                                                                            BotLogger.Error(LogCategory.System, $"[GC] StartManualGcLoop crashed: {ex.GetType().Name}: {ex.Message}");
+                                                                                                                                        }
+                                                                                                                                    }
 
                                 internal static void StopManualGcLoop()
                                 {
@@ -2697,10 +2705,14 @@ private static BotUI? _ui;
 
                                         // Discord-подписки (Ready/MessageReceived/GuildScheduledEvent*) теперь
                                         // живут в Этапе 2/4: СИНХРОНИЗАЦИЯ — там, где идёт работа с эвентами.
-                                        try
-                                        {
-                                            await _client.LoginAsync(TokenType.Bot, GetBotToken());
-                                            await _client.StartAsync();
+                                                                                // Исключение: OnReady нужен ДО StartAsync, иначе Discord шлёт READY раньше,
+                                                                                // чем мы успеваем подписаться (Ready — одноразовое событие). Двойной
+                                                                                // подписки не будет: SetupDiscordEvents начинается с `_client.Ready -= OnReady`.
+                                                                                _client!.Ready += OnReady;
+                                                                                try
+                                                                                {
+                                                                                    await _client.LoginAsync(TokenType.Bot, GetBotToken());
+                                                                                    await _client.StartAsync();
                                                                                     StartupRenderer.Instance.WriteLine($"Вход выполнен успешно. Состояние: {_client.ConnectionState}, логин: {_client.LoginState}");
 
                                             // PrepareAsync ПОСЛЕ LoginAsync — CurrentUser уже установлен,
@@ -3795,19 +3807,19 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                 private DateTime _fullReadyTime;
 
         private async Task OnReady()
-                {
-                    _readyTime = DateTime.UtcNow;
+                        {
+                                    _readyTime = DateTime.UtcNow;
 
-                            // 🩹 prod-sidecar-10062: метим момент готовности, чтобы PreDefer
-                            // в первые секунды после старта не падал с 10062 (Discord ещё не
-                            // синхронизировал сессию с момента выхода Gateway). Защищает
-                            // ситуацию "простоял бот всю ночь, потом /roll → 10062".
-                            MarkReconnectCompleted();
+                                    // 🩹 prod-sidecar-10062: метим момент готовности, чтобы PreDefer
+                                    // в первые секунды после старта не падал с 10062 (Discord ещё не
+                                    // синхронизировал сессию с момента выхода Gateway). Защищает
+                                    // ситуацию "простоял бот всю ночь, потом /roll → 10062".
+                                    MarkReconnectCompleted();
 
-                                                        // 🩹 perf: запуск фонового GC-цикла. После холодного старта
-                                                        // в LOH/L2 накапливается мусор от инициализации — пусть соберёт
-                                                        // маленькими порциями, а не большой паузой во время первого /roll.
-                                                        StartManualGcLoop();
+                                                                                            // 🩹 perf: запуск фонового GC-цикла. После холодного старта
+                                                                                            // в LOH/L2 накапливается мусор от инициализации — пусть соберёт
+                                                                                            // маленькими порциями, а не большой паузой во время первого /roll.
+                                                                                            StartManualGcLoop();
 
                             // ✅ Bug audit: ClearRestartPendingFlag вызывался ТОЛЬКО из
                     // PredictionService.AnnounceOnlineAsync при условии, что у гильдии
