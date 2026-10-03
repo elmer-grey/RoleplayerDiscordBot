@@ -44,6 +44,35 @@ public class VoiceChannelCommands
     private static Task? _monitorLoop;
 
     /// <summary>
+    /// Ссылка на Discord-клиент для доступа к кэшу гильдий (подсчёт пользователей в голосовых).
+    /// Устанавливается из Program.cs после создания клиента.
+    /// </summary>
+    private static DiscordSocketClient? _client;
+
+    /// <summary>
+    /// Устанавливает (или сбрасывает) ссылку на Discord-клиент. Вызывать из Program.cs.
+    /// </summary>
+    public static void SetClient(DiscordSocketClient? client) => _client = client;
+
+    /// <summary>
+    /// Останавливает polling-таск и очищает трекер. Вызывать из Program.cs при полном
+    /// рестарте клиента (DisposeClientSafely → новый _client), чтобы старый монитор
+    /// не тикал на disposed HttpClient старого клиента.
+    /// </summary>
+    public static void ResetForNewClient()
+    {
+        lock (_monitorLock)
+        {
+            try { _monitorCts?.Cancel(); } catch { }
+            try { _monitorCts?.Dispose(); } catch { }
+            _monitorCts = null;
+            _monitorLoop = null;
+            _activeRooms.Clear();
+        }
+        _client = null;
+    }
+
+    /// <summary>
     /// Обработчик команды <c>/voice</c>. Отвечает ephemeral-сообщением с кнопками 2..7.
     /// </summary>
     public async Task VoiceAsync(SocketSlashCommand command)
@@ -191,17 +220,8 @@ public class VoiceChannelCommands
         BotLogger.Info(LogCategory.Discord, $"[Voice] Создан канал {voice.Name} ({voice.Id}) лимит={limit}, мастер={userLabel}.");
 
         // Удаляем сообщение с кнопками (требование пользователя) и подтверждаем взаимодействие.
-        // DeferAsync выше сделал ACK; теперь Followup + удаление сообщения.
-        try
-        {
-            if (component.Message is { } msg && !msg.IsSuppressed)
-                await msg.DeleteAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось удалить сообщение с кнопками: {ex.GetType().Name}: {ex.Message}");
-        }
-
+        // DeferAsync выше сделал ACK. Сначала Followup — чтобы пользователь увидел результат
+        // даже если удаление сообщения упадёт. Потом пытаемся удалить.
         try
         {
             await component.FollowupAsync(
@@ -211,6 +231,18 @@ public class VoiceChannelCommands
         catch (Exception ex)
         {
             BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось отправить Followup: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        // Удаление через прямой запрос к каналу: на некоторых версиях Discord.NET
+        // component.Message указывает на уже-disposed сообщение после Followup.
+        try
+        {
+            if (component.Channel is IMessageChannel ch)
+                await ch.DeleteMessageAsync(component.Message.Id).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось удалить сообщение с кнопками: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -266,6 +298,7 @@ public class VoiceChannelCommands
 
             var now = DateTime.UtcNow;
             var toDelete = new List<ulong>();
+            var stateChanged = false;
 
             foreach (var kv in _activeRooms)
             {
@@ -288,12 +321,26 @@ public class VoiceChannelCommands
                 int users;
                 try
                 {
-                    // RestVoiceChannel (созданный через CreateVoiceChannelAsync) не имеет ConnectedUsers.
-                    // Сокет-зеркало может появиться после синхронизации; пробуем его.
-                    if (channel is SocketVoiceChannel socket)
-                        users = socket.ConnectedUsers.Count;
-                    else
-                        users = -1; // неизвестно, не считаем пустой
+                    // Считаем пользователей в канале через кэш гильдии.
+                    // Работает и для RestVoiceChannel (созданных через CreateVoiceChannelAsync),
+                    // у которых нет свойства ConnectedUsers.
+                    var client = _client;
+                    if (client == null)
+                    {
+                        BotLogger.Warn(LogCategory.Discord, $"[Voice] _client == null в MonitorLoopAsync, гильдия {tracker.GuildId}, канал {tracker.Channel.Id}.");
+                        continue;
+                    }
+                    SocketGuild? guild = client.GetGuild(tracker.GuildId);
+                    if (guild == null)
+                    {
+                        // Гильдия ещё не загружена в кэш (или бот не на этом сервере).
+                        // SocketGuild нужен для доступа к guild.Users с VoiceChannel.
+                        BotLogger.Info(LogCategory.Discord, $"[Voice] Канал {tracker.Channel.Name}: гильдия {tracker.GuildId} недоступна в кэше, пропускаю. client.Guilds={client.Guilds.Count}");
+                        continue;
+                    }
+
+                    users = guild.Users
+                        .Count(u => u.VoiceChannel?.Id == tracker.Channel.Id);
                 }
                 catch (Exception ex)
                 {
@@ -303,12 +350,21 @@ public class VoiceChannelCommands
 
                 if (users > 0)
                 {
-                    tracker.EmptySinceUtc = null;
+                    if (tracker.EmptySinceUtc != null)
+                    {
+                        tracker.EmptySinceUtc = null;
+                        stateChanged = true;
+                        BotLogger.Info(LogCategory.Discord, $"[Voice] Канал {tracker.Channel.Name} занят, таймер остановлен.");
+                    }
                 }
                 else if (users == 0)
                 {
                     if (tracker.EmptySinceUtc == null)
+                    {
                         tracker.EmptySinceUtc = now;
+                        stateChanged = true;
+                        BotLogger.Info(LogCategory.Discord, $"[Voice] Канал {tracker.Channel.Name} стал пуст, таймер запущен (TTL {EmptyRoomTtl.TotalMinutes:F0} мин).");
+                    }
                     else if (now - tracker.EmptySinceUtc.Value >= EmptyRoomTtl)
                         toDelete.Add(kv.Key);
                 }
@@ -317,21 +373,32 @@ public class VoiceChannelCommands
 
             foreach (var channelId in toDelete)
             {
-                if (!_activeRooms.TryRemove(channelId, out var tracker))
+                if (!_activeRooms.TryGetValue(channelId, out var tracker))
                     continue;
 
+                bool deleted = false;
                 try
                 {
                     await tracker.Channel.DeleteAsync().ConfigureAwait(false);
+                    deleted = true;
                     BotLogger.Info(LogCategory.Discord, $"[Voice] Канал {tracker.Channel.Name} удалён (пуст > {EmptyRoomTtl.TotalMinutes:F0} мин).");
                 }
                 catch (Exception ex)
                 {
-                    BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось удалить канал {tracker.Channel.Name}: {ex.Message}");
+                    BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось удалить канал {tracker.Channel.Name}: {ex.GetType().Name}: {ex.Message}");
                 }
+
+                // Убираем из трекера только после успешного удаления. Иначе — оставляем,
+                // чтобы следующий тик попробовал снова. Иначе канал-сирота навсегда останется
+                // на сервере, а JSON перезапишется без него.
+                if (deleted)
+                    _activeRooms.TryRemove(channelId, out _);
+                else
+                    stateChanged = true; // на следующий тик снова попробуем
             }
 
-            if (toDelete.Count > 0)
+            // Сохраняем JSON при любом изменении состояния или удалении.
+            if (stateChanged || toDelete.Count > 0)
                 PersistRooms();
         }
     }
@@ -367,6 +434,9 @@ public class VoiceChannelCommands
 
         [JsonPropertyName("created_at_utc")]
         public DateTime CreatedAtUtc { get; set; }
+
+        [JsonPropertyName("empty_since_utc")]
+        public DateTime? EmptySinceUtc { get; set; }
     }
 
     private static readonly JsonSerializerOptions _jsonOpts = new()
@@ -401,6 +471,7 @@ public class VoiceChannelCommands
                     GuildId = t.GuildId,
                     UserLimit = t.UserLimit,
                     CreatedAtUtc = t.Channel.CreatedAt.UtcDateTime,
+                    EmptySinceUtc = t.EmptySinceUtc,
                 })
                 .ToList();
             File.WriteAllText(path, JsonSerializer.Serialize(rooms, _jsonOpts));
@@ -421,7 +492,10 @@ public class VoiceChannelCommands
     {
         var path = GetPersistencePath();
         if (!File.Exists(path))
+        {
+            BotLogger.Info(LogCategory.Discord, $"[Voice] Persistence: {Path.GetFileName(path)} не найден, нечего загружать.");
             return;
+        }
 
         List<PersistedRoom>? rooms = null;
         try
@@ -477,13 +551,26 @@ public class VoiceChannelCommands
             }
 
             if (users > 0)
+            {
                 tracker.EmptySinceUtc = null; // занят — таймер не тикает
+            }
+            else if (r.EmptySinceUtc.HasValue)
+            {
+                // Канал был пуст ещё до рестарта — продолжаем таймер с того же момента.
+                tracker.EmptySinceUtc = r.EmptySinceUtc.Value;
+            }
             else
-                tracker.EmptySinceUtc = DateTime.UtcNow; // пуст — таймер заново
+            {
+                // Канал пуст, но в файле не было отметки — запускаем таймер заново.
+                tracker.EmptySinceUtc = DateTime.UtcNow;
+            }
 
             _activeRooms[ch.Id] = tracker;
             valid.Add(tracker);
-            BotLogger.Info(LogCategory.Discord, $"[Voice] Загружен канал {ch.Name} ({ch.Id}) лимит={r.UserLimit}, users={users}.");
+            var emptySinceStr = tracker.EmptySinceUtc.HasValue
+                ? tracker.EmptySinceUtc.Value.ToString("HH:mm:ss")
+                : "null";
+            BotLogger.Info(LogCategory.Discord, $"[Voice] Загружен канал {ch.Name} ({ch.Id}) лимит={r.UserLimit}, users={users}, empty_since_utc={emptySinceStr}.");
         }
 
         if (valid.Count > 0)

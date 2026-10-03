@@ -153,7 +153,36 @@ private Task? _dailyRestartTask;
         /// <summary>Снять отметку после того, как обработчик её увидел.</summary>
         public static bool ClearPreDeferDone(ulong interactionId) => _preDeferDone.TryRemove(interactionId, out _);
 
-        // Флаг, что мы внутри Program.Main — это первый запуск, и AttachSink
+                /// <summary>
+                /// Interaction-токены, для которых предварительный defer провалился (10062 / TimeoutException).
+                /// Если PreDefer упал — interaction уже мёртв, повторный DeferAsync в обработчике
+                /// только заставит пользователя ждать 3 секунды до «Приложение не отвечает».
+                /// </summary>
+                private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> _preDeferFailed = new();
+
+                /// <summary>Отметить interaction как «PreDefer упал».</summary>
+                internal static void MarkPreDeferFailed(ulong interactionId) => _preDeferFailed[interactionId] = 1;
+
+                /// <summary>Упал ли предварительный defer для этого interaction.</summary>
+                public static bool IsPreDeferFailed(ulong interactionId) => _preDeferFailed.ContainsKey(interactionId);
+
+                /// <summary>Снять отметку после того, как обработчик её увидел.</summary>
+                public static bool ClearPreDeferFailed(ulong interactionId) => _preDeferFailed.TryRemove(interactionId, out _);
+
+                /// <summary>
+                /// Момент последнего успешного реконнекта (UTC). Используется, чтобы дать Discord шанс
+                /// синхронизировать сессию после Gateway Reconnect — иначе первый defer может уйти
+                /// до того, как Discord успел зарегистрировать нашу сессию, и он ответит 10062.
+                /// </summary>
+                private static DateTime _lastReconnectUtc = DateTime.MinValue;
+
+                /// <summary>Сколько времени (UTC) прошло с последнего реконнекта.</summary>
+                private static TimeSpan TimeSinceLastReconnect => DateTime.UtcNow - _lastReconnectUtc;
+
+                /// <summary>Отметить момент реконнекта; вызывается из ReconnectionService / OnReady.</summary>
+                internal static void MarkReconnectCompleted() { _lastReconnectUtc = DateTime.UtcNow; }
+
+                // Флаг, что мы внутри Program.Main — это первый запуск, и AttachSink
         // к StartupRenderer.Instance должен произойти один раз. На рестарте
         // мы НЕ добавляем sinks повторно — иначе в UI одна и та же строка
         // появляется N раз (по разу на каждый сохранённый UiSink-экземпляр).
@@ -1076,6 +1105,7 @@ private void SaveServerConfigs()
     catch { }
 
             _client = CreateDiscordClient();
+            VoiceChannelCommands.SetClient(_client);
             _commandService = new CommandService();
 
     // Load persisted DM event-notification subscriptions BEFORE EventAnnouncer,
@@ -2485,8 +2515,10 @@ private static BotUI? _ui;
 
                         // Отписываем ВСЕ обработчики от старого клиента и утилизируем
                         // его ОТДЕЛЬНО от CleanupServices — там это делать поздно.
+                        VoiceChannelCommands.ResetForNewClient();
                         DisposeClientSafely(_client);
                         _client = CreateDiscordClient();
+                        VoiceChannelCommands.SetClient(_client);
 
                         CleanupServices();
 
@@ -3453,7 +3485,12 @@ private static BotUI? _ui;
                 if (recon == null) return;
                 var info = recon.ConnectionInfo;
 
-                            // 🩹 reminder-survives-restart: после OnDisconnected → Cancel() все per-event
+                        // 🩹 reminder-survives-reconnect: метим момент реконнекта, чтобы PreDefer
+                        // после Gateway Reconnect не падал с 10062 (interaction ещё не синхронизирован
+                        // с новой сессией у Discord). Время хранится до ~5 секунд.
+                        MarkReconnectCompleted();
+
+                                    // 🩹 reminder-survives-restart: после OnDisconnected → Cancel() все per-event
                             // CTS в EventOpsLifecycleService умерли, а вместе с ними — Task.Delay для
                             // reminder1h и deleteReminder15m. В сторе остались абсолютные моменты
                             // (Reminder1hAtUtc / DeleteReminder15mAtUtc), теперь переставляем таймеры
@@ -3583,6 +3620,17 @@ private static BotUI? _ui;
             }
         }
 
+        /// <summary>
+        /// Срабатывает, когда кэш юзеров гильдии готов (GuildAvailable).
+        /// Здесь можно безопасно обращаться к guild.GetVoiceChannel(...).
+        /// </summary>
+        private async Task OnGuildAvailableForVoice(SocketGuild guild)
+        {
+            BotLogger.Info(LogCategory.Discord, $"[Voice] GuildAvailable: {guild.Name} ({guild.Id}), users={guild.Users.Count}, каналов={guild.Channels.Count}.");
+            try { await VoiceChannelCommands.LoadPersistedAsync(_client!).ConfigureAwait(false); }
+            catch (Exception ex) { BotLogger.Warn(LogCategory.Discord, $"[Voice] LoadPersistedAsync (GuildAvailable): {ex.GetType().Name}: {ex.Message}"); }
+        }
+
         private async Task OnPredictionMade(ConnectionPredictor.PredictionResult prediction)
         {
             await LogStartup($"Прогноз: {prediction.Reason} в {prediction.PredictedTime:HH:mm:ss}");
@@ -3641,7 +3689,13 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                 {
                     _readyTime = DateTime.UtcNow;
 
-                    // ✅ Bug audit: ClearRestartPendingFlag вызывался ТОЛЬКО из
+                            // 🩹 prod-sidecar-10062: метим момент готовности, чтобы PreDefer
+                            // в первые секунды после старта не падал с 10062 (Discord ещё не
+                            // синхронизировал сессию с момента выхода Gateway). Защищает
+                            // ситуацию "простоял бот всю ночь, потом /roll → 10062".
+                            MarkReconnectCompleted();
+
+                            // ✅ Bug audit: ClearRestartPendingFlag вызывался ТОЛЬКО из
                     // PredictionService.AnnounceOnlineAsync при условии, что у гильдии
                     // есть активный prediction channel. На гильдиях без predictions (и в
                     // первые секунды после Ready, до того как успеет отработать
@@ -3662,8 +3716,19 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                     // легитимный лок параллельного живого процесса.
                     try { CleanupStaleSidecarLocks(); } catch { }
 
-                    // Загружаем ранее созданные /voice-комнаты и возобновляем их мониторинг.
-                    try { await VoiceChannelCommands.LoadPersistedAsync(_client!).ConfigureAwait(false); } catch (Exception ex) { BotLogger.Warn(LogCategory.Discord, $"[Voice] LoadPersistedAsync: {ex.GetType().Name}: {ex.Message}"); }
+                    // Подписка на GuildAvailable — кэш юзеров гильдии готов, можно грузить persistence.
+                    // Загрузка persistence идёт через OnGuildAvailableForVoice.
+                    try
+                    {
+                        _client.GuildAvailable -= OnGuildAvailableForVoice;
+                        _client.GuildAvailable += OnGuildAvailableForVoice;
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось подписаться на GuildAvailable: {ex.GetType().Name}: {ex.Message}");
+                    }
+
+                    VoiceChannelCommands.SetClient(_client);
 
                                 // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
                                 // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.
@@ -5557,19 +5622,66 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                 // ДО switch и до получения сервиса из DI. Discord требует
                                                                                                 // ответ в течение 3 секунд; раньше при GC/IO-паузах
                                                                                                 // _services.GetRequiredService<RollDiceCommands>() не укладывался.
-                                                                                                if (_preDeferCommands.Contains(name))
-                                                                                                {
-                                                                                                    try
-                                                                                                    {
-                                                                                                        await command.DeferAsync().ConfigureAwait(false);
-                                                                                                        MarkPreDeferDone(command.Id);
-                                                                                                    }
-                                                                                                    catch (Exception ex)
-                                                                                                    {
-                                                                                                        DeferFailureLogger.Log($"PreDefer:{name}", ex, command, input: null);
-                                                                                                        // Не падаем — пусть команда попробует обычный путь.
-                                                                                                    }
-                                                                                                }
+                                                                                                                                                                                                //
+                                                                                                                                                                                                // 🩹 10062-retry: после Gateway Reconnect или сразу после старта
+                                                                                                                                                                                                // interaction ещё не синхронизирован с нашей сессией, и первый
+                                                                                                                                                                                                // defer возвращает 10062. Делаем до 2 ретраев с короткой паузой
+                                                                                                                                                                                                // (100 мс между попытками). В сумме тратим не больше ~300 мс —
+                                                                                                                                                                                                // укладываемся в 3-секундный Discord-окно.
+                                                                                                                                                                                                if (_preDeferCommands.Contains(name))
+                                                                                                                                                                                                {
+                                                                                                                                                                                                    Exception? lastEx = null;
+                                                                                                                                                                                                    bool deferred = false;
+                                                                                                                                                                                                    // Если недавно был реконнект (<2 сек) — подождём чуть перед первой попыткой,
+                                                                                                                                                                                                    // чтобы Discord успел зарегистрировать сессию.
+                                                                                                                                                                                                    if (TimeSinceLastReconnect < TimeSpan.FromSeconds(2))
+                                                                                                                                                                                                    {
+                                                                                                                                                                                            try { await Task.Delay(200).ConfigureAwait(false); }
+                                                                                                                                                                                            catch { }
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                    for (int attempt = 0; attempt <= 2 && !deferred; attempt++)
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        try
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                            await command.DeferAsync().ConfigureAwait(false);
+                                                                                                                                                                                                            MarkPreDeferDone(command.Id);
+                                                                                                                                                                                                            deferred = true;
+                                                                                                                                                                                                            if (attempt > 0)
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                BotLogger.Info(LogCategory.Cmd,
+                                                                                                                                                                                                                    $"[PreDefer:{name}] succeeded на попытке {attempt + 1}/{3} для interaction={command.Id} (был 10062 / TimeoutException ранее).");
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                        catch (Exception ex)
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                            lastEx = ex;
+                                                                                                                                                                                                            // Ретраим ТОЛЬКО 10062 (сессия не синхронизирована после Gateway Reconnect).
+                                                                                                                                                                                                            // TimeoutException = «мы реально опоздали с ответом» — бесполезен
+                                                                                                                                                                                                            // ретраить, потому что повторный DeferAsync на это же interaction тоже
+                                                                                                                                                                                                            // опоздает (Discord уже не ждёт ACK).
+                                                                                                                                                                                                            bool retriable = ex is Discord.Net.HttpException httpEx
+                                                                                                                                                                                                                && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
+                                                                                                                                                                                                            if (!retriable || attempt == 2)
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                DeferFailureLogger.Log($"PreDefer:{name}", ex, command, input: null);
+                                                                                                                                                                                                                break;
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                            // Пауза между попытками: 150, 350 мс.
+                                                                                                                                                                                                            var delayMs = attempt == 0 ? 150 : 350;
+                                                                                                                                                                                                            try { await Task.Delay(delayMs).ConfigureAwait(false); } catch { }
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                    if (!deferred)
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                        // Все попытки исчерпаны. Interaction уже мёртв,
+                                                                                                                                                                                                        // повторный DeferAsync в обработчике только заставит
+                                                                                                                                                                                                        // пользователя ждать 3 секунды до "Приложение не отвечает".
+                                                                                                                                                                                                        MarkPreDeferFailed(command.Id);
+                                                                                                                                                                                                                                                                                                        if (lastEx != null)
+                                                                                                                                                                                                                          DeferFailureLogger.Log($"PreDefer:{name}:gave-up", lastEx, command, input: null);
+                                                                                                                                                                                                                                                                                                        return;
+                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                }
 
                                                                                                 try
                                                                                                 {

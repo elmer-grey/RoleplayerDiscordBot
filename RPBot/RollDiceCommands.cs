@@ -155,7 +155,15 @@ namespace RPBot
             // Если предварительный ACK уже выполнен в Program.OnSlashCommandExecuted
             // (ранний defer для тяжёлых команд — см. Program._preDeferCommands),
             // повторно DeferAsync НЕ зовём: он упадёт с «Cannot defer an already deferred interaction».
-            var alreadyDeferred = Program.IsPreDeferDone(command.Id);
+                        if (Program.IsPreDeferFailed(command.Id))
+                        {
+                            // 🩹 perf: PreDefer окончательно не прошёл (3 ретрая 10062 — interaction
+                            // не синхронизирован). Не пытаемся выполнить бросок — Discord всё равно
+                            // уже отвалился, и Followup-ответ не доставится. Просто выходим.
+                            Program.ClearPreDeferFailed(command.Id);
+                            return;
+                        }
+                        var alreadyDeferred = Program.IsPreDeferDone(command.Id);
             if (alreadyDeferred)
             {
                 Program.ClearPreDeferDone(command.Id);
@@ -297,9 +305,16 @@ namespace RPBot
             if (isStatsChannel)
             {
                 var sem = GetGuildSemaphore(guildId);
-                await sem.WaitAsync();
-                try
-                {
+                            // Таймаут 2 сек, как в Roll20 — если сессия залипла, не держим
+                            // Discord-interaction >3 сек (это вызовет "Приложение не отвечает").
+                            bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                            if (!gotLock)
+                            {
+                                BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
+                            }
+                            else
+                            try
+                            {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
                         // ✅ Bug 3: пауза НЕ блокирует бросок. Бросок всегда можно совершить;
@@ -338,7 +353,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    sem.Release();
+                                                if (gotLock) sem.Release();
                 }
             }
 
@@ -354,14 +369,19 @@ namespace RPBot
             if (isStatsChannel || isRollChannel)
             {
                 var sem = GetGuildSemaphore(guildId);
-                await sem.WaitAsync();
-                try
+                            bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                            if (!gotLock)
                 {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
-                    {
-                        // ✅ Bug 3: пишем бросок ТОЛЬКО в активные сессии с TrackRolls=true.
-                        // Глобальный счётчик (RollsToday) уже инкрементнут через
-                        // WriteCompletedRollLog ниже.
+                                BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
+                            }
+                            else
+                            try
+                            {
+                                if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
+                                {
+                                    // ✅ Bug 3: пишем бросок ТОЛЬКО в активные сессии с TrackRolls=true.
+                                    // Глобальный счётчик (RollsToday) уже инкрементнут через
+                                    // WriteCompletedRollLog ниже.
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
                             !s.Value.IsPaused &&
@@ -383,7 +403,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    sem.Release();
+                                                    if (gotLock) sem.Release();
                 }
             }
 
@@ -411,46 +431,56 @@ namespace RPBot
                     // Цвет embed — по СРЕДНЕМУ значению (требование пользователя).
                     // Fallback на multi-embed с отдельными эмбедами — если не удалось склеить
                     // (например, не хватает части файлов).
-                    var stripStream = DiceStripComposer.ComposeStrip(results, numbersDir, diceType, out var missingForStrip);
+                                    //
+                                    // 🩹 perf: ComposeStrip делается в фоне (Task.Run), чтобы GC-паузы при
+                                    // склейке PNG (10d20 → 168*10 = 1680 px bitmap + PNG-энкод) не
+                                    // блокировали ACK-поток >3 сек и не вызывали "Приложение не отвечает".
+                                    // Defer уже отправлен, фоновый Task.Run — это disk/GC-работа.
+                                    // ВАЖНО: out-параметр missing мы возвращаем через замыкание (массив из 1 элемента).
+                                    var missingBox = new List<int>[] { null! };
+                                    var stripTask = Task.Run(() =>
+                                        DiceStripComposer.ComposeStrip(results, numbersDir, diceType, out missingBox[0]));
+                                    var stripStream = await stripTask.ConfigureAwait(false);
+                                    var missingForStrip = missingBox[0] ?? new List<int>();
 
-                    if (stripStream != null)
-                    {
-                        try
-                        {
-                            var avg = results.Average();
-                            var embed = new EmbedBuilder()
-                                .WithImageUrl("attachment://roll_strip.png")
-                                .WithColor(DiceStripComposer.ColorForAverage(avg, min, max))
-                                .Build();
+                                    if (stripStream != null)
+                                    {
+                                        try
+                                        {
+                                            var avg = results.Average();
+                                            var embed = new EmbedBuilder()
+                                                .WithImageUrl("attachment://roll_strip.png")
+                                                .WithColor(DiceStripComposer.ColorForAverage(avg, min, max))
+                                                .Build();
 
-                            var label = count == 2
-                                ? "Результаты броска (помеха/преимущество):"
-                                : $"Результаты {count} бросков:";
+                                            var label = count == 2
+                                                ? "Результаты броска (помеха/преимущество):"
+                                                : $"Результаты {count} бросков:";
 
-                            var attachment = new FileAttachment(stripStream, "roll_strip.png");
-                            await command.FollowupWithFilesAsync(
-                                attachments: new[] { attachment },
-                                text: label,
-                                embeds: new[] { embed });
+                                            var attachment = new FileAttachment(stripStream, "roll_strip.png");
+                                            await command.FollowupWithFilesAsync(
+                                                attachments: new[] { attachment },
+                                                text: label,
+                                                embeds: new[] { embed });
 
-                            if (missingForStrip.Count > 0)
-                                BotLogger.Warn(LogCategory.Rolls,
-                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
+                                            if (missingForStrip.Count > 0)
+                                                BotLogger.Warn(LogCategory.Rolls,
+                                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
 
-                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                            return;
-                        }
-                        finally
-                        {
-                            stripStream.Dispose();
-                        }
-                    }
-                    else
-                    {
-                        // Не получилось склеить (вообще нет файлов). Падаем в общий fallback ниже.
-                        BotLogger.Warn(LogCategory.Rolls,
-                            $"[strip] для {diceType} нет ни одного PNG, fallback на текст.");
-                    }
+                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            return;
+                                        }
+                                        finally
+                                        {
+                                            stripStream.Dispose();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Не получилось склеить (вообще нет файлов). Падаем в общий fallback ниже.
+                                        BotLogger.Warn(LogCategory.Rolls,
+                                            $"[strip] для {diceType} нет ни одного PNG, fallback на текст.");
+                                    }
                 }
             }
 
