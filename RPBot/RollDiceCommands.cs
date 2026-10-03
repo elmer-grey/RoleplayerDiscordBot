@@ -27,6 +27,12 @@ namespace RPBot
                 private static readonly ConcurrentDictionary<ulong, DateTime> _lastRollTime = new();
         private static readonly TimeSpan _rollCooldown = TimeSpan.FromSeconds(2);
 
+                        // 🩹 perf: кэш PNG для /roll20 (одиночный куб). Файл читается с диска ОДИН раз
+                        // за сессию бота, дальше byte[] отдаётся через FileAttachment → нет file-lock
+                        // на Windows и нет disk-IO при повторных бросках. Ключ = полный путь.
+                        private static readonly ConcurrentDictionary<string, byte[]> _roll20PngCache =
+                            new(StringComparer.OrdinalIgnoreCase);
+
         private static bool IsOnCooldown(ulong userId)
         {
             if (_lastRollTime.TryGetValue(userId, out var last))
@@ -420,10 +426,16 @@ namespace RPBot
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                             .WithColor(GetGradientColor(result, 1, max))
                             .Build();
-                        await command.FollowupWithFileAsync(filePath, embed: embed);
-                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                        return;
-                    }
+                                            // 🩹 perf: берём PNG из кэша (см. _roll20PngCache). Тот же кэш
+                                            // работает и для /roll с одним кубом, потому что ключ — полный путь.
+                                            var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
+                                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                                            await command.FollowupWithFilesAsync(
+                                                attachments: new[] { attachment },
+                                                embeds: new[] { embed });
+                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            return;
+                                        }
                 }
                 else
                 {
@@ -645,12 +657,18 @@ namespace RPBot
                     .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                     .WithColor(GetGradientColor(result, 1, 20))
                     .Build();
-                await command.FollowupWithFileAsync(filePath, embed: embed);
-            }
-            else
-            {
-                await command.FollowupAsync($"**Результат броска:** {result}");
-            }
+                            // 🩹 perf: берём PNG из кэша, не с диска. Кэш наполняется через
+                            // File.ReadAllBytesAsync при первом запросе и больше никогда не меняется.
+                            var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
+                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                            await command.FollowupWithFilesAsync(
+                                attachments: new[] { attachment },
+                                embeds: new[] { embed });
+                        }
+                        else
+                        {
+                            await command.FollowupAsync($"**Результат броска:** {result}");
+                        }
             WriteCompletedRollLog("d20", result);
         }
 

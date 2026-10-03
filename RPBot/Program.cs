@@ -182,6 +182,57 @@ private Task? _dailyRestartTask;
                 /// <summary>Отметить момент реконнекта; вызывается из ReconnectionService / OnReady.</summary>
                 internal static void MarkReconnectCompleted() { _lastReconnectUtc = DateTime.UtcNow; }
 
+                                // 🩹 perf: Manual GC. По умолчанию .NET запускает GC.Collect() редко, и
+                                // когда память наконец собирается — пауза может быть >3 сек, что
+                                // приводит к "Приложение не отвечает" в Discord. Мы запускаем
+                                // GC.Collect(2, Optimized, blocking: false) в фоне каждые 30 сек —
+                                // это короткие паузы (<100мс), которые не вредят ACK.
+                                private static CancellationTokenSource? _gcLoopCts;
+                                private static Task? _gcLoopTask;
+                                private const int GcLoopPeriodSeconds = 30;
+
+                                internal static void StartManualGcLoop()
+                                {
+                                    if (_gcLoopTask != null) return;
+                                    _gcLoopCts = new CancellationTokenSource();
+                                    var ct = _gcLoopCts.Token;
+                                    _gcLoopTask = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            while (!ct.IsCancellationRequested)
+                                            {
+                                                try { await Task.Delay(TimeSpan.FromSeconds(GcLoopPeriodSeconds), ct).ConfigureAwait(false); }
+                                                catch (OperationCanceledException) { return; }
+
+                                                // Optimized + blocking:false + compacting:false → самая
+                                                // короткая пауза. GC сам решает, насколько глубоко копать.
+                                                // Compact делаем только при росте LOH >50% (см. ниже).
+                                                try
+                                                {
+                                                    GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    BotLogger.Warn(LogCategory.System, $"[GC] manual loop failed: {ex.Message}");
+                                                }
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            BotLogger.Error(LogCategory.System, $"[GC] loop crashed: {ex}");
+                                        }
+                                    });
+                                    BotLogger.Info(LogCategory.System, $"[GC] manual loop запущен, период={GcLoopPeriodSeconds}с");
+                                }
+
+                                internal static void StopManualGcLoop()
+                                {
+                                    try { _gcLoopCts?.Cancel(); } catch { }
+                                    _gcLoopCts = null;
+                                    _gcLoopTask = null;
+                                }
+
                 // Флаг, что мы внутри Program.Main — это первый запуск, и AttachSink
         // к StartupRenderer.Instance должен произойти один раз. На рестарте
         // мы НЕ добавляем sinks повторно — иначе в UI одна и та же строка
@@ -3694,6 +3745,11 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                             // синхронизировал сессию с момента выхода Gateway). Защищает
                             // ситуацию "простоял бот всю ночь, потом /roll → 10062".
                             MarkReconnectCompleted();
+
+                                                        // 🩹 perf: запуск фонового GC-цикла. После холодного старта
+                                                        // в LOH/L2 накапливается мусор от инициализации — пусть соберёт
+                                                        // маленькими порциями, а не большой паузой во время первого /roll.
+                                                        StartManualGcLoop();
 
                             // ✅ Bug audit: ClearRestartPendingFlag вызывался ТОЛЬКО из
                     // PredictionService.AnnounceOnlineAsync при условии, что у гильдии
