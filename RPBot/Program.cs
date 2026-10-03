@@ -2283,7 +2283,12 @@ public Task ReloadServerConfigsAsync()
 
         static async Task Main(string[] args)
         {
-            // Гарантированное завершение Lavalink при любом способе остановки (VS Stop, taskkill и т.д.)
+                    // 🩹 perf: AboveNormal priority — Windows не отдаёт CPU боту фоновым
+                    // процессам (Windows Update, антивирус, OneDrive). При нормальных GC
+                    // паузах в десятки мс это не спасёт, но против микрофризов диспетчера
+                    // (10-50 мс на фоне) — помогает не пропустить Discord ACK.
+                    try { System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.AboveNormal; } catch { }
+                    // Гарантированное завершение Lavalink при любом способе остановки (VS Stop, taskkill и т.д.)
             AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
 
@@ -3476,22 +3481,42 @@ private static BotUI? _ui;
 
         private async Task BackgroundMonitoringLoop(CancellationToken ct = default)
         {
-            while (!_shouldExit && !ct.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(30), ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    await LogStartup($"⚠️ BackgroundMonitoring: delay error: {ex.Message}");
-                    await Task.Delay(500);
-                    continue;
-                }
+                    // 🩹 perf: heartbeat-лог каждые 30с. Показывает, что бот жив и
+                    // обрабатывает цикл мониторинга. Если TimeoutException приходят,
+                    // а heartbeat-строки идут — значит, проблема НЕ в зависании бота,
+                    // а в IO/Discord-сокете. Без этого в логе непонятно, был бот жив
+                    // или нет в момент падения.
+                    int heartbeatTick = 0;
+                    DateTime loopStart = DateTime.UtcNow;
+                    while (!_shouldExit && !ct.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            await LogStartup($"⚠️ BackgroundMonitoring: delay error: {ex.Message}");
+                            await Task.Delay(500);
+                            continue;
+                        }
+
+                        heartbeatTick++;
+                        try
+                        {
+                            var p = System.Diagnostics.Process.GetCurrentProcess();
+                            var elapsed = (DateTime.UtcNow - loopStart).TotalSeconds;
+                            BotLogger.Info(LogCategory.System,
+                                $"[Heartbeat] tick={heartbeatTick} elapsed={elapsed:F0}s threads={p.Threads.Count} " +
+                                $"ws={p.WorkingSet64 / 1024d / 1024d:F1}MB " +
+                                $"cpu={(p.TotalProcessorTime.TotalMilliseconds / Math.Max(elapsed * 10, 1)):F1}% " +
+                                $"conn={_client?.ConnectionState} ready={TimeSinceLastReconnect.TotalSeconds:F0}s_ago");
+                        }
+                        catch { /* heartbeat — best-effort */ }
 
                 var predictor = _connectionPredictor;
                 var client = _client;
@@ -5774,13 +5799,22 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                                                                                                                     {
                                                                                                                                                                                                         try
                                                                                                                                                                                                         {
+                                                                                                                                                                                                            // 🩹 perf: замер времени DeferAsync — если увидим >100мс,
+                                                                                                                                                                                                            // значит, виноват IO/SSL/GC, а не 10062 (NotFound).
+                                                                                                                                                                                                            var sw = System.Diagnostics.Stopwatch.StartNew();
                                                                                                                                                                                                             await command.DeferAsync().ConfigureAwait(false);
+                                                                                                                                                                                                            sw.Stop();
                                                                                                                                                                                                             MarkPreDeferDone(command.Id);
                                                                                                                                                                                                             deferred = true;
                                                                                                                                                                                                             if (attempt > 0)
                                                                                                                                                                                                             {
                                                                                                                                                                                                                 BotLogger.Info(LogCategory.Cmd,
-                                                                                                                                                                                                                                                                                                                                                                                                                                $"[PreDefer:{name}] succeeded на попытке {attempt + 1}/{3} для interaction={command.Id} (был 10062 / SSL / TimeoutException ранее).");
+                                                                                                                                                                                                                    $"[PreDefer:{name}] succeeded на попытке {attempt + 1}/{3} для interaction={command.Id} (был 10062 / SSL / TimeoutException ранее).");
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                            else if (sw.Elapsed.TotalMilliseconds > 100)
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                                BotLogger.Warn(LogCategory.Cmd,
+                                                                                                                                                                                                                    $"[PreDefer:{name}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms interaction={command.Id} — возможна IO/GC пауза.");
                                                                                                                                                                                                             }
                                                                                                                                                                                                         }
                                                                                                                                                                                                         catch (Exception ex)
