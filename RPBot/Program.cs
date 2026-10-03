@@ -184,47 +184,105 @@ private Task? _dailyRestartTask;
 
                                 // 🩹 perf: Manual GC. По умолчанию .NET запускает GC.Collect() редко, и
                                 // когда память наконец собирается — пауза может быть >3 сек, что
-                                // приводит к "Приложение не отвечает" в Discord. Мы запускаем
-                                // GC.Collect(2, Optimized, blocking: false) в фоне каждые 30 сек —
-                                // это короткие паузы (<100мс), которые не вредят ACK.
-                                private static CancellationTokenSource? _gcLoopCts;
-                                private static Task? _gcLoopTask;
-                                private const int GcLoopPeriodSeconds = 30;
+                                                                // приводит к "Приложение не отвечает" в Discord. Стратегия:
+                                                                //  • каждые 30 с — мягкая сборка (Optimized, blocking:false, compacting:false)
+                                                                //    в фоне — короткие паузы <100 мс.
+                                                                //  • каждые 5 минут — ПОЛНАЯ сборка с compaction LOH (blocking:true),
+                                                                //    устраняет фрагментацию LOH от больших PNG (>85 КБ) и предотвращает
+                                                                //    внезапные Gen2-паузы >3 с.
+                                                                //  • замер паpz GC (Total_Pause / кол-во сборок / алоцированные байты) —
+                                                                //    пишется в лог каждую итерацию, чтобы видеть реальную картину.
+                                                                private static CancellationTokenSource? _gcLoopCts;
+                                                                private static Task? _gcLoopTask;
+                                                                private const int GcLoopPeriodSeconds = 30;
+                                                                private const int GcCompactIntervalSeconds = 300; // 5 мин
+                                                                // Состояние для замеров.
+                                                                private static long _lastAllocatedBytes;
+                                                                private static int _lastGen0, _lastGen1, _lastGen2;
+                                                                private static TimeSpan _lastTotalPause;
+                                                                private static readonly System.Diagnostics.Stopwatch _gcWatch = new();
 
-                                internal static void StartManualGcLoop()
-                                {
-                                    if (_gcLoopTask != null) return;
-                                    _gcLoopCts = new CancellationTokenSource();
-                                    var ct = _gcLoopCts.Token;
-                                    _gcLoopTask = Task.Run(async () =>
-                                    {
-                                        try
-                                        {
-                                            while (!ct.IsCancellationRequested)
-                                            {
-                                                try { await Task.Delay(TimeSpan.FromSeconds(GcLoopPeriodSeconds), ct).ConfigureAwait(false); }
-                                                catch (OperationCanceledException) { return; }
+                                                                internal static void StartManualGcLoop()
+                                                                {
+                                                                    if (_gcLoopTask != null) return;
+                                                                    _gcLoopCts = new CancellationTokenSource();
+                                                                    var ct = _gcLoopCts.Token;
+                                                                    _gcWatch.Restart();
+                                                                    _lastAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true);
+                                                                    _lastGen0 = GC.CollectionCount(0);
+                                                                    _lastGen1 = GC.CollectionCount(1);
+                                                                    _lastGen2 = GC.CollectionCount(2);
+                                                                    _lastTotalPause = GC.GetTotalPauseDuration();
+                                                                    _gcLoopTask = Task.Run(async () =>
+                                                                    {
+                                                                        var compactInterval = TimeSpan.FromSeconds(GcCompactIntervalSeconds);
+                                                                        DateTime nextCompactAt = DateTime.UtcNow + compactInterval;
+                                                                        try
+                                                                        {
+                                                                            while (!ct.IsCancellationRequested)
+                                                                            {
+                                                                                try { await Task.Delay(TimeSpan.FromSeconds(GcLoopPeriodSeconds), ct).ConfigureAwait(false); }
+                                                                                catch (OperationCanceledException) { return; }
 
-                                                // Optimized + blocking:false + compacting:false → самая
-                                                // короткая пауза. GC сам решает, насколько глубоко копать.
-                                                // Compact делаем только при росте LOH >50% (см. ниже).
-                                                try
-                                                {
-                                                    GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    BotLogger.Warn(LogCategory.System, $"[GC] manual loop failed: {ex.Message}");
-                                                }
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            BotLogger.Error(LogCategory.System, $"[GC] loop crashed: {ex}");
-                                        }
-                                    });
-                                    BotLogger.Info(LogCategory.System, $"[GC] manual loop запущен, период={GcLoopPeriodSeconds}с");
-                                }
+                                                                                bool doCompact = DateTime.UtcNow >= nextCompactAt;
+                                                                                var sw = System.Diagnostics.Stopwatch.StartNew();
+                                                                                try
+                                                                                {
+                                                                                    if (doCompact)
+                                                                                    {
+                                                                                        // Полная сборка с компактизацией LOH — изредка,
+                                                                                        // в фоне. Укладываемся обычно в 100-400 мс, но
+                                                                                        // без неё LOH фрагментируется и рано или поздно
+                                                                                        // случается пауза >3 сек.
+                                                                                        GC.Collect(2, GCCollectionMode.Default, blocking: true, compacting: true);
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                                                                                    }
+                                                                                }
+                                                                                catch (Exception ex)
+                                                                                {
+                                                                                    BotLogger.Warn(LogCategory.System, $"[GC] manual loop failed: {ex.Message}");
+                                                                                    continue;
+                                                                                }
+                                                                                sw.Stop();
+
+                                                                                // Замер после сборки.
+                                                                                var afterPause = GC.GetTotalPauseDuration();
+                                                                                var afterGen0 = GC.CollectionCount(0);
+                                                                                var afterGen1 = GC.CollectionCount(1);
+                                                                                var afterGen2 = GC.CollectionCount(2);
+                                                                                var allocatedNow = GC.GetTotalAllocatedBytes(precise: true);
+                                                                                var heap0 = GC.GetTotalMemory(forceFullCollection: false);
+                                                                                _gcWatch.Restart();
+
+                                                                                var pauseDelta = afterPause - _lastTotalPause;
+                                                                                var allocDeltaMb = (allocatedNow - _lastAllocatedBytes) / 1024d / 1024d;
+                                                                                var heapMb = heap0 / 1024d / 1024d;
+                                                                                BotLogger.Info(LogCategory.System,
+                                                                                    $"[GC] iter compact={doCompact} allocDelta={allocDeltaMb:F1}MB " +
+                                                                                    $"gen0={afterGen0 - _lastGen0} gen1={afterGen1 - _lastGen1} gen2={afterGen2 - _lastGen2} " +
+                                                                                    $"heap={heapMb:F1}MB " +
+                                                                                    $"pauseDelta={pauseDelta.TotalMilliseconds:F0}ms totalPause={afterPause.TotalMilliseconds:F0}ms " +
+                                                                                    $"iterMs={sw.Elapsed.TotalMilliseconds:F0}");
+
+                                                                                _lastAllocatedBytes = allocatedNow;
+                                                                                _lastGen0 = afterGen0;
+                                                                                _lastGen1 = afterGen1;
+                                                                                _lastGen2 = afterGen2;
+                                                                                _lastTotalPause = afterPause;
+
+                                                                                if (doCompact) nextCompactAt = DateTime.UtcNow + compactInterval;
+                                                                            }
+                                                                        }
+                                                                        catch (Exception ex)
+                                                                        {
+                                                                            BotLogger.Error(LogCategory.System, $"[GC] loop crashed: {ex}");
+                                                                        }
+                                                                    });
+                                                                    BotLogger.Info(LogCategory.System, $"[GC] manual loop запущен, период={GcLoopPeriodSeconds}с, compaction={GcCompactIntervalSeconds}с");
+                                                                }
 
                                 internal static void StopManualGcLoop()
                                 {
@@ -3541,7 +3599,7 @@ private static BotUI? _ui;
                         // с новой сессией у Discord). Время хранится до ~5 секунд.
                         MarkReconnectCompleted();
 
-                                    // 🩹 reminder-survives-restart: после OnDisconnected → Cancel() все per-event
+                                                            // 🩹 reminder-survives-restart: после OnDisconnected → Cancel() все per-event
                             // CTS в EventOpsLifecycleService умерли, а вместе с ними — Task.Delay для
                             // reminder1h и deleteReminder15m. В сторе остались абсолютные моменты
                             // (Reminder1hAtUtc / DeleteReminder15mAtUtc), теперь переставляем таймеры
@@ -4537,8 +4595,13 @@ await Task.CompletedTask;
 
         private async Task OnDisconnected(Exception exception)
         {
-            // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
-                    try { _eventOpsRemigrator?.Cancel(); } catch { }
+                    // 🩹 stress-monitor: маркер потери соединения для внешнего монитора.
+                    // Парсер ждёт эту подстроку. Сама причина (exception) нам не нужна —
+                    // мы только знаем, что сессия потеряна.
+                    var disconnectMsg = exception?.Message ?? "<no-exception>";
+
+                                        // Останавливаем ремиграцию: цикл ModifyAsync после logout нам больше не нужен.
+                            try { _eventOpsRemigrator?.Cancel(); } catch { }
 
                     // Останавливаем таймеры lifecycle — после дисконнекта Task.Delay внутри
                     // них всё равно сработает, но делать там нечего (REST не ответит).
@@ -5705,27 +5768,37 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                                                                                                                             if (attempt > 0)
                                                                                                                                                                                                             {
                                                                                                                                                                                                                 BotLogger.Info(LogCategory.Cmd,
-                                                                                                                                                                                                                    $"[PreDefer:{name}] succeeded на попытке {attempt + 1}/{3} для interaction={command.Id} (был 10062 / TimeoutException ранее).");
+                                                                                                                                                                                                                                                                                                                                                                                                                                $"[PreDefer:{name}] succeeded на попытке {attempt + 1}/{3} для interaction={command.Id} (был 10062 / SSL / TimeoutException ранее).");
                                                                                                                                                                                                             }
                                                                                                                                                                                                         }
                                                                                                                                                                                                         catch (Exception ex)
                                                                                                                                                                                                         {
                                                                                                                                                                                                             lastEx = ex;
-                                                                                                                                                                                                            // Ретраим ТОЛЬКО 10062 (сессия не синхронизирована после Gateway Reconnect).
-                                                                                                                                                                                                            // TimeoutException = «мы реально опоздали с ответом» — бесполезен
-                                                                                                                                                                                                            // ретраить, потому что повторный DeferAsync на это же interaction тоже
-                                                                                                                                                                                                            // опоздает (Discord уже не ждёт ACK).
-                                                                                                                                                                                                            bool retriable = ex is Discord.Net.HttpException httpEx
-                                                                                                                                                                                                                && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
-                                                                                                                                                                                                            if (!retriable || attempt == 2)
-                                                                                                                                                                                                            {
-                                                                                                                                                                                                                DeferFailureLogger.Log($"PreDefer:{name}", ex, command, input: null);
-                                                                                                                                                                                                                break;
-                                                                                                                                                                                                            }
-                                                                                                                                                                                                            // Пауза между попытками: 150, 350 мс.
-                                                                                                                                                                                                            var delayMs = attempt == 0 ? 150 : 350;
-                                                                                                                                                                                                            try { await Task.Delay(delayMs).ConfigureAwait(false); } catch { }
-                                                                                                                                                                                                        }
+                                                                                                                                                                                                                                                                                                                                                                                                                    // Ретраим ТОЛЬКО 10062 (сессия не синхронизирована после Gateway Reconnect)
+                                                                                                                                                                                                                                                                                                                                                                                                                    // и HttpRequestException с SSL/TLS (истёк keep-alive в пуле HTTP-соединений:
+                                                                                                                                                                                                                                                                                                                                                                                                                    // Discord/Cloudflare закрыл idle-сокет, а .NET-клиент пытается писать в
+                                                                                                                                                                                                                                                                                                                                                                                                                    // мёртвый поток; лечится короткой паузой и новым соединением из пула).
+                                                                                                                                                                                                                                                                                                                                                                                                                    //
+                                                                                                                                                                                                                                                                                                                                                                                                                    // TimeoutException = «мы реально опоздали с ответом» — бесполезен
+                                                                                                                                                                                                                                                                                                                                                                                                                    // ретраить, потому что повторный DeferAsync на это же interaction тоже
+                                                                                                                                                                                                                                                                                                                                                                                                                    // опоздает (Discord уже не ждёт ACK).
+                                                                                                                                                                                                                                                                                                                                                                                                                    bool isHttpNotFound = ex is Discord.Net.HttpException httpEx
+                                                                                                                                                                                                                                                                                                                                                                                                                        && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
+                                                                                                                                                                                                                                                                                                                                                                                                                    bool isSslBroken = ex is System.Net.Http.HttpRequestException httpReq
+                                                                                                                                                                                                                                                                                                                                                                                                                        && (httpReq.InnerException is System.IO.IOException
+                                                                                                                                                                                                                                                                                                                                                                                                                            || httpReq.InnerException is System.Net.Sockets.SocketException
+                                                                                                                                                                                                                                                                                                                                                                                                                            || (httpReq.InnerException?.Message?.Contains("SSL") ?? false)
+                                                                                                                                                                                                                                                                                                                                                                                                                            || (httpReq.Message?.Contains("SSL") ?? false));
+                                                                                                                                                                                                                                                                                                                                                                                                                    bool retriable = isHttpNotFound || isSslBroken;
+                                                                                                                                                                                                                                                                                                                                                                                                                    if (!retriable || attempt == 2)
+                                                                                                                                                                                                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                                                                                                                                                                                                        DeferFailureLogger.Log($"PreDefer:{name}", ex, command, input: null);
+                                                                                                                                                                                                                                                                                                                                                                                                                        break;
+                                                                                                                                                                                                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                                                                                                                                                                                                    // Пауза между попытками: 150, 350 мс.
+                                                                                                                                                                                                                                                                                                                                                                                                                    var delayMs = attempt == 0 ? 150 : 350;
+                                                                                                                                                                                                                                                                                                                                                                                                                    try { await Task.Delay(delayMs).ConfigureAwait(false); } catch { }
+                                                                                                                                                                                                                                                                                                                                                                                                                }
                                                                                                                                                                                                     }
                                                                                                                                                                                                     if (!deferred)
                                                                                                                                                                                                     {

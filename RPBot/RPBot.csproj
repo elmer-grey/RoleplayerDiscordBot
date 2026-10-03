@@ -7,7 +7,13 @@
     <Nullable>enable</Nullable>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <NoWarn Condition="'$(Configuration)' == 'Debug'">$(NoWarn);NU1900</NoWarn>
-  </PropertyGroup>
+      <!-- 🩹 perf: Server GC + CONCURRENT (background) уменьшают паузы GC, которые
+           иначе блокируют все потоки и приводят к "Приложение не отвечает" в Discord.
+           Workstation GC по умолчанию блокирует ВСЕ потоки при Gen2 сборке;
+           Server GC + concurrent даёт фоновую сборку без полной остановки мира. -->
+      <ServerGarbageCollection>true</ServerGarbageCollection>
+      <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="Numbers\**" />
