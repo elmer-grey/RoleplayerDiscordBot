@@ -1224,14 +1224,66 @@ namespace RPBot
                     case "confirm_stop":
                     case "cancel_stop":
                     case "toggle_rolls":
-                        try { await component.DeferAsync(); }
-                        catch (Exception ex)
                         {
-                            DeferFailureLogger.Log("GameSessionButton", ex, component, parts[0]);
-                            return;
+                            // 🩹 perf: 10062-retry для кнопок — после Gateway Reconnect или
+                            // если бот рестартовался между нажатием и обработкой, первый
+                            // DeferAsync возвращает 10062 Unknown interaction. Делаем до 2
+                            // ретраев с короткой паузой. Также SLOW-детектор: замеряем
+                            // время DeferAsync, пишем gcPause/gen счётчики, чтобы видеть
+                            // GC vs IO-причину.
+                            bool deferred = false;
+                            Exception? lastEx = null;
+                            for (int attempt = 0; attempt <= 2 && !deferred; attempt++)
+                            {
+                                try
+                                {
+                                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                                    await component.DeferAsync();
+                                    sw.Stop();
+                                    deferred = true;
+                                    if (attempt > 0)
+                                    {
+                                        BotLogger.Info(LogCategory.Cmd,
+                                            $"[GameSessionButton:DeferAsync:{parts[0]}] succeeded на попытке {attempt + 1}/3 для interaction={component.Id} (был 10062 ранее).");
+                                    }
+                                    else if (sw.Elapsed.TotalMilliseconds > 100)
+                                    {
+                                        long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
+                                        int gen0 = System.GC.CollectionCount(0);
+                                        int gen1 = System.GC.CollectionCount(1);
+                                        int gen2 = System.GC.CollectionCount(2);
+                                        long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
+                                        BotLogger.Warn(LogCategory.Cmd,
+                                            $"[GameSessionButton:DeferAsync:{parts[0]}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
+                                            $"interaction={component.Id} " +
+                                            $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                            $"— возможна IO/GC пауза.");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    lastEx = ex;
+                                    bool isHttpNotFound = ex is Discord.Net.HttpException httpEx
+                                        && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
+                                    bool isSslBroken = ex is System.Net.Http.HttpRequestException httpReq
+                                        && (httpReq.InnerException is System.IO.IOException
+                                            || httpReq.InnerException is System.Net.Sockets.SocketException
+                                            || (httpReq.InnerException?.Message?.Contains("SSL") ?? false)
+                                            || (httpReq.Message?.Contains("SSL") ?? false));
+                                    bool retriable = isHttpNotFound || isSslBroken;
+                                    if (!retriable || attempt == 2)
+                                    {
+                                        DeferFailureLogger.Log("GameSessionButton", ex, component, parts[0]);
+                                        return;
+                                    }
+                                    var delayMs = attempt == 0 ? 150 : 350;
+                                    try { await Task.Delay(delayMs); } catch { }
+                                }
+                            }
+                            if (!deferred) return;
+                            break;
                         }
-                        break;
-                }
+                    }
 
                 switch (parts[0])
                 {
