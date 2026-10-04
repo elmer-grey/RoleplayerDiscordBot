@@ -166,7 +166,7 @@ namespace RPBot
             }
         }
 
-        private static async Task SaveSessionsAsync()
+        public static async Task SaveSessionsAsync()
         {
             try
             {
@@ -2243,10 +2243,14 @@ namespace RPBot
                             _stoppedSessions.TryRemove(session.GuildId, out _);
                         }
 
-                        try
-                        {
-                            var guild = _client.GetGuild(session.GuildId);
-                            if (guild == null) return;
+                                                // ✅ Persistence-fix: флаш после удаления сессии, чтобы
+                                                // не было окна, когда файл содержит удалённую сессию.
+                                                _ = Task.Run(() => SaveSessionsAsync());
+
+                                                try
+                                                {
+                                                    var guild = _client.GetGuild(session.GuildId);
+                                                    if (guild == null) return;
 
                             // Используем ControlChannelId — точный канал control message (напоминания о паузе тоже там)
                             var channelId = session.ControlChannelId != 0
@@ -2333,11 +2337,68 @@ namespace RPBot
                 return;
             }
 
-            var sem = GetGuildSemaphore(guildId.Value);
-            await sem.WaitAsync();
-            try
-            {
-                LogDebug($"Обработка кнопки статистики для гильдии {guildId}");
+                    // 🩹 perf: PreDefer с 10062-retry + SLOW-детектором. Раньше эта кнопка делала
+                    // RespondAsync напрямую после SemaphoreSlim.WaitAsync() — если сеть к Discord
+                    // тормозила >3с, мы получали "Cannot respond after 3 seconds" и exception
+                    // падали в лог без шанса отправить пользователю ответ. Теперь сначала ACK,
+                    // потом вся логика, потом Edit/Followup.
+                    var customId = component.Data.CustomId;
+                    bool deferred = false;
+                    Exception? lastDeferEx = null;
+                    for (int attempt = 0; attempt <= 2 && !deferred; attempt++)
+                    {
+                        try
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            await component.DeferAsync(ephemeral: true);
+                            sw.Stop();
+                            deferred = true;
+                            if (attempt > 0)
+                            {
+                                BotLogger.Info(LogCategory.Cmd,
+                                    $"[GameSessionButton:DeferAsync:stats:{customId}] succeeded на попытке {attempt + 1}/3 для interaction={component.Id} (был 10062 ранее).");
+                            }
+                            else if (sw.Elapsed.TotalMilliseconds > 100)
+                            {
+                                long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
+                                int gen0 = System.GC.CollectionCount(0);
+                                int gen1 = System.GC.CollectionCount(1);
+                                int gen2 = System.GC.CollectionCount(2);
+                                long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
+                                BotLogger.Warn(LogCategory.Cmd,
+                                    $"[GameSessionButton:DeferAsync:stats:{customId}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
+                                    $"interaction={component.Id} " +
+                                    $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                    $"— возможна IO/GC пауза.");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            lastDeferEx = ex;
+                            bool isHttpNotFound = ex is Discord.Net.HttpException httpEx
+                                && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
+                            bool isSslBroken = ex is System.Net.Http.HttpRequestException httpReq
+                                && (httpReq.InnerException is System.IO.IOException
+                                    || httpReq.InnerException is System.Net.Sockets.SocketException
+                                    || (httpReq.InnerException?.Message?.Contains("SSL") ?? false)
+                                    || (httpReq.Message?.Contains("SSL") ?? false));
+                            bool retriable = isHttpNotFound || isSslBroken;
+                            if (!retriable || attempt == 2)
+                            {
+                                DeferFailureLogger.Log("GameSessionButton", ex, component, $"stats:{customId}");
+                                return;
+                            }
+                            var delayMs = attempt == 0 ? 150 : 350;
+                            try { await Task.Delay(delayMs); } catch { }
+                        }
+                    }
+                    if (!deferred) return;
+
+                    var sem = GetGuildSemaphore(guildId.Value);
+                    await sem.WaitAsync();
+                    try
+                    {
+                        LogDebug($"Обработка кнопки статистики для гильдии {guildId}");
 
                         // Ищем среди активных и в архиве (на случай, если сессия уже завершена
                         // и бот успел перезагрузиться, прежде чем пользователь нажал кнопку).
@@ -2355,7 +2416,7 @@ namespace RPBot
                         {
                             LogWarn($"[STATS] Сессия для сообщения статистики {component.Message.Id} не найдена (ни активная, ни в архиве)");
                             try { await component.Message.DeleteAsync(); } catch { }
-                            await component.RespondAsync("❌ Сессия не найдена.\n\nВозможно, она была очищена или архив был удалён.", ephemeral: true);
+                                                    try { await component.FollowupAsync("❌ Сессия не найдена.\n\nВозможно, она была очищена или архив был удалён.", ephemeral: true); } catch { }
                             return;
                         }
 

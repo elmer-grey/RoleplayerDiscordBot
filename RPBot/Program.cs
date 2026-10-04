@@ -452,40 +452,48 @@ private Task? _dailyRestartTask;
                             _ = Task.Run(() => _pointsUserIndex.SaveAsync());
                         }
                         catch { }
-                        var predictionService = _predictionService;
-                        var active = predictionService?.GetActive(guildId, channelId);
-                        if (active == null || active.IsResolved)
-                        {
-                            try { await component.RespondAsync("Сейчас нет активного прогноза в этом канале.", ephemeral: true); } catch { }
-                            ScheduleDeleteOriginalResponse(component);
-                            return;
-                        }
+                                // 🩹 perf: PreDefer с ретраем — раньше кнопка делала RespondAsync напрямую,
+                                // и при сетевом джиттере >3с пользователь не получал ответа.
+                                if (!await Common.ComponentPreDefer.TryDeferAsync(component, "pred_bet"))
+                                    return;
 
-                        var balance = _pointsService.GetBalance(guildId, component.User.Id);
-                        var cb = new ComponentBuilder()
-                            .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}:{channelId}", style: ButtonStyle.Primary);
+                                var predictionService = _predictionService;
+                                var active = predictionService?.GetActive(guildId, channelId);
+                                if (active == null || active.IsResolved)
+                                {
+                                    try { await component.FollowupAsync("Сейчас нет активного прогноза в этом канале.", ephemeral: true); } catch { }
+                                    ScheduleDeleteOriginalResponse(component);
+                                    return;
+                                }
 
-                        try { await component.RespondAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
-                        ScheduleDeleteOriginalResponse(component);
-                    }
+                                var balance = _pointsService.GetBalance(guildId, component.User.Id);
+                                var cb = new ComponentBuilder()
+                                    .WithButton($"Продолжить (баланс: {balance})", customId: $"pred_bet_confirm:{guildId}:{channelId}", style: ButtonStyle.Primary);
+
+                                try { await component.FollowupAsync($"Ваш текущий баланс: {balance}.", ephemeral: true, components: cb.Build()); } catch { }
+                                ScheduleDeleteOriginalResponse(component);
+                            }
 
         private async Task HandlePredictionBetConfirmButton(SocketMessageComponent component, string[] parts)
-        {
-            // customId: pred_bet_confirm:<guildId>:<channelId>
-                        // ✅ pred-parallelization: добавлен channelId — кнопка живёт в конкретном канале,
-                        // и обработчик modal'а должен знать, в каком именно.
-                        if (parts.Length < 3) return;
-                        if (!ulong.TryParse(parts[1], out var guildId)) return;
-                        if (!ulong.TryParse(parts[2], out var channelId)) return;
+                {
+                    // customId: pred_bet_confirm:<guildId>:<channelId>
+                                // ✅ pred-parallelization: добавлен channelId — кнопка живёт в конкретном канале,
+                                // и обработчик modal'а должен знать, в каком именно.
+                                if (parts.Length < 3) return;
+                                if (!ulong.TryParse(parts[1], out var guildId)) return;
+                                if (!ulong.TryParse(parts[2], out var channelId)) return;
 
-                        var user = component.User as SocketGuildUser;
-                        if (user == null)
-                        {
-                            await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
-                            return;
-                        }
+                                var user = component.User as SocketGuildUser;
+                                if (user == null)
+                                {
+                                    await component.RespondAsync("Только участники сервера могут ставить.", ephemeral: true);
+                                    return;
+                                }
 
-                        _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
+                                // Note: PreDefer не делаем здесь — кнопка открывает Modal через
+                                // RespondWithModalAsync, а после Defer это запрещено Discord API.
+
+                                _pendingBetUi[$"{guildId}:{component.User.Id}"] = component;
 
                         var active = _predictionService?.GetActive(guildId, channelId);
                         PredictionBet? existingBet = null;
@@ -668,24 +676,29 @@ private Task? _dailyRestartTask;
             if (!ulong.TryParse(parts[1], out var guildId)) return;
             if (!int.TryParse(parts[2], out var page)) return;
 
-            try
-            {
-                // Используем метод из Program.Prediction.cs (partial class)
-                var embed = BuildHistoryEmbed(guildId, page);
-                var components = BuildHistoryComponents(guildId, page);
+                    // 🩹 perf: PreDefer с ретраем — раньше UpdateAsync падал с TimeoutException,
+                    // если история грузится долго (большой объём).
+                    if (!await Common.ComponentPreDefer.TryDeferAsync(component, "pred_history_page"))
+                        return;
 
-                await component.UpdateAsync(msg =>
-                {
-                    msg.Embed = embed;
-                    msg.Components = components?.Build();
-                });
+                    try
+                    {
+                        // Используем метод из Program.Prediction.cs (partial class)
+                        var embed = BuildHistoryEmbed(guildId, page);
+                        var components = BuildHistoryComponents(guildId, page);
+
+                        await component.ModifyOriginalResponseAsync(msg =>
+                        {
+                            msg.Embed = embed;
+                            msg.Components = components?.Build();
+                        });
             }
-            catch (Exception ex)
-            {
-                await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}").ConfigureAwait(false);
-                try { await component.RespondAsync("Ошибка при переключении страницы.", ephemeral: true); } catch { }
-            }
-        }
+                    catch (Exception ex)
+                    {
+                        await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}").ConfigureAwait(false);
+                        try { await component.FollowupAsync("Ошибка при переключении страницы.", ephemeral: true); } catch { }
+                    }
+                }
 
         private void ScheduleDeleteOriginalResponse(SocketInteraction interaction, int delaySeconds = 30)
         {
@@ -747,34 +760,38 @@ private Task? _dailyRestartTask;
                         if (!ulong.TryParse(parts[1], out var guildId)) return;
                         if (!ulong.TryParse(parts[2], out var channelId)) return;
 
-                        var user = component.User as SocketGuildUser;
-                        var isAdmin = user?.GuildPermissions.Administrator ?? false;
+                                // 🩹 perf: PreDefer с ретраем.
+                                if (!await Common.ComponentPreDefer.TryDeferAsync(component, "pred_cancel"))
+                                    return;
 
-                        var resolverId = user?.Id ?? 0UL;
-                        var predictionService = _predictionService;
-                        if (predictionService == null)
-                        {
-                            try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
-                            return;
-                        }
+                                var user = component.User as SocketGuildUser;
+                                var isAdmin = user?.GuildPermissions.Administrator ?? false;
 
-                        var activePrediction = predictionService.GetActive(guildId, channelId);
-                        if (activePrediction == null)
-                        {
-                            try { await component.RespondAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
-                            return;
-                        }
-
-                        var (ok, error) = await predictionService.CancelAsync(activePrediction, resolverId, isAdmin);
-                                    if (ok)
-                                    {
-                                        try { await component.UpdateAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
-                                    }
-                                    else
-                                    {
-                                        try { await component.RespondAsync(error, ephemeral: true); } catch { }
-                                    }
+                                var resolverId = user?.Id ?? 0UL;
+                                var predictionService = _predictionService;
+                                if (predictionService == null)
+                                {
+                                    try { await component.FollowupAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                                    return;
                                 }
+
+                                var activePrediction = predictionService.GetActive(guildId, channelId);
+                                if (activePrediction == null)
+                                {
+                                    try { await component.FollowupAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
+                                    return;
+                                }
+
+                                var (ok, error) = await predictionService.CancelAsync(activePrediction, resolverId, isAdmin);
+                                            if (ok)
+                                    {
+                                                try { await component.ModifyOriginalResponseAsync(msg => { msg.Content = "Прогноз отменён"; msg.Components = new ComponentBuilder().Build(); }); } catch { }
+                                    }
+                                            else
+                                            {
+                                                try { await component.FollowupAsync(error, ephemeral: true); } catch { }
+                                            }
+                                        }
 
                     private async Task HandlePredictionResolveButton(SocketMessageComponent component, string[] parts)
                     {
@@ -784,35 +801,40 @@ private Task? _dailyRestartTask;
                         if (!ulong.TryParse(parts[2], out var channelId)) return;
                         if (!int.TryParse(parts[3], out var outcomeId)) return;
 
-                        var user = component.User as SocketGuildUser;
-                        var isAdmin = user?.GuildPermissions.Administrator ?? false;
+                                            // 🩹 perf: PreDefer с ретраем — раньше ResolveAsync мог тормозить и
+                                            // RespondAsync падал с TimeoutException. Теперь ACK первым.
+                                            if (!await Common.ComponentPreDefer.TryDeferAsync(component, "pred_resolve"))
+                                                return;
 
-                        var resolverId = user?.Id ?? 0UL;
-                        var predictionService = _predictionService;
-                        if (predictionService == null)
-                        {
-                            try { await component.RespondAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
-                            return;
-                        }
+                                            var user = component.User as SocketGuildUser;
+                                            var isAdmin = user?.GuildPermissions.Administrator ?? false;
 
-                        var activePrediction = predictionService.GetActive(guildId, channelId);
-                        if (activePrediction == null)
-                        {
-                            try { await component.RespondAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
-                            return;
-                        }
+                                            var resolverId = user?.Id ?? 0UL;
+                                            var predictionService = _predictionService;
+                                            if (predictionService == null)
+                                            {
+                                                try { await component.FollowupAsync("Сервис прогнозов недоступен.", ephemeral: true); } catch { }
+                                                return;
+                                            }
 
-                        var (ok, error) = await predictionService.ResolveAsync(activePrediction, resolverId, isAdmin, outcomeId);
-                        if (!ok)
+                                            var activePrediction = predictionService.GetActive(guildId, channelId);
+                                            if (activePrediction == null)
+                                            {
+                                                try { await component.FollowupAsync("В этом канале нет активного прогноза.", ephemeral: true); } catch { }
+                                                return;
+                                            }
+
+                                            var (ok, error) = await predictionService.ResolveAsync(activePrediction, resolverId, isAdmin, outcomeId);
+                                            if (!ok)
                         {
-                            // Avoid responding if the original message was deleted — try update quietly
-                            try { await component.RespondAsync(error, ephemeral: true); } catch { }
-                        }
-                        else
-                        {
-                            try { await component.UpdateAsync(msg => { msg.Components = new ComponentBuilder().Build(); }); } catch { }
-                        }
-                    }
+                                                // Avoid responding if the original message was deleted — try update quietly
+                                                try { await component.FollowupAsync(error, ephemeral: true); } catch { }
+                                            }
+                                            else
+                                            {
+                                                try { await component.ModifyOriginalResponseAsync(msg => msg.Components = new ComponentBuilder().Build()); } catch { }
+                                            }
+                                        }
 
                     // ✅ R6 fix: чистит _pendingBetUi для конкретной гильдии (все пользователи).
                     // Вызывается на cancel/resolve/autocancel.
@@ -1919,15 +1941,22 @@ public async Task GracefulShutdownAsync(string reason)
 
         try { _backgroundMonitoringCts?.Cancel(); } catch { }
         StopDailyRestartScheduler();
+                StopPersistenceFlushLoop();
 
-    try { _reconnectionService?.Shutdown(); } catch { }
+            try { _reconnectionService?.Shutdown(); } catch { }
 
-    try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
-    try { _webDashboard?.Dispose(); } catch { }
-    _webDashboard = null;
+                        // ✅ Persistence-fix: синхронный флаш рантайм-сторов на shutdown,
+                        // чтобы Ctrl+C / SIGTERM / logoff не теряли финальное состояние.
+                        try { await GameSessionCommands.SaveSessionsAsync().ConfigureAwait(false); } catch { }
+                        try { if (_pointsService != null) await _pointsService.SaveAsync().ConfigureAwait(false); } catch { }
+                        try { if (_predictionService != null) _predictionService.Shutdown(); } catch { }
 
-    try { if (_ui != null && _uiStarted) { _ui.Dispose(); _ui = null; _uiStarted = false; } } catch { }
-}
+            try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
+            try { _webDashboard?.Dispose(); } catch { }
+            _webDashboard = null;
+
+            try { if (_ui != null && _uiStarted) { _ui.Dispose(); _ui = null; _uiStarted = false; } } catch { }
+        }
 
 private void StartDailyRestartScheduler()
 {
@@ -1947,6 +1976,53 @@ private void StopDailyRestartScheduler()
     try { _dailyRestartCts?.Cancel(); } catch { }
     try { _dailyRestartCts?.Dispose(); } catch { }
     _dailyRestartCts = null;
+}
+
+// ✅ Persistence-fix: периодический флаш runtime-сторов каждые 5 минут
+// как страховка от kill/BSOD между изменениями и fire-and-forget записью.
+private CancellationTokenSource? _persistenceFlushCts;
+private Task? _persistenceFlushTask;
+
+private void StartPersistenceFlushLoop()
+{
+    if (_persistenceFlushTask != null && !_persistenceFlushTask.IsCompleted) return;
+    StopPersistenceFlushLoop();
+    _persistenceFlushCts = new CancellationTokenSource();
+    _persistenceFlushTask = Task.Run(() => PersistenceFlushLoopAsync(_persistenceFlushCts.Token));
+}
+
+private void StopPersistenceFlushLoop()
+{
+    try { _persistenceFlushCts?.Cancel(); } catch { }
+    try { _persistenceFlushCts?.Dispose(); } catch { }
+    _persistenceFlushCts = null;
+}
+
+private async Task PersistenceFlushLoopAsync(CancellationToken ct)
+{
+    try
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _ = GameSessionCommands.SaveSessionsAsync();
+                if (_pointsService != null)
+                    _ = _pointsService.SaveAsync();
+            }
+            catch (Exception ex)
+            {
+                try { await LogStartup($"[PersistLoop] {ex.GetType().Name}: {ex.Message}"); } catch { }
+            }
+
+            await Task.Delay(TimeSpan.FromMinutes(5), ct).ConfigureAwait(false);
+        }
+    }
+    catch (TaskCanceledException) { /* нормальный shutdown */ }
+    catch (Exception ex)
+    {
+        try { await LogStartup($"[PersistLoop] {ex.GetType().Name}: {ex.Message}"); } catch { }
+    }
 }
 
 private async Task DailyRestartLoopAsync(CancellationToken ct)
@@ -2810,11 +2886,18 @@ private static BotUI? _ui;
         // Ежедневный плановый перезапуск (время задаётся в config.json)
         StartDailyRestartScheduler();
 
-                        // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
-                        _backgroundMonitoringCts?.Cancel();
-                        _backgroundMonitoringCts?.Dispose();
-                        _backgroundMonitoringCts = new CancellationTokenSource();
-                        _backgroundMonitoringTask = Task.Run(() => BackgroundMonitoringLoopWrapper(_backgroundMonitoringCts.Token));
+                // ✅ Persistence-fix: периодический флаш runtime-сторов каждые 60с.
+                // Защищает от потери данных при внезапном kill/BSOD/выключении —
+                // даже если fire-and-forget Task.Run(...) от обработчиков не успел
+                // записать, периодический loop гарантирует снимок состояния на диске
+                // с задержкой не более минуты.
+                StartPersistenceFlushLoop();
+
+                                // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
+                                _backgroundMonitoringCts?.Cancel();
+                                _backgroundMonitoringCts?.Dispose();
+                                _backgroundMonitoringCts = new CancellationTokenSource();
+                                _backgroundMonitoringTask = Task.Run(() => BackgroundMonitoringLoopWrapper(_backgroundMonitoringCts.Token));
 
                         while (!_shouldExit)
                         {
@@ -5317,28 +5400,30 @@ await Task.CompletedTask;
         }
 
         public async Task HandleSelectMenuExecuted(SocketMessageComponent component)
-        {
-            await Task.Yield();
-            try
-            {
-                var cid = component.Data.CustomId;
-                if (_musicCommands is not null && cid.StartsWith("music_search_select:"))
-                    await _musicCommands.HandleButtonAsync(component);
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Error(LogCategory.Discord, $"[SelectMenuExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
-                await LogError($"Ошибка обработки SelectMenu: {ex.Message}");
-                try
                 {
-                    if (!component.HasResponded)
-                        await component.RespondAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
-                    else
-                        await component.FollowupAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                    await Task.Yield();
+                    // Note: PreDefer для music_search_select делает _musicCommands.HandleButtonAsync внутри.
+                    // Не дублируем Defer тут, чтобы не получить "Cannot respond or defer twice".
+                    try
+                    {
+                        var cid = component.Data.CustomId;
+                        if (_musicCommands is not null && cid.StartsWith("music_search_select:"))
+                            await _musicCommands.HandleButtonAsync(component);
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Error(LogCategory.Discord, $"[SelectMenuExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
+                        await LogError($"Ошибка обработки SelectMenu: {ex.Message}");
+                        try
+                        {
+                            if (!component.HasResponded)
+                                await component.RespondAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                            else
+                                await component.FollowupAsync("Ошибка взаимодействия. Подробности в логах.", ephemeral: true).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
                 }
-                catch { }
-            }
-        }
 
         private async Task ProcessButtonAsync(SocketMessageComponent component)
         {
