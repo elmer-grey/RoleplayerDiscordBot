@@ -179,6 +179,9 @@ private Task? _dailyRestartTask;
                 /// <summary>Сколько времени (UTC) прошло с последнего реконнекта.</summary>
                 private static TimeSpan TimeSinceLastReconnect => DateTime.UtcNow - _lastReconnectUtc;
 
+                /// <summary>Время последнего успешного REST keep-alive пинга (UTC).</summary>
+                private static DateTime _lastKeepAliveUtc = DateTime.MinValue;
+
                 /// <summary>Отметить момент реконнекта; вызывается из ReconnectionService / OnReady.</summary>
                 internal static void MarkReconnectCompleted() { _lastReconnectUtc = DateTime.UtcNow; }
 
@@ -194,8 +197,8 @@ private Task? _dailyRestartTask;
                                                                 //    пишется в лог каждую итерацию, чтобы видеть реальную картину.
                                                                 private static CancellationTokenSource? _gcLoopCts;
                                                                 private static Task? _gcLoopTask;
-                                                                private const int GcLoopPeriodSeconds = 30;
-                                                                private const int GcCompactIntervalSeconds = 300; // 5 мин
+                                                                private const int GcLoopPeriodSeconds = 300;  // 5 мин — период замера и компактизации
+                                                                                                                                private const int GcCompactIntervalSeconds = 1800; // 30 мин — между полными compaction-прогонами
                                                                 // Состояние для замеров.
                                                                 private static long _lastAllocatedBytes;
                                                                 private static int _lastGen0, _lastGen1, _lastGen2;
@@ -3589,7 +3592,7 @@ private static BotUI? _ui;
 
         private async Task BackgroundMonitoringLoop(CancellationToken ct = default)
         {
-                    // 🩹 perf: heartbeat-лог каждые 30с. Показывает, что бот жив и
+                    // 🩹 perf: heartbeat-лог каждые 5 мин. Показывает, что бот жив и
                     // обрабатывает цикл мониторинга. Если TimeoutException приходят,
                     // а heartbeat-строки идут — значит, проблема НЕ в зависании бота,
                     // а в IO/Discord-сокете. Без этого в логе непонятно, был бот жив
@@ -3600,7 +3603,7 @@ private static BotUI? _ui;
                     {
                         try
                         {
-                            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                                                await Task.Delay(TimeSpan.FromMinutes(5), ct);
                         }
                         catch (OperationCanceledException)
                         {
@@ -3630,15 +3633,17 @@ private static BotUI? _ui;
                                                 // не пингует REST API — соединение в пуле протухает после 60-100 сек
                                                 // idle, и следующий запрос (наш DeferAsync!) делает TCP+SSL handshake
                                                 // заново. 100-600 мс задержки. Пинг REST каждые 60 сек держит
-                                                // соединение прогретым.
-                                                if (heartbeatTick % 2 == 0 && _client?.Rest != null && _client.ConnectionState == ConnectionState.Connected)
-                                                {
-                                                    try
-                                                    {
-                                                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                                                                                                // соединение прогретым. Heartbeat-цикл 5 мин — keep-alive
+                                                                                                // работает по собственному счётчику времени.
+                                                                                                if (_client?.Rest != null && _client.ConnectionState == ConnectionState.Connected && DateTime.UtcNow - _lastKeepAliveUtc >= TimeSpan.FromSeconds(60))
+                                                                                                {
+                                                                                                    try
+                                                                                                    {
+                                                                                                        _lastKeepAliveUtc = DateTime.UtcNow;
+                                                                                                        var sw = System.Diagnostics.Stopwatch.StartNew();
                                                                                                         var user = await _client.Rest.GetCurrentUserAsync();
-                                                        sw.Stop();
-                                                                                                        BotLogger.Info(LogCategory.Discord,
+                                                                                                        sw.Stop();
+                                                                                                        BotLogger.Debug(LogCategory.Discord,
                                                                                                             $"[KeepAlive] rest ping ok={user?.Id != null} took={sw.ElapsedMilliseconds}ms");
                                                                                                     }
                                                                                                     catch (Exception kaEx)
