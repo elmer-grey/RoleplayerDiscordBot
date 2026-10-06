@@ -2145,8 +2145,17 @@ public Task ReloadServerConfigsAsync()
         static async Task Main(string[] args)
         {
             // Гарантированное завершение Lavalink при любом способе остановки (VS Stop, taskkill и т.д.)
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
+                    // ⚠️ ТОЛЬКО в Windows-режиме (бот сам поднимает Lavalink через StartLavalinkProcessAsync,
+                    //    и должен его убить, иначе останется orphan java-процесс).
+                    // На Linux-деплое Lavalink поднимается отдельным lavalink.service, и KillOrphanedLavalink
+                    // убьёт его при systemctl restart rpbot → следующий rpbot стартанёт без Lavalink и упадёт
+                    // на инициализации музыки (Connection refused).
+                    bool isLinuxDeployment = !OperatingSystem.IsWindows();
+                    if (!isLinuxDeployment)
+                    {
+                        AppDomain.CurrentDomain.ProcessExit += (_, _) => KillOrphanedLavalink();
+                        Console.CancelKeyPress += (_, e) => { e.Cancel = true; KillOrphanedLavalink(); };
+                    }
 
             // Хук на корректную остановку без Environment.Exit — при SIGINT/SIGTERM
             // (taskkill, Ctrl+C, диспетчер задач "Завершить") бот успевает погасить

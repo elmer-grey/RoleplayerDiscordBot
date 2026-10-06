@@ -429,6 +429,18 @@ namespace RPBot.Web
                         return;
                     }
 
+                                    // На Linux-деплое дашборд не поднимаем вообще — HttpListener на публичных
+                                    // IP без root падает с ErrorCode=50 / «Invalid port in prefix», а loopback
+                                    // бесполезен (нет доступа извне). Если нужен веб-доступ — настрой nginx-rev-proxy
+                                    // (см. deploy/SETUP-LINUX.md) и переведи host на конкретный IP/localhost.
+                                    if (!OperatingSystem.IsWindows())
+                                    {
+                                        BotLogger.Warn(LogCategory.System,
+                                            "[WebDashboard] отключён на Linux-деплое (нет root для бинда). " +
+                                            "Доступ к статистике — через Discord-через Telegram.");
+                                        return;
+                                    }
+
                     // Превентивная регистрация URL в Windows urlacl — иначе HttpListener.Start()
                     // падает с HttpListenerException (503) на не-локальных префиксах и у обычных
                     // пользователей. Пробуем один раз, без всплытия UAC, если уже зарегистрировано.
