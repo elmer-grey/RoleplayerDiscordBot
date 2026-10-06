@@ -6,13 +6,15 @@ Documentation=https://github.com/lavalink-devs/Lavalink
 # но удобен для отладки (видно `systemctl status lavalink`).
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=10
 
 [Service]
 Type=simple
 User=rpbot
 Group=rpbot
-WorkingDirectory=/opt/rpbot/Lavalink
-ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/rpbot/Lavalink/Lavalink.jar
+WorkingDirectory=/opt/rpbot/RoleplayerDiscordBot/Lavalink
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/rpbot/RoleplayerDiscordBot/Lavalink/Lavalink.jar
 # Лимиты JVM: 256-512 МБ хватает для 5+ одновременных плееров на 1 ядре.
 # Поднять, если много параллельных треков или падают long-running сеты.
 
@@ -21,8 +23,6 @@ ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/rpbot/Lavalink/Lavalink.jar
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=120
-StartLimitBurst=10
 
 # Лимиты — Lavalink ест больше всех: heap JVM + native + стек.
 MemoryMax=800M
@@ -33,7 +33,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/opt/rpbot/Lavalink/logs
+ReadWritePaths=/opt/rpbot/RoleplayerDiscordBot/Lavalink/logs
 
 StandardOutput=journal
 StandardError=journal

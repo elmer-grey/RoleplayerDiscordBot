@@ -39,12 +39,12 @@ echo 'export PATH="$DENO_INSTALL/bin:$PATH"' >> /home/rpbot/.bashrc
 
 ```bash
 sudo useradd -r -m -d /home/rpbot -s /bin/bash rpbot
-sudo mkdir -p /opt/rpbot /var/lib/rpbot /var/log/rpbot
-sudo chown -R rpbot:rpbot /opt/rpbot /var/lib/rpbot /var/log/rpbot
+sudo mkdir -p /opt/rpbot/RoleplayerDiscordBot /var/lib/rpbot /var/log/rpbot
+sudo chown -R rpbot:rpbot /opt/rpbot/RoleplayerDiscordBot /var/lib/rpbot /var/log/rpbot
 ```
 
 Каталоги:
-- `/opt/rpbot` — репозиторий (бинарь RPBot, Lavalink.jar, yt-cipher).
+- `/opt/rpbot/RoleplayerDiscordBot` — репозиторий (бинарь RPBot, Lavalink.jar, yt-cipher).
 - `/var/lib/rpbot` — данные бота: `Settings/`, `Data/`, `Logs/` (через `RPBOT_DATA_DIR`).
 - `/var/log/rpbot` — для `journalctl` не нужен, но удобно складывать внешние логи (например, nginx access).
 
@@ -54,9 +54,9 @@ sudo chown -R rpbot:rpbot /opt/rpbot /var/lib/rpbot /var/log/rpbot
 
 ```bash
 sudo -u rpbot -i
-cd /opt/rpbot
-
-git clone https://github.com/elmer-grey/RoleplayerDiscordBot.git .
+cd /opt/rpbot/RoleplayerDiscordBot
+# Если каталог пустой (первый деплой) — клонируем; иначе git pull ниже.
+[ -d .git ] || git clone https://github.com/elmer-grey/RoleplayerDiscordBot.git /opt/rpbot/RoleplayerDiscordBot
 # ВАЖНО: submodule yt-cipher
 git submodule update --init --recursive
 
@@ -77,17 +77,17 @@ cd ..
 ### 4.1. Lavalink/application.yml
 
 ```bash
-sudo -u rpbot cp /opt/rpbot/Lavalink/application.yml.example \
-              /opt/rpbot/Lavalink/application.yml
-sudo -u rpbot nano /opt/rpbot/Lavalink/application.yml
+sudo -u rpbot cp /opt/rpbot/RoleplayerDiscordBot/Lavalink/application.yml.example \
+              /opt/rpbot/RoleplayerDiscordBot/Lavalink/application.yml
+sudo -u rpbot nano /opt/rpbot/RoleplayerDiscordBot/Lavalink/application.yml
 # Файл содержит OAuth refreshToken — обязательно ограничить доступ:
-sudo chmod 600 /opt/rpbot/Lavalink/application.yml
+sudo chmod 600 /opt/rpbot/RoleplayerDiscordBot/Lavalink/application.yml
 ```
 
 **Один раз** запустить Lavalink руками для получения YouTube OAuth refreshToken:
 
 ```bash
-sudo -u rpbot java -jar /opt/rpbot/Lavalink/Lavalink.jar
+sudo -u rpbot java -jar /opt/rpbot/RoleplayerDiscordBot/Lavalink/Lavalink.jar
 # В консоли появится ссылка вида https://accounts.google.com/o/oauth2/...
 # Открыть в браузере → авторизоваться → скопировать refreshToken из лога
 # Ctrl+C, вставить refreshToken в application.yml
@@ -138,18 +138,21 @@ sudo chown -R rpbot:rpbot /var/lib/rpbot/Settings
 
 ### 4.3. WebDashboard: bind на Linux
 
-`WebDashboard` на Linux биндится **только на `127.0.0.1`** и не слушает публичные
-IP — это by design (нет urlacl, под обычным юзером `HttpListener` на публичных
-адресах стартует только с `CAP_NET_BIND_SERVICE`). Доступ извне — через
-SSH-туннель или reverse-proxy (см. шаг 7, nginx + Basic Auth).
+Сейчас (октябрь 2026) WebDashboard на Linux **отключён в коде** — `WebDashboardService.Start()`
+возвращается сразу на `!OperatingSystem.IsWindows()`. Причина: HttpListener на публичных
+IP под non-root падает с `ErrorCode=50` / «Invalid port in prefix», а loopback
+бесполезен без ssh-туннеля. Если когда-нибудь понадобится — переведи на Kestrel +
+nginx-rev-proxy (TODO: переписать `WebDashboardService.cs` под Kestrel).
+
+Доступ к статистике на Linux — через Discord-каналы и Telegram.
 
 ---
 
 ## 5. systemd units
 
 ```bash
-sudo cp /opt/rpbot/deploy/systemd/rpbot.service     /etc/systemd/system/
-sudo cp /opt/rpbot/deploy/systemd/lavalink.service  /etc/systemd/system/
+sudo cp /opt/rpbot/RoleplayerDiscordBot/deploy/systemd/rpbot.service     /etc/systemd/system/
+sudo cp /opt/rpbot/RoleplayerDiscordBot/deploy/systemd/lavalink.service  /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # Включить автозапуск
@@ -216,33 +219,22 @@ tail -f /var/lib/rpbot/Logs/$(date +%Y%m%d)/run.log
 tail -f /var/lib/rpbot/Logs/$(date +%Y%m%d)/Music.log
 
 # Lavalink
-tail -f /opt/rpbot/Lavalink/logs/spring.log
+tail -f /opt/rpbot/RoleplayerDiscordBot/Lavalink/logs/spring.log
 ```
 
 > Суточная ротация: бот создаёт новую папку при перезапуске после `LogDayResolver.CutoffHour`
 > (по умолчанию 06:00). Это встроено в BotLogger (`feat(logs): суточные папки`).
 
-### WebDashboard (опционально)
+### WebDashboard (опционально, временно недоступно)
 
-Если хочется смотреть логи в браузере:
-
-```bash
-# SSH-туннель (без изменений в nginx)
-ssh -L 5057:127.0.0.1:5057 rpbot@<server>
-# Открыть http://127.0.0.1:5057 в браузере
-
-# Или через nginx + Basic Auth (см. deploy/nginx/rpbot-dashboard.conf)
-sudo cp /opt/rpbot/deploy/nginx/rpbot-dashboard.conf \
-        /etc/nginx/sites-available/rpbot-dashboard.conf
-sudo htpasswd -c /etc/nginx/.htpasswd rpbot-admin   # задать пароль
-sudo ln -s /etc/nginx/sites-available/rpbot-dashboard.conf \
-           /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-> Без TLS nginx слушает на 80-м порту открытым текстом — **добавьте Let's Encrypt**
-> (`sudo certbot --nginx -d dashboard.example.com`), иначе пароль Basic Auth
-> уйдёт по сети в открытом виде.
+С октября 2026 WebDashboard отключён на Linux (см. `deploy/nginx/rpbot-dashboard.conf`
+с комментарием). Альтернативы на текущий момент:
+- SSH-туннель (когда WebDashboard снова заработает):
+  ```bash
+  ssh -L 5057:127.0.0.1:5057 rpbot@<server>
+  # Открыть http://127.0.0.1:5057 в браузере
+  ```
+- Статистика прямо сейчас: через `!status` в Discord и в Telegram-канале.
 
 ---
 
@@ -252,7 +244,7 @@ Lavalink по умолчанию пишет в `Lavalink/logs/spring.log` без
 это не критично, но настрой logback на всякий случай:
 
 ```bash
-sudo nano /opt/rpbot/Lavalink/logback.xml
+sudo nano /opt/rpbot/RoleplayerDiscordBot/Lavalink/logback.xml
 # Добавить <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
 # с maxFileSize=50MB и maxHistory=7
 ```
@@ -263,21 +255,41 @@ sudo nano /opt/rpbot/Lavalink/logback.xml
 
 ## 9. Обновление бота
 
+Бот собирается на Windows-машине (или в CI), заливается на сервер как `publish.zip`.
+
+**На Windows:**
+```powershell
+cd C:\path\to\RoleplayerDiscordBot
+dotnet publish RPBot/RPBot.csproj -c Release -r linux-x64 --self-contained false -o RPBot/publish
+Compress-Archive -Path RPBot/publish\* -DestinationPath RPBot/publish.zip -Force
+scp -P 2222 RPBot\publish.zip root@<server>:/tmp/publish.zip
+```
+
+**На сервере:**
 ```bash
 sudo systemctl stop rpbot
-sudo -u rpbot -i
-cd /opt/rpbot
-git pull
-git submodule update --remote
-# Если менялись .cs — пересобрать
-cd /opt/rpbot/RPBot
-dotnet publish -c Release -o /tmp/rpbot-publish
-sudo cp /tmp/rpbot-publish/RPBot.dll /opt/rpbot/RPBot/
-sudo chown rpbot:rpbot /opt/rpbot/RPBot/RPBot.dll
-exit
+sudo rm -rf /opt/rpbot/RoleplayerDiscordBot/RPBot/*
+sudo -u rpbot unzip -q -o /tmp/publish.zip -d /opt/rpbot/RoleplayerDiscordBot/RPBot/
+sudo rm /tmp/publish.zip
+sudo chown -R rpbot:rpbot /opt/rpbot/RoleplayerDiscordBot/RPBot
 sudo systemctl start rpbot
+
+# Следить за стартом
 journalctl -u rpbot -f
 ```
+
+> По умолчанию бот **не регистрирует** команды при рестарте (StartupType=Restart).
+> Это правильное поведение — команды уже зарегистрированы в Discord. Если
+> менялись сами команды и нужна принудительная перерегистрация — задайте env
+> перед стартом:
+> ```bash
+> sudo systemctl edit rpbot.service
+> # [Service]
+> # Environment=RPBOT_FULL_START=1
+> sudo systemctl restart rpbot
+> ```
+> Файл-флаг тоже работает: `touch /var/lib/rpbot/Data/.full_start_request`
+> (удалится автоматически после успешного Discord Ready).
 
 ---
 

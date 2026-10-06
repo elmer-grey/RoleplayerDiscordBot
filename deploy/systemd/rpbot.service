@@ -6,18 +6,26 @@ Wants=network-online.target
 # Если Lavalink упал — бот сам перезапустит его (Music.AutoStart=true).
 # lavalink.service нужен только если хочется держать Lavalink как отдельный процесс.
 # Если используешь встроенный запуск Lavalink из бота — убери After=/Wants= выше.
+StartLimitIntervalSec=120
+StartLimitBurst=10
 
 [Service]
 Type=simple
 User=rpbot
 Group=rpbot
-WorkingDirectory=/opt/rpbot/RPBot
-ExecStart=/usr/bin/dotnet /opt/rpbot/RPBot/RPBot.dll
+WorkingDirectory=/opt/rpbot/RoleplayerDiscordBot/RPBot
+ExecStart=/usr/bin/dotnet /opt/rpbot/RoleplayerDiscordBot/RPBot/RPBot.dll
 # Headless-режим: на VPS нет /dev/tty, Terminal.Gui не запустится.
-# Логи и управление — через journalctl и WebDashboard (127.0.0.1:5057).
+# Логи и управление — через journalctl.
 Environment=RPBOT_NO_UI=1
 Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
 Environment=DOTNET_NOLOGO=1
+# ⚠️ Discord-токен НЕ кладите в этот файл — он попадёт в git!
+# Задайте через `systemctl edit rpbot.service`:
+#   [Service]
+#   Environment=DISCORD_BOT_TOKEN=ваш.токен.сюда
+#   Environment=RPBOT_FULL_START=1   # только для первого деплоя / принудительной перерегистрации
+# По умолчанию бот читает токен из config.json (BotToken), env имеет приоритет.
 # Переменная для override корня данных. По умолчанию бот использует
 # ~/.local/share/rpbot (XDG_DATA_HOME). Лучше задать явно — путь стабильнее.
 Environment=RPBOT_DATA_DIR=/var/lib/rpbot
@@ -25,12 +33,8 @@ Environment=RPBOT_DATA_DIR=/var/lib/rpbot
 # Автоперезапуск при любом падении (включая kill -9 с последующим OOM-возвратом).
 Restart=always
 RestartSec=5
-# Если бот падает слишком часто — не долбить systemd-restart бесконечно.
-StartLimitIntervalSec=120
-StartLimitBurst=10
-# Корректный shutdown: Discord.Net гасит WebSocket, WebDashboard закрывается,
-# LavalinkService убивает встроенный процесс Lavalink. 60 секунд хватает с запасом;
-# после этого systemd пошлёт SIGKILL (принудительный, без cleanup).
+# Корректный shutdown: Discord.Net гасит WebSocket, WebDashboard закрывается.
+# 60 секунд хватает с запасом; после этого systemd пошлёт SIGKILL.
 TimeoutStopSec=60
 # Посылаем SIGTERM (а не SIGKILL сразу) на остановке — даём процессу шанс отработать
 # CancellationToken'ы в MusicService, GameSession, EventOpsLifecycleService.
@@ -49,10 +53,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/var/lib/rpbot /opt/rpbot
-# Бот читает настройки из /opt/rpbot/Lavalink/application.yml и пишет
-# в /var/lib/rpbot (RPBOT_DATA_DIR). ProtectHome=read-only оставляет /home/*,
-# /root и /run/user доступными на чтение.
+ReadWritePaths=/var/lib/rpbot /opt/rpbot/RoleplayerDiscordBot /home/rpbot
+# /home/rpbot нужен .NET CLI для first-use (создаёт .dotnet/, .config/, и т.д.):
+# при ProtectHome=read-only без этого пути бот падает на первой попытке
+# что-то записать в $HOME. Альтернатива — создать /home/rpbot/{.dotnet,.aspnet,
+# .local,.config} заранее (см. SETUP-LINUX.md, шаг 2).
 
 # stdout/stderr уходят в journald — основной способ просмотра логов на VPS.
 StandardOutput=journal
