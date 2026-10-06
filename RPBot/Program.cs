@@ -1450,7 +1450,9 @@ private void SaveServerConfigs()
         private string? _startupReason;
         private StartupType _nextStartupType = StartupType.FirstStart;
         private string? _nextStartupReason;
-        private DateTime _startupTime;
+                /// <summary>Источник текущего старта/рестарта: "console" | "chat" | "scheduler" | "discord" | null.</summary>
+                private string? _startupInitiator;
+                private DateTime _startupTime;
 
         public bool ShouldExit => _shouldExit;
         public bool ShouldRestart => _shouldRestart;
@@ -1569,6 +1571,25 @@ public Task RestartAsync()
         }
     }
 
+                    /// <summary>
+                    /// Снимает одноразовый флаг «запрошен полный старт» (.full_start_request).
+                    /// Создаётся вручную или через env RPBOT_FULL_START=1, чтобы при следующем запуске
+                    /// бот прошёл полную регистрацию команд (StartupType=FirstStart).
+                    /// </summary>
+                    public static void ClearFullStartRequestFlag()
+                    {
+                        try
+                        {
+                            var path = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".full_start_request"));
+                            if (File.Exists(path)) File.Delete(path);
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.System,
+                                $"[Program] ClearFullStartRequestFlag: не удалось удалить файл: {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
+
         private async Task RestartWithReasonAsync(string initiator, string reason)
         {
         // Идемпотентность, чтобы не запускать рестарт повторно из разных потоков
@@ -1617,9 +1638,10 @@ public Task RestartAsync()
     _shouldExit = true;
     _currentStartupType = StartupType.Restart;
     _startupReason = reason;
-    _nextStartupType = StartupType.Restart;
-    _nextStartupReason = _startupReason;
-    _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
+        _startupInitiator = initiator;
+        _nextStartupType = StartupType.Restart;
+        _nextStartupReason = _startupReason;
+        _statusNotifier?.SetStartupContext(StartupType.Restart, _startupReason);
     _reconnectionService?.Shutdown();
 
     // При ежедневной перезагрузке — очищаем висящие сессии со статистикой
@@ -2109,10 +2131,16 @@ public Task ReloadServerConfigsAsync()
 
         public void SetStartupContext(StartupType type, string? reason)
         {
-            _currentStartupType = type;
-            _startupReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
-            _statusNotifier?.SetStartupContext(type, _startupReason);
-        }
+                    SetStartupContext(type, reason, initiator: null);
+                }
+
+                public void SetStartupContext(StartupType type, string? reason, string? initiator)
+                {
+                    _currentStartupType = type;
+                    _startupReason = string.IsNullOrWhiteSpace(reason) ? null : reason;
+                    _startupInitiator = string.IsNullOrWhiteSpace(initiator) ? null : initiator;
+                    _statusNotifier?.SetStartupContext(type, _startupReason);
+                }
 
         static async Task Main(string[] args)
         {
@@ -2151,6 +2179,68 @@ public Task ReloadServerConfigsAsync()
             int restartCount = 0;
             var pendingStartupType = StartupType.FirstStart;
             string? pendingStartupReason = null;
+
+                        // Политика регистрации команд: регистрируем только при «полном старте».
+                        // Любой рестарт (systemd, ручной, авто) — НЕ трогаем Discord.
+                        // Полный старт запрашивается явно через:
+                        //   1) env RPBOT_FULL_START=1 — для первого деплоя / принудительной перерегистрации;
+                        //   2) файл-флаг {DataFolder}/.full_start_request — удобно для отладки
+                        //      (создаётся вручную, удаляется автоматически после успешного старта).
+                        // Внутрипроцессный рестарт через RestartWithReasonAsync дополнительно
+                        // проставляет .restart_pending — это второй источник истины.
+                        bool isFullStartRequested = false;
+                        try
+                        {
+                            var envFlag = Environment.GetEnvironmentVariable("RPBOT_FULL_START");
+                            if (!string.IsNullOrEmpty(envFlag) && envFlag != "0" && envFlag.ToLowerInvariant() != "false")
+                            {
+                                isFullStartRequested = true;
+                                BotLogger.Info(LogCategory.Boot, "Запрошен полный старт через env RPBOT_FULL_START=1");
+                            }
+                            else
+                            {
+                                var fullStartFlag = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".full_start_request"));
+                                if (File.Exists(fullStartFlag))
+                                {
+                                    isFullStartRequested = true;
+                                    BotLogger.Info(LogCategory.Boot, "Запрошен полный старт через флаг .full_start_request");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.Boot,
+                                $"Ошибка проверки полного-старта флага: {ex.GetType().Name}: {ex.Message}");
+                        }
+
+                        // Определяем «FirstStart vs Restart»:
+                        //   - явный запрос полного старта     → FirstStart;
+                        //   - флаг .restart_pending из сессии → Restart (внутрипроцессный рестарт);
+                        //   - иначе                            → Restart (systemd/systemd restart, после первого старта).
+                        try
+                        {
+                            var flagPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, ".restart_pending"));
+                            if (!isFullStartRequested)
+                            {
+                                pendingStartupType = StartupType.Restart;
+                                pendingStartupReason = "Restart после перезапуска процесса";
+                                if (File.Exists(flagPath))
+                                    BotLogger.Info(LogCategory.Boot, "Найден .restart_pending → StartupType = Restart");
+                                else
+                                    BotLogger.Info(LogCategory.Boot, "Дефолт: StartupType = Restart (пропускаем регистрацию команд)");
+                            }
+                            else
+                            {
+                                pendingStartupType = StartupType.FirstStart;
+                                pendingStartupReason = null;
+                                BotLogger.Info(LogCategory.Boot, "Запрошен полный старт → StartupType = FirstStart (регистрация команд)");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.Boot,
+                                $"Не удалось проверить .restart_pending: {ex.GetType().Name}: {ex.Message}");
+                        }
 
             do
             {
@@ -3631,6 +3721,7 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
                     // predictions и активных каналов. Идемпотентно: если файла нет —
                     // File.Exists/File.Delete просто ничего не сделают.
                     try { ClearRestartPendingFlag(); } catch { }
+                    try { ClearFullStartRequestFlag(); } catch { }
 
                     // 🩹 prod-sidecar-stuck: за прошлые сессии иногда остаются
                     // висящие sidecar'ы (sessions_state.json.lock, *.json.lock) —
@@ -4020,39 +4111,28 @@ await Task.CompletedTask;
                 }
 
     // ЭТАП 1: Регистрация команд
-                    var isDailyRestart =
-                    _currentStartupType == StartupType.Restart &&
-                    string.Equals(_startupReason, "Ежедневная перезагрузка", StringComparison.OrdinalIgnoreCase);
+                        var stage1Lines = new List<string>();
 
-                                    var stage1Lines = new List<string>();
+                        // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
+                        // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
+                        StartupRenderer.Instance.WriteHeader("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД");
 
-                    // Заголовок открываем ДО регистрации/списка — иначе ломается порядок,
-                    // когда ListSlashCommandsAsync пишет в UI через BotLogger.SetUiSink.
-                    StartupRenderer.Instance.WriteHeader("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД");
-
-                    if (isDailyRestart)
-                    {
-                        // После плановой ежедневной перезагрузки не спрашиваем про переинициализацию команд
-                        StartupRenderer.Instance.WriteLine("Регистрация команд пропущена (ежедневная перезагрузка).");
-                                        await _commandHandler.ListSlashCommandsAsync();
-                    }
-                    else
-                    {
-                        if (_ui != null && await _ui.AskYesNoQuestion(
-                                "Нужно ли перерегистрировать команды?",
-                                "Y - Да, N - Нет, таймаут 60 секунд",
-                                60
-                            ) == true)
+                        if (_currentStartupType == StartupType.FirstStart)
                         {
+                            // Полноценный (первый) запуск — регистрируем команды обязательно.
                             await _commandHandler.InitializeAsync();
                             // При регистрации список уже описан пошагово — печатать его повторно не нужно.
                         }
                         else
                         {
-                            StartupRenderer.Instance.WriteLine("Регистрация команд пропущена.");
+                            // Любой рестарт или реконнект — НЕ трогаем Discord,
+                            // просто печатаем текущий список зарегистрированных команд.
+                            var reason = _currentStartupType == StartupType.Restart
+                                ? $"перезапуск ({_startupReason ?? "без варианта"})"
+                                : "реконнект";
+                            StartupRenderer.Instance.WriteLine($"Регистрация команд пропущена ({reason}).");
                             await _commandHandler.ListSlashCommandsAsync();
                         }
-                    }
 
                     // Закрывающая линия этапа 1 — симметрично заголовку.
                     StartupRenderer.Instance.WriteFooter("ЭТАП 1/4: РЕГИСТРАЦИЯ КОМАНД — ЗАВЕРШЁН");

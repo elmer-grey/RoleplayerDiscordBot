@@ -2078,16 +2078,25 @@ namespace RPBot
 
         public Task<bool?> AskYesNoQuestion(string question, string hint, int timeoutSeconds)
         {
-            var tcs = new TaskCompletionSource<bool?>();
-
-            bool previousInputState = _inputEnabled;
-            if (_inputEnabled)
+                    // Headless-режим (RPBOT_NO_UI=1): Terminal.Gui MainLoop не инициализирован —
+                    // возвращаем false, чтобы инициализация пошла по «нет»-ветке
+                    // (ListSlashCommandsAsync без перерегистрации).
+                    if (Application.MainLoop == null || _isDisposed)
             {
-                DisableInput();
-            }
+                        TryAppendErrorToFile("AskYesNoQuestion: Terminal.Gui MainLoop недоступен (NO_UI) — пропускаем диалог.");
+                        return Task.FromResult<bool?>(false);
+                    }
 
-            Application.MainLoop.Invoke(() =>
-            {
+                    var tcs = new TaskCompletionSource<bool?>();
+
+                    bool previousInputState = _inputEnabled;
+                    if (_inputEnabled)
+                    {
+                        DisableInput();
+                    }
+
+                    Application.MainLoop.Invoke(() =>
+                    {
                 try
                 {
                     Console.CursorVisible = false;
