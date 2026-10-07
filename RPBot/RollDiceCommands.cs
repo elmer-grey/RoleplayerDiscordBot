@@ -159,6 +159,34 @@ namespace RPBot
             }
         }
 
+        /// <summary>
+        /// Отправляет ephemeral-сообщение и через 5 секунд удаляет его.
+        /// Используется для кулдауна: 'Подождите немного перед следующим броском.'
+        /// видно только автору, и через 5 сек исчезает само.
+        /// </summary>
+        private static async Task SendEphemeralCooldownAsync(SocketSlashCommand command, string text)
+        {
+            try
+            {
+                var msg = await command.FollowupAsync(text, ephemeral: true).ConfigureAwait(false);
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(5000).ConfigureAwait(false);
+                        await msg.DeleteAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
+            catch
+            {
+                // ephemeral может быть запрещён в этом канале / истёк токен — не критично.
+            }
+        }
+
                 /// <summary>
                 /// Отправляет ephemeral Followup с уведомлением о паузе (видно только автору).
                 /// Если pauseMsg == null — ничего не делает.
@@ -204,7 +232,7 @@ namespace RPBot
             }
             else
             {
-                try { await command.DeferAsync(ephemeral: true).ConfigureAwait(false); }
+                try { await command.DeferAsync().ConfigureAwait(false); }
                 catch (Exception ex)
                 {
                     DeferFailureLogger.Log("RollDice", ex, command, input);
@@ -250,9 +278,9 @@ namespace RPBot
         {
             if (IsOnCooldown(command.User.Id))
             {
-                        // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        // ephemeral кулдаун: видно только автору, через 5 сек удаляется.
                         BotLogger.Info(LogCategory.Cmd, $"[Roll] send cooldown ephemeral user={command.User.Id} guild={guildId} ch={channelId}");
-                        await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                        await SendEphemeralCooldownAsync(command, "Подождите немного перед следующим броском.");
                 return;
             }
             UpdateCooldown(command.User.Id);
@@ -553,7 +581,7 @@ namespace RPBot
             }
             else
             {
-                try { await command.DeferAsync(ephemeral: true).ConfigureAwait(false); }
+                try { await command.DeferAsync().ConfigureAwait(false); }
                 catch (Exception ex)
                 {
                     DeferFailureLogger.Log("Roll20", ex, command, input: null);
@@ -601,9 +629,9 @@ namespace RPBot
         {
             if (IsOnCooldown(command.User.Id))
             {
-                        // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        // ephemeral кулдаун: видно только автору, через 5 сек удаляется.
                         BotLogger.Info(LogCategory.Cmd, $"[Roll20] send cooldown ephemeral user={command.User.Id} guild={guildId} ch={channelId}");
-                        await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
+                        await SendEphemeralCooldownAsync(command, "Подождите немного перед следующим броском.");
                 return;
             }
             UpdateCooldown(command.User.Id);
