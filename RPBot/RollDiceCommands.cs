@@ -152,6 +152,27 @@ namespace RPBot
             }
         }
 
+                /// <summary>
+                /// Отправляет ephemeral Followup с уведомлением о паузе (видно только автору).
+                /// Если pauseMsg == null — ничего не делает.
+                /// Применяется после основного Followup (PNG или текст результата), чтобы:
+                ///   1) ACK «Бот думает...» не удалялся и пользователь понимал, что slash отработал;
+                ///   2) текст о паузе и Followup с результатом жили независимо, без гонки;
+                ///   3) ephemeral не путал текст в общем канале.
+                /// </summary>
+                private static async Task TrySendPauseFollowupAsync(SocketSlashCommand command, string? pauseMsg)
+                {
+                    if (pauseMsg == null) return;
+                    try
+                    {
+                        await command.FollowupAsync(pauseMsg, ephemeral: true).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // ephemeral может быть запрещён в этом канале / истёк токен — не критично.
+                    }
+                }
+
         [Command("roll")]
         public async Task RollDice(SocketSlashCommand command, string input)
         {
@@ -222,8 +243,8 @@ namespace RPBot
         {
             if (IsOnCooldown(command.User.Id))
             {
-                // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
-                await command.FollowupAsync("Подождите немного перед следующим броском.");
+                        // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
                 return;
             }
             UpdateCooldown(command.User.Id);
@@ -308,60 +329,63 @@ namespace RPBot
                 return;
             }
 
-            if (isStatsChannel)
-            {
-                var sem = GetGuildSemaphore(guildId);
-                            // Таймаут 2 сек, как в Roll20 — если сессия залипла, не держим
-                            // Discord-interaction >3 сек (это вызовет "Приложение не отвечает").
-                            bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                            if (!gotLock)
-                            {
-                                BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
-                            }
-                            else
-                            try
-                            {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
-                    {
-                        // ✅ Bug 3: пауза НЕ блокирует бросок. Бросок всегда можно совершить;
-                        // глобальный счётчик IncrementRollsToday() инкрементится в
-                        // WriteCompletedRollLog (см. ниже). В session.Rolls пишется
-                        // только если сессия активна и TrackRolls=true.
-                        //
-                        // Однако: если ВСЕ сессии со сбором бросков на паузе — бросок
-                        // покажется без пометки (что было бы странно для пользователя,
-                        // который не понимает, почему ничего не засчиталось). В этом
-                        // случае пишем сообщение, что бросок учтён только глобально.
-                        var activeCollecting = sessions.Values
-                            .Where(s => !s.IsStopped && !s.IsPaused && s.TrackRolls)
-                            .ToList();
-                        var pausedCollecting = sessions.Values
-                            .Where(s => !s.IsStopped && s.IsPaused && s.TrackRolls)
-                            .ToList();
+            string? pauseMsg = null;
 
-                        if (activeCollecting.Count == 0 && pausedCollecting.Count > 0)
+                        if (isStatsChannel)
                         {
-                            var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
-                            await command.FollowupAsync(
-                                $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.",
-                                ephemeral: false);
-                            _ = DeleteOriginalResponseSafeAsync(command, 5000);
+                            var sem = GetGuildSemaphore(guildId);
+                                        // Таймаут 2 сек, как в Roll20 — если сессия залипла, не держим
+                                        // Discord-interaction >3 сек (это вызовет "Приложение не отвечает").
+                                        bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                                        if (!gotLock)
+                                        {
+                                            BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
+                                        }
+                                        else
+                                        try
+                                        {
+                                if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
+                                {
+                                    // ✅ Bug 3: пауза НЕ блокирует бросок. Бросок всегда можно совершить;
+                                    // глобальный счётчик IncrementRollsToday() инкрементится в
+                                    // WriteCompletedRollLog (см. ниже). В session.Rolls пишется
+                                    // только если сессия активна и TrackRolls=true.
+                                    //
+                                    // Однако: если ВСЕ сессии со сбором бросков на паузе — бросок
+                                    // покажется без пометки (что было бы странно для пользователя,
+                                    // который не понимает, почему ничего не засчиталось). В этом
+                                    // случае пишем сообщение, что бросок учтён только глобально.
+                                    var activeCollecting = sessions.Values
+                                        .Where(s => !s.IsStopped && !s.IsPaused && s.TrackRolls)
+                                        .ToList();
+                                    var pausedCollecting = sessions.Values
+                                        .Where(s => !s.IsStopped && s.IsPaused && s.TrackRolls)
+                                        .ToList();
+
+                                    // ✅ Bug 3: информируем пользователя о пауза-сессиях.
+                                    // Раньше текст отправлялся отдельным Followup + DeleteOriginalFile-
+                                    // SafeAsync(command, 5000). Из-за гонки с PNG-Followup это выглядело
+                                    // как «оповещение о паузе и картинка броска сливаются в один ответ и
+                                    // вместе удаляются». Теперь текст сохраняется в pauseMsg и отправляется
+                                    // ephemeral-Followup ПОСЛЕ PNG — видно только автору, не висит в канале,
+                                    // ACK «Бот думает...» не удаляется.
+                                    if (activeCollecting.Count == 0 && pausedCollecting.Count > 0)
+                                    {
+                                        var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                                        pauseMsg = $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.";
+                                    }
+                                    else if (activeCollecting.Count > 0 && pausedCollecting.Count > 0)
+                                    {
+                                        var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                                        pauseMsg = $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}.";
+                                    }
+                                }
+                            }
+                            finally
+                            {
+                                                            if (gotLock) sem.Release();
+                            }
                         }
-                        else if (activeCollecting.Count > 0 && pausedCollecting.Count > 0)
-                        {
-                            var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
-                            await command.FollowupAsync(
-                                $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}.",
-                                ephemeral: false);
-                            _ = DeleteOriginalResponseSafeAsync(command, 5000);
-                        }
-                    }
-                }
-                finally
-                {
-                                                if (gotLock) sem.Release();
-                }
-            }
 
             Random random = Random.Shared;
             List<int> results = Enumerable.Range(0, count)
@@ -433,9 +457,10 @@ namespace RPBot
                                             await command.FollowupWithFilesAsync(
                                                 attachments: new[] { attachment },
                                                 embeds: new[] { embed });
-                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                                            return;
-                                        }
+                                                                                        await TrySendPauseFollowupAsync(command, pauseMsg);
+                                                                                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                                                                        return;
+                                                                                    }
                 }
                 else
                 {
@@ -475,12 +500,14 @@ namespace RPBot
                                                 text: label,
                                                 embeds: new[] { embed });
 
-                                            if (missingForStrip.Count > 0)
-                                                BotLogger.Warn(LogCategory.Rolls,
-                                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
+                                                                                        await TrySendPauseFollowupAsync(command, pauseMsg);
 
-                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                                            return;
+                                                                                        if (missingForStrip.Count > 0)
+                                                                                            BotLogger.Warn(LogCategory.Rolls,
+                                                                                                $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
+
+                                                                                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                                                                        return;
                                         }
                                         finally
                                         {
@@ -498,8 +525,9 @@ namespace RPBot
 
             var resultMessage = BuildRollResponse(results, hasRange, min, max, modifier);
             await command.FollowupAsync(resultMessage);
-            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-        }
+                        await TrySendPauseFollowupAsync(command, pauseMsg);
+                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                    }
 
         [Command("roll20")]
         public async Task Roll20(SocketSlashCommand command)
@@ -564,8 +592,8 @@ namespace RPBot
         {
             if (IsOnCooldown(command.User.Id))
             {
-                // Сообщение НЕ ephemeral: пусть все в канале видят, что участник на кулдауне.
-                await command.FollowupAsync("Подождите немного перед следующим броском.");
+                        // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
                 return;
             }
             UpdateCooldown(command.User.Id);
@@ -583,94 +611,102 @@ namespace RPBot
             Random random = Random.Shared;
             int result = random.Next(1, 21);
 
-            // Если это канал статистики или канал бросков, проверяем сессии.
-            // Семафор ждём с таймаутом — если он залип, не подвешиваем взаимодействие на >3с.
-            //
-            // ✅ Bug 3: бросок ВСЕГДА совершается. Глобальный счётчик
-            // (RollsToday через IncrementRollsToday ниже) инкрементится
-            // независимо от паузы. В session.Rolls пишется только если
-            // сессия активна и TrackRolls=true.
-            if (isStatsChannel || isRollChannel)
-            {
-                bool gotLock = false;
-                var sem = GetGuildSemaphore(guildId);
-                try
-                {
-                    gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-                    if (!gotLock)
-                    {
-                        BotLogger.Warn(LogCategory.Cmd, $"[Roll20] семафор сессий занят >2с, пропускаю запись броска");
-                    }
-                    else
-                    {
-                        if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
-                        {
-                            // ✅ Bug 2/4: каждая сессия сама решает, собирает ли она броски (TrackRolls).
-                            var sessionsWithRolls = sessions.Values
-                                .Where(s => s.TrackRolls && !s.IsStopped)
-                                .ToList();
+            string? pauseMsg = null;
 
-                            // Пишем бросок только в активные (не на паузе) сессии.
-                            var activeCollecting = sessionsWithRolls
-                                .Where(s => !s.IsPaused)
-                                .ToList();
-                            foreach (var session in activeCollecting)
+                        // Если это канал статистики или канал бросков, проверяем сессии.
+                        // Семафор ждём с таймаутом — если он залип, не подвешиваем взаимодействие на >3с.
+                        //
+                        // ✅ Bug 3: бросок ВСЕГДА совершается. Глобальный счётчик
+                        // (RollsToday через IncrementRollsToday ниже) инкрементится
+                        // независимо от паузы. В session.Rolls пишется только если
+                        // сессия активна и TrackRolls=true.
+                        if (isStatsChannel || isRollChannel)
+                        {
+                            bool gotLock = false;
+                            var sem = GetGuildSemaphore(guildId);
+                            try
                             {
-                                session.Rolls.Add(new RollStatistic
+                                gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                                if (!gotLock)
                                 {
-                                    PlayerName = command.User.GlobalName,
-                                    RollValue = result,
-                                    DiceType = "d20"  // ✅ Roll20 всегда d20
-                                });
-                            }
+                                    BotLogger.Warn(LogCategory.Cmd, $"[Roll20] семафор сессий занят >2с, пропускаю запись броска");
+                                }
+                                else
+                                {
+                                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
+                                    {
+                                        // ✅ Bug 2/4: каждая сессия сама решает, собирает ли она броски (TrackRolls).
+                                        var sessionsWithRolls = sessions.Values
+                                            .Where(s => s.TrackRolls && !s.IsStopped)
+                                            .ToList();
 
-                            // ✅ Bug 3: информируем пользователя о пауза-сессиях.
-                            var pausedCollecting = sessionsWithRolls
-                                .Where(s => s.IsPaused)
-                                .ToList();
-                            if (pausedCollecting.Any())
+                                        // Пишем бросок только в активные (не на паузе) сессии.
+                                        var activeCollecting = sessionsWithRolls
+                                            .Where(s => !s.IsPaused)
+                                            .ToList();
+                                        foreach (var session in activeCollecting)
+                                        {
+                                            session.Rolls.Add(new RollStatistic
+                                            {
+                                                PlayerName = command.User.GlobalName,
+                                                RollValue = result,
+                                                DiceType = "d20"  // ✅ Roll20 всегда d20
+                                            });
+                                        }
+
+                                        // ✅ Bug 3: информируем пользователя о пауза-сессиях.
+                                        // Раньше текст отправлялся отдельным Followup + DeleteOriginalFile-
+                                        // SafeAsync(command, 5000). Из-за гонки с PNG-Followup это выглядело
+                                        // как «оповещение о паузе и картинка броска сливаются в один ответ и
+                                        // вместе удаляются». Теперь: PNG отправляется в канал ОДИН Followup,
+                                        // текст о паузе идёт вторым ephemeral-Followup (видно только автору),
+                                        // ACK «Бот думает...» не удаляется.
+                                        var pausedCollecting = sessionsWithRolls
+                                            .Where(s => s.IsPaused)
+                                            .ToList();
+                                        if (pausedCollecting.Any())
+                                        {
+                                            var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
+                                            pauseMsg = activeCollecting.Any()
+                                                ? $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}."
+                                                : $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.";
+                                        }
+                                    }
+                                }
+                            }
+                            finally
                             {
-                                var names = string.Join(", ", pausedCollecting.Select(p => $"«{p.GameName}»"));
-                                string msg = activeCollecting.Any()
-                                    ? $"⚠️ Бросок засчитан в активные сессии. Сессии на паузе не учли его: {names}."
-                                    : $"Игра {names} на паузе. Бросок засчитан только в глобальный счётчик, в сессии он не пойдёт.";
-                                _ = command.FollowupAsync(msg, ephemeral: false);
-                                _ = DeleteOriginalResponseSafeAsync(command, 5000);
+                                if (gotLock) sem.Release();
                             }
                         }
-                    }
-                }
-                finally
-                {
-                    if (gotLock) sem.Release();
-                }
-            }
 
-            // Показываем результат броска (в любом случае)
-            var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
-            var diceSubfolder = Path.Combine(numbersDir, "d20");
-            var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+                        // Показываем результат броска (в любом случае)
+                        var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
+                        var diceSubfolder = Path.Combine(numbersDir, "d20");
+                        var filePath = Path.Combine(diceSubfolder, $"{result}.png");
 
-            if (rollPicturesEnabled && Directory.Exists(diceSubfolder) && File.Exists(filePath))
-            {
-                var embed = new EmbedBuilder()
-                    .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
-                    .WithColor(GetGradientColor(result, 1, 20))
-                    .Build();
-                            // 🩹 perf: берём PNG из кэша, не с диска. Кэш наполняется через
-                            // File.ReadAllBytesAsync при первом запросе и больше никогда не меняется.
-                            var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
-                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
-                            await command.FollowupWithFilesAsync(
-                                attachments: new[] { attachment },
-                                embeds: new[] { embed });
-                        }
-                        else
+                        if (rollPicturesEnabled && Directory.Exists(diceSubfolder) && File.Exists(filePath))
                         {
-                            await command.FollowupAsync($"**Результат броска:** {result}");
-                        }
-            WriteCompletedRollLog("d20", result);
-        }
+                            var embed = new EmbedBuilder()
+                                .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
+                                .WithColor(GetGradientColor(result, 1, 20))
+                                .Build();
+                                        // 🩹 perf: берём PNG из кэша, не с диска. Кэш наполняется через
+                                        // File.ReadAllBytesAsync при первом запросе и больше никогда не меняется.
+                                        var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
+                                        var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                                        await command.FollowupWithFilesAsync(
+                                            attachments: new[] { attachment },
+                                            embeds: new[] { embed });
+                                                                                    await TrySendPauseFollowupAsync(command, pauseMsg);
+                                                                                }
+                                                                                else
+                                                                                {
+                                                                                    await command.FollowupAsync($"**Результат броска:** {result}");
+                                                                                    await TrySendPauseFollowupAsync(command, pauseMsg);
+                                                                                }
+                                                                    WriteCompletedRollLog("d20", result);
+                                                                }
 
         private Color GetGradientColor(int value, int minValue, int maxValue)
         {

@@ -461,29 +461,30 @@ namespace RPBot.EventOps
                                                 // возвращает false (вы ниже не попадаете), reminder не уходит.
                                                 //
                                                 // Правило: если now внутри окна [Start-1ч, Start+30мин] и
-                                                // reminder ещё не отправлялся (ReminderDmMessageIdsByUserId
-                                                // пустой ИЛИ вообще не было этой записи) — досылаем.
-                                                if (entry.LastStartTimeUtc.HasValue)
-                                                {
-                                                    var startUtc = entry.LastStartTimeUtc.Value;
-                                                    var reminderAt = startUtc.AddHours(-1);
-                                                    var nowUtc = DateTimeOffset.UtcNow;
-                                                    var reminderAlreadySent = entry.ReminderDmMessageIdsByUserId != null
-                                                        && entry.ReminderDmMessageIdsByUserId.Count > 0;
-                                                    if (!reminderAlreadySent
-                                                        && nowUtc >= reminderAt
-                                                        && nowUtc <= startUtc.AddMinutes(30))
-                                                    {
-                                                        BotLogger.Info(LogCategory.Discord,
-                                                            $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up reminder1h (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={startUtc:o} now={nowUtc:o}");
-                                                        try { await SendReminderAsync(entry); sentCatchupReminder++; }
-                                                        catch (Exception exR)
-                                                        {
-                                                            BotLogger.Warn(LogCategory.Discord,
-                                                                $"[EventOpsLifecycle] catch-up reminder failed: {exR.Message}");
-                                                        }
-                                                    }
-                                                }
+                                                                                                // reminder ещё не отправлялся (ни один Reminder*-ID в сторе
+                                                                                                // не заполнен) — досылаем. Используем WasReminderAlreadySent,
+                                                                                                // который проверяет все три канала (DM / канал анонса / TG),
+                                                                                                // иначе при пустом ReminderDmMessageIdsByUserId catch-up слал
+                                                                                                // бы reminder повторно при каждом рестарте (Bug evt-rb-dup).
+                                                                                                if (entry.LastStartTimeUtc.HasValue)
+                                                                                                {
+                                                                                                    var startUtc = entry.LastStartTimeUtc.Value;
+                                                                                                    var reminderAt = startUtc.AddHours(-1);
+                                                                                                    var nowUtc = DateTimeOffset.UtcNow;
+                                                                                                    if (!WasReminderAlreadySent(entry)
+                                                                                                        && nowUtc >= reminderAt
+                                                                                                        && nowUtc <= startUtc.AddMinutes(30))
+                                                                                                    {
+                                                                                                            BotLogger.Info(LogCategory.Discord,
+                                                                                                                $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up reminder1h (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={startUtc:o} now={nowUtc:o}");
+                                                                                                            try { await SendReminderAsync(entry); sentCatchupReminder++; }
+                                                                                                            catch (Exception exR)
+                                                                                                            {
+                                                                                                                BotLogger.Warn(LogCategory.Discord,
+                                                                                                                    $"[EventOpsLifecycle] catch-up reminder failed: {exR.Message}");
+                                                                                                            }
+                                                                                                        }
+                                                                                                }
 
                                                                                                         // 🩹 disconnect-no-rehydrate (deleteReminder15m): если reminder
                                                                                                         // в сторе ещё висит (DM/канал-announce/Telegram), а момент
@@ -812,12 +813,41 @@ namespace RPBot.EventOps
         //  Планирование
         // ════════════════════════════════════════════════════════════════════
 
-        private bool ScheduleReminder1h(EventAnnouncementEntry entry)
-        {
-            if (!entry.LastStartTimeUtc.HasValue)
-            {
-                BotLogger.Warn(LogCategory.Discord,
-                    $"[EventOpsLifecycle] ScheduleReminder1h: skip, нет LastStartTimeUtc guild={entry.GuildId} event={entry.EventId}");
+                /// <summary>
+                /// Возвращает true, если reminder1h для этого события уже отправлялся в любой
+                /// из трёх каналов (DM подписчикам / Discord-канал анонса / Telegram-чат).
+                ///
+                /// Используется в <see cref="RebuildFromStoreAsync"/> и <see cref="ScheduleReminder1h"/>
+                /// чтобы не слать reminder повторно после рестарта бота. До этого фикса (Bug evt-rb-dup)
+                /// проверка смотрела только на DM, и если подписчиков с DM не было — catch-up слал
+                /// reminder повторно при каждом рестарте (даже если он уже ушёл в канал/TG).
+                /// </summary>
+                private static bool WasReminderAlreadySent(EventAnnouncementEntry entry)
+                {
+                    var dmIds = entry.ReminderDmMessageIdsByUserId;
+                    return (dmIds != null && dmIds.Count > 0)
+                        || entry.ReminderAnnounceMessageId != 0
+                        || (entry.ReminderTelegramMessageId != 0 && entry.ReminderTelegramChatId != 0);
+                }
+
+                private bool ScheduleReminder1h(EventAnnouncementEntry entry)
+                {
+                    // 🩹 Bug evt-rb-dup: если reminder уже отправлялся (в DM / канал анонса / Telegram) —
+                    // не планировать новый. До этого guard RebuildFromStoreAsync после рестарта
+                    // перепланировал reminder, который уже был отослан в прошлой сессии, и тот
+                    // срабатывал снова. Теперь стор — единый источник истины: если хоть один
+                    // Reminder*-ID заполнен, считаем, что reminder уже ушёл.
+                    if (WasReminderAlreadySent(entry))
+                    {
+                        BotLogger.Info(LogCategory.Discord,
+                            $"[EventOpsLifecycle] ScheduleReminder1h: skip, reminder уже отправлялся ранее (announce={entry.ReminderAnnounceMessageId} tg={entry.ReminderTelegramMessageId}) guild={entry.GuildId} event={entry.EventId}");
+                        return false;
+                    }
+
+                    if (!entry.LastStartTimeUtc.HasValue)
+                    {
+                        BotLogger.Warn(LogCategory.Discord,
+                            $"[EventOpsLifecycle] ScheduleReminder1h: skip, нет LastStartTimeUtc guild={entry.GuildId} event={entry.EventId}");
                 return false;
             }
 
