@@ -197,7 +197,7 @@ private Task? _dailyRestartTask;
                                                                 //    пишется в лог каждую итерацию, чтобы видеть реальную картину.
                                                                 private static CancellationTokenSource? _gcLoopCts;
                                                                 private static Task? _gcLoopTask;
-                                                                private const int GcLoopPeriodSeconds = 300;  // 5 мин — период замера и компактизации
+                                                                private const int GcLoopPeriodSeconds = 1800; // 30 мин — период замера и компактизации (было 5 мин)
                                                                                                                                 private const int GcCompactIntervalSeconds = 1800; // 30 мин — между полными compaction-прогонами
                                                                 // Состояние для замеров.
                                                                 private static long _lastAllocatedBytes;
@@ -3699,18 +3699,20 @@ private static BotUI? _ui;
 
         private async Task BackgroundMonitoringLoop(CancellationToken ct = default)
         {
-                    // 🩹 perf: heartbeat-лог каждые 5 мин. Показывает, что бот жив и
+                    // 🩹 perf: heartbeat-лог каждые 30 мин. Показывает, что бот жив и
                     // обрабатывает цикл мониторинга. Если TimeoutException приходят,
                     // а heartbeat-строки идут — значит, проблема НЕ в зависании бота,
                     // а в IO/Discord-сокете. Без этого в логе непонятно, был бот жив
-                    // или нет в момент падения.
-                    int heartbeatTick = 0;
-                    DateTime loopStart = DateTime.UtcNow;
-                    while (!_shouldExit && !ct.IsCancellationRequested)
-                    {
-                        try
-                        {
-                                                await Task.Delay(TimeSpan.FromMinutes(5), ct);
+                                        // или нет в момент падения. Интервал увеличен с 5 мин до 30 мин —
+                                        // на проде запись логов каждые 5 минут засоряла Logs/yyyyMMdd,
+                                        // а полезной информации в этих строках мало (tick=N, ws=NNMB).
+                                        int heartbeatTick = 0;
+                                        DateTime loopStart = DateTime.UtcNow;
+                                        while (!_shouldExit && !ct.IsCancellationRequested)
+                                        {
+                                            try
+                                            {
+                                                                    await Task.Delay(TimeSpan.FromMinutes(30), ct);
                         }
                         catch (OperationCanceledException)
                         {
@@ -3740,7 +3742,7 @@ private static BotUI? _ui;
                                                 // не пингует REST API — соединение в пуле протухает после 60-100 сек
                                                 // idle, и следующий запрос (наш DeferAsync!) делает TCP+SSL handshake
                                                 // заново. 100-600 мс задержки. Пинг REST каждые 60 сек держит
-                                                                                                // соединение прогретым. Heartbeat-цикл 5 мин — keep-alive
+                                                                                                // соединение прогретым. Heartbeat-цикл 30 мин — keep-alive
                                                                                                 // работает по собственному счётчику времени.
                                                                                                 if (_client?.Rest != null && _client.ConnectionState == ConnectionState.Connected && DateTime.UtcNow - _lastKeepAliveUtc >= TimeSpan.FromSeconds(60))
                                                                                                 {
