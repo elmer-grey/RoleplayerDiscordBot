@@ -11,7 +11,7 @@ server:
 lavalink:
   plugins:
     # YouTube source plugin — для воспроизведения с YouTube
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.17.0"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
       repository: "https://maven.lavalink.dev/releases"
   server:
     # Пароль должен совпадать с Music.Password в config.json бота
@@ -61,8 +61,10 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
-      - WEB             # полная загрузка плейлистов и поиск
-      - TV              # playback-only с OAuth через remote cipher
+      - ANDROID_MUSIC   # воспроизведение без poToken, основной клиент
+      - ANDROID_VR      # playback + livestream, не требует OAuth/poToken
+      - WEB             # fallback (OAuth через remote cipher)
+      - MWEB            # запасной клиент
     remoteCipher:
       # Локальный yt-cipher, который автоматически поднимает RPBot на 127.0.0.1:8001
       # (Music.YtCipherAutoStart=true). Если поднимаешь свой — поменяй URL.
