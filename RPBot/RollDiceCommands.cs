@@ -403,6 +403,7 @@ namespace RPBot
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
             var diceSubfolder = Path.Combine(numbersDir, diceType);
             bool hasImages = !hasRange && Directory.Exists(diceSubfolder);
+            BotLogger.Info(LogCategory.Cmd, $"[Roll] PNG-выбор input='{_input}' diceType='{diceType}' numbersDir='{numbersDir}' diceSub='{diceSubfolder}' rollPicturesEnabled={rollPicturesEnabled} hasRange={hasRange} hasImages={hasImages} modifier={modifier} count={count}");
 
             if (isStatsChannel || isRollChannel)
             {
@@ -693,6 +694,7 @@ namespace RPBot
                         var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
                         var diceSubfolder = Path.Combine(numbersDir, "d20");
                         var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+                        BotLogger.Info(LogCategory.Cmd, $"[Roll20] PNG-выбор result={result} numbersDir='{numbersDir}' diceSub='{diceSubfolder}' file='{filePath}' rollPicturesEnabled={rollPicturesEnabled} dirExists={Directory.Exists(diceSubfolder)} fileExists={File.Exists(filePath)}");
 
                         if (rollPicturesEnabled && Directory.Exists(diceSubfolder) && File.Exists(filePath))
                         {
