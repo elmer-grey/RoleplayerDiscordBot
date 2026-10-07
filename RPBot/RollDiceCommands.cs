@@ -36,7 +36,14 @@ namespace RPBot
         private static bool IsOnCooldown(ulong userId)
         {
             if (_lastRollTime.TryGetValue(userId, out var last))
-                return DateTime.UtcNow - last < _rollCooldown;
+            {
+                var remain = _rollCooldown - (DateTime.UtcNow - last);
+                if (remain > TimeSpan.Zero)
+                {
+                    BotLogger.Info(LogCategory.Cmd, $"[Roll] cooldown HIT user={userId} осталось={remain.TotalMilliseconds:F0}мс");
+                    return true;
+                }
+            }
             return false;
         }
 
@@ -244,6 +251,7 @@ namespace RPBot
             if (IsOnCooldown(command.User.Id))
             {
                         // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        BotLogger.Info(LogCategory.Cmd, $"[Roll] send cooldown ephemeral user={command.User.Id} guild={guildId} ch={channelId}");
                         await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
                 return;
             }
@@ -593,6 +601,7 @@ namespace RPBot
             if (IsOnCooldown(command.User.Id))
             {
                         // ephemeral: кулдаун — личное уведомление, остальным в канале оно не нужно.
+                        BotLogger.Info(LogCategory.Cmd, $"[Roll20] send cooldown ephemeral user={command.User.Id} guild={guildId} ch={channelId}");
                         await command.FollowupAsync("Подождите немного перед следующим броском.", ephemeral: true);
                 return;
             }
