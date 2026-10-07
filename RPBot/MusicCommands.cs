@@ -732,12 +732,60 @@ namespace RPBot
                 return;
             }
 
-            try { await component.DeferAsync(ephemeral: true); }
-            catch (Exception ex)
+                        // 🩹 perf: 10062-retry для кнопок (после Gateway Reconnect или рестарта бота
+                        // первый DeferAsync возвращает 10062). До 2 ретраев с короткой паузой.
             {
-                DeferFailureLogger.Log("MusicButton", ex, component, component.Data.CustomId);
-                return;
-            }
+                            bool deferred = false;
+                            Exception? lastEx = null;
+                            for (int attempt = 0; attempt <= 2 && !deferred; attempt++)
+                            {
+                                try
+                                {
+                                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                                    await component.DeferAsync(ephemeral: true);
+                                    sw.Stop();
+                                    deferred = true;
+                                    if (attempt > 0)
+                                    {
+                                        BotLogger.Info(LogCategory.Cmd,
+                                            $"[MusicButton:DeferAsync] succeeded на попытке {attempt + 1}/3 для interaction={component.Id} (был 10062 ранее).");
+                                    }
+                                    else if (sw.Elapsed.TotalMilliseconds > 100)
+                                    {
+                                        long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
+                                        int gen0 = System.GC.CollectionCount(0);
+                                        int gen1 = System.GC.CollectionCount(1);
+                                        int gen2 = System.GC.CollectionCount(2);
+                                        long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
+                                        BotLogger.Warn(LogCategory.Cmd,
+                                            $"[MusicButton:DeferAsync] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
+                                            $"interaction={component.Id} " +
+                                            $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                            $"— возможна IO/GC пауза.");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    lastEx = ex;
+                                    bool isHttpNotFound = ex is Discord.Net.HttpException httpEx
+                                        && httpEx.HttpCode == System.Net.HttpStatusCode.NotFound;
+                                    bool isSslBroken = ex is System.Net.Http.HttpRequestException httpReq
+                                        && (httpReq.InnerException is System.IO.IOException
+                                            || httpReq.InnerException is System.Net.Sockets.SocketException
+                                            || (httpReq.InnerException?.Message?.Contains("SSL") ?? false)
+                                            || (httpReq.Message?.Contains("SSL") ?? false));
+                                    bool retriable = isHttpNotFound || isSslBroken;
+                                    if (!retriable || attempt == 2)
+                                    {
+                                        DeferFailureLogger.Log("MusicButton", ex, component, component.Data.CustomId);
+                                        return;
+                                    }
+                                    var delayMs = attempt == 0 ? 150 : 350;
+                                    try { await Task.Delay(delayMs); } catch { }
+                                }
+                            }
+                            if (!deferred) return;
+                        }
 
             _ = Task.Run(async () =>
             {
@@ -1110,7 +1158,7 @@ namespace RPBot
                 return;
             }
             var result = await _lavalink.GoToTrackNumberAsync(guildId, trackNumber);
-            await modal.FollowupAsync(result, ephemeral: true);
+                        try { await modal.FollowupAsync(result, ephemeral: true); } catch { }
         }
 
         private async Task ButtonToggleQueueAsync(ulong guildId, SocketMessageComponent component)

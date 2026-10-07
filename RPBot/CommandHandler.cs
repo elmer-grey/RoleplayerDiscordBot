@@ -282,6 +282,10 @@ new SlashCommandBuilder()
     .WithDescription("Выполняет бросок двадцатигранного кубика d20"),
 
     new SlashCommandBuilder()
+    .WithName("voice")
+    .WithDescription("Создать временный голосовой канал с лимитом на число человек (только для мастеров)"),
+
+    new SlashCommandBuilder()
     .WithName("queue")
     .WithDescription("Создаёт очередь участников для сцены")
     .AddOption("input", ApplicationCommandOptionType.String, "Количество участников сцены", isRequired: true),

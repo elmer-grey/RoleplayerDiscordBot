@@ -1,4 +1,4 @@
-﻿using Discord;
+using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +26,12 @@ namespace RPBot
                 // Per-user cooldown: не чаще 1 броска в 2 секунды
                 private static readonly ConcurrentDictionary<ulong, DateTime> _lastRollTime = new();
         private static readonly TimeSpan _rollCooldown = TimeSpan.FromSeconds(2);
+
+                        // 🩹 perf: кэш PNG для /roll20 (одиночный куб). Файл читается с диска ОДИН раз
+                        // за сессию бота, дальше byte[] отдаётся через FileAttachment → нет file-lock
+                        // на Windows и нет disk-IO при повторных бросках. Ключ = полный путь.
+                        private static readonly ConcurrentDictionary<string, byte[]> _roll20PngCache =
+                            new(StringComparer.OrdinalIgnoreCase);
 
         private static bool IsOnCooldown(ulong userId)
         {
@@ -151,11 +157,31 @@ namespace RPBot
         {
             // Сразу освобождаем шлюз и подтверждаем взаимодействие. Это нужно, чтобы Discord
             // не показал «Приложение не отвечает», даже если дальнейшая обработка залипнет.
-            try { await command.DeferAsync().ConfigureAwait(false); }
-            catch (Exception ex)
+            //
+            // Если предварительный ACK уже выполнен в Program.OnSlashCommandExecuted
+            // (ранний defer для тяжёлых команд — см. Program._preDeferCommands),
+            // повторно DeferAsync НЕ зовём: он упадёт с «Cannot defer an already deferred interaction».
+                        if (Program.IsPreDeferFailed(command.Id))
+                        {
+                            // 🩹 perf: PreDefer окончательно не прошёл (3 ретрая 10062 — interaction
+                            // не синхронизирован). Не пытаемся выполнить бросок — Discord всё равно
+                            // уже отвалился, и Followup-ответ не доставится. Просто выходим.
+                            Program.ClearPreDeferFailed(command.Id);
+                            return;
+                        }
+                        var alreadyDeferred = Program.IsPreDeferDone(command.Id);
+            if (alreadyDeferred)
             {
-                DeferFailureLogger.Log("RollDice", ex, command, input);
-                return;
+                Program.ClearPreDeferDone(command.Id);
+            }
+            else
+            {
+                try { await command.DeferAsync().ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    DeferFailureLogger.Log("RollDice", ex, command, input);
+                    return;
+                }
             }
 
             string user = command.User?.GlobalName ?? "<unknown>";
@@ -285,9 +311,16 @@ namespace RPBot
             if (isStatsChannel)
             {
                 var sem = GetGuildSemaphore(guildId);
-                await sem.WaitAsync();
-                try
-                {
+                            // Таймаут 2 сек, как в Roll20 — если сессия залипла, не держим
+                            // Discord-interaction >3 сек (это вызовет "Приложение не отвечает").
+                            bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                            if (!gotLock)
+                            {
+                                BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
+                            }
+                            else
+                            try
+                            {
                     if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
                     {
                         // ✅ Bug 3: пауза НЕ блокирует бросок. Бросок всегда можно совершить;
@@ -326,11 +359,11 @@ namespace RPBot
                 }
                 finally
                 {
-                    sem.Release();
+                                                if (gotLock) sem.Release();
                 }
             }
 
-            Random random = new Random();
+            Random random = Random.Shared;
             List<int> results = Enumerable.Range(0, count)
                 .Select(_ => random.Next(min, max + 1))
                 .ToList();
@@ -342,14 +375,19 @@ namespace RPBot
             if (isStatsChannel || isRollChannel)
             {
                 var sem = GetGuildSemaphore(guildId);
-                await sem.WaitAsync();
-                try
+                            bool gotLock = await sem.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                            if (!gotLock)
                 {
-                    if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
-                    {
-                        // ✅ Bug 3: пишем бросок ТОЛЬКО в активные сессии с TrackRolls=true.
-                        // Глобальный счётчик (RollsToday) уже инкрементнут через
-                        // WriteCompletedRollLog ниже.
+                                BotLogger.Warn(LogCategory.Cmd, $"[RollDice] семафор сессий занят >2с, пропускаю запись в сессии");
+                            }
+                            else
+                            try
+                            {
+                                if (GameSessionCommands._sessions.TryGetValue(guildId, out var sessions))
+                                {
+                                    // ✅ Bug 3: пишем бросок ТОЛЬКО в активные сессии с TrackRolls=true.
+                                    // Глобальный счётчик (RollsToday) уже инкрементнут через
+                                    // WriteCompletedRollLog ниже.
                         var activeSessions = sessions.Where(s =>
                             !s.Value.IsStopped &&
                             !s.Value.IsPaused &&
@@ -371,7 +409,7 @@ namespace RPBot
                 }
                 finally
                 {
-                    sem.Release();
+                                                    if (gotLock) sem.Release();
                 }
             }
 
@@ -388,57 +426,73 @@ namespace RPBot
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                             .WithColor(GetGradientColor(result, 1, max))
                             .Build();
-                        await command.FollowupWithFileAsync(filePath, embed: embed);
-                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                        return;
-                    }
+                                            // 🩹 perf: берём PNG из кэша (см. _roll20PngCache). Тот же кэш
+                                            // работает и для /roll с одним кубом, потому что ключ — полный путь.
+                                            var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
+                                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                                            await command.FollowupWithFilesAsync(
+                                                attachments: new[] { attachment },
+                                                embeds: new[] { embed });
+                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            return;
+                                        }
                 }
                 else
                 {
-                    var embeds = new List<Embed>();
-                    var files = new List<FileAttachment>();
-                    var textResults = new List<string>();
+                    // Несколько кубов: склеиваем в один strip (требование пользователя).
+                    // Цвет embed — по СРЕДНЕМУ значению (требование пользователя).
+                    // Fallback на multi-embed с отдельными эмбедами — если не удалось склеить
+                    // (например, не хватает части файлов).
+                                    //
+                                    // 🩹 perf: ComposeStrip делается в фоне (Task.Run), чтобы GC-паузы при
+                                    // склейке PNG (10d20 → 168*10 = 1680 px bitmap + PNG-энкод) не
+                                    // блокировали ACK-поток >3 сек и не вызывали "Приложение не отвечает".
+                                    // Defer уже отправлен, фоновый Task.Run — это disk/GC-работа.
+                                    // ВАЖНО: out-параметр missing мы возвращаем через замыкание (массив из 1 элемента).
+                                    var missingBox = new List<int>[] { null! };
+                                    var stripTask = Task.Run(() =>
+                                        DiceStripComposer.ComposeStrip(results, numbersDir, diceType, out missingBox[0]));
+                                    var stripStream = await stripTask.ConfigureAwait(false);
+                                    var missingForStrip = missingBox[0] ?? new List<int>();
 
-                    for (int i = 0; i < results.Count; i++)
-                    {
-                        var result = results[i];
-                        var filePath = Path.Combine(diceSubfolder, $"{result}.png");
+                                    if (stripStream != null)
+                                    {
+                                        try
+                                        {
+                                            var avg = results.Average();
+                                            var embed = new EmbedBuilder()
+                                                .WithImageUrl("attachment://roll_strip.png")
+                                                .WithColor(DiceStripComposer.ColorForAverage(avg, min, max))
+                                                .Build();
 
-                        if (File.Exists(filePath))
-                        {
-                            var uniqueFileName = $"{result}_{i + 1}.png";
-                            files.Add(new FileAttachment(filePath, uniqueFileName));
-                            embeds.Add(new EmbedBuilder()
-                                .WithImageUrl($"attachment://{uniqueFileName}")
-                                .WithColor(GetGradientColor(result, 1, max))
-                                .Build());
-                        }
-                        else
-                        {
-                            textResults.Add(result.ToString());
-                        }
-                    }
+                                            var label = count == 2
+                                                ? "Результаты броска (помеха/преимущество):"
+                                                : $"Результаты {count} бросков:";
 
-                    if (files.Count > 0)
-                    {
-                        var combinedMessage = files.Count switch
-                        {
-                            2 => "Результаты броска с помехой/преимуществом:",
-                            _ => $"Результаты {files.Count} бросков:"
-                        };
+                                            var attachment = new FileAttachment(stripStream, "roll_strip.png");
+                                            await command.FollowupWithFilesAsync(
+                                                attachments: new[] { attachment },
+                                                text: label,
+                                                embeds: new[] { embed });
 
-                        if (textResults.Count > 0)
-                        {
-                            combinedMessage += $"\n(Без картинок: {string.Join(", ", textResults)})";
-                        }
+                                            if (missingForStrip.Count > 0)
+                                                BotLogger.Warn(LogCategory.Rolls,
+                                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
 
-                        await command.FollowupWithFilesAsync(
-                            attachments: files,
-                            text: combinedMessage,
-                            embeds: embeds.ToArray());
-                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                        return;
-                    }
+                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            return;
+                                        }
+                                        finally
+                                        {
+                                            stripStream.Dispose();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Не получилось склеить (вообще нет файлов). Падаем в общий fallback ниже.
+                                        BotLogger.Warn(LogCategory.Rolls,
+                                            $"[strip] для {diceType} нет ни одного PNG, fallback на текст.");
+                                    }
                 }
             }
 
@@ -451,11 +505,23 @@ namespace RPBot
         public async Task Roll20(SocketSlashCommand command)
         {
             // Сразу подтверждаем взаимодействие, чтобы Discord не показывал «Приложение не отвечает».
-            try { await command.DeferAsync().ConfigureAwait(false); }
-            catch (Exception ex)
+            //
+            // Если предварительный ACK уже выполнен в Program.OnSlashCommandExecuted
+            // (ранний defer для тяжёлых команд — см. Program._preDeferCommands),
+            // повторно DeferAsync НЕ зовём.
+            var alreadyDeferred = Program.IsPreDeferDone(command.Id);
+            if (alreadyDeferred)
             {
-                DeferFailureLogger.Log("Roll20", ex, command, input: null);
-                return;
+                Program.ClearPreDeferDone(command.Id);
+            }
+            else
+            {
+                try { await command.DeferAsync().ConfigureAwait(false); }
+                catch (Exception ex)
+                {
+                    DeferFailureLogger.Log("Roll20", ex, command, input: null);
+                    return;
+                }
             }
 
             ulong? guildIdNullable = null;
@@ -514,7 +580,7 @@ namespace RPBot
             bool isStatsChannel = statsChannelId != 0 && channelId == statsChannelId;
             bool isRollChannel  = rollChannelId  != 0 && channelId == rollChannelId;
 
-            Random random = new Random();
+            Random random = Random.Shared;
             int result = random.Next(1, 21);
 
             // Если это канал статистики или канал бросков, проверяем сессии.
@@ -591,12 +657,18 @@ namespace RPBot
                     .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                     .WithColor(GetGradientColor(result, 1, 20))
                     .Build();
-                await command.FollowupWithFileAsync(filePath, embed: embed);
-            }
-            else
-            {
-                await command.FollowupAsync($"**Результат броска:** {result}");
-            }
+                            // 🩹 perf: берём PNG из кэша, не с диска. Кэш наполняется через
+                            // File.ReadAllBytesAsync при первом запросе и больше никогда не меняется.
+                            var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
+                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                            await command.FollowupWithFilesAsync(
+                                attachments: new[] { attachment },
+                                embeds: new[] { embed });
+                        }
+                        else
+                        {
+                            await command.FollowupAsync($"**Результат броска:** {result}");
+                        }
             WriteCompletedRollLog("d20", result);
         }
 
