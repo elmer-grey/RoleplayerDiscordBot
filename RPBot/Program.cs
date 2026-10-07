@@ -90,7 +90,7 @@ private VoicePointsService? _voicePointsService;
         private RPBot.EventOps.EventOpsRemigrationService? _eventOpsRemigrator;
         private RPBot.EventOps.EventOpsLifecycleService? _eventOpsLifecycle;
         private EventAnnouncer? _eventAnnouncer;
-        private WebDashboardService? _webDashboard;
+        private IWebDashboard? _webDashboard;
 private GoogleSheetsService? _googleSheetsService;
 private LavalinkService? _lavalinkService;
 private MusicCommands? _musicCommands;
@@ -133,9 +133,12 @@ private Task? _dailyRestartTask;
         /// </summary>
         private static readonly HashSet<string> _preDeferCommands = new(StringComparer.Ordinal)
         {
-            "roll",
-            "roll20",
-        };
+                    // ВНИМАНИЕ: легкие команды сюда НЕ добавлять — PreDefer сам идёт
+                    // в Discord API за 200-500мс (Cloudflare), что отъедает 1/6 от окна ACK.
+                    // Если команда укладывается в 3с без PreDefer — оставляем обычный путь.
+                    // Текущий список пуст: roll/roll20 и подобные обрабатываются быстро и
+                    // PreDefer для них создаёт SLOW-предупреждения и риск таймаута ACK.
+                };
 
         /// <summary>
         /// Interaction-токены, для которых уже выполнен предварительный defer.
@@ -1321,9 +1324,15 @@ private void SaveServerConfigs()
         // Для Lifecycle подписчиков он работает так же (HandleCreatedAsync/HandleUpdatedAsync/...),
         // потому что Attach делает += на методы напрямую.
 
-    BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: создаю WebDashboardService на 0.0.0.0:5057");
-    _webDashboard = new WebDashboardService(
-    host: "0.0.0.0",
+    BotLogger.Info(LogCategory.System, $"[WebDashboard] Program constructor: создаю web dashboard на 0.0.0.0:5057 (платформа={(OperatingSystem.IsWindows() ? "Windows → WebDashboardService/HttpListener" : "Linux → WebDashboardHost/Kestrel")})");
+        // ✅ Linux-деплой использует WebDashboardHost (Kestrel) — HttpListener в .NET 8 на Linux
+        // имеет хронические баги (ErrorCode=400 на loopback-префиксах, ломаный Authorization) и
+        // требует root для не-loopback. Kestrel корректно работает на 127.0.0.1 без urlacl.
+        // На Windows продолжает использоваться WebDashboardService (HttpListener) — там Kestrel не нужен.
+        if (OperatingSystem.IsWindows())
+        {
+            _webDashboard = new WebDashboardService(
+            host: "0.0.0.0",
     port: 5057,
     healthProvider: () => new
     {
@@ -1520,7 +1529,175 @@ private void SaveServerConfigs()
     catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
     return checks;
     });
-    BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: вызываю _webDashboard.Start()");
+        }
+        else
+        {
+        // ───── Linux-ветка (VPS-деплой) ─────
+        // Kestrel-реализация WebDashboardHost. Сигнатура конструктора совпадает с
+        // WebDashboardService 1:1 (тот же набор Func-провайдеров), поэтому мы
+        // дублируем только список аргументов. Если меняется состав провайдеров —
+        // синхронизируй обе ветки.
+        _webDashboard = new WebDashboardHost(
+        host: "0.0.0.0",
+        port: 5057,
+        healthProvider: () => new
+        {
+        Connected = _client?.ConnectionState == ConnectionState.Connected,
+        Guilds = _client?.Guilds?.Count ?? 0,
+        StartupType = GetStartupTypeDisplay(),
+        UtcNow = DateTimeOffset.UtcNow,
+        Version = BotVersion,
+        Uptime = DateTimeOffset.UtcNow - _startupTimeUtc,
+        },
+        serverConfigsProvider: () => _serverConfigs!,
+        sessionsProvider: () =>
+            {
+            var client = _client;
+            return GameSessionCommands._sessions
+            .ToDictionary(
+            g => g.Key,
+            g =>
+            {
+                SocketGuild? sguild = null;
+                try { sguild = client?.GetGuild(g.Key); } catch { }
+                var guildName = sguild?.Name;
+                return g.Value.Values.Select(s => new
+                {
+                s.SessionId,
+                GuildId = g.Key,
+                GuildName = guildName,
+                Name = s.GameName,
+                Status = s.IsStopped ? "завершена" : (s.IsPaused ? "на паузе" : "активна"),
+                RollCollecting = !s.IsStopped && !s.IsPaused && s.TrackRolls,
+                RollsCount = s.Rolls?.Count ?? 0,
+                CreatedAt = s.StartTime,
+                LeaderId = s.MasterId,
+                MasterName = s.MasterName,
+                }).ToList();
+            });
+            },
+            eventsProvider: () =>
+            {
+            if (_eventAnnouncementStore == null) return "event announcements not ready";
+            try
+            {
+            var entries = _eventAnnouncementStore.GetEntriesSnapshot();
+            var client = _client;
+            return entries.Select(e =>
+            {
+                SocketGuild? g = null;
+                try { g = client?.GetGuild(e.GuildId); } catch { }
+                string? statusLabel = null;
+                if (!string.IsNullOrEmpty(e.LastUpdatedMark))
+                {
+                var mark = e.LastUpdatedMark!;
+                var colon = mark.IndexOf(':');
+                statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
+                }
+                string? whenMsk = null;
+                try
+                {
+                if (e.LastStartTimeUtc.HasValue)
+                whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+                } catch { }
+                return new
+                {
+                    GuildId = e.GuildId,
+                    GuildName = g?.Name,
+                    EventId = e.EventId,
+                    Name = e.LastName ?? "(без названия)",
+                    Description = e.LastDescription,
+                    StartsAtMsk = whenMsk,
+                    Location = e.LastLocation,
+                    ChannelId = e.LastChannelId,
+                    CoverImageUrl = e.LastCoverImageUrl,
+                    StatusLabel = statusLabel,
+                    LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+                };
+            }).ToList();
+            }
+            catch (Exception ex) { return ex.Message; }
+            },
+        clientProvider: () => _client,
+        rollsTodayProvider: () => _rollsTodayCount,
+        activeSessionsProvider: () => GameSessionCommands._sessions.Sum(g => g.Value.Count(s => !s.Value.IsPaused)),
+        chatMessagesTodayProvider: () => _chatMessagesTodayCount,
+        usersInVoiceProvider: () => _usersInVoiceCount,
+        activityProvider: () => GetActivityBuckets(),
+        versionProvider: () => BotVersion,
+        uptimeProvider: () => DateTimeOffset.UtcNow - _startupTimeUtc,
+        systemsProvider: () =>
+        {
+        var checks = new List<object>();
+        try { checks.Add(new { Name = "Discord Gateway",  Healthy = _client?.ConnectionState == Discord.ConnectionState.Connected, Kind = (_client?.ConnectionState == Discord.ConnectionState.Connected) ? "ok" : "err", Message = _client?.ConnectionState == Discord.ConnectionState.Connected ? $"Подключено ({_client.Latency} мс)" : $"Не подключено ({_client?.ConnectionState})" }); } catch { }
+        try { var guildsCount = _client?.Guilds?.Count ?? 0; checks.Add(new { Name = "Серверы Discord", Healthy = guildsCount > 0, Kind = guildsCount > 0 ? "ok" : "err", Message = guildsCount > 0 ? $"Доступно: {guildsCount}" : "Нет доступных серверов" }); } catch { }
+        try { var cfgN = _serverConfigs?.Count ?? 0; checks.Add(new { Name = "Конфигурация", Healthy = cfgN > 0, Kind = cfgN > 0 ? "ok" : "err", Message = cfgN > 0 ? $"Настроено: {cfgN}" : "Нет настроенных серверов" }); } catch { }
+        try
+        {
+            var predEnabled = _serverConfigs?.Values?.Count(c => c.PredictionsEnabled) ?? 0;
+            checks.Add(new { Name = "Прогнозы", Healthy = predEnabled > 0, Kind = predEnabled > 0 ? "ok" : "mute", Message = predEnabled > 0 ? $"Включены на {predEnabled} серверах" : "Не включены ни на одном сервере" });
+        }
+        catch { }
+        try
+        {
+            if (_telegramNotifier != null)
+            {
+            var probes = new List<string>();
+            foreach (var kvp in _serverConfigs ?? new Dictionary<ulong, ServerConfig>())
+            {
+            if (!kvp.Value.TelegramEnabled) continue;
+                var r = _telegramNotifier.ProbeAsync(kvp.Key).GetAwaiter().GetResult();
+            probes.Add($"{kvp.Key}: {(r.Success ? "OK" : r.Message)}");
+            }
+                var ok = probes.Count > 0 && probes.All(s => s.EndsWith("OK"));
+            checks.Add(new { Name = "Telegram", Healthy = ok, Kind = ok ? "ok" : (probes.Count == 0 ? "mute" : "err"), Message = probes.Count > 0 ? string.Join("\n", probes) : "Telegram-интеграция выключена на всех серверах" });
+            }
+            else
+            {
+            checks.Add(new { Name = "Telegram", Healthy = false, Kind = "mute", Message = "Telegram-нотификатор отключён в конфиге" });
+            }
+        }
+        catch (Exception ex) { checks.Add(new { Name = "Telegram", Healthy = false, Kind = "err", Message = ex.Message }); }
+        try { checks.Add(new { Name = "Голосовые поинты", Healthy = _voicePointsService != null, Kind = (_voicePointsService != null) ? "ok" : "err", Message = _voicePointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+        try { checks.Add(new { Name = "Хранилище поинтов", Healthy = _pointsService != null, Kind = (_pointsService != null) ? "ok" : "err", Message = _pointsService != null ? "OK" : "Сервис не инициализирован" }); } catch { }
+        try
+        {
+            if (_googleSheetsService == null)
+            {
+            checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "mute", Message = "Отключено (google_credentials.json не задан)" });
+            }
+            else
+            {
+            var probe = _googleSheetsService.ProbeAsync().GetAwaiter().GetResult();
+            checks.Add(new { Name = "Google Sheets", Healthy = probe.Success, Kind = probe.Success ? "ok" : "err", Message = probe.Message });
+            }
+        }
+        catch (Exception ex) { checks.Add(new { Name = "Google Sheets", Healthy = false, Kind = "err", Message = ex.Message }); }
+        try
+        {
+            if (_lavalinkService == null)
+            {
+            checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "mute", Message = "Отключено (Music.Enabled=false)" });
+            }
+            else
+            {
+            var probeErr = _lavalinkService.ProbeAsync().GetAwaiter().GetResult();
+            var procOk = string.IsNullOrEmpty(probeErr);
+            checks.Add(new { Name = "Музыка (Lavalink)", Healthy = procOk, Kind = procOk ? "ok" : "err", Message = procOk ? $"Отвечает на {_config!.Music.Host}:{_config!.Music.Port}/version" : $"Не отвечает: {probeErr}" });
+            }
+        }
+        catch (Exception ex) { checks.Add(new { Name = "Музыка (Lavalink)", Healthy = false, Kind = "err", Message = ex.Message }); }
+        try
+        {
+            var loaded = _textBlocks?.Count ?? 0;
+            var kind = loaded > 0 ? "ok" : "info";
+            checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = loaded > 0, Kind = kind, Message = loaded > 0 ? $"Загружено {loaded} шаблонов" : "Файл отсутствует — шаблоны пустые (не критично)" });
+        }
+        catch (Exception ex) { checks.Add(new { Name = "Текстовые блоки (Pastes.txt)", Healthy = false, Message = ex.Message }); }
+        return checks;
+        });
+        }
+        BotLogger.Info(LogCategory.System, "[WebDashboard] Program constructor: вызываю _webDashboard.Start()");
     try
     {
         _webDashboard.Start();

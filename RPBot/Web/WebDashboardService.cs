@@ -275,7 +275,7 @@ namespace RPBot.Web
         }
     }
 
-    public sealed class WebDashboardService : IDisposable
+    public sealed class WebDashboardService : IWebDashboard
     {
         private readonly string _prefix;
         private readonly List<string> _prefixes = new();

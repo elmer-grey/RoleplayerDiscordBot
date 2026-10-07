@@ -30,7 +30,7 @@ namespace RPBot.Web
     /// На Windows продолжает работать старый WebDashboardService (HttpListener).
     /// Здесь только Linux-путь.
     /// </summary>
-    public sealed class WebDashboardHost : IDisposable
+    public sealed class WebDashboardHost : IWebDashboard
     {
         private readonly string _host;
         private readonly int _port;
