@@ -512,9 +512,12 @@ namespace RPBot
             CancellationToken cancellationToken = default)
         {
             if (_audioService is null || user.VoiceChannel is null)
-                return null;
+                    {
+                        Log($"[Music] JoinAndAwaitVoice: short-circuit — _audioService={(_audioService is null ? "null" : "ok")}, user.VoiceChannel={(user.VoiceChannel is null ? "null" : user.VoiceChannel.Id.ToString())}, guildId={user.Guild.Id}, userId={user.Id}");
+                        return null;
+                    }
 
-            var guildId = user.Guild.Id;
+                    var guildId = user.Guild.Id;
             var targetChannelId = user.VoiceChannel.Id;
             var client = _discordClient;
             var selfId = client.CurrentUser?.Id ?? 0;
@@ -586,8 +589,24 @@ namespace RPBot
             }
 
             // Получаем плеер (он должен быть уже создан JoinAsync; если нет — создастся)
-            try { return await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
-            catch (Exception ex) { Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync — {ex.Message}"); return null; }
+            // Lavalink создаёт плеер только после получения и VOICE_STATE_UPDATE, и VOICE_SERVER_UPDATE.
+            // В Discord эти два события приходят почти одновременно, но с задержкой до ~1с.
+            // Если GetPlayerAsync вернул null сразу — ждём ещё до 5с, периодически повторяя.
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                try {
+                    var p = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken);
+                    if (p is not null)
+                    {
+                        if (attempt > 0) Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync OK на попытке {attempt + 1}, state={p.State}");
+                        return p;
+                    }
+                }
+                catch (Exception ex) { Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync попытка {attempt+1} — {ex.Message}"); }
+                await Task.Delay(250, cancellationToken);
+            }
+            Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync вернул null после 20 попыток (5с ожидания) guildId={guildId}");
+            return null;
         }
 
         // ─── Health-probe ─────────────────────────────────────────────────
@@ -789,29 +808,36 @@ namespace RPBot
             string query,
             CancellationToken cancellationToken = default)
         {
+            Log($"[Music] PlayRichAsync ENTER: user={user.Id} guild={user.Guild.Id} query='{query}'");
             if (_audioService is null)
                 return new PlayResult { Message = "❌ Музыкальный сервис не инициализирован." };
 
             if (user.VoiceChannel is null)
+            {
+                Log($"[Music] PlayRichAsync: user.VoiceChannel is null");
                 return new PlayResult { Message = "❌ Ты должен быть в голосовом канале." };
+            }
 
             var guildId = user.Guild.Id;
             var voiceChannel = user.VoiceChannel;
 
             NotifyingPlayer? player;
-            try { player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken); }
-            catch { player = null; }
+            try { player = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken);
+                  Log($"[Music] PlayRichAsync: GetPlayerAsync(1)={(player is null ? "null" : $"state={player.State}")}"); }
+            catch (Exception ex) { Log($"[Music] PlayRichAsync: GetPlayerAsync(1) threw — {ex.Message}"); player = null; }
 
             bool freshJoin = player is null;
+            Log($"[Music] PlayRichAsync: freshJoin={freshJoin}");
             if (player is null)
             {
                 try
                 {
                     player = await JoinAndAwaitVoiceAsync(user, TimeSpan.FromSeconds(15), cancellationToken);
+                    Log($"[Music] PlayRichAsync: JoinAndAwaitVoice вернул {(player is null ? "null" : $"player state={player.State}")}");
                     if (player is null)
                         return new PlayResult { Message = "❌ Ошибка подключения: не дождались voice state от Discord. Попробуй ещё раз." };
                 }
-                catch (Exception ex) { return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
+                catch (Exception ex) { Log($"[Music] PlayRichAsync: JoinAndAwaitVoiceAsync threw — {ex.Message}"); return new PlayResult { Message = $"❌ Ошибка подключения: {ex.Message}" }; }
             }
 
                         if (player is null)
@@ -825,12 +851,27 @@ namespace RPBot
             }
 
             // Для YouTube-плейлистов (URL содержит list=) используем загрузку всего плейлиста
-            if (IsPlaylistUrl(query))
-                return await LoadAndQueuePlaylistAsync(player, guildId, query, cancellationToken);
+                        if (IsPlaylistUrl(query))
+                            return await LoadAndQueuePlaylistAsync(player, guildId, query, cancellationToken);
 
-            var track = await _audioService.Tracks.LoadTrackAsync(query, TrackSearchMode.None, cancellationToken: cancellationToken);
-            if (track is null)
-                return new PlayResult { Message = $"❌ Трек не найден: `{query}`" };
+                        Log($"[Music] PlayRichAsync: идёт LoadTrackAsync query='{query}'");
+                        object? trackObj;
+                        try
+                        {
+                            trackObj = await _audioService.Tracks.LoadTrackAsync(query, TrackSearchMode.None, cancellationToken: cancellationToken);
+                            Log($"[Music] PlayRichAsync: LoadTrackAsync вернул {(trackObj is null ? "null" : trackObj.GetType().Name)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"[Music] PlayRichAsync: LoadTrackAsync БРОСИЛ ИСКЛЮЧЕНИЕ — {ex.GetType().Name}: {ex.Message}");
+                            return new PlayResult { Message = $"❌ Ошибка загрузки трека: {ex.Message}" };
+                        }
+                        if (trackObj is null)
+                        {
+                            Log($"[Music] PlayRichAsync: LoadTrackAsync вернул null. query='{query}'");
+                            return new PlayResult { Message = $"❌ Трек не найден: `{query}`" };
+                        }
+                        dynamic track = trackObj;
 
             var state = GetOrCreateState(guildId);
 

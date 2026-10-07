@@ -789,35 +789,45 @@ namespace RPBot
 
             _ = Task.Run(async () =>
             {
-                switch (component.Data.CustomId)
+                            try
                 {
-                    case MusicEmbedBuilder.BtnPausePlay: await ButtonTogglePauseAsync(guildId.Value, component); break;
-                    case MusicEmbedBuilder.BtnSkip:      await ButtonSkipAsync(guildId.Value, component);        break;
-                    case MusicEmbedBuilder.BtnStop:      await ButtonStopAsync(guildId.Value, component);        break;
-                    case MusicEmbedBuilder.BtnLoop:      await ButtonLoopAsync(guildId.Value, component);        break;
-                    case MusicEmbedBuilder.BtnShuffle:   await ButtonShuffleAsync(guildId.Value, component);     break;
-                    case MusicEmbedBuilder.BtnVolDown:   await ButtonVolumeAsync(guildId.Value, component, -10); break;
-                    case MusicEmbedBuilder.BtnVolUp:     await ButtonVolumeAsync(guildId.Value, component, +10); break;
-                    case MusicEmbedBuilder.BtnQueue:     await ButtonToggleQueueAsync(guildId.Value, component); break;
-                    case MusicEmbedBuilder.BtnPrev:      await ButtonPrevAsync(guildId.Value, component);        break;
-                    case "music_autopause_resume":       await ButtonAutoPauseResumeAsync(guildId.Value, component); break;
-                    case "music_autopause_skip":         await ButtonAutoPauseSkipAsync(guildId.Value, component);  break;
-                    case "music_queue_prev":             await ButtonQueuePageAsync(guildId.Value, component, -1);  break;
-                    case "music_queue_next":             await ButtonQueuePageAsync(guildId.Value, component, +1);  break;
-                    default:
-                        if (component.Data.CustomId.StartsWith("music_search_select:"))
-                            await SelectSearchPickAsync(guildId.Value, component);
-                        else if (component.Data.CustomId.StartsWith("playlist_public_yes_"))
-                            await ButtonPlaylistPublicAsync(component, true);
-                        else if (component.Data.CustomId.StartsWith("playlist_public_no_"))
-                            await ButtonPlaylistPublicAsync(component, false);
-                        else if (component.Data.CustomId.StartsWith("playlist_overwrite_yes_"))
-                            await ButtonPlaylistOverwriteYesAsync(component);
-                        else if (component.Data.CustomId.StartsWith("playlist_overwrite_no_"))
-                            await ButtonPlaylistOverwriteNoAsync(component);
-                        break;
-                }
-            });
+                            switch (component.Data.CustomId)
+                            {
+                                case MusicEmbedBuilder.BtnPausePlay: await ButtonTogglePauseAsync(guildId.Value, component); break;
+                                case MusicEmbedBuilder.BtnSkip:      await ButtonSkipAsync(guildId.Value, component);        break;
+                                case MusicEmbedBuilder.BtnStop:      await ButtonStopAsync(guildId.Value, component);        break;
+                                case MusicEmbedBuilder.BtnLoop:      await ButtonLoopAsync(guildId.Value, component);        break;
+                                case MusicEmbedBuilder.BtnShuffle:   await ButtonShuffleAsync(guildId.Value, component);     break;
+                                case MusicEmbedBuilder.BtnVolDown:   await ButtonVolumeAsync(guildId.Value, component, -10); break;
+                                case MusicEmbedBuilder.BtnVolUp:     await ButtonVolumeAsync(guildId.Value, component, +10); break;
+                                case MusicEmbedBuilder.BtnQueue:     await ButtonToggleQueueAsync(guildId.Value, component); break;
+                                case MusicEmbedBuilder.BtnPrev:      await ButtonPrevAsync(guildId.Value, component);        break;
+                                case "music_autopause_resume":       await ButtonAutoPauseResumeAsync(guildId.Value, component); break;
+                                case "music_autopause_skip":         await ButtonAutoPauseSkipAsync(guildId.Value, component);  break;
+                                case "music_queue_prev":             await ButtonQueuePageAsync(guildId.Value, component, -1);  break;
+                                case "music_queue_next":             await ButtonQueuePageAsync(guildId.Value, component, +1);  break;
+                                default:
+                                    if (component.Data.CustomId.StartsWith("music_search_select:"))
+                                        await SelectSearchPickAsync(guildId.Value, component);
+                                    else if (component.Data.CustomId.StartsWith("playlist_public_yes_"))
+                                        await ButtonPlaylistPublicAsync(component, true);
+                                    else if (component.Data.CustomId.StartsWith("playlist_public_no_"))
+                                        await ButtonPlaylistPublicAsync(component, false);
+                                    else if (component.Data.CustomId.StartsWith("playlist_overwrite_yes_"))
+                                        await ButtonPlaylistOverwriteYesAsync(component);
+                                    else if (component.Data.CustomId.StartsWith("playlist_overwrite_no_"))
+                                        await ButtonPlaylistOverwriteNoAsync(component);
+                                    else
+                                        Log($"[MusicButton] неизвестный customId='{component.Data.CustomId}' interaction={component.Id}");
+                                    break;
+                            }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"[MusicButton] UNHANDLED customId='{component.Data.CustomId}' interaction={component.Id} → {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+                                DeferFailureLogger.Log("MusicButton", ex, component, component.Data.CustomId);
+                            }
+                        });
         }
 
         private async Task ButtonAutoPauseResumeAsync(ulong guildId, SocketMessageComponent component)
@@ -893,6 +903,7 @@ namespace RPBot
             var cachedMsg = GetSearchCacheMessage(guildId, userId);
 
             var result = await _lavalink.PlayRichAsync(user, track.Url);
+            Log($"[Music] SelectSearchPickAsync: PlayRichAsync вернул IsNew={result.IsNewTrack} IsQueued={result.IsQueued} Message='{result.Message}' TrackTitle='{result.TrackTitle}'");
             var state = _lavalink.GetOrCreateState(guildId);
             if (state.NowPlayingChannel is null && component.Channel is ITextChannel tc)
                 state.NowPlayingChannel = tc;
