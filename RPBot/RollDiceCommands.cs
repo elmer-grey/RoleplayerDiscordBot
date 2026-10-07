@@ -204,7 +204,7 @@ namespace RPBot
             }
             else
             {
-                try { await command.DeferAsync().ConfigureAwait(false); }
+                try { await command.DeferAsync(ephemeral: true).ConfigureAwait(false); }
                 catch (Exception ex)
                 {
                     DeferFailureLogger.Log("RollDice", ex, command, input);
@@ -553,7 +553,7 @@ namespace RPBot
             }
             else
             {
-                try { await command.DeferAsync().ConfigureAwait(false); }
+                try { await command.DeferAsync(ephemeral: true).ConfigureAwait(false); }
                 catch (Exception ex)
                 {
                     DeferFailureLogger.Log("Roll20", ex, command, input: null);
