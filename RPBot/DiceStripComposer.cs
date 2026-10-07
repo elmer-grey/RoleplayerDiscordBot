@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.Processing;
 
 using DiscordColor = Discord.Color;
 
@@ -35,6 +37,9 @@ namespace RPBot;
 ///   MemoryStream из памяти.</item>
 /// </list>
 /// </para>
+/// <para><b>Переход на ImageSharp (07.10.2026):</b> System.Drawing.Common
+/// официально не поддерживается на не-Windows с .NET 7+, поэтому GDI+ был
+/// заменён на SixLabors.ImageSharp (managed-only, кросс-платформенный).</para>
 /// </remarks>
 public static class DiceStripComposer
 {
@@ -82,7 +87,7 @@ public static class DiceStripComposer
             return cached;
         }
 
-        var loaded = new List<(int value, Image img)>();
+        var loaded = new List<(int value, Image<Rgba32> img)>();
         try
         {
             foreach (var v in values)
@@ -93,7 +98,7 @@ public static class DiceStripComposer
                     missing.Add(v);
                     continue;
                 }
-                // L1: кэш Image.FromFile по (path, mtime). Повторные открытия того же
+                // L1: кэш Image.Load по (path, mtime). Повторные открытия того же
                 // файла больше не делаем — отдаём из памяти.
                 var img = DieImageCache.GetOrLoad(path);
                 if (img != null)
@@ -106,26 +111,30 @@ public static class DiceStripComposer
             var totalW = Padding * 2 + loaded.Count * DieSize + Math.Max(0, loaded.Count - 1) * Gap;
             var totalH = Padding * 2 + DieSize;
 
-            using var bmp = new Bitmap(totalW, totalH, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(bmp))
-            {
-                g.CompositingMode = CompositingMode.SourceOver;
-                g.CompositingQuality = CompositingQuality.HighQuality;
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.SmoothingMode = SmoothingMode.HighQuality;
-                g.Clear(Color.Transparent);
+            // Собираем canvas. Кубики из кэша — клонируем, чтобы не мутировать общий кэш.
+            // Image<Rgba32> по умолчанию инициализируется прозрачными пикселями (0,0,0,0),
+            // отдельный Clear не требуется.
+            using var canvas = new Image<Rgba32>(totalW, totalH);
 
-                int x = Padding;
-                foreach (var (_, img) in loaded)
+            int x = Padding;
+            foreach (var (_, srcImg) in loaded)
+            {
+                // Клонируем кэшированный кубик, чтобы Mutate/Resize не затронул кэш.
+                var sized = srcImg.Clone(ctx => ctx.Resize(DieSize, DieSize));
+                try
                 {
-                    g.DrawImage(img, x, Padding, DieSize, DieSize);
-                    x += DieSize + Gap;
+                    canvas.Mutate(ctx => ctx.DrawImage(sized, new SixLabors.ImageSharp.Point(x, Padding), 1f));
                 }
+                finally
+                {
+                    sized.Dispose();
+                }
+                x += DieSize + Gap;
             }
 
-            // capacity = totalW*totalH/4 — для 32bppArgb это точный размер пиксельных данных.
+            // capacity = totalW*totalH/4 — для Rgba32 это точный размер пиксельных данных.
             var ms = new MemoryStream(capacity: totalW * totalH / 4);
-            bmp.Save(ms, ImageFormat.Png);
+            canvas.Save(ms, new PngEncoder());
             ms.Position = 0;
 
             // Сохраняем в L2-кэш ТОЛЬКО если все значения найдены, иначе strip неполный —
@@ -200,7 +209,7 @@ public static class DiceStripComposer
     private static readonly LruStripCache StripResultCache = new(capacity: 256);
 
     /// <summary>
-    /// L1-кэш отдельных <see cref="Image"/> по (path, mtime).
+    /// L1-кэш отдельных <see cref="Image{Rgba32}"/> по (path, mtime).
     /// </summary>
     private static readonly DieImageCacheImpl DieImageCache = new();
 }
@@ -272,13 +281,13 @@ internal sealed class LruStripCache
 }
 
 /// <summary>
-/// L1-кэш <see cref="Image"/> по (path, lastWriteTimeUtc).
+/// L1-кэш <see cref="Image{Rgba32}"/> по (path, lastWriteTimeUtc).
 /// </summary>
 internal sealed class DieImageCacheImpl
 {
     private readonly ConcurrentDictionary<string, CachedImage> _cache = new();
 
-    public Image? GetOrLoad(string path)
+    public Image<Rgba32>? GetOrLoad(string path)
     {
         var fi = new FileInfo(path);
         if (!fi.Exists) return null;
@@ -288,10 +297,9 @@ internal sealed class DieImageCacheImpl
         if (_cache.TryGetValue(key, out var cached) && cached.Mtime == mtime)
             return cached.Image;
 
-        // Image.FromFile на Windows держит файл залоченным до Dispose.
-        // Чтобы этого избежать — читаем файл в byte[] и используем FromStream.
         try
         {
+            // Image.Load по Stream — не держит файл после Dispose.
             byte[] bytes;
             using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var ms = new MemoryStream((int)fs.Length))
@@ -300,7 +308,7 @@ internal sealed class DieImageCacheImpl
                 bytes = ms.ToArray();
             }
             using var imgStream = new MemoryStream(bytes, writable: false);
-            var copy = Image.FromStream(imgStream, useEmbeddedColorManagement: false, validateImageData: false);
+            var copy = Image.Load<Rgba32>(imgStream);
 
             var entry = new CachedImage { Image = copy, Mtime = mtime };
             _cache.AddOrUpdate(key,
@@ -323,7 +331,7 @@ internal sealed class DieImageCacheImpl
         }
     }
 
-    public bool Owns(Image img)
+    public bool Owns(Image<Rgba32> img)
     {
         foreach (var kv in _cache)
         {
@@ -334,7 +342,7 @@ internal sealed class DieImageCacheImpl
 
     private sealed class CachedImage
     {
-        public Image Image = null!;
+        public Image<Rgba32> Image = null!;
         public long Mtime;
     }
 }
