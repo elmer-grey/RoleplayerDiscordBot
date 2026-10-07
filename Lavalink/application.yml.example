@@ -61,9 +61,9 @@ plugins:
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
     clients:
-      - ANDROID_MUSIC   # воспроизведение без poToken, основной клиент
-      - ANDROID_VR      # playback + livestream, не требует OAuth/poToken
-      - WEB             # fallback (OAuth через remote cipher)
+      - TV              # playback с OAuth, поддержка age-restricted (требует refreshToken)
+      - TVHTML5_SIMPLY  # playback без OAuth, требует проверки (для не-возрастных)
+      - WEB             # fallback с OAuth, search + плейлисты
       - MWEB            # запасной клиент
     remoteCipher:
       # Локальный yt-cipher, который автоматически поднимает RPBot на 127.0.0.1:8001
