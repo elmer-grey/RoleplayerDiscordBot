@@ -591,8 +591,8 @@ namespace RPBot
             // Получаем плеер (он должен быть уже создан JoinAsync; если нет — создастся)
             // Lavalink создаёт плеер только после получения и VOICE_STATE_UPDATE, и VOICE_SERVER_UPDATE.
             // В Discord эти два события приходят почти одновременно, но с задержкой до ~1с.
-            // Если GetPlayerAsync вернул null сразу — ждём ещё до 5с, периодически повторяя.
-            for (int attempt = 0; attempt < 20; attempt++)
+            // Если GetPlayerAsync вернул null сразу — ждём ещё до 15с, периодически повторяя.
+            for (int attempt = 0; attempt < 60; attempt++)
             {
                 try {
                     var p = await _audioService.Players.GetPlayerAsync<NotifyingPlayer>(guildId, cancellationToken);
@@ -605,7 +605,7 @@ namespace RPBot
                 catch (Exception ex) { Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync попытка {attempt+1} — {ex.Message}"); }
                 await Task.Delay(250, cancellationToken);
             }
-            Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync вернул null после 20 попыток (5с ожидания) guildId={guildId}");
+            Log($"[Music] JoinAndAwaitVoice: GetPlayerAsync вернул null после 60 попыток (15с ожидания) guildId={guildId}");
             return null;
         }
 
