@@ -466,8 +466,11 @@ function logLineHtml(rec){
 }
 
 function dedupMerge(buffer, incoming){
-  // Свежие впереди — дедуп по seq (монотонный id с сервера).
-  // Если у записи нет seq (старый сервер) — fallback на timestamp+message.
+  // Дедуп по seq (монотонный id с сервера). Для записей без seq (старый сервер)
+  // — fallback на timestamp+message.
+  // Затем сортируем по timestamp (свежие сверху). Раньше порядок был по seq,
+  // но seq сбрасывается к 1 при рестарте → после рестарта новые записи шли
+  // впереди старых по seq, но позади по времени, что выглядело как каша.
   // Обрезка до 500.
   const seen = new Set();
   const merged = [];
@@ -476,8 +479,18 @@ function dedupMerge(buffer, incoming){
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(rec);
-    if (merged.length >= 500) break;
   }
+  // timestamp приходит как "2026-10-07 07:40:46" — парсим в Date для сравнения.
+  const parseTs = (s) => {
+    if (!s) return 0;
+    // "YYYY-MM-DD HH:MM:SS" → ISO-формат для Date
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (m) return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+    const d = Date.parse(s);
+    return isNaN(d) ? 0 : d;
+  };
+  merged.sort((a, b) => parseTs(b.timestamp) - parseTs(a.timestamp));
+  if (merged.length > 500) merged.length = 500;
   return merged;
 }
 
