@@ -117,8 +117,14 @@ public static string ResolvePath(string path)
 
     if (Path.IsPathRooted(path)) return path;
 
+    // Нормализуем слэши: на Linux "\Data\Numbers" превратилось бы в имя папки
+    // с обратным слэшем, потому что Path.Combine сцепляет через DirectorySeparatorChar
+    // только прямые слэши, а \ оставляет как есть. Заменяем ОБА варианта.
+    var sep = Path.DirectorySeparatorChar;
+    var normalized = path.Replace('/', sep).Replace('\\', sep);
+
     // Runtime-данные — относительно корня данных.
-    var trimmed = path.Replace('\\', '/').TrimStart('/');
+    var trimmed = normalized.Replace(sep, '/').TrimStart('/');
     if (trimmed.StartsWith(SettingsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
         trimmed.StartsWith(DataFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
         trimmed.StartsWith(LogsFolderName + "/", StringComparison.OrdinalIgnoreCase) ||
@@ -126,11 +132,11 @@ public static string ResolvePath(string path)
         string.Equals(trimmed, DataFolderName, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(trimmed, LogsFolderName, StringComparison.OrdinalIgnoreCase))
     {
-    return Path.Combine(GetDataRootDirectory(), path.Replace('/', Path.DirectorySeparatorChar));
+    return Path.Combine(GetDataRootDirectory(), normalized);
     }
 
     // Статические ресурсы — относительно .exe.
-    return Path.Combine(AppContext.BaseDirectory, path);
+    return Path.Combine(AppContext.BaseDirectory, normalized);
 }
 
 /// <summary>
