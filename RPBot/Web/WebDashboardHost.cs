@@ -118,9 +118,14 @@ namespace RPBot.Web
                 return;
             }
 
-            // Kestrel на Linux биндим строго на 127.0.0.1 — наружу проксирует nginx.
-            // "0.0.0.0" приведёт к тому, что бот будет торчать на публичном IP (а это нам не нужно).
-            var bindHost = _host == "0.0.0.0" || string.IsNullOrEmpty(_host) ? "127.0.0.1" : _host;
+            // Kestrel на Linux биндим на заданный хост из конфига.
+            //
+            // "0.0.0.0" — слушать на всех интерфейсах (loopback, eth0, tailscale0).
+            // Наружу порт фильтрует iptables, поэтому безопасность не страдает.
+            // Это даёт доступ через Tailscale (100.x.y.z) без nginx-прокси.
+            //
+            // Если хост пустой — дефолт 127.0.0.1 (loopback, для nginx-режима).
+            var bindHost = string.IsNullOrEmpty(_host) ? "127.0.0.1" : _host;
             var bindUrl = $"http://{bindHost}:{_port}";
 
             BotLogger.Info(LogCategory.System, $"[WebDashboardHost] Start(): bind={bindUrl}");
