@@ -119,12 +119,18 @@ namespace RPBot
                     // SuppressPrepareLog=true), а пользователю лог показывается именно здесь,
                     // внутри Этапа 4, рядом с реальным запуском Lavalink.
                     Log("[Music] DI-контейнер собран, DiscordClientWrapper подписан на события ✓");
-                    await StartYtCipherProcessAsync(cancellationToken);
-                    var ready = await StartLavalinkProcessAsync(cancellationToken);
-                    await StartHostedServicesAsync(cancellationToken);
-                    Log("[Music] AudioServiceHost запущен после Lavalink ✓");
-                    return ready;
-                }
+                            var ytCipherOk = await StartYtCipherProcessAsync(cancellationToken);
+                            if (_config.YtCipherAutoStart && !ytCipherOk)
+                            {
+                                Log("[Music] ⚠️ yt-cipher НЕ поднялся (AutoStart=true). /play для YouTube будет падать с ошибкой cipher. " +
+                                    "Проверь: deno установлен, server.ts доступен, порт свободен. Если yt-cipher уже поднят через systemd " +
+                                    "(/etc/systemd/system/yt-cipher.service) — можно проигнорировать.");
+                            }
+                            var ready = await StartLavalinkProcessAsync(cancellationToken);
+                            await StartHostedServicesAsync(cancellationToken);
+                            Log("[Music] AudioServiceHost запущен после Lavalink ✓");
+                            return ready;
+                        }
 
         /// <summary>
         /// Пересобирает DI-контейнер с актуальным Discord-клиентом.
@@ -152,21 +158,35 @@ namespace RPBot
             }
         }
 
-        private async Task StartYtCipherProcessAsync(CancellationToken cancellationToken)
+        private async Task<bool> StartYtCipherProcessAsync(CancellationToken cancellationToken)
         {
-            if (!_config.YtCipherAutoStart) return;
+                    if (!_config.YtCipherAutoStart) return true; // AutoStart выключен — внешний ответственен
 
             if (_ytCipherProcess is { HasExited: false })
             {
                 Log("[Music] yt-cipher уже запущен.");
-                return;
+                        return true;
             }
 
-            var denoExe = ResolveDeno();
+                    // Pre-check: если на порту уже отвечает /metrics — yt-cipher поднят извне (systemd).
+                    // Не плодим второй процесс на том же порту.
+                    try
+                    {
+                        using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+                        var probeResp = await probe.GetAsync($"http://127.0.0.1:{_config.YtCipherPort}/metrics", cancellationToken);
+                        if (probeResp.IsSuccessStatusCode)
+                        {
+                            Log($"[Music] yt-cipher уже отвечает на 127.0.0.1:{_config.YtCipherPort}/metrics (внешний запуск) — свой процесс не стартую.");
+                            return true;
+                        }
+                    }
+                    catch { /* порт свободен / ничего не отвечает — продолжаем запуск своего */ }
+
+                    var denoExe = ResolveDeno();
             if (denoExe is null)
             {
-                Log("[Music] deno не найден — yt-cipher не будет запущен.");
-                return;
+                        Log("[Music] ❌ deno не найден — yt-cipher не будет запущен. Установите Deno: https://deno.land/ или `curl -fsSL https://deno.land/install.sh | sh`.");
+                        return false;
             }
 
             var ytCipherDir = BotConfig.ResolvePath(_config.YtCipherPath);
@@ -183,8 +203,8 @@ namespace RPBot
             }
             if (!File.Exists(serverTs))
             {
-                Log($"[Music] server.ts не найден: {serverTs} — yt-cipher не будет запущен.");
-                return;
+                        Log($"[Music] ❌ server.ts не найден: {serverTs} — yt-cipher не будет запущен. Проверьте Music.YtCipherPath в config.json.");
+                        return false;
             }
 
             var psi = new ProcessStartInfo
@@ -207,15 +227,15 @@ namespace RPBot
                 _ytCipherProcess = Process.Start(psi);
                 if (_ytCipherProcess is null)
                 {
-                    Log("[Music] Не удалось запустить yt-cipher процесс.");
-                    return;
+                            Log("[Music] ❌ Не удалось запустить yt-cipher процесс (Process.Start вернул null).");
+                            return false;
                 }
                 Log($"[Music] yt-cipher PID={_ytCipherProcess.Id}");
             }
             catch (Exception ex)
             {
-                Log($"[Music] Ошибка запуска yt-cipher: {ex.Message}");
-                return;
+                        Log($"[Music] ❌ Ошибка запуска yt-cipher: {ex.Message}");
+                        return false;
             }
 
             // Ждём готовности — до 20 сек
@@ -228,13 +248,15 @@ namespace RPBot
                 try
                 {
                     var resp = await http.GetAsync(url, cancellationToken);
-                    if (resp.IsSuccessStatusCode) { Log("[Music] yt-cipher готов ✓"); return; }
+                                if (resp.IsSuccessStatusCode) { Log("[Music] yt-cipher готов ✓"); return true; }
                 }
                 catch { }
                 await Task.Delay(1000, cancellationToken);
             }
-            Log("[Music] yt-cipher не ответил в отведённое время.");
-        }
+                        Log($"[Music] ❌ yt-cipher не ответил на {url} за 20 сек. PID={_ytCipherProcess?.Id}, Exited={_ytCipherProcess?.HasExited}. " +
+                            "Проверьте логи процесса yt-cipher (systemctl status yt-cipher / journalctl -u yt-cipher).");
+                        return false;
+                    }
 
         private static string? ResolveDeno()
         {
