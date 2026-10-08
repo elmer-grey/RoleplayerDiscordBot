@@ -219,30 +219,21 @@ public class VoiceChannelCommands
 
         BotLogger.Info(LogCategory.Discord, $"[Voice] Создан канал {voice.Name} ({voice.Id}) лимит={limit}, мастер={userLabel}.");
 
-        // Удаляем сообщение с кнопками (требование пользователя) и подтверждаем взаимодействие.
-        // DeferAsync выше сделал ACK. Сначала Followup — чтобы пользователь увидел результат
-        // даже если удаление сообщения упадёт. Потом пытаемся удалить.
+        // Убираем кнопки через модификацию исходного ответа компонента: заменяем
+        // содержимое на подтверждение и очищаем компоненты. Сообщение остаётся
+        // (ephemeral), но кнопки исчезают и пользователь видит результат сразу.
         try
         {
-            await component.FollowupAsync(
-                $"Готово: создан «{voice.Name}».",
-                ephemeral: true).ConfigureAwait(false);
+            await component.ModifyOriginalResponseAsync(msg =>
+            {
+                msg.Content = $"Готово: создан «{voice.Name}».";
+                msg.Components = new ComponentBuilder().Build();
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось отправить Followup: {ex.GetType().Name}: {ex.Message}");
-        }
-
-        // Удаление через прямой запрос к каналу: на некоторых версиях Discord.NET
-        // component.Message указывает на уже-disposed сообщение после Followup.
-        try
-        {
-            if (component.Channel is IMessageChannel ch)
-                await ch.DeleteMessageAsync(component.Message.Id).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось удалить сообщение с кнопками: {ex.GetType().Name}: {ex.Message}");
+            // Не критично: кнопки просто останутся до закрытия пользователем.
+            BotLogger.Info(LogCategory.Discord, $"[Voice] Не удалось убрать кнопки ({ex.GetType().Name}: {ex.Message}).");
         }
     }
 
@@ -494,27 +485,34 @@ public class VoiceChannelCommands
         if (!File.Exists(path))
         {
             BotLogger.Info(LogCategory.Discord, $"[Voice] Persistence: {Path.GetFileName(path)} не найден, нечего загружать.");
-            return;
+            // Файла нет — попробуем всё равно подхватить сирот-каналы (см. ниже).
         }
 
         List<PersistedRoom>? rooms = null;
-        try
+        if (File.Exists(path))
         {
-            var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
-            rooms = JsonSerializer.Deserialize<List<PersistedRoom>>(text, _jsonOpts);
-        }
-        catch (Exception ex)
-        {
-            BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось прочитать {Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message}");
-            return;
+            try
+            {
+                var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+                rooms = JsonSerializer.Deserialize<List<PersistedRoom>>(text, _jsonOpts);
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.Discord, $"[Voice] Не удалось прочитать {Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         if (rooms == null || rooms.Count == 0)
         {
-            // Пустой список — почистим файл.
-            try { File.Delete(path); } catch { /* ignore */ }
-            return;
+            // Пустой JSON — залогируем, но не возвращаемся: ниже подхватим сирот.
+            if (rooms != null)
+                BotLogger.Info(LogCategory.Discord, $"[Voice] Persistence: {Path.GetFileName(path)} пуст, идём по сиротам.");
         }
+
+        // ✅ Round: если файл прочитался, но JsonSerializer вернул null (пустой файл,
+        // "[]" с пробелами, или что-то нестандартное) — подменяем на пустой список,
+        // иначе foreach ниже бросит NullReferenceException.
+        rooms ??= new List<PersistedRoom>();
 
         var valid = new List<RoomTracker>();
         var stale = new List<ulong>();
@@ -571,6 +569,31 @@ public class VoiceChannelCommands
                 ? tracker.EmptySinceUtc.Value.ToString("HH:mm:ss")
                 : "null";
             BotLogger.Info(LogCategory.Discord, $"[Voice] Загружен канал {ch.Name} ({ch.Id}) лимит={r.UserLimit}, users={users}, empty_since_utc={emptySinceStr}.");
+        }
+
+        // Подхватываем каналы-сироты: "Тайная вечеря — N (...)" на серверах, в которых
+        // бот состоит, но почему-то выпали из трекера (например, после рестарта бота
+        // ранее — когда JSON был повреждён, пуст или перезаписан). Без этого такие
+        // каналы живут на сервере вечно, потому что бот о них забыл.
+        var seenGuilds = new HashSet<ulong>(client.Guilds.Select(g => g.Id));
+        foreach (var guildId in seenGuilds)
+        {
+            var guild = client.GetGuild(guildId);
+            if (guild == null) continue;
+            foreach (var vch in guild.VoiceChannels)
+            {
+                if (_activeRooms.ContainsKey(vch.Id)) continue;
+                if (!vch.Name.StartsWith("Тайная вечеря — ", StringComparison.Ordinal)) continue;
+
+                var tracker = new RoomTracker(vch, guildId, vch.UserLimit ?? 0);
+                int users;
+                try { users = vch is SocketVoiceChannel svc ? svc.ConnectedUsers.Count : -1; }
+                catch { users = -1; }
+                tracker.EmptySinceUtc = users == 0 ? DateTime.UtcNow : (DateTime?)null;
+                _activeRooms[vch.Id] = tracker;
+                valid.Add(tracker);
+                BotLogger.Info(LogCategory.Discord, $"[Voice] Подхвачен сирота-канал {vch.Name} ({vch.Id}) лимит={vch.UserLimit}, users={users}.");
+            }
         }
 
         if (valid.Count > 0)

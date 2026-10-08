@@ -4303,6 +4303,18 @@ private async Task SendPredictionMessage(ConnectionPredictor.PredictionResult pr
 
                     VoiceChannelCommands.SetClient(_client);
 
+                    // Явный вызов LoadPersistedAsync в Ready, потому что GuildAvailable
+                    // может не сработать, если гильдия уже доступна (например, после
+                    // реконнекта). Без этого сирот-каналы не подхватятся.
+                    try
+                    {
+                        await VoiceChannelCommands.LoadPersistedAsync(_client).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.Discord, $"[Voice] LoadPersistedAsync (Ready): {ex.GetType().Name}: {ex.Message}");
+                    }
+
                                 // ОТПРАВЛЯЕМ В UI. LogInfo-вариант ("Ready: connected as X") удалён —
                                 // дубль, в run.log писался и через рендерер (Инициализация бота...) и тут.
                                 BotLogger.Info(LogCategory.Discord, $"БОТ ПОДКЛЮЧЕН К DISCORD: {_client!.CurrentUser?.Username} в {DateTime.Now:HH:mm:ss}");
@@ -5058,6 +5070,17 @@ await Task.CompletedTask;
                     // ✅ R6 fix: при отключении от Discord все pending-UI кнопки
                     // «Продолжить» теряют смысл — клиент их не видит. Чистим.
                     try { ClearAllPendingBetUi(); } catch { }
+
+                    // ✅ Расширенный лог: пишем ПОЛНУЮ причину отключения (короткая + детали),
+                    // а не только короткую. Раньше в логе было "WebSocket ошибка" без подробностей;
+                    // теперь будет видно конкретный код закрытия, тип и InnerException.
+                    try
+                    {
+                        var full = DisconnectReasonTranslator.GetFullReason(exception!);
+                        var emoji = DisconnectReasonTranslator.GetEmojiForReason(full);
+                        BotLogger.Warn(LogCategory.Discord, $"{emoji} [Disconnect] {full} | exception={exception?.GetType().FullName ?? "null"}");
+                    }
+                    catch { /* лог не должен ломать обработку отключения */ }
 
                     if (_reconnectionService == null)
                     {
