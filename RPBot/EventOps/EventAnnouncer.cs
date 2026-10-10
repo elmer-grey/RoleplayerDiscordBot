@@ -986,7 +986,7 @@ namespace RPBot.EventOps
 
             if (isStarted)
             {
-                statusHeader = $"✅ <b>Событие началось:</b> {guildEvent.Name}";
+                statusHeader = $"▶️ <b>Событие началось:</b> {guildEvent.Name}";
                 whenLines.Add($"🕒 <b>Начало:</b> {mskNow.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
             }
             else if (isCompleted)
@@ -1321,7 +1321,7 @@ namespace RPBot.EventOps
 
                                         if (isStarted)
                                         {
-                                            header = $"✅ <b>Событие началось:</b> {restEvent.Name}";
+                                            header = $"▶️ <b>Событие началось:</b> {restEvent.Name}";
                                             whenLines.Add($"🕒 <b>Начало:</b> {mskNow.ToString("dd.MM.yyyy HH:mm")} (по МСК)");
                                         }
                                         else if (isCompleted)

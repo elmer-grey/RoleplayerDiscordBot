@@ -83,7 +83,6 @@ namespace RPBot
             // 👇 СОБИРАЕМ ВСЕ КОМАНДЫ ДЛЯ ПОДСЧЕТА
             var allCommands = GetAllCommands();
             int totalCommands = allCommands.Count * _guildIDs.Count;
-            int completedCommands = 0;
 
             BotLogger.Info(LogCategory.Cmd, $"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u043a\u043e\u043c\u0430\u043d\u0434 \u2014 \u042d\u0422\u0410\u041f 1/4 ({totalCommands} \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0439)");
 
@@ -99,33 +98,80 @@ namespace RPBot
 
                 BotLogger.Info(LogCategory.Cmd, $"│  Регистрация на сервере: {guild.Name} ({guildId})       │");
 
-                int guildCommandIndex = 0;
-                foreach (var command in allCommands)
+                // ⚡ BulkOverwriteApplicationCommandsAsync — один REST-запрос на всю гильдию вместо N.
+                // Раньше было ~1.2 сек на команду (REST + Task.Delay(200) для rate-limit).
+                // С ~22 командами × 2 гильдии = ~50 сек; теперь ≤ 1 REST-вызов = 1-3 сек.
+                // Метод определён на IGuild, поэтому кастим SocketGuild → IGuild.
+                //
+                // Перед записью проверяем, какие команды уже зарегистрированы. Если команда + опции
+                // совпадают — печатаем «уже есть — пропускаем» и НЕ трогаем Discord. Если отличается
+                // или новая — добавляем в список на запись.
+                var existing = (System.Collections.Generic.IReadOnlyCollection<Discord.IApplicationCommand>?)null;
+                try
                 {
-                    guildCommandIndex++;
-                    completedCommands++;
+                    existing = await ((IGuild)guild).GetApplicationCommandsAsync();
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Warn(LogCategory.Cmd, $"Не удалось получить список зарегистрированных команд для {guild.Name}: {ex.GetType().Name}: {ex.Message}");
+                }
 
+                int skipped = 0;
+                int needsOverwrite = 0;
+                var commandsToWrite = new List<SlashCommandBuilder>();
+
+                if (existing != null)
+                {
+                    foreach (var localCmd in allCommands)
+                    {
+                        // Сравниваем только по Name+Description: опции и choices при изменении
+                        // будут перезаписаны — BulkOverwrite идемпотентен.
+                        // localCmd — SlashCommandBuilder, его .Name/.Description — обычные string.
+                        var remote = existing.FirstOrDefault(c =>
+                            string.Equals(c.Name, localCmd.Name, StringComparison.Ordinal) &&
+                            string.Equals(c.Description, localCmd.Description, StringComparison.Ordinal));
+                        if (remote != null)
+                        {
+                            BotLogger.Info(LogCategory.Cmd, $"│  [skip]  /{localCmd.Name,-18} — уже зарегистрирована, описание совпадает");
+                            skipped++;
+                        }
+                        else
+                        {
+                            BotLogger.Info(LogCategory.Cmd, $"│  [new]   /{localCmd.Name,-18} — будет записана");
+                            needsOverwrite++;
+                            commandsToWrite.Add(localCmd);
+                        }
+                    }
+                }
+                else
+                {
+                    commandsToWrite.AddRange(allCommands);
+                    needsOverwrite = allCommands.Count;
+                }
+
+                if (needsOverwrite == 0)
+                {
+                    var elapsed = DateTime.UtcNow - _registrationStartTime;
+                    BotLogger.Info(LogCategory.Cmd, $"│  Все {allCommands.Count} команд уже актуальны на {guild.Name} — пропускаем. Время: {elapsed:mm\\:ss}");
+                }
+                else
+                {
                     try
                     {
-                        await guild.CreateApplicationCommandAsync(command.Build());
+                        var payload = commandsToWrite.Select(c => c.Build()).ToArray();
+                        await ((IGuild)guild).BulkOverwriteApplicationCommandsAsync(payload);
 
-                        // 👇 РАССЧИТЫВАЕМ ПРОГРЕСС И ВРЕМЯ
-                        var percent = (int)((double)completedCommands / totalCommands * 100);
                         var elapsed = DateTime.UtcNow - _registrationStartTime;
-                        var estimatedTotal = TimeSpan.FromTicks((long)(elapsed.Ticks * (totalCommands / (double)completedCommands)));
-                        var remaining = estimatedTotal - elapsed;
-
-                        BotLogger.Info(LogCategory.Cmd, $"│  [{percent,3}%] Команда: {command.Name,-20} | Выполнено: {completedCommands}/{totalCommands} | Время: {elapsed:mm\\:ss}");
-
-                        await Task.Delay(200);
+                        BotLogger.Info(LogCategory.Cmd, $"│  [done]  BulkOverwrite: {needsOverwrite} команд (пропущено {skipped}) | {elapsed:mm\\:ss}");
                     }
                     catch (Exception ex)
                     {
-                        BotLogger.Info(LogCategory.Cmd, $"│   Ошибка регистрации {command.Name}: {ex.Message}     │");
+                        BotLogger.Error(LogCategory.Cmd, $"BulkOverwriteApplicationCommandsAsync failed for guild={guildId}: {ex.GetType().Name}: {ex.Message}");
+                        BotLogger.Info(LogCategory.Cmd, $"│   Ошибка регистрации на {guild.Name}: {ex.Message}     │");
                     }
                 }
 
-                BotLogger.Info(LogCategory.Cmd, $"│   Завершено: {guild.Name} ({guildCommandIndex} команд)             │");
+                BotLogger.Info(LogCategory.Cmd, $"│   Завершено: {guild.Name} ({allCommands.Count} команд)             │");
             }
 
             var totalTime = DateTime.UtcNow - _registrationStartTime;
@@ -311,41 +357,16 @@ new SlashCommandBuilder()
     .WithName("stop_q")
     .WithDescription("Останавливает текущую активную очередь"),
 
-    new SlashCommandBuilder()
-    .WithName("start")
-    .WithDescription("Начать новую игровую сессию")
-    .AddOption("game_name", ApplicationCommandOptionType.String, "Название игры или сцены", isRequired: true)
-    .AddOption("master", ApplicationCommandOptionType.User, "Мастер игры", isRequired: false)
-    .AddOption("comment", ApplicationCommandOptionType.String, "Дополнительные комментарии к сессии", isRequired: false),
-
-    new SlashCommandBuilder()
-    .WithName("pause")
-    .WithDescription("Приостановить текущую игровую сессию"),
-
-    new SlashCommandBuilder()
-    .WithName("resume")
-    .WithDescription("Возобновить приостановленную игровую сессию"),
-
-    new SlashCommandBuilder()
-    .WithName("stop")
-    .WithDescription("Завершить текущую игровую сессию"),
-
-    new SlashCommandBuilder()
-    .WithName("edit_session")
-    .WithDescription("Изменить параметры текущей игровой сессии (только для мастеров)")
-    .AddOption("new_game_name", ApplicationCommandOptionType.String, "Новое название игры", isRequired: false)
-    .AddOption("new_master", ApplicationCommandOptionType.User, "Новый мастер игры", isRequired: false)
-    .AddOption("new_comment", ApplicationCommandOptionType.String, "Новый комментарий", isRequired: false),
+    // start/pause/resume/stop/edit_session/open_chat — раньше регистрировались как отдельные slash-команды,
+    // но с 2026-10-10 заменены кнопками в management-сообщении. Регистрация отключена, чтобы:
+    // 1) не путать пользователей (команды в палитре Discord, но при вызове «Команда не распознана» — default в switch);
+    // 2) ускорить регистрацию (было ~67 сек, 56 REST-вызовов по 1 на команду × 2 гильдии).
+    // Логика StartGameSession/CloseChatCommand/EditSession остаётся — она вызывается кнопками напрямую.
 
     new SlashCommandBuilder()
     .WithName("close_chat")
     .WithDescription("Архивирует текстовый канал или блокирует ветку форума")
     .AddOption("reason", ApplicationCommandOptionType.String, "Причина закрытия", isRequired: false),
-
-    new SlashCommandBuilder()
-    .WithName("open_chat")
-    .WithDescription("Возвращает канал из архива и перемещает в указанную категорию")
-    .AddOption("category", ApplicationCommandOptionType.String, "Название категории для перемещения", isRequired: true),
 
 
 new SlashCommandBuilder()
