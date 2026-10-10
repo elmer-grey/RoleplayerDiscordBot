@@ -631,7 +631,7 @@ private Task? _dailyRestartTask;
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("HandlePredictionOutcomesButton", ex, $"guild={guildId} channel={channelId} count={outcomesCount}").ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("HandlePredictionOutcomesButton", ex, $"guild={guildId} channel={channelId} count={outcomesCount}", LogCategory.Predict).ConfigureAwait(false);
                 try { await component.RespondAsync("Произошла ошибка при открытии формы. Попробуйте ещё раз.", ephemeral: true); } catch { }
             }
         }
@@ -670,7 +670,7 @@ private Task? _dailyRestartTask;
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("HandlePredictionContinueStep2Button", ex, $"guild={guildId} channel={channelId} user={component.User.Id}").ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("HandlePredictionContinueStep2Button", ex, $"guild={guildId} channel={channelId} user={component.User.Id}", LogCategory.Predict).ConfigureAwait(false);
                 try { await component.RespondAsync("Произошла ошибка. Попробуйте начать сначала.", ephemeral: true); } catch { }
             }
         }
@@ -701,7 +701,7 @@ private Task? _dailyRestartTask;
             }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}").ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("HandlePredictionHistoryPageButton", ex, $"guild={guildId} page={page}", LogCategory.Predict).ConfigureAwait(false);
                         try { await component.FollowupAsync("Ошибка при переключении страницы.", ephemeral: true); } catch { }
                     }
                 }
@@ -5554,7 +5554,7 @@ await Task.CompletedTask;
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("pred_create_step1", ex, $"customId={customId} user={modal.User?.Id}").ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("pred_create_step1", ex, $"customId={customId} user={modal.User?.Id}", LogCategory.Predict).ConfigureAwait(false);
                         try { await modal.FollowupAsync("Произошла ошибка. Попробуйте начать сначала.", ephemeral: true).ConfigureAwait(false); } catch { }
                         try { ScheduleDeleteOriginalResponse(modal); } catch { }
                         return;
@@ -5661,7 +5661,7 @@ await Task.CompletedTask;
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("pred_create_step2", ex, $"customId={customId} user={modal.User?.Id}").ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("pred_create_step2", ex, $"customId={customId} user={modal.User?.Id}", LogCategory.Predict).ConfigureAwait(false);
                         try { await modal.FollowupAsync("Произошла ошибка при создании прогноза. Попробуйте ещё раз.", ephemeral: true).ConfigureAwait(false); } catch { }
                         try { ScheduleDeleteOriginalResponse(modal); } catch { }
                         return;
@@ -5670,7 +5670,7 @@ await Task.CompletedTask;
             }
             catch (Exception ex)
             {
-                try { await PredictionErrorLogger.LogAsync("HandleModalSubmitted", ex, $"customId={customId}").ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("HandleModalSubmitted", ex, $"customId={customId}", LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 BotLogger.Error(LogCategory.Discord, $"[ModalSubmitted:{customId}] {ex.GetType().Name}: {ex.Message}");
                 try { await LogError($"HandleModalSubmitted exception for CustomId={customId}: {ex}"); } catch { }
                 try { await modal.RespondAsync("Что-то пошло не так. Подробности в логах бота.", ephemeral: true).ConfigureAwait(false); } catch { }
@@ -5689,7 +5689,7 @@ await Task.CompletedTask;
             }
             catch (Exception ex)
             {
-                try { await PredictionErrorLogger.LogAsync("HandleButtonExecuted", ex, $"customId={component.Data.CustomId}").ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("HandleButtonExecuted", ex, $"customId={component.Data.CustomId}", LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 BotLogger.Error(LogCategory.Discord, $"[ButtonExecuted:{component.Data.CustomId}] {ex.GetType().Name}: {ex.Message}");
                 await LogError($"Ошибка обработки кнопки: {ex.Message}");
                 try
@@ -6412,9 +6412,10 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
             }
             catch (Exception ex)
             {
-                // Пишем в общий логгер (категория Predict подходит — она уже используется для всех
-                // нештатных ситуаций взаимодействий) и дублируем в Cmd, чтобы было видно в обоих фильтрах.
-                try { await PredictionErrorLogger.LogAsync("OnSlashCommandExecuted", ex, $"cmd={name} user={command.User?.Id} guild={command.GuildId}").ConfigureAwait(false); } catch { }
+                // Логируем в Cmd, потому что это ошибка обработки slash-команды, а не прогноза.
+                // Категория Predict использовалась исторически — это давало путаницу при разборе логов
+                // (см. рефакторинг 2026-10-10, issue: «[Predict] RollDice» в логах бросков).
+                try { await PredictionErrorLogger.LogAsync("OnSlashCommandExecuted", ex, $"cmd={name} user={command.User?.Id} guild={command.GuildId}", LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 BotLogger.Error(LogCategory.Cmd, $"[SlashCommand:{name}] {ex.GetType().Name}: {ex.Message}");
 
                 // Пытаемся ответить пользователю, чтобы Discord не показывал «Приложение не отвечает».
@@ -6500,7 +6501,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[StopQueue] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("StopQueue", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("StopQueue", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в StopQueue: {ex.Message}");
             }
         }
@@ -6524,7 +6525,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[QueueCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("QueueCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("QueueCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в QueueCommand: {ex.Message}");
             }
         }
@@ -6542,7 +6543,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Q_InCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Q_InCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Q_InCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Q_InCommand: {ex.Message}");
             }
         }
@@ -6558,7 +6559,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[CloseChatCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("CloseChatCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("CloseChatCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в CloseChatCommand: {ex.Message}");
             }
         }
@@ -6574,7 +6575,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[OpenChatCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("OpenChatCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("OpenChatCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в OpenChatCommand: {ex.Message}");
             }
         }
@@ -6598,7 +6599,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[ClearMessage] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("ClearMessage", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("ClearMessage", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в ClearMessage: {ex.Message}");
             }
         }
@@ -6616,7 +6617,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[RollCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("RollCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("RollCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в RollCommand: {ex.Message}");
             }
         }
@@ -6631,7 +6632,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[VoiceCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("VoiceCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("VoiceCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в VoiceCommand: {ex.Message}");
             }
         }
@@ -6646,7 +6647,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Roll20Command] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Roll20Command", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Roll20Command", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Roll20Command: {ex.Message}");
             }
         }
@@ -6682,7 +6683,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[RollPicturesCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("RollPicturesCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("RollPicturesCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в RollPicturesCommand: {ex.Message}");
             }
         }
@@ -6698,7 +6699,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[ServerInfoCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("ServerInfoCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("ServerInfoCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в ServerInfoCommand: {ex.Message}");
             }
         }
@@ -6714,7 +6715,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[HelpCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("HelpCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("HelpCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в HelpCommand: {ex.Message}");
             }
         }
@@ -6730,7 +6731,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Help_RollCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Help_RollCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Help_RollCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Help_RollCommand: {ex.Message}");
             }
         }
@@ -6746,7 +6747,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Help_PredictCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Help_PredictCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Help_PredictCommand", ex, null, LogCategory.Predict).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Help_PredictCommand: {ex.Message}");
             }
         }
@@ -6762,7 +6763,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Help_GameSessionCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Help_GameSessionCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Help_GameSessionCommand", ex, null, LogCategory.Session).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Help_GameSessionCommand: {ex.Message}");
             }
         }
@@ -6778,7 +6779,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Help_MusicCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Help_MusicCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Help_MusicCommand", ex, null, LogCategory.Music).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Help_MusicCommand: {ex.Message}");
             }
         }
@@ -6797,7 +6798,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Bug_ReportCommand] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Bug_ReportCommand", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Bug_ReportCommand", ex, null, LogCategory.Cmd).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в Bug_ReportCommand: {ex.Message}");
             }
         }
@@ -6821,7 +6822,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[StartGameSession] {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("StartGameSession", ex).ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("StartGameSession", ex, null, LogCategory.Session).ConfigureAwait(false); } catch { }
                 await LogError($"Ошибка в StartGameSession: {ex.Message}");
             }
         }

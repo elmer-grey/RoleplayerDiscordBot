@@ -289,7 +289,7 @@ namespace RPBot
                                                                                 }
                                                                                 catch (Exception annEx)
                                                                                 {
-                                                                                    await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                                                                    await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                                                                                 }
                                                                             }
                                                                         }
@@ -297,12 +297,12 @@ namespace RPBot
                                                                         try { await SaveStateAsync().ConfigureAwait(false); }
                                                                         catch (Exception saveEx)
                                                                         {
-                                                                            await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state").ConfigureAwait(false);
+                                                                            await PredictionErrorLogger.LogAsync("OnClientDisconnected:save", saveEx, "Failed to persist offline state", LogCategory.Predict).ConfigureAwait(false);
                                                                         }
                                                                     }
                                                                     catch (Exception ex)
                                                                     {
-                                                                        await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect").ConfigureAwait(false);
+                                                                        await PredictionErrorLogger.LogAsync("OnClientDisconnected", ex, "Failed to update predictions on disconnect", LogCategory.Predict).ConfigureAwait(false);
                                                                     }
                                                                 });
                                                                                         }
@@ -382,7 +382,7 @@ namespace RPBot
                                         }
                                         catch (Exception upEx)
                                         {
-                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:UpdateMessage", upEx, $"guild={p.GuildId} kind={kind}").ConfigureAwait(false);
+                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:UpdateMessage", upEx, $"guild={p.GuildId} kind={kind}", LogCategory.Predict).ConfigureAwait(false);
                                         }
                                         // (2) Шлём сообщение «Бот ушёл…» в канал.
                                         try
@@ -391,7 +391,7 @@ namespace RPBot
                                         }
                                         catch (Exception ex)
                                         {
-                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                            await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync", ex,  $"guild={p.GuildId}", LogCategory.Predict).ConfigureAwait(false);
                                         }
                                     }
                                     // (3) Сохраняем состояние, чтобы BotOfflineAtUtc/WasBotOfflineOnShutdown дошли до файла.
@@ -401,7 +401,7 @@ namespace RPBot
                                     }
                                     catch (Exception ex)
                                     {
-                                        await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:save", ex).ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("AnnounceShutdownAsync:save", ex, null, LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
 
@@ -476,7 +476,7 @@ namespace RPBot
                 }
                 catch (Exception upEx)
                 {
-                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:UpdateMessage", upEx, $"guild={p.GuildId}").ConfigureAwait(false);
+                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:UpdateMessage", upEx, $"guild={p.GuildId}", LogCategory.Predict).ConfigureAwait(false);
                 }
 
                 // Шлём "Бот снова в сети" и удаляем offline-сообщения.
@@ -486,7 +486,7 @@ namespace RPBot
                 }
                 catch (Exception annEx)
                 {
-                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:AnnounceOnline", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                    await PredictionErrorLogger.LogAsync("AnnounceOnlineForRestored:AnnounceOnline", annEx, $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                 }
 
                 // ✅ Round 7-C4: после восстановления прогноза планируем удаление
@@ -550,7 +550,7 @@ namespace RPBot
                         }
                         catch (Exception ex)
                         {
-                            await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                            await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetChannel", ex,  $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                         }
                     }
                     if (ch == null && attempt < 5)
@@ -582,7 +582,7 @@ namespace RPBot
                     {
                         // Discord.Net не имеет публичного HttpException-типа в этой версии;
                         // любой transient сбой пытаемся ретраить в общем цикле.
-                        await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetMessage", ex, $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}").ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("ValidateActiveAfterReadyAsync:GetMessage", ex,  $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}", LogCategory.Predict).ConfigureAwait(false);
                         if (msgAttempts >= 4)
                         {
                             await AutoCancelRestoredPredictionAsync(p, cancelReason: "Восстановление невозможно: ошибка проверки сообщения. Прогноз отменён, ставки возвращены.").ConfigureAwait(false);
@@ -663,7 +663,7 @@ namespace RPBot
                                     try { statusSource = await guild.GetEventAsync(eventId).ConfigureAwait(false); }
                                     catch (Exception ex)
                                     {
-                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:GetEventAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:GetEventAsync", ex,  $"guild={p.GuildId} eventId={eventId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
                                 // REST-фоллбэк: кэш SocketGuild может быть пустым сразу после рестарта.
@@ -681,13 +681,13 @@ namespace RPBot
                                             }
                                             catch (Exception ex)
                                             {
-                                                await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetEventAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                                await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetEventAsync", ex,  $"guild={p.GuildId} eventId={eventId}", LogCategory.Predict).ConfigureAwait(false);
                                             }
                                         }
                                     }
                                     catch (Exception ex)
                                     {
-                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetGuild", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("CheckEventStatus:RestGetGuild", ex,  $"guild={p.GuildId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
 
@@ -722,7 +722,7 @@ namespace RPBot
                             }
                             catch (Exception ex)
                             {
-                                await PredictionErrorLogger.LogAsync("CheckEventStatusAndCancelIfDoneAsync", ex, $"guild={p.GuildId} eventId={eventId}").ConfigureAwait(false);
+                                await PredictionErrorLogger.LogAsync("CheckEventStatusAndCancelIfDoneAsync", ex,  $"guild={p.GuildId} eventId={eventId}", LogCategory.Predict).ConfigureAwait(false);
                             }
                         }
 
@@ -790,7 +790,7 @@ namespace RPBot
                                     }
                                     catch (Exception annEx)
                                     {
-                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", annEx, $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
                             }
@@ -802,7 +802,7 @@ namespace RPBot
                         }
                         catch (Exception ex)
                         {
-                            await PredictionErrorLogger.LogAsync("OnClientReadyForAnnouncements", ex).ConfigureAwait(false);
+                            await PredictionErrorLogger.LogAsync("OnClientReadyForAnnouncements", ex, null, LogCategory.Predict).ConfigureAwait(false);
                         }
                     });
                     return Task.CompletedTask;
@@ -873,7 +873,7 @@ namespace RPBot
                                                                             }
                                     catch (Exception ex)
                     {
-                                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("AnnounceOfflineAsync", ex,  $"guild={p.GuildId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
 
@@ -912,7 +912,7 @@ namespace RPBot
                                                 if (delEx is Discord.Net.HttpException hex) code = (int)hex.HttpCode;
                                                 if (code != 10008)
                                                 {
-                                                    await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                                    await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}", LogCategory.Predict).ConfigureAwait(false);
                                                 }
                                             }
                                         }
@@ -945,7 +945,7 @@ namespace RPBot
                                     }
                                     catch (Exception ex)
                                     {
-                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex, $"guild={p.GuildId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("AnnounceOnlineAsync", ex,  $"guild={p.GuildId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
 
@@ -981,7 +981,7 @@ namespace RPBot
                                     if (delEx is Discord.Net.HttpException hex) code = (int)hex.HttpCode;
                                     if (code != 10008)
                                     {
-                                        await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}").ConfigureAwait(false);
+                                        await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync:delete", delEx, $"guild={p.GuildId} msgId={msgId}", LogCategory.Predict).ConfigureAwait(false);
                                     }
                                 }
                 finally
@@ -993,7 +993,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync", ex).ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("ScheduleOnlineMessageCleanupAsync", ex, null, LogCategory.Predict).ConfigureAwait(false);
             }
         }
 
@@ -1124,7 +1124,7 @@ namespace RPBot
             }
                     catch (Exception ex)
             {
-                        await PredictionErrorLogger.LogAsync("SaveStateAsync", ex).ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("SaveStateAsync", ex, null, LogCategory.Predict).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -1376,7 +1376,7 @@ namespace RPBot
                                 }
                                 catch (Exception ex)
                                 {
-                                    await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannel", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                    await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannel", ex,  $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                                 }
                             }
 
@@ -1417,7 +1417,7 @@ namespace RPBot
                         }
                         catch (Exception ex)
                         {
-                            await PredictionErrorLogger.LogAsync("LoadStateAsync:entry", ex, $"guild={guildKv.Key} channel={channelKv.Key}").ConfigureAwait(false);
+                            await PredictionErrorLogger.LogAsync("LoadStateAsync:entry", ex,  $"guild={guildKv.Key} channel={channelKv.Key}", LogCategory.Predict).ConfigureAwait(false);
                         }
                     }
                 }
@@ -1474,13 +1474,13 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex).ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("LoadStateAsync:saveCleanedState", ex, null, LogCategory.Predict).ConfigureAwait(false);
                     }
                 }
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("LoadStateAsync", ex).ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("LoadStateAsync", ex, null, LogCategory.Predict).ConfigureAwait(false);
             }
             finally
             {
@@ -1517,14 +1517,14 @@ namespace RPBot
                 }
                             catch (Exception ex)
                             {
-                                await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannelAsync", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                                await PredictionErrorLogger.LogAsync("LoadStateAsync:GetChannelAsync", ex,  $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
                             }
 
                 AppendRestoreReport($"AUTO_CANCEL_RESTORE guild={p.GuildId} channelId={p.ChannelId} bets={p.Bets.Count} reason='{cancelReason}'");
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("AutoCancelRestoredPredictionAsync", ex, $"guild={p.GuildId} channel={p.ChannelId}").ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("AutoCancelRestoredPredictionAsync", ex,  $"guild={p.GuildId} channel={p.ChannelId}", LogCategory.Predict).ConfigureAwait(false);
             }
         }
 
@@ -2078,7 +2078,7 @@ namespace RPBot
                         }
                         catch (Exception ex)
                         {
-                            await PredictionErrorLogger.LogAsync("ResolveAsync:DeleteMessage", ex, $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}").ConfigureAwait(false);
+                            await PredictionErrorLogger.LogAsync("ResolveAsync:DeleteMessage", ex,  $"guild={p.GuildId} channel={p.ChannelId} message={p.MessageId}", LogCategory.Predict).ConfigureAwait(false);
                         }
                     }
 
@@ -2101,7 +2101,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("ResolveAsync:UpdateStats", ex, $"guild={guildId}").ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("ResolveAsync:UpdateStats", ex,  $"guild={guildId}", LogCategory.Predict).ConfigureAwait(false);
                     }
 
                     // ✅ НОВОЕ: Отправляем сообщение о достижениях (после небольшой задержки для обновления статистики)
@@ -2118,14 +2118,14 @@ namespace RPBot
                         }
                         catch (Exception ex)
                         {
-                            await PredictionErrorLogger.LogAsync("ResolveAsync:AchievementsPost", ex, $"guild={guildId}").ConfigureAwait(false);
+                            await PredictionErrorLogger.LogAsync("ResolveAsync:AchievementsPost", ex,  $"guild={guildId}", LogCategory.Predict).ConfigureAwait(false);
                         }
                     });
                 }
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("ResolveAsync:ResultPost", ex, $"guild={guildId} resolver={resolverId} win={winningOutcomeId}").ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("ResolveAsync:ResultPost", ex,  $"guild={guildId} resolver={resolverId} win={winningOutcomeId}", LogCategory.Predict).ConfigureAwait(false);
             }
 
             // ✅ НОВОЕ: Добавляем в историю
@@ -2810,7 +2810,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("LoadStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("LoadStatsAsync", ex,  _statsFilePath, LogCategory.Predict).ConfigureAwait(false);
             }
             finally
             {
@@ -2841,7 +2841,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                await PredictionErrorLogger.LogAsync("LoadAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
+                await PredictionErrorLogger.LogAsync("LoadAchievementsAsync", ex,  _achievementsFilePath, LogCategory.Predict).ConfigureAwait(false);
             }
             finally
             {
@@ -2861,7 +2861,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("SaveStatsAsync", ex, _statsFilePath).ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("SaveStatsAsync", ex,  _statsFilePath, LogCategory.Predict).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -3095,7 +3095,7 @@ namespace RPBot
                     }
                     catch (Exception ex)
                     {
-                        await PredictionErrorLogger.LogAsync("SaveAchievementsAsync", ex, _achievementsFilePath).ConfigureAwait(false);
+                        await PredictionErrorLogger.LogAsync("SaveAchievementsAsync", ex,  _achievementsFilePath, LogCategory.Predict).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -3236,7 +3236,7 @@ namespace RPBot
                         {
                                                     try
                                                     {
-                                                        PredictionErrorLogger.LogAsync("Shutdown:markOffline", ex, "Failed to mark predictions offline").GetAwaiter().GetResult();
+                                                        PredictionErrorLogger.LogAsync("Shutdown:markOffline", ex, "Failed to mark predictions offline", LogCategory.Predict).GetAwaiter().GetResult();
                                                     }
                                                     catch { /* не блокируем shutdown */ }
                                                 }
@@ -3250,7 +3250,7 @@ namespace RPBot
                                                 {
                                                     try
                                                     {
-                                                        PredictionErrorLogger.LogAsync("Shutdown:saveState", ex, "Failed to persist predictions state on shutdown").GetAwaiter().GetResult();
+                                                        PredictionErrorLogger.LogAsync("Shutdown:saveState", ex, "Failed to persist predictions state on shutdown", LogCategory.Predict).GetAwaiter().GetResult();
                                                     }
                                                     catch { /* не блокируем shutdown */ }
                                                 }
