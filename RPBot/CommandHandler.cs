@@ -83,6 +83,7 @@ namespace RPBot
             // 👇 СОБИРАЕМ ВСЕ КОМАНДЫ ДЛЯ ПОДСЧЕТА
             var allCommands = GetAllCommands();
             int totalCommands = allCommands.Count * _guildIDs.Count;
+            int doneCommands = 0;
 
             BotLogger.Info(LogCategory.Cmd, $"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u043a\u043e\u043c\u0430\u043d\u0434 \u2014 \u042d\u0422\u0410\u041f 1/4 ({totalCommands} \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0439)");
 
@@ -103,9 +104,10 @@ namespace RPBot
                 // С ~22 командами × 2 гильдии = ~50 сек; теперь ≤ 1 REST-вызов = 1-3 сек.
                 // Метод определён на IGuild, поэтому кастим SocketGuild → IGuild.
                 //
-                // Перед записью проверяем, какие команды уже зарегистрированы. Если команда + опции
-                // совпадают — печатаем «уже есть — пропускаем» и НЕ трогаем Discord. Если отличается
-                // или новая — добавляем в список на запись.
+                // ⚠️ ВАЖНО: BulkOverwriteApplicationCommandsAsync ЗАМЕНЯЕТ ВСЕ команды гильдии
+                // на переданный массив (PUT-семантика). Если передать неполный список — лишние
+                // команды удалятся. Поэтому ВСЕГДА шлём полный список allCommands, а не только
+                // [new]. Сравнение с existing — только чтобы понять, нужен ли запрос вообще.
                 var existing = (System.Collections.Generic.IReadOnlyCollection<Discord.IApplicationCommand>?)null;
                 try
                 {
@@ -116,53 +118,44 @@ namespace RPBot
                     BotLogger.Warn(LogCategory.Cmd, $"Не удалось получить список зарегистрированных команд для {guild.Name}: {ex.GetType().Name}: {ex.Message}");
                 }
 
-                int skipped = 0;
-                int needsOverwrite = 0;
-                var commandsToWrite = new List<SlashCommandBuilder>();
-
+                bool needsOverwrite = true;
                 if (existing != null)
                 {
+                    // Сравниваем только по Name+Description: опции и choices при изменении
+                    // будут перезаписаны — BulkOverwrite идемпотентен.
+                    // localCmd — SlashCommandBuilder, его .Name/.Description — обычные string.
+                    needsOverwrite = false;
                     foreach (var localCmd in allCommands)
                     {
-                        // Сравниваем только по Name+Description: опции и choices при изменении
-                        // будут перезаписаны — BulkOverwrite идемпотентен.
-                        // localCmd — SlashCommandBuilder, его .Name/.Description — обычные string.
                         var remote = existing.FirstOrDefault(c =>
                             string.Equals(c.Name, localCmd.Name, StringComparison.Ordinal) &&
                             string.Equals(c.Description, localCmd.Description, StringComparison.Ordinal));
-                        if (remote != null)
+                        if (remote == null)
                         {
-                            BotLogger.Info(LogCategory.Cmd, $"│  [skip]  /{localCmd.Name,-18} — уже зарегистрирована, описание совпадает");
-                            skipped++;
-                        }
-                        else
-                        {
-                            BotLogger.Info(LogCategory.Cmd, $"│  [new]   /{localCmd.Name,-18} — будет записана");
-                            needsOverwrite++;
-                            commandsToWrite.Add(localCmd);
+                            // Нашли команду, которой нет или описание отличается — нужна перезапись.
+                            needsOverwrite = true;
+                            break;
                         }
                     }
                 }
-                else
-                {
-                    commandsToWrite.AddRange(allCommands);
-                    needsOverwrite = allCommands.Count;
-                }
 
-                if (needsOverwrite == 0)
+                if (!needsOverwrite)
                 {
                     var elapsed = DateTime.UtcNow - _registrationStartTime;
                     BotLogger.Info(LogCategory.Cmd, $"│  Все {allCommands.Count} команд уже актуальны на {guild.Name} — пропускаем. Время: {elapsed:mm\\:ss}");
+                    doneCommands += allCommands.Count;
                 }
                 else
                 {
                     try
                     {
-                        var payload = commandsToWrite.Select(c => c.Build()).ToArray();
+                        var payload = allCommands.Select(c => c.Build()).ToArray();
                         await ((IGuild)guild).BulkOverwriteApplicationCommandsAsync(payload);
+                        doneCommands += allCommands.Count;
 
                         var elapsed = DateTime.UtcNow - _registrationStartTime;
-                        BotLogger.Info(LogCategory.Cmd, $"│  [done]  BulkOverwrite: {needsOverwrite} команд (пропущено {skipped}) | {elapsed:mm\\:ss}");
+                        int pct = totalCommands == 0 ? 100 : (int)Math.Round(doneCommands * 100.0 / totalCommands);
+                        BotLogger.Info(LogCategory.Cmd, $"│  [{pct,3}%] Сервер: {guild.Name,-22} | Выполнено: {doneCommands}/{totalCommands} | BulkOverwrite: {allCommands.Count} команд | Время: {elapsed:mm\\:ss}");
                     }
                     catch (Exception ex)
                     {
@@ -358,7 +351,7 @@ new SlashCommandBuilder()
     .WithDescription("Останавливает текущую активную очередь"),
 
     // start/pause/resume/stop/edit_session/open_chat — раньше регистрировались как отдельные slash-команды,
-    // но с 2026-10-10 заменены кнопками в management-сообщении. Регистрация отключена, чтобы:
+    // но с 2026-10-10 заменены кнопками в сообщении-управления. Регистрация отключена, чтобы:
     // 1) не путать пользователей (команды в палитре Discord, но при вызове «Команда не распознана» — default в switch);
     // 2) ускорить регистрацию (было ~67 сек, 56 REST-вызовов по 1 на команду × 2 гильдии).
     // Логика StartGameSession/CloseChatCommand/EditSession остаётся — она вызывается кнопками напрямую.
