@@ -269,7 +269,7 @@ namespace RPBot
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[RollDice:{input}] user={user} guild={guildId} {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("RollDice", ex, $"user={user} guild={guildId} input={input}").ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("RollDice", ex, $"user={user} guild={guildId} input={input}", LogCategory.Rolls).ConfigureAwait(false); } catch { }
                 try { await command.FollowupAsync("Ошибка при броске. Подробности в логах.", ephemeral: true).ConfigureAwait(false); } catch { }
             }
         }
@@ -487,10 +487,12 @@ namespace RPBot
                             .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                             .WithColor(GetGradientColor(result, 1, max))
                             .Build();
-                                            // 🩹 perf: берём PNG из кэша (см. _roll20PngCache). Тот же кэш
-                                            // работает и для /roll с одним кубом, потому что ключ — полный путь.
+                                            // 🩹 perf + retry-safe: PNG из кэша (см. _roll20PngCache).
+                                            // Стрим живёт до конца всего блока (Followup + pause-сообщение),
+                                            // иначе при HTTP-retry Discord.NET получает "closed Stream".
                                             var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
-                                            var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                                            using var ms = new MemoryStream(pngBytes, writable: false);
+                                            var attachment = new FileAttachment(ms, Path.GetFileName(filePath));
                                             await command.FollowupWithFilesAsync(
                                                 attachments: new[] { attachment },
                                                 embeds: new[] { embed });
@@ -519,6 +521,15 @@ namespace RPBot
 
                                     if (stripStream != null)
                                     {
+                                        // 🩹 RollDice: оставляем stripStream живым до самого конца блока
+                                        // (Followup + pause). Раньше finally { Dispose() } закрывал стрим
+                                        // сразу после await, и при HTTP-retry (Discord.NET перепосылает
+                                        // multipart) прилетало "ObjectDisposedException: Cannot access a
+                                        // closed Stream" → "HttpRequestException: Error while copying
+                                        // content to a stream". Теперь using var держит стрим до возврата
+                                        // из метода. Исходный stripStream приходит из Task.Run в фоне, GC
+                                        // и без того не освободит его преждевременно.
+                                        using var _stripHolder = stripStream;
                                         try
                                         {
                                             var avg = results.Average();
@@ -531,24 +542,25 @@ namespace RPBot
                                                 ? "Результаты броска (помеха/преимущество):"
                                                 : $"Результаты {count} бросков:";
 
-                                            var attachment = new FileAttachment(stripStream, "roll_strip.png");
+                                            var attachment = new FileAttachment(_stripHolder, "roll_strip.png");
                                             await command.FollowupWithFilesAsync(
                                                 attachments: new[] { attachment },
                                                 text: label,
                                                 embeds: new[] { embed });
 
-                                                                                        await TrySendPauseFollowupAsync(command, pauseMsg);
+                                            await TrySendPauseFollowupAsync(command, pauseMsg);
 
-                                                                                        if (missingForStrip.Count > 0)
-                                                                                            BotLogger.Warn(LogCategory.Rolls,
-                                                                                                $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
+                                            if (missingForStrip.Count > 0)
+                                                BotLogger.Warn(LogCategory.Rolls,
+                                                    $"[strip] не нашлись файлы для значений: {string.Join(",", missingForStrip)}");
 
-                                                                                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
-                                                                                        return;
+                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            return;
                                         }
                                         finally
                                         {
-                                            stripStream.Dispose();
+                                            // using var _stripHolder сам вызовет Dispose на выходе из метода.
+                                            // Здесь ничего не делаем.
                                         }
                                     }
                                     else
@@ -620,7 +632,7 @@ namespace RPBot
             catch (Exception ex)
             {
                 BotLogger.Error(LogCategory.Cmd, $"[Roll20] user={userName} guild={guildId} {ex.GetType().Name}: {ex.Message}");
-                try { await PredictionErrorLogger.LogAsync("Roll20", ex, $"user={userName} guild={guildId}").ConfigureAwait(false); } catch { }
+                try { await PredictionErrorLogger.LogAsync("Roll20", ex, $"user={userName} guild={guildId}", LogCategory.Rolls).ConfigureAwait(false); } catch { }
                 try { await command.FollowupAsync("Ошибка при броске d20. Подробности в логах.", ephemeral: true).ConfigureAwait(false); } catch { }
             }
         }
@@ -730,10 +742,12 @@ namespace RPBot
                                 .WithImageUrl($"attachment://{Path.GetFileName(filePath)}")
                                 .WithColor(GetGradientColor(result, 1, 20))
                                 .Build();
-                                        // 🩹 perf: берём PNG из кэша, не с диска. Кэш наполняется через
-                                        // File.ReadAllBytesAsync при первом запросе и больше никогда не меняется.
+                                        // 🩹 perf + retry-safe: PNG из кэша в byte[] + MemoryStream живёт
+                                        // до конца блока (Followup + pause). Иначе HTTP-retry Discord.NET
+                                        // упирается в "Cannot access a closed Stream".
                                         var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
-                                        var attachment = new FileAttachment(new MemoryStream(pngBytes, writable: false), Path.GetFileName(filePath));
+                                        using var ms = new MemoryStream(pngBytes, writable: false);
+                                        var attachment = new FileAttachment(ms, Path.GetFileName(filePath));
                                         await command.FollowupWithFilesAsync(
                                             attachments: new[] { attachment },
                                             embeds: new[] { embed });

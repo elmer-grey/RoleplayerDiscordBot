@@ -419,7 +419,7 @@ namespace RPBot
             {
                             // Гарантируем, что каждое действие выполнится независимо:
                             // если логгер упадёт, ответ пользователю всё равно уйдёт.
-                            try { await PredictionErrorLogger.LogAsync("PredictionCommand", ex).ConfigureAwait(false); } catch { }
+                            try { await PredictionErrorLogger.LogAsync("PredictionCommand", ex, null, LogCategory.Predict).ConfigureAwait(false); } catch { }
                             try { await LogError($"PredictionCommand exception: {ex}"); } catch { }
                             try { await command.RespondAsync("Ошибка обработки команды прогноза.", ephemeral: true); } catch { }
                             // Резервная диагностика — даже если все три логгера отказали.

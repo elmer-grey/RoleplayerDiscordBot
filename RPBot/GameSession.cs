@@ -168,6 +168,12 @@ namespace RPBot
 
         public static async Task SaveSessionsAsync()
         {
+            // 🩹 diag: triple-save-bug. Каждые 5 минут в run.log пишется 3 записи подряд
+            // (14:10:06 + 14:10:11 + 14:10:11), хотя PersistenceFlushLoopAsync — единственный
+            // документированный источник. Добавляем короткий stack-trace с Guid, чтобы за
+            // один цикл увидеть, кто ещё зовёт Save. Снять после локализации источника.
+            var _diagId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var _diagStack = new System.Diagnostics.StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
             try
             {
                 var dataDir = Path.GetDirectoryName(_sessionsStatePath);
@@ -212,7 +218,9 @@ namespace RPBot
                             {
                                 var totalRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count)
                                     + _stoppedSessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
-                                BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} сессий (активных+архив) ({totalRolls} бросков)");
+                                BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} сессий (активных+архив) ({totalRolls} бросков) [diag={_diagId}]");
+                                if (_diagStack != null)
+                                    BotLogger.Debug(LogCategory.Session, $"[diag={_diagId}] stack:\n{_diagStack}");
                             }
                         }
                         finally
