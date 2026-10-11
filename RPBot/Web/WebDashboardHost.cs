@@ -421,17 +421,53 @@ namespace RPBot.Web
                     var bootstrap = new { items = snapshot.Select(MapRecord).ToList() };
                     var bootstrapBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(bootstrap) + "\n");
                     await ctx.Response.Body.WriteAsync(bootstrapBytes, ctx.RequestAborted).ConfigureAwait(false);
+
+                    // Сразу после bootstrap шлём «ready»-сигнал — клиент
+                    // (dashboard.html startLogsStream) парсит его и
+                    // принудительно снимает «подключение к /api/logs/stream…»
+                    // в блоке логов. Без этого, если bootstrap пуст или
+                    // nginx/браузер задержал первый chunk, в дашборде до
+                    // любого обновления логов висит «подключение…».
+                    var readyBytes = Encoding.UTF8.GetBytes("{\"type\":\"ready\"}\n");
+                    await ctx.Response.Body.WriteAsync(readyBytes, ctx.RequestAborted).ConfigureAwait(false);
                     await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
 
                     try
                     {
+                        // Цикл ждёт _streamSignal. Между событиями шлём
+                        // heartbeat-комментарий каждые 15 сек, чтобы nginx
+                        // (proxy_read_timeout 3600s) и промежуточные
+                        // прокси не считали соединение «висящим» и не
+                        // буферизовали первый chunk bootstrap'а. Формат
+                        // «: <text>\n» — стандартный SSE-keepalive,
+                        // dashboard.html его игнорирует.
+                        var heartbeatInterval = TimeSpan.FromSeconds(15);
                         while (!ctx.RequestAborted.IsCancellationRequested)
                         {
-                            try
+                            var waitTask = _streamSignal.WaitAsync(ctx.RequestAborted);
+                            var delayTask = Task.Delay(heartbeatInterval, ctx.RequestAborted);
+                            var completed = await Task.WhenAny(waitTask, delayTask).ConfigureAwait(false);
+
+                            if (completed == waitTask)
                             {
-                                await _streamSignal.WaitAsync(ctx.RequestAborted).ConfigureAwait(false);
+                                try { await waitTask.ConfigureAwait(false); }
+                                catch (OperationCanceledException) { break; }
                             }
-                            catch (OperationCanceledException) { break; }
+                            else
+                            {
+                                // Период без новых записей. Шлём heartbeat,
+                                // обновляем расписание.
+                                try
+                                {
+                                    var hb = Encoding.UTF8.GetBytes(": keepalive\n");
+                                    await ctx.Response.Body.WriteAsync(hb, ctx.RequestAborted).ConfigureAwait(false);
+                                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException) { break; }
+                                catch (HttpListenerException) { return; }
+                                catch (ObjectDisposedException) { return; }
+                                continue;
+                            }
 
                             // _streamSignal будит нас на КАЖДЫЙ эвент, но в реальности
                             // между Wait и Lock может прийти ещё пачка. Семплим всё,
@@ -518,6 +554,23 @@ namespace RPBot.Web
             try { uptime = _uptimeProvider(); }
             catch (Exception ex) { uptime = TimeSpan.Zero; }
 
+            // Latency: int, 0 если клиент ещё не подключён или Latency неизвестен.
+            // В JS дашборда это приходит как «0 мс» — корректнее, чем «—».
+            int pingMs = 0;
+            try
+            {
+                var client = _clientProvider?.Invoke();
+                if (client != null) pingMs = (int)client.Latency;
+            }
+            catch { pingMs = 0; }
+
+            int rolls = 0, activeSessions = 0, chatMessages = 0, usersInVoice = 0, totalLogs = 0;
+            try { rolls = SafeInvokeInt(_rollsTodayProvider); } catch { }
+            try { activeSessions = SafeInvokeInt(_activeSessionsProvider); } catch { }
+            try { chatMessages = SafeInvokeInt(_chatMessagesTodayProvider); } catch { }
+            try { usersInVoice = SafeInvokeInt(_usersInVoiceProvider); } catch { }
+            lock (_logsLock) totalLogs = _logs.Count;
+
             return new
             {
                 Status = "ok",
@@ -525,6 +578,19 @@ namespace RPBot.Web
                 UptimeSeconds = (long)uptime.TotalSeconds,
                 Provider = raw,
                 UtcNow = DateTimeOffset.UtcNow,
+                // Дашборд (renderHealth) читает d.PingMs и d.Stats — без них
+                // пинг показывался как «—», а Stats-блок не рендерился. Эти
+                // поля обязательны (см. chkpt 030 — баг «пинг —»).
+                PingMs = pingMs,
+                Timestamp = DateTimeOffset.UtcNow,
+                Stats = new
+                {
+                    RollsToday = rolls,
+                    ActiveSessions = activeSessions,
+                    ChatMessagesToday = chatMessages,
+                    UsersInVoice = usersInVoice,
+                    LogRecords = totalLogs,
+                },
             };
         }
 

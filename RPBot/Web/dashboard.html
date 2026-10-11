@@ -583,6 +583,11 @@ async function startLogsStream(){
           const line = buf.slice(0, nl);
           buf = buf.slice(nl + 1);
           if (!line) continue;
+          // SSE-keepalive: строка начинается с «:» (например «: keepalive»)
+          // — игнорируем, но сам факт, что данные пришли, означает, что
+          // стрим жив. Используем это как сигнал сбросить «подключение…»,
+          // даже если bootstrap ещё не пришёл (например, nginx буферизует).
+          if (line.startsWith(':')){ _setStatus('ожидание первой записи…', false); continue; }
           let obj;
           try { obj = JSON.parse(line); } catch {
             continue;
@@ -591,6 +596,12 @@ async function startLogsStream(){
             window._allLogs = dedupMerge([], obj.items);
             bootstrapConsumed = true;
             // bootstrap — разовый снимок, рендерим сразу, без батча.
+            renderLogs();
+          } else if (obj && typeof obj === 'object' && obj.type === 'ready'){
+            // Сигнал «стрим открыт» сразу после bootstrap. Снимаем
+            // «подключение…» принудительно — на случай если bootstrap
+            // пуст или задержан. renderLogs() сам отрисует «(нет
+            // записей)» если _allLogs пуст, что и есть целевой UX.
             renderLogs();
           } else if (obj && typeof obj === 'object' && obj.timestamp){
             window._allLogs = dedupMerge(window._allLogs || [], [obj]);
