@@ -461,30 +461,53 @@ namespace RPBot.EventOps
                                                 // возвращает false (вы ниже не попадаете), reminder не уходит.
                                                 //
                                                 // Правило: если now внутри окна [Start-1ч, Start+30мин] и
-                                                                                                // reminder ещё не отправлялся (ни один Reminder*-ID в сторе
-                                                                                                // не заполнен) — досылаем. Используем WasReminderAlreadySent,
-                                                                                                // который проверяет все три канала (DM / канал анонса / TG),
-                                                                                                // иначе при пустом ReminderDmMessageIdsByUserId catch-up слал
-                                                                                                // бы reminder повторно при каждом рестарте (Bug evt-rb-dup).
-                                                                                                if (entry.LastStartTimeUtc.HasValue)
-                                                                                                {
-                                                                                                    var startUtc = entry.LastStartTimeUtc.Value;
-                                                                                                    var reminderAt = startUtc.AddHours(-1);
-                                                                                                    var nowUtc = DateTimeOffset.UtcNow;
-                                                                                                    if (!WasReminderAlreadySent(entry)
-                                                                                                        && nowUtc >= reminderAt
-                                                                                                        && nowUtc <= startUtc.AddMinutes(30))
-                                                                                                    {
-                                                                                                            BotLogger.Info(LogCategory.Discord,
-                                                                                                                $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up reminder1h (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={startUtc:o} now={nowUtc:o}");
-                                                                                                            try { await SendReminderAsync(entry); sentCatchupReminder++; }
-                                                                                                            catch (Exception exR)
-                                                                                                            {
-                                                                                                                BotLogger.Warn(LogCategory.Discord,
-                                                                                                                    $"[EventOpsLifecycle] catch-up reminder failed: {exR.Message}");
-                                                                                                            }
-                                                                                                        }
-                                                                                                }
+                                                                                                // reminder ещё не отправлен во ВСЕ каналы — досылаем.
+                                                                                                // Раньше использовался WasReminderAlreadySent (OR по трём
+                                                                                                // каналам), и если хоть один Reminder*-ID в сторе заполнен —
+                                                                                                // catch-up не слал. Это ломало DM-сценарий, когда reminder
+                                                                                                // уже ушёл в канал/TG, но DM-подписчикам так и не пришёл
+                                                                                                // (ReminderDmMessageIdsByUserId оставался null).
+                                                                                                //
+                                                                                                // 🔁 per-channel-already-sent-skip (Bug fix): теперь
+                                                                                                // catch-up срабатывает, пока reminder не разослан во ВСЕ
+                                                                                                // каналы. SendReminderAsync с per-channel-skip доставит
+                                                                                                // reminder только в каналы, где его ещё не было — дублей
+                                                                                                // не будет.
+                                                //
+                                                // 🩹 Bug: double-reminder-on-catchup. ScheduleReminder1h выше по коду
+                                                // при «опоздали» ставит Task.Run(delay=0) через RunReminder1hAsync,
+                                                // и эта ветка ВСЕГДА пишет entry.Reminder1hAtUtc = reminderAt в стор
+                                                // (см. строку entry.Reminder1hAtUtc = reminderAt после Task.Run).
+                                                // Значит, если мы уже внутри ScheduleReminder1h — в сторе
+                                                // Reminder1hAtUtc != null, и catch-up НЕ должен слать. Иначе
+                                                // reminder уходит дважды: один раз из Task.Run, второй из catch-up
+                                                // (в Telegram и в канал анонса — дубли в обоих каналах). Проверяем
+                                                // !entry.Reminder1hAtUtc.HasValue, чтобы catch-up ловил только
+                                                // «timer пропал после рестарта/реконнекта» (наш сценарий 23:28).
+                                                if (entry.LastStartTimeUtc.HasValue)
+                                                {
+                                                    var dmAlready = entry.ReminderDmMessageIdsByUserId != null && entry.ReminderDmMessageIdsByUserId.Count > 0;
+                                                    var announceAlready = entry.ReminderAnnounceMessageId != 0;
+                                                    var tgAlready = entry.ReminderTelegramMessageId != 0 && entry.ReminderTelegramChatId != 0;
+                                                    var allChannelsSent = dmAlready && announceAlready && tgAlready;
+                                                    var startUtc = entry.LastStartTimeUtc.Value;
+                                                    var reminderAt = startUtc.AddHours(-1);
+                                                    var nowUtc = DateTimeOffset.UtcNow;
+                                                    if (!allChannelsSent
+                                                        && !entry.Reminder1hAtUtc.HasValue
+                                                        && nowUtc >= reminderAt
+                                                        && nowUtc <= startUtc.AddMinutes(30))
+                                                    {
+                                                            BotLogger.Info(LogCategory.Discord,
+                                                                $"[EventOpsLifecycle] RebuildFromStoreAsync: catch-up reminder1h (disconnect-no-rehydrate) guild={entry.GuildId} event={entry.EventId} start={startUtc:o} now={nowUtc:o}");
+                                                            try { await SendReminderAsync(entry); sentCatchupReminder++; }
+                                                            catch (Exception exR)
+                                                            {
+                                                                BotLogger.Warn(LogCategory.Discord,
+                                                                    $"[EventOpsLifecycle] catch-up reminder failed: {exR.Message}");
+                                                            }
+                                                        }
+                                                }
 
                                                                                                         // 🩹 disconnect-no-rehydrate (deleteReminder15m): если reminder
                                                                                                         // в сторе ещё висит (DM/канал-announce/Telegram), а момент
@@ -832,15 +855,24 @@ namespace RPBot.EventOps
 
                 private bool ScheduleReminder1h(EventAnnouncementEntry entry)
                 {
-                    // 🩹 Bug evt-rb-dup: если reminder уже отправлялся (в DM / канал анонса / Telegram) —
-                    // не планировать новый. До этого guard RebuildFromStoreAsync после рестарта
+                    // 🩹 Bug evt-rb-dup: если reminder уже отправлялся во ВСЕ каналы (DM / канал анонса /
+                    // Telegram) — не планировать новый. До этого guard RebuildFromStoreAsync после рестарта
                     // перепланировал reminder, который уже был отослан в прошлой сессии, и тот
-                    // срабатывал снова. Теперь стор — единый источник истины: если хоть один
-                    // Reminder*-ID заполнен, считаем, что reminder уже ушёл.
-                    if (WasReminderAlreadySent(entry))
+                    // срабатывал снова. Теперь стор — единый источник истины: если все Reminder*-ID
+                    // заполнены, считаем, что reminder уже ушёл везде.
+                    //
+                    // 🔁 per-channel-already-sent-skip: guard остался, но стал «per-channel».
+                    // SendReminderAsync сам пропустит каналы, по которым reminder уже был,
+                    // поэтому даже если стор показывает «уже отправлялся» для announce/TG,
+                    // но DM ещё не было (ReminderDmMessageIdsByUserId == null) — мы всё равно
+                    // должны доставить reminder в DM, иначе подписчики без уведомления.
+                    var dmAlready = entry.ReminderDmMessageIdsByUserId != null && entry.ReminderDmMessageIdsByUserId.Count > 0;
+                    var announceAlready = entry.ReminderAnnounceMessageId != 0;
+                    var tgAlready = entry.ReminderTelegramMessageId != 0 && entry.ReminderTelegramChatId != 0;
+                    if (dmAlready && announceAlready && tgAlready)
                     {
                         BotLogger.Info(LogCategory.Discord,
-                            $"[EventOpsLifecycle] ScheduleReminder1h: skip, reminder уже отправлялся ранее (announce={entry.ReminderAnnounceMessageId} tg={entry.ReminderTelegramMessageId}) guild={entry.GuildId} event={entry.EventId}");
+                            $"[EventOpsLifecycle] ScheduleReminder1h: skip, reminder уже отправлялся ранее во все каналы (dm={entry.ReminderDmMessageIdsByUserId?.Count ?? 0} announce={entry.ReminderAnnounceMessageId} tg={entry.ReminderTelegramMessageId}) guild={entry.GuildId} event={entry.EventId}");
                         return false;
                     }
 
@@ -1238,52 +1270,117 @@ namespace RPBot.EventOps
                             }
                         }
 
-            // ── Discord DM: тем, кому дошёл оригинальный анонс ────────────────
-            // Шлём только тем, у кого уже есть запись в DmMessageIdsByUserId —
-            // иначе мы не знаем, дошла ли им копия.
+            // ── Discord DM: подписчикам события (event-notify.json) ────────────
+            // Раньше брали только тех, у кого уже есть запись в DmMessageIdsByUserId
+            // (кэш «кому дошёл оригинальный анонс в DM»). Это работало только если
+            // оригинальный анонс в DM дошёл. Если он упал (бот рестартовался между
+            // отправкой в канал и рассылкой DM, или DM не доставились), то
+            // DmMessageIdsByUserId оставался пустым и reminder в DM не уходил
+            // никому, хотя подписчики были (Bug: reminder-dm-skipped-when-original-dm-failed).
+            //
+            // Правильно: reminder в DM — это персональное уведомление подписчикам
+            // события, а не follow-up уже разосланного анонса. Список берём из
+            // EventNotificationService.GetActiveSubscribers(guildId) — это
+            // /var/lib/rpbot/Data/event-notify.json. Fallback на DmMessageIdsByUserId
+            // оставлен для обратной совместимости (если в сторе reminder-а нет
+            // записи о подписчиках — например, для старых событий до миграции).
+            //
+            // 🩹 Bug: per-channel-already-sent-skip. Каналы reminder'а независимы:
+            // раньше использовался общий WasReminderAlreadySent, и если хоть один
+            // из трёх (DM / канал анонса / Telegram) уже отправлял — skip по всем.
+            // Это приводило к ситуации, когда после рестарта бот уже отправил
+            // reminder в канал анонса и TG (без DM), и DM не уходил никому, хотя
+            // подписчики были. Теперь: каждый канал проверяется отдельно, и если
+            // в нём ещё не отправляли — отправляем только туда.
             var dmSent = new Dictionary<ulong, ulong>();
+            var dmAlreadySent = entry.ReminderDmMessageIdsByUserId != null
+                                && entry.ReminderDmMessageIdsByUserId.Count > 0;
             var client2 = client;
             var entryRef = entry;
-            foreach (var kv in entry.DmMessageIdsByUserId)
+
+            if (dmAlreadySent)
             {
-                var userId = kv.Key;
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] SendReminderAsync: skip DM (уже отправлялся ранее, ids={entry.ReminderDmMessageIdsByUserId!.Count}) guild={entry.GuildId} event={entry.EventId}");
+            }
+            else
+            {
+                var dmRecipients = new HashSet<ulong>();
                 try
                 {
-                    var user = guild.GetUser(userId) as IUser ?? await TryGetUserAsync(client2, userId);
-                    if (user == null) continue;
-
-                    var dm = await user.CreateDMChannelAsync();
-                    var dmEmbed = new EmbedBuilder()
-                        .WithTitle("⏰ Напоминание о событии")
-                        .WithDescription(
-                            $"**Напоминание:** через час начнётся событие **{eventName}** — не пропустите!")
-                        .WithColor(Color.Orange)
-                        .AddField("🕒 Когда", startUnix > 0 ? $"<t:{startUnix}:F>" : "—", true)
-                        .AddField("📍 Где", whereText, true)
-                        .AddField("👤 Создал", creatorText, true)
-                        .WithUrl(eventUrl)
-                        .WithFooter("Через 15 минут после начала события это сообщение будет автоматически удалено")
-                        .WithCurrentTimestamp()
-                        .Build();
-
-                    var dmMsg = await dm.SendMessageAsync(embed: dmEmbed);
-                    dmSent[userId] = dmMsg.Id;
-
-                    BotLogger.Info(LogCategory.Discord,
-                        $"[EventOpsLifecycle] reminder DM отправлен user={userId} guild={entryRef.GuildId} event={entryRef.EventId}");
+                    foreach (var uid in _eventNotifications.GetActiveSubscribers(guild.Id))
+                        dmRecipients.Add(uid);
                 }
-                catch (Exception ex)
+                catch (Exception exSub)
                 {
                     BotLogger.Warn(LogCategory.Discord,
-                        $"[EventOpsLifecycle] reminder DM error user={userId}: {ex.Message}");
+                        $"[EventOpsLifecycle] SendReminderAsync: GetActiveSubscribers failed: {exSub.Message}");
+                }
+                // Fallback: добавим тех, кому дошёл оригинальный DM-анонс (на случай,
+                // если у них была подписка, но по какой-то причине пропала из
+                // event-notify.json — чтобы reminder хотя бы дублировал канал/ТГ).
+                if (entry.DmMessageIdsByUserId != null)
+                {
+                    foreach (var kv in entry.DmMessageIdsByUserId)
+                        dmRecipients.Add(kv.Key);
+                }
+
+                if (dmRecipients.Count == 0)
+                {
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] SendReminderAsync: нет подписчиков на DM-напоминания guild={entry.GuildId} event={entry.EventId} (event-notify.json пуст и оригинальный DM-анонс никому не уходил)");
+                }
+
+                foreach (var userId in dmRecipients)
+                {
+                    try
+                    {
+                        var user = guild.GetUser(userId) as IUser ?? await TryGetUserAsync(client2, userId);
+                        if (user == null) continue;
+
+                        var dm = await user.CreateDMChannelAsync();
+                        var dmEmbed = new EmbedBuilder()
+                            .WithTitle("⏰ Напоминание о событии")
+                            .WithDescription(
+                                $"**Напоминание:** через час начнётся событие **{eventName}** — не пропустите!")
+                            .WithColor(Color.Orange)
+                            .AddField("🕒 Когда", startUnix > 0 ? $"<t:{startUnix}:F>" : "—", true)
+                            .AddField("📍 Где", whereText, true)
+                            .AddField("👤 Создал", creatorText, true)
+                            .WithUrl(eventUrl)
+                            .WithFooter("Через 15 минут после начала события это сообщение будет автоматически удалено")
+                            .WithCurrentTimestamp()
+                            .Build();
+
+                        var dmMsg = await dm.SendMessageAsync(embed: dmEmbed);
+                        dmSent[userId] = dmMsg.Id;
+
+                        BotLogger.Info(LogCategory.Discord,
+                            $"[EventOpsLifecycle] reminder DM отправлен user={userId} guild={entryRef.GuildId} event={entryRef.EventId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.Discord,
+                            $"[EventOpsLifecycle] reminder DM error user={userId}: {ex.Message}");
+                    }
                 }
             }
 
             // ── Discord: основной канал анонса (рядом с анонсом события) ──────
             // Шлём отдельным сообщением — анонс события не трогаем. Через 15 мин
             // после ActualStartTimeUtc это сообщение удаляется.
+            //
+            // 🩹 per-channel-already-sent-skip: если ReminderAnnounceMessageId != 0
+            // (уже слали в этот канал в этой сессии или предыдущей) — skip,
+            // чтобы при ручном сбросе одного канала (например, только DM) не
+            // дублировать в канале анонса. Аналогично для Telegram-блока ниже.
             ulong? announceReminderMsgId = null;
-            if (entry.AnnounceChannelId != 0)
+            if (entry.ReminderAnnounceMessageId != 0)
+            {
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] SendReminderAsync: skip канал анонса (уже отправлялся ранее, msg={entry.ReminderAnnounceMessageId}) guild={entry.GuildId} event={entry.EventId}");
+            }
+            else if (entry.AnnounceChannelId != 0)
             {
                 try
                 {
@@ -1353,7 +1450,12 @@ namespace RPBot.EventOps
             var liveCfg = _serverConfigsProvider()?.TryGetValue(entry.GuildId, out var lc) == true ? lc : null;
             var tgChatId = liveCfg?.TelegramChatId ?? entry.TelegramChatId;
             var tgThreadId = liveCfg?.TelegramMessageThreadId ?? entry.TelegramMessageThreadId;
-            if (_telegramNotifier != null && tgChatId != 0)
+            if (entry.ReminderTelegramMessageId != 0 && entry.ReminderTelegramChatId != 0)
+            {
+                BotLogger.Info(LogCategory.Discord,
+                    $"[EventOpsLifecycle] SendReminderAsync: skip Telegram (уже отправлялся ранее, msg={entry.ReminderTelegramMessageId}) guild={entry.GuildId} event={entry.EventId}");
+            }
+            else if (_telegramNotifier != null && tgChatId != 0)
             {
                 try
                 {

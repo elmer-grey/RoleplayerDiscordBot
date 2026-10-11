@@ -68,6 +68,44 @@ namespace RPBot
             if (!isManual && exception is GatewayReconnectException)
             {
                 BotLogger.Debug(LogCategory.Discord, "Плановый реконнект Discord Gateway — не вмешиваемся.");
+
+                // 🩹 reminder-survives-gateway-reconnect: Program.OnDisconnected уже дёрнул
+                // _eventOpsLifecycle?.Cancel() (см. Program.cs:5067), который убил ВСЕ per-event
+                // CTS — в т.ч. reminder1h. До этого фикса ранний return приводил к тому, что
+                // OnReconnectCompleted не вызывался → RehydrateTimersAsync не запускался →
+                // reminder-таймеры не восстанавливались, и reminder1h терялся на всё время
+                // до следующего рестарта бота (Bug: reminder-dies-on-gateway-reconnect).
+                // Даём клиенту ~2 сек самому восстановиться (обычно Discord делает это за <1 сек),
+                // и если Connected — сигналим подписчикам через OnReconnectCompleted(true),
+                // чтобы Program перезапустил RehydrateTimersAsync и поднял умершие таймеры.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < 20; i++)
+                        {
+                            await Task.Delay(100).ConfigureAwait(false);
+                            if (_disposed || _isShuttingDown) return;
+                            if (_client.ConnectionState == ConnectionState.Connected)
+                            {
+                                _connectionInfo.LastConnectionTime = DateTime.UtcNow;
+                                _connectionInfo.LastConnectReason = "Плановый реконнект Discord Gateway";
+                                _connectionInfo.ResetAttempts();
+                                BotLogger.Info(LogCategory.Discord,
+                                    "[RECONNECT] Плановый Gateway-реконнект завершён — уведомляю подписчиков (RehydrateTimersAsync)");
+                                try { if (OnReconnectCompleted != null) await OnReconnectCompleted.Invoke(true).ConfigureAwait(false); }
+                                catch (Exception ex) { await Log($"Ошибка в OnReconnectCompleted после gateway-reconnect: {ex.Message}"); }
+                                return;
+                            }
+                        }
+                        BotLogger.Debug(LogCategory.Discord,
+                            "[RECONNECT] Плановый Gateway-реконнект: клиент не восстановился за 2 сек — оставляем как есть");
+                    }
+                    catch (Exception ex)
+                    {
+                        await Log($"Ошибка в Gateway-reconnect watcher: {ex.Message}");
+                    }
+                });
                 return;
             }
             if (!isManual && IsExpectedDisconnectInProgress()) return;
