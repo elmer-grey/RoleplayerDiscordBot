@@ -251,7 +251,8 @@ namespace RPBot.EventOps
                                     var ct = linkedCts.Token;
                                     var entries = _store.GetEntriesSnapshot();
 
-                                    int rehydratedReminder = 0, rehydratedDelete = 0, sentNowReminder = 0, sentNowDelete = 0;
+                                    int rehydratedReminder = 0, rehydratedDelete = 0, rehydratedCleanup = 0,
+                                        sentNowReminder = 0, sentNowDelete = 0, sentNowCleanup = 0;
 
                                     foreach (var entry in entries)
                                     {
@@ -353,10 +354,64 @@ namespace RPBot.EventOps
                                                     $"[EventOpsLifecycle] RehydrateTimers: переставлен deleteReminder15m guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {deleteAt:u})");
                                             }
                                         }
+
+                                        // (3) Cleanup24h: восстанавливаем ТОЖЕ. До этого фикса
+                                        // (Bug evt-cleanup-lost-on-reconnect) блок отсутствовал
+                                        // целиком, и при любом gateway-реконнекте cleanup24h-CTS
+                                        // отменялся в OnDisconnected, а RehydrateTimers его не
+                                        // пересоздавал — cleanup для completed/cancelled/abandoned
+                                        // событий тихо умирал, и анонсы висели в сторе и в дашборде
+                                        // «вечно», пока не приходил следующий полный рестарт бота.
+                                        // Сценарий: cleanup для Берсеша (event=1558114473787523173)
+                                        // был запланирован на 16:47:16Z, реконнект в 16:51:19
+                                        // убил CTS, RehydrateTimers не восстановил — запись так и
+                                        // не очистилась до следующего ежедневного рестарта.
+                                        if (entry.CleanupAtUtc.HasValue)
+                                        {
+                                            var cleanupAt = entry.CleanupAtUtc.Value;
+                                            var nowUtc2 = DateTimeOffset.UtcNow;
+                                            if (nowUtc2 >= cleanupAt)
+                                            {
+                                                // Cleanup уже в прошлом (типичный случай: реконнект
+                                                // случился ПОСЛЕ момента cleanup). Делаем его сейчас —
+                                                // иначе запись будет болтаться в сторе «вечно» до
+                                                // следующего полного рестарта, в дашборде будет
+                                                // показываться как «зависший» completed-анонс.
+                                                BotLogger.Info(LogCategory.Discord,
+                                                    $"[EventOpsLifecycle] RehydrateTimers: шлю cleanup24h (момент прошёл в оффлайне) guild={entry.GuildId} event={entry.EventId} cleanupAt={cleanupAt:o} now={nowUtc2:o}");
+                                                try { await RunCleanup24hAsync(entry, ct, TimeSpan.Zero); sentNowCleanup++; }
+                                                catch (Exception exC)
+                                                {
+                                                    BotLogger.Warn(LogCategory.Discord,
+                                                        $"[EventOpsLifecycle] RehydrateTimers: RunCleanup24hAsync failed: {exC.Message}");
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // В будущем — ставим Task.Delay на остаток. Тот же
+                                                // слот, что и в ScheduleCleanup24h, чтобы
+                                                // cancellation был согласованным.
+                                                var delay = cleanupAt - nowUtc2;
+                                                var key = (entry.GuildId, entry.EventId);
+                                                var slot = _timers.GetOrAdd(key, _ => new ScheduledTimers());
+                                                CancellationTokenSource cts;
+                                                lock (slot.Lock)
+                                                {
+                                                    try { slot.Cleanup24hCts?.Cancel(); } catch { }
+                                                    try { slot.Cleanup24hCts?.Dispose(); } catch { }
+                                                    cts = new CancellationTokenSource();
+                                                    slot.Cleanup24hCts = cts;
+                                                }
+                                                _ = Task.Run(() => RunCleanup24hAsync(entry, cts.Token, delay), cts.Token);
+                                                rehydratedCleanup++;
+                                                BotLogger.Info(LogCategory.Discord,
+                                                    $"[EventOpsLifecycle] RehydrateTimers: переставлен cleanup24h guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {cleanupAt:u})");
+                                            }
+                                        }
                                     }
 
                                     BotLogger.Info(LogCategory.Discord,
-                                        $"[EventOpsLifecycle] RehydrateTimers завершено: reminderDelay={rehydratedReminder}, deleteDelay={rehydratedDelete}, reminderNow={sentNowReminder}, deleteNow={sentNowDelete}");
+                                        $"[EventOpsLifecycle] RehydrateTimers завершено: reminderDelay={rehydratedReminder}, deleteDelay={rehydratedDelete}, cleanupDelay={rehydratedCleanup}, reminderNow={sentNowReminder}, deleteNow={sentNowDelete}, cleanupNow={sentNowCleanup}");
                                 }
                                 catch (Exception ex)
                                 {
@@ -1732,16 +1787,113 @@ namespace RPBot.EventOps
                 && entry.TelegramMessageId > 0
                 && entry.TelegramChatId != 0)
             {
+                // 🩹 Bug cleanup-tg-silent-fail: в Telegram Bot API
+                // deleteMessage возвращает «Bad Request: message can't
+                // be deleted» в двух случаях:
+                //   1) сообщение опубликовано НЕ от имени бота
+                //      (sender_chat_id или forward);
+                //   2) сообщению в канале больше 48 часов
+                //      (ограничение Telegram API: в каналах бот может
+                //      удалять только сообщения не старше 48ч).
+                // Раньше результат DeleteMessageAsync игнорировался, и в
+                // логе неизменно писалось «Telegram анонс удалён» даже
+                // при ok=false — в дашборде анонс пропадал, а в
+                // Telegram-канале продолжал висеть без следов cleanup.
+                //
+                // Стратегия (v4): основной сценарий — deleteMessage
+                // (как было задумано изначально: анонс должен
+                // удалиться, а не превращаться в «❌ Анонс удалён…» в
+                // ленте). Только если Telegram Bot API отказал в
+                // удалении (ok=false) — например, истёк 48ч лимит
+                // для каналов или сообщение опубликовано не от бота —
+                // пробуем editMessageText → editMessageCaption как
+                // fallback, чтобы подписчики видели явный след
+                // (а не фантомный «живой» анонс события, которое уже
+                // давно закончилось). В каждой ветке — детальное
+                // логирование для разбора инцидентов.
+                var markerText = "❌ Анонс удалён (cleanup 24ч; " +
+                                 $"event={entry.EventId}, было опубликовано " +
+                                 "и закрыто автоматически)";
+                var cleanupDone = false;
                 try
                 {
-                    await _telegramNotifier.DeleteMessageAsync(entry.GuildId, entry.TelegramMessageId);
-                    BotLogger.Info(LogCategory.Discord,
-                        $"[EventOpsLifecycle] cleanup: Telegram анонс удалён guild={entry.GuildId} event={entry.EventId}");
+                    var ok = await _telegramNotifier.DeleteMessageAsync(entry.GuildId, entry.TelegramMessageId);
+                    if (ok)
+                    {
+                        BotLogger.Info(LogCategory.Discord,
+                            $"[EventOpsLifecycle] cleanup: Telegram анонс удалён guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
+                        cleanupDone = true;
+                    }
+                    else
+                    {
+                        BotLogger.Warn(LogCategory.Discord,
+                            $"[EventOpsLifecycle] cleanup: Telegram delete вернул ok=false, пробуем edit-fallback (вероятно, истёк 48ч лимит) guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId} chat={entry.TelegramChatId} thread={entry.TelegramMessageThreadId}");
+                    }
                 }
                 catch (Exception ex)
                 {
                     BotLogger.Warn(LogCategory.Discord,
-                        $"[EventOpsLifecycle] cleanup Telegram error: {ex.Message}");
+                        $"[EventOpsLifecycle] cleanup Telegram delete error: {ex.Message}");
+                }
+
+                if (!cleanupDone)
+                {
+                    // delete не сработал. Пробуем editMessageText
+                    // (для текстовых сообщений). Если и он вернёт
+                    // ok=false (например, фото-сообщение без
+                    // подписи — «there is no text in the message to
+                    // edit») — пробуем editMessageCaption: для
+                    // фото-сообщений caption — это «текст подписи»,
+                    // и метод работает даже за пределами 48ч лимита
+                    // на удаление.
+                    var editSucceeded = false;
+                    try
+                    {
+                        editSucceeded = await _telegramNotifier.EditMessageTextAsync(
+                            entry.GuildId, entry.TelegramMessageId, markerText);
+                        if (editSucceeded)
+                        {
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsLifecycle] cleanup: Telegram анонс отредактирован (text, fallback после delete fail) guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        BotLogger.Warn(LogCategory.Discord,
+                            $"[EventOpsLifecycle] cleanup Telegram editText error: {ex.Message}");
+                    }
+
+                    if (!editSucceeded)
+                    {
+                        try
+                        {
+                            editSucceeded = await _telegramNotifier.EditMessageCaptionAsync(
+                                entry.GuildId, entry.TelegramMessageId, markerText);
+                            if (editSucceeded)
+                            {
+                                BotLogger.Info(LogCategory.Discord,
+                                    $"[EventOpsLifecycle] cleanup: Telegram анонс отредактирован (caption, fallback после delete fail) guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.Discord,
+                                $"[EventOpsLifecycle] cleanup Telegram editCaption error: {ex.Message}");
+                        }
+                    }
+
+                    if (!editSucceeded)
+                    {
+                        // Самый плохой сценарий: ни delete, ни edit
+                        // не сработали. Анонс в канале, бот не может
+                        // его ни удалить (>48ч), ни отредактировать
+                        // (не свой sender_chat). Логируем
+                        // максимально подробно, чтобы при разборе
+                        // инцидентов было сразу видно, что нужно
+                        // сделать руками.
+                        BotLogger.Warn(LogCategory.Discord,
+                            $"[EventOpsLifecycle] cleanup: Telegram анонс НЕ удалён и НЕ отредактирован (проверьте руками) guild={entry.GuildId} event={entry.EventId} msg={entry.TelegramMessageId} chat={entry.TelegramChatId} thread={entry.TelegramMessageThreadId} tip=вероятно истёк 48ч лимит или сообщение опубликовано не от бота");
+                    }
                 }
             }
 

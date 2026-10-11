@@ -74,6 +74,12 @@ public IReadOnlyList<EventAnnouncementEntry> GetEntriesSnapshot()
         ActualStartTimeUtc = e.ActualStartTimeUtc,
         CancelledAtUtc = e.CancelledAtUtc,
         CompletedAtUtc = e.CompletedAtUtc,
+        // Без копирования CleanupAtUtc в snapshot бот терял сохранённое
+        // время cleanup на каждом рестарте: ScheduleCleanup24h видел null,
+        // пересчитывал от CompletedAtUtc+24h и сразу переписывал стор
+        // (см. chkpt «Telegram cleanup 48h limit fix», проблема потери
+        // ручного edit при тестировании edit-then-delete fallback).
+        CleanupAtUtc = e.CleanupAtUtc,
         ReminderDmMessageIdsByUserId = e.ReminderDmMessageIdsByUserId is null
             ? null
             : new Dictionary<ulong, ulong>(e.ReminderDmMessageIdsByUserId),
