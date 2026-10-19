@@ -718,19 +718,42 @@ async function toggleNotifications(){
 }
 
 function maybeNotify(rec){
-  if (!notificationsOn() || Notification.permission !== 'granted') return;
   if (!document.hidden) return; // вкладка видима — не дёргаем
   if (logLevelKind(rec.level) !== 'error') return;
   const key = (rec.seq ?? '') + '|' + (rec.timestamp ?? '');
   window._notifiedKeys = window._notifiedKeys || {};
   if (window._notifiedKeys[key]) return;
   window._notifiedKeys[key] = true;
+  // Работает и на http (без Notification API): мигающий заголовок вкладки.
+  flashTitleError();
+  if (!notificationsOn() || Notification.permission !== 'granted') return;
   const cat = rec.category ? '[' + rec.category + '] ' : '';
   try {
     const n = new Notification('RPBot: ошибка', { body: cat + String(rec.message ?? '').slice(0, 160) });
     n.onclick = () => { try { window.focus(); n.close(); } catch {} };
   } catch {}
 }
+
+// ───── Мигание заголовка вкладки при новой ошибке (работает на http) ──────
+// Notification API требует https; мигающий заголовок виден и без него.
+const TITLE_ORIG = document.title;
+
+function flashTitleError(){
+  if (window._titleFlash) return;
+  window._titleFlash = true;
+  let flip = false;
+  window._titleFlashTimer = setInterval(() => {
+    document.title = (flip = !flip) ? '⛔ ОШИБКА RPBot' : TITLE_ORIG;
+  }, 1200);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && window._titleFlash){
+    window._titleFlash = false;
+    clearInterval(window._titleFlashTimer);
+    document.title = TITLE_ORIG;
+  }
+});
 
 async function startLogsStream(){
   stopLogsStream();
