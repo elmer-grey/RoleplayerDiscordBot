@@ -1783,7 +1783,12 @@ namespace RPBot.EventOps
             }
 
             // ── Telegram: удаляем анонс ───────────────────────────────────────
+            // ⏸ ВРЕМЕННАЯ ПРАВКА (2026-10-19, по решению владельца): удаление ТГ-анонса
+            // при cleanup24h отключено — анонс остаётся в Telegram навсегда после
+            // статуса «событие завершено». Для отката вернуть tgCleanup24hEnabled=true.
+            const bool tgCleanup24hEnabled = false;
             if (_telegramNotifier != null
+                && tgCleanup24hEnabled
                 && entry.TelegramMessageId > 0
                 && entry.TelegramChatId != 0)
             {
