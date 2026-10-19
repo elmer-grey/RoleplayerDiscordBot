@@ -379,7 +379,7 @@ function _guildBlocks(items, renderItem){
 function renderSessions(d){
   if (d && d.error){ setHtml('sessions', `<span class="err">${esc(d.error)}</span>`); return; }
   const flat = _flattenSessionsDict(d);
-  if (flat.length === 0){ setText('sessions','активных ролевых сессий нет (это не события EventOps — для них отдельный блок)'); return; }
+  if (flat.length === 0){ setText('sessions','активных ролевых сессий нет'); return; }
   const html = _guildBlocks(flat, s => {
     const started = s.CreatedAt ? formatMskTime(s.CreatedAt) : '—';
     const statusKind = /пауз/i.test(s.Status || '') ? 'warn' : 'ok';
@@ -418,7 +418,7 @@ function renderAnnouncements(d){
   const html = _guildBlocks(d, a => {
     const updated = formatMskTime(a.LastUpdatedAtUtc);
     const start = a.StartsAtMsk || '—';
-    const loc = a.Location || (a.ChannelId ? `канал #${a.ChannelId}` : '—');
+    const loc = a.Location || a.ChannelName || (a.ChannelId ? `канал #${a.ChannelId}` : '—');
     const desc = a.Description
       ? `<div class="item-desc">${esc(a.Description.length > 600 ? a.Description.slice(0, 600) + '…' : a.Description)}</div>`
       : '';
@@ -432,7 +432,10 @@ function renderAnnouncements(d){
       <div class="item-title">${esc(a.Name ?? '—')}</div>
       <div class="item-meta">
         ${_badge(a.StatusLabel || 'Запланировано', statusKind)}
-        <span>Старт (МСК): <b>${esc(start)}</b></span>
+        <span>Старт (план, МСК): <b>${esc(start)}</b></span>
+        ${a.ActualStartMsk ? `<span>Реальный старт: <b>${esc(a.ActualStartMsk)}</b></span>` : ''}
+        ${a.EndedMsk ? `<span>Завершение: <b>${esc(a.EndedMsk)}</b></span>` : ''}
+        ${a.ActiveTime ? `<span>Активное время: <b>${esc(a.ActiveTime)}</b></span>` : ''}
         <span>Где: ${esc(loc)}</span>
         <span>Обновлено: ${esc(updated)}</span>
       </div>

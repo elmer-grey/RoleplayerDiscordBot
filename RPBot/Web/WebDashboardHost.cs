@@ -60,11 +60,6 @@ namespace RPBot.Web
         private bool _tailRegistered;
         private readonly object _tailInitLock = new();
 
-        // Сигнал «новые записи» для всех открытых /api/logs/stream подписчиков.
-        // SemaphoreSlim с currentCount=0 ждёт WaitAsync(), Release() будит — то же, что ManualResetEventSlim,
-        // но async-friendly.
-        private readonly SemaphoreSlim _streamSignal = new(0, int.MaxValue);
-
         // Rate-limit: 240 запросов/мин с одного IP.
         private readonly object _rateLimitLock = new();
         private readonly Dictionary<string, RateLimitBucket> _rateLimitBuckets = new(StringComparer.Ordinal);
@@ -238,7 +233,6 @@ namespace RPBot.Web
         public void Dispose()
         {
             try { StopAsync().GetAwaiter().GetResult(); } catch { }
-            try { _streamSignal.Dispose(); } catch { }
         }
 
         // ───── Handlers ─────────────────────────────────────────────────────────
@@ -434,45 +428,29 @@ namespace RPBot.Web
 
                     try
                     {
-                        // Цикл ждёт _streamSignal. Между событиями шлём
-                        // heartbeat-комментарий каждые 15 сек, чтобы nginx
-                        // (proxy_read_timeout 3600s) и промежуточные
-                        // прокси не считали соединение «висящим» и не
-                        // буферизовали первый chunk bootstrap'а. Формат
-                        // «: <text>\n» — стандартный SSE-keepalive,
-                        // dashboard.html его игнорирует.
+                        // Поллинг-цикл вместо событий: прежняя версия висела
+                        // на SemaphoreSlim.WaitAsync под Task.WhenAny с
+                        // Task.Delay(15с); по истечении таймера заброшенный
+                        // waitTask оставался зарегистрированным в очереди
+                        // семафора, Release «расходовал» сигналы на зомби-
+                        // ожидания, и живой цикл просыпался не всегда —
+                        // логи в дашборде замирали в случайный момент
+                        // (2026-10-19: WARN 15:35:39 держался на клиенте
+                        // 8+ минут при живом log-файле). Поллинг 250мс не
+                        // создаёт зомби-waiter'ов, переживает голодание
+                        // пула потоков (предупреждение Kestrel «thread pool
+                        // starvation» в прод-логах) и держит максимальную
+                        // задержку появления новой строки ~250мс.
+                        var pollInterval = TimeSpan.FromMilliseconds(250);
                         var heartbeatInterval = TimeSpan.FromSeconds(15);
+                        var lastHeartbeat = DateTime.UtcNow;
                         while (!ctx.RequestAborted.IsCancellationRequested)
                         {
-                            var waitTask = _streamSignal.WaitAsync(ctx.RequestAborted);
-                            var delayTask = Task.Delay(heartbeatInterval, ctx.RequestAborted);
-                            var completed = await Task.WhenAny(waitTask, delayTask).ConfigureAwait(false);
+                            try { await Task.Delay(pollInterval, ctx.RequestAborted).ConfigureAwait(false); }
+                            catch (OperationCanceledException) { break; }
 
-                            if (completed == waitTask)
-                            {
-                                try { await waitTask.ConfigureAwait(false); }
-                                catch (OperationCanceledException) { break; }
-                            }
-                            else
-                            {
-                                // Период без новых записей. Шлём heartbeat,
-                                // обновляем расписание.
-                                try
-                                {
-                                    var hb = Encoding.UTF8.GetBytes(": keepalive\n");
-                                    await ctx.Response.Body.WriteAsync(hb, ctx.RequestAborted).ConfigureAwait(false);
-                                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
-                                }
-                                catch (OperationCanceledException) { break; }
-                                catch (HttpListenerException) { return; }
-                                catch (ObjectDisposedException) { return; }
-                                continue;
-                            }
-
-                            // _streamSignal будит нас на КАЖДЫЙ эвент, но в реальности
-                            // между Wait и Lock может прийти ещё пачка. Семплим всё,
-                            // что свежее lastSentSeq, одним блоком, чтобы не залипнуть
-                            // в lock+write-loop на бёрсте.
+                            // Сэмплим всё, что свежее lastSentSeq, одним блоком,
+                            // чтобы не залипнуть в lock+write-loop на бёрсте.
                             List<string>? payloads = null;
                             lock (_logsLock)
                             {
@@ -483,21 +461,41 @@ namespace RPBot.Web
                                     lastSentSeq = fresh[0].Seq;
                                 }
                             }
-                            if (payloads == null) continue;
-                            foreach (var line in payloads)
+                            if (payloads != null)
                             {
-                                var chunk = Encoding.UTF8.GetBytes(line + "\n");
+                                foreach (var line in payloads)
+                                {
+                                    var chunk = Encoding.UTF8.GetBytes(line + "\n");
+                                    try
+                                    {
+                                        await ctx.Response.Body.WriteAsync(chunk, ctx.RequestAborted).ConfigureAwait(false);
+                                    }
+                                    catch (OperationCanceledException) { return; }
+                                }
                                 try
                                 {
-                                    await ctx.Response.Body.WriteAsync(chunk, ctx.RequestAborted).ConfigureAwait(false);
+                                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
                                 }
                                 catch (OperationCanceledException) { return; }
+                                lastHeartbeat = DateTime.UtcNow;
                             }
-                            try
+                            else if ((DateTime.UtcNow - lastHeartbeat) >= heartbeatInterval)
                             {
-                                await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+                                // Период без новых записей. Шлём keepalive, чтобы
+                                // nginx/прокси не считали соединение «висящим» и не
+                                // буферизовали. Формат «: <text>\n» — стандартный
+                                // SSE-keepalive, dashboard.html его игнорирует.
+                                try
+                                {
+                                    var hb = Encoding.UTF8.GetBytes(": keepalive\n");
+                                    await ctx.Response.Body.WriteAsync(hb, ctx.RequestAborted).ConfigureAwait(false);
+                                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+                                    lastHeartbeat = DateTime.UtcNow;
+                                }
+                                catch (OperationCanceledException) { break; }
+                                catch (HttpListenerException) { return; }
+                                catch (ObjectDisposedException) { return; }
                             }
-                            catch (OperationCanceledException) { return; }
                         }
                     }
                     catch (OperationCanceledException) { }
@@ -519,11 +517,9 @@ namespace RPBot.Web
                 while (_logs.Count > _maxLogs)
                     _logs.RemoveLast();
             }
-            // Будим ВСЕ ждущие стримы. SemaphoreSlim.Release без maxValue-наращивания —
-            // каждый WaitAsync заберёт одно. Для нескольких подписчиков делаем Release без аргумента
-            // (по умолчанию = +1), но если накопилось больше — расширяем до текущего числа подписчиков.
-            // Простое Release() — оптимально для нашего сценария: 1-3 подписчика, события редкие.
-            try { _streamSignal.Release(); } catch (SemaphoreFullException) { /* игнорируем переполнение */ }
+            // Будильники-события нет: /api/logs/stream сам опрашивает
+            // очередь каждые 250мс (страховочный поллинг в HandleLogsStream —
+            // семафорный сигналинг с WhenAny давал «зависание» стрима).
         }
 
         private object MapRecord(BotLogRecord x) => new

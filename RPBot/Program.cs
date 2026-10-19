@@ -1450,6 +1450,24 @@ private void SaveServerConfigs()
             if (e.LastStartTimeUtc.HasValue)
             whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
             } catch { }
+            string? channelName = null;
+            if (e.LastChannelId.HasValue)
+            {
+            try { channelName = g?.GetChannel(e.LastChannelId.Value)?.Name; } catch { }
+            }
+            DateTimeOffset? actualStart = e.ActualStartTimeUtc;
+            DateTimeOffset? endedAt = e.CompletedAtUtc ?? e.CancelledAtUtc;
+            DateTimeOffset endRef = endedAt ?? ((statusLabel == "Завершено" || statusLabel == "Отменено") ? e.LastUpdatedAtUtc : DateTimeOffset.Now);
+            string? activeTime = actualStart.HasValue && endRef >= actualStart.Value ? FormatActiveTimeRu(endRef - actualStart.Value) : null;
+            string? actualStartMsk = null;
+            string? endedMsk = null;
+            try
+            {
+            if (actualStart.HasValue)
+            actualStartMsk = actualStart.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+            if (endedAt.HasValue)
+            endedMsk = endedAt.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+            } catch { }
             return new
             {
                 GuildId = e.GuildId,
@@ -1458,7 +1476,11 @@ private void SaveServerConfigs()
                 Name = e.LastName ?? "(без названия)",
                 Description = e.LastDescription,
                 StartsAtMsk = whenMsk,
+                ActualStartMsk = actualStartMsk,
+                EndedMsk = endedMsk,
+                ActiveTime = activeTime,
                 Location = e.LastLocation,
+                ChannelName = channelName,
                 ChannelId = e.LastChannelId,
                 CoverImageUrl = e.LastCoverImageUrl,
                 StatusLabel = statusLabel,
@@ -1627,6 +1649,24 @@ private void SaveServerConfigs()
                 if (e.LastStartTimeUtc.HasValue)
                 whenMsk = e.LastStartTimeUtc.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
                 } catch { }
+                string? channelName = null;
+                if (e.LastChannelId.HasValue)
+                {
+                try { channelName = g?.GetChannel(e.LastChannelId.Value)?.Name; } catch { }
+                }
+                DateTimeOffset? actualStart = e.ActualStartTimeUtc;
+                DateTimeOffset? endedAt = e.CompletedAtUtc ?? e.CancelledAtUtc;
+                DateTimeOffset endRef = endedAt ?? ((statusLabel == "Завершено" || statusLabel == "Отменено") ? e.LastUpdatedAtUtc : DateTimeOffset.Now);
+                string? activeTime = actualStart.HasValue && endRef >= actualStart.Value ? FormatActiveTimeRu(endRef - actualStart.Value) : null;
+                string? actualStartMsk = null;
+                string? endedMsk = null;
+                try
+                {
+                if (actualStart.HasValue)
+                actualStartMsk = actualStart.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+                if (endedAt.HasValue)
+                endedMsk = endedAt.Value.UtcDateTime.AddHours(3).ToString("dd.MM.yyyy HH:mm");
+                } catch { }
                 return new
                 {
                     GuildId = e.GuildId,
@@ -1635,7 +1675,11 @@ private void SaveServerConfigs()
                     Name = e.LastName ?? "(без названия)",
                     Description = e.LastDescription,
                     StartsAtMsk = whenMsk,
+                    ActualStartMsk = actualStartMsk,
+                    EndedMsk = endedMsk,
+                    ActiveTime = activeTime,
                     Location = e.LastLocation,
+                    ChannelName = channelName,
                     ChannelId = e.LastChannelId,
                     CoverImageUrl = e.LastCoverImageUrl,
                     StatusLabel = statusLabel,
@@ -7633,6 +7677,18 @@ private Task LogStartup(string message)
             // Русские метки вида «▶️ Событие началось: 12.08.2026 14:00» — берём префикс до ':'.
             var colon = mark.IndexOf(':');
             return colon > 0 ? mark.Substring(0, colon).Trim() : mark;
+        }
+
+        /// <summary>
+        /// Человекочитаемая длительность («активное время» события): д/ч/мин.
+        /// </summary>
+        private static string FormatActiveTimeRu(TimeSpan span)
+        {
+            if (span.TotalMinutes < 1) return "меньше минуты";
+            var days = (int)span.TotalDays;
+            if (days > 0) return $"{days}д {span.Hours}ч";
+            if (span.Hours > 0) return $"{span.Hours}ч {span.Minutes}м";
+            return $"{span.Minutes}м";
         }
 
         /// <summary>
