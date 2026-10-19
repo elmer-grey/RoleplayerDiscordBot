@@ -219,20 +219,11 @@ public class VoiceChannelCommands
 
         BotLogger.Info(LogCategory.Discord, $"[Voice] Создан канал {voice.Name} ({voice.Id}) лимит={limit}, мастер={userLabel}.");
 
-        // Разрешаем slash-команды бота в созданной комнате (обход per-channel прав интеграции:
-        // комната создана ботом и не входит в whitelist каналов). Не блокирует ACK кнопки.
-        var roomCommandNames = config?.VoiceRoomCommandNames;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await VoiceRoomCommandPermissions.EnableBotCommandsInChannelAsync(guild, voice.Id, roomCommandNames).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                BotLogger.Error(LogCategory.Discord, $"[VoiceCmdPerms] Включение команд в комнате {voice.Id}: {ex.GetType().Name}: {ex.Message}");
-            }
-        });
+        // Разрешение slash-команд бота в созданной комнате через Discord API (VOICE
+        // command permissions) НЕВОЗМОЖНО: PUT application command permissions
+        // запрещён бот-токену (HTTP 403, code 20001 "Bots cannot use this
+        // endpoint", проверено 2026-10-19). Владелец управляет видимостью команд
+        // сам — через настройки интеграции Discord.
 
         // Убираем кнопки через модификацию исходного ответа компонента: заменяем
         // содержимое на подтверждение и очищаем компоненты. Сообщение остаётся

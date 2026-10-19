@@ -707,7 +707,6 @@ namespace RPBot
         "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
         "predictions" => cfg.PredictionsEnabled.ToString(),
         "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
-        "voice_room_commands" => (cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : ""),
         _ => "Неизвестный ключ"
     };
                     AddCommandOutput(res);
@@ -1833,7 +1832,6 @@ namespace RPBot
                                             AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
                                             AddCommandOutput($"predictions: {cfg.PredictionsEnabled}");
                                             AddCommandOutput($"roll_pictures: {cfg.RollPicturesEnabled}");
-                                            AddCommandOutput($"voice_room_commands: {(cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : "")}");
                                         }
                                     }
                                     else
@@ -1878,7 +1876,6 @@ namespace RPBot
                                             "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
                                             "predictions" => cfg.PredictionsEnabled.ToString(),
                                             "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
-                                            "voice_room_commands" => (cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : ""),
                                             _ => "Неизвестный ключ"
                                         };
                                         AddCommandOutput(res);

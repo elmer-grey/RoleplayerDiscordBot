@@ -1088,9 +1088,7 @@ private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotC
                     ? overrides.SwearWords
                     : defaults.SwearWords,
 
-                VoiceRoomCommandNames = (overrides.VoiceRoomCommandNames != null && overrides.VoiceRoomCommandNames.Count > 0)
-                    ? overrides.VoiceRoomCommandNames
-                    : defaults.VoiceRoomCommandNames
+                VoiceRoomCommandNames = defaults.VoiceRoomCommandNames
             };
         }
 
@@ -2503,16 +2501,8 @@ public Task ReloadServerConfigsAsync()
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var rp)) sconfig.RollPicturesEnabled = rp;
                     break;
                 case "voice_room_commands":
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        if (value.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase) || value.Trim().Equals("default", StringComparison.OrdinalIgnoreCase))
-                            sconfig.VoiceRoomCommandNames = new List<string> { "roll", "roll20", "roll_pictures" };
-                        else
-                            sconfig.VoiceRoomCommandNames = value.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                .Select(x => x.Trim().TrimStart('/').ToLowerInvariant())
-                                .Where(x => x.Length > 0)
-                                .ToList();
-                    }
+                    // Фича убрана (Discord 20001): ключ игнорируется, "clear"/"default"-поведение не действует.
+                    break;
                     break;
                 case "event_voice_channel":
                 #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated setter, сохраняем для обратной совместимости /config set

@@ -28,9 +28,11 @@ public ulong? SuperUserRoleId { get; set; } = null;
 public bool PredictionsEnabled { get; set; } = true;
         // Использовать ли картинки при выводе бросков, если они доступны
         public bool RollPicturesEnabled { get; set; } = true;
-        // Slash-команды бота, которые разрешаются в созданных ботом временных голосовых комнатах
-        // (обход per-channel разграничения команд интеграции: комната не входит в whitelist каналов).
-        // Список через запятую; пусто → стандартный набор (roll, roll20, roll_pictures).
+        // Slash-команды бота, разрешаемые в созданных ботом комнатах: фича убрана —
+        // PUT application command permissions запрещён бот-токену (Discord 20001);
+        // владелец управляет видимостью команд через настройки интеграции Discord.
+        // DEPRECATED 2026-10-19: свойство оставлено для совместимости чтения старых config.json,
+        // в логике больше не используется.
         public List<string> VoiceRoomCommandNames { get; set; } = new List<string> { "roll", "roll20", "roll_pictures" };
 // Голосовой канал события (event), в котором начисляются костяшки.
         // ✅ pred-parallelization: DEPRECATED — раньше на гильдии был только один прогноз,
