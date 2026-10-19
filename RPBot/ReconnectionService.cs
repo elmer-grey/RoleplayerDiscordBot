@@ -90,6 +90,7 @@ namespace RPBot
                             {
                                 _connectionInfo.LastConnectionTime = DateTime.UtcNow;
                                 _connectionInfo.LastConnectReason = "Плановый реконнект Discord Gateway";
+                                _connectionInfo.LastWasPlannedGatewayReconnect = true;
                                 _connectionInfo.ResetAttempts();
                                 BotLogger.Info(LogCategory.Discord,
                                     "[RECONNECT] Плановый Gateway-реконнект завершён — уведомляю подписчиков (RehydrateTimersAsync)");
@@ -144,6 +145,11 @@ namespace RPBot
             // устаревший реконнект.
             try { await _reconnectLock.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
+
+            // Любой реконнект вне планового gateway-сценария (ручной, после реального
+            // дисконнекта, самовосстановление клиента) сбрасывает флаг подавления
+            // уведомления — в этих случаях «Переподключение успешно» остаётся.
+            _connectionInfo.LastWasPlannedGatewayReconnect = false;
 
             // После получения блокировки ct мог уже быть отменён (ещё один Disconnect
             // пришёл пока мы ждали). Берём актуальный CTS.

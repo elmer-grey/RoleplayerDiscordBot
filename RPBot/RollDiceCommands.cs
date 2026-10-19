@@ -49,6 +49,37 @@ namespace RPBot
 
         private static void UpdateCooldown(ulong userId)
             => _lastRollTime[userId] = DateTime.UtcNow;
+
+        // 🩹 net-retry: Cloudflare/Discord изредка рвут keep-alive посреди multipart-заливки —
+        // «HttpRequestException: Error while copying content to a stream» (18.10 наблюдалось
+        // дважды: 16:30 и 17:31, броски 2d6). Все загружаемые PNG — MemoryStream (byte[]-кэш
+        // или strip-склейка), поэтому один ретрай со сбросом Position переживает разрыв
+        // соединения без потери результата броска.
+        private static async Task SendFilesWithRetryAsync(
+            SocketSlashCommand command,
+            MemoryStream stream,
+            string fileName,
+            string? text = null,
+            Embed[]? embeds = null)
+        {
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    stream.Position = 0;
+                    var attachment = new FileAttachment(stream, fileName);
+                    await command.FollowupWithFilesAsync(
+                        attachments: new[] { attachment },
+                        text: text,
+                        embeds: embeds).ConfigureAwait(false);
+                    return;
+                }
+                catch (HttpRequestException) when (attempt == 0)
+                {
+                    try { await Task.Delay(300).ConfigureAwait(false); } catch { }
+                }
+            }
+        }
         private string? ValidateRollInput(string input)
         {
             if (string.IsNullOrWhiteSpace(input))
@@ -492,12 +523,10 @@ namespace RPBot
                                             // иначе при HTTP-retry Discord.NET получает "closed Stream".
                                             var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
                                             using var ms = new MemoryStream(pngBytes, writable: false);
-                                            var attachment = new FileAttachment(ms, Path.GetFileName(filePath));
-                                            await command.FollowupWithFilesAsync(
-                                                attachments: new[] { attachment },
-                                                embeds: new[] { embed });
-                                                                                        await TrySendPauseFollowupAsync(command, pauseMsg);
-                                                                                        WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
+                                            await SendFilesWithRetryAsync(
+                                                command, ms, Path.GetFileName(filePath), embeds: new[] { embed });
+                                                                                            await TrySendPauseFollowupAsync(command, pauseMsg);
+                                                                                            WriteCompletedRollLog(_input, results, hasRange, min, max, modifier);
                                                                                         return;
                                                                                     }
                 }
@@ -529,7 +558,7 @@ namespace RPBot
                                         // content to a stream". Теперь using var держит стрим до возврата
                                         // из метода. Исходный stripStream приходит из Task.Run в фоне, GC
                                         // и без того не освободит его преждевременно.
-                                        using var _stripHolder = stripStream;
+                                    using var _stripHolder = stripStream;
                                         try
                                         {
                                             var avg = results.Average();
@@ -542,11 +571,9 @@ namespace RPBot
                                                 ? "Результаты броска (помеха/преимущество):"
                                                 : $"Результаты {count} бросков:";
 
-                                            var attachment = new FileAttachment(_stripHolder, "roll_strip.png");
-                                            await command.FollowupWithFilesAsync(
-                                                attachments: new[] { attachment },
-                                                text: label,
-                                                embeds: new[] { embed });
+                                            await SendFilesWithRetryAsync(
+                                                command, _stripHolder, "roll_strip.png",
+                                                text: label, embeds: new[] { embed });
 
                                             await TrySendPauseFollowupAsync(command, pauseMsg);
 
@@ -747,10 +774,8 @@ namespace RPBot
                                         // упирается в "Cannot access a closed Stream".
                                         var pngBytes = _roll20PngCache.GetOrAdd(filePath, path => File.ReadAllBytes(path));
                                         using var ms = new MemoryStream(pngBytes, writable: false);
-                                        var attachment = new FileAttachment(ms, Path.GetFileName(filePath));
-                                        await command.FollowupWithFilesAsync(
-                                            attachments: new[] { attachment },
-                                            embeds: new[] { embed });
+                                        await SendFilesWithRetryAsync(
+                                            command, ms, Path.GetFileName(filePath), embeds: new[] { embed });
                                                                                     await TrySendPauseFollowupAsync(command, pauseMsg);
                                                                                 }
                                                                                 else

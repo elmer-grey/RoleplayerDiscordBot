@@ -320,6 +320,15 @@ private Task? _dailyRestartTask;
         {
             try
             {
+                // Persistence-flush fix: гасим луп флаша при чистке инстанса. Раньше он
+                // переживал Dispose (Task.Run со своим CTS никем не отменялся) — каждый
+                // in-process рестарт добавлял ещё один живой луп, и через несколько
+                // рестартов каждые 5 минут «Сохранено …» писали 5-6 параллельных
+                // экземпляров PersistenceFlushLoopAsync. Это же был «второй писатель»
+                // points.json: протухший луп сейвил старый инстанс _pointsService
+                // с устаревшим состоянием, перетирая свежий баланс.
+                StopPersistenceFlushLoop();
+
                 if (_reconnectionService != null)
                 {
                     try
@@ -358,6 +367,18 @@ private Task? _dailyRestartTask;
                     try { _voicePointsService.Shutdown(); } catch { }
                     _voicePointsService = null;
                 }
+
+                // Race-points-fix: финальный сейв баланса после остановки луп — при
+                // in-process рестарте новый Program.LoadAsync() перечитает файл СЮДА,
+                // и без этого сейва начисления, попавшие в коалесц-окно, потерялись бы.
+                try
+                {
+                    _pointsService?.SaveAsync().GetAwaiter().GetResult();
+                }
+                catch { }
+                // Финальный сейв выполняем синхронно и один раз — после него старый
+                // инстанс больше не пишет points.json, и LoadAsync нового Program
+                // читает актуальный файл.
 
             }
             catch (Exception ex)
@@ -1065,7 +1086,11 @@ private string _eventNotificationsPath = BotConfig.ResolvePath(Path.Combine(BotC
 
                 SwearWords = (overrides.SwearWords != null && overrides.SwearWords.Count > 0)
                     ? overrides.SwearWords
-                    : defaults.SwearWords
+                    : defaults.SwearWords,
+
+                VoiceRoomCommandNames = (overrides.VoiceRoomCommandNames != null && overrides.VoiceRoomCommandNames.Count > 0)
+                    ? overrides.VoiceRoomCommandNames
+                    : defaults.VoiceRoomCommandNames
             };
         }
 
@@ -1976,6 +2001,10 @@ public Task RestartAsync()
         // Останавливаем планировщик, чтобы он не сработал повторно во время выключения
         StopDailyRestartScheduler();
 
+        // Persistence-flush fix: гасим и луп флаша — новый инстанс после рестарта
+        // поднимет свой, а старый не должен доживать до Dispose.
+        StopPersistenceFlushLoop();
+
         // ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
         WriteRestartPendingFlag();
 
@@ -2161,6 +2190,11 @@ public async Task GracefulShutdownAsync(string reason)
                         try { if (_pointsService != null) await _pointsService.SaveAsync().ConfigureAwait(false); } catch { }
                         try { if (_predictionService != null) _predictionService.Shutdown(); } catch { }
 
+                        // Race-points-fix: останавливаем VoicePointsService до финального сейва,
+                        // чтобы пер-юзер-лупы не добавили начисления уже после сохранения и не
+                        // остались жить с умирающим инстансом сервиса (источник гонки points.json).
+                        try { _voicePointsService?.Shutdown(); _voicePointsService = null; } catch { }
+
             try { if (_webDashboard != null) await _webDashboard.StopAsync(); } catch { }
             try { _webDashboard?.Dispose(); } catch { }
             _webDashboard = null;
@@ -2206,6 +2240,10 @@ private void StopPersistenceFlushLoop()
     try { _persistenceFlushCts?.Cancel(); } catch { }
     try { _persistenceFlushCts?.Dispose(); } catch { }
     _persistenceFlushCts = null;
+    // Сбрасываем ссылку на задачу: сразу после Cancel IsCompleted ещё false (Delay
+    // не успел выбросить OperationCanceledException), и guard в Start-методе со
+    // старой ссылкой решил бы, что луп ещё жив, и не поднял новый.
+    _persistenceFlushTask = null;
 }
 
 private async Task PersistenceFlushLoopAsync(CancellationToken ct)
@@ -2459,6 +2497,18 @@ public Task ReloadServerConfigsAsync()
                 case "roll_pictures":
                     if (toggle.HasValue) sconfig.RollPicturesEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var rp)) sconfig.RollPicturesEnabled = rp;
+                    break;
+                case "voice_room_commands":
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        if (value.Trim().Equals("clear", StringComparison.OrdinalIgnoreCase) || value.Trim().Equals("default", StringComparison.OrdinalIgnoreCase))
+                            sconfig.VoiceRoomCommandNames = new List<string> { "roll", "roll20", "roll_pictures" };
+                        else
+                            sconfig.VoiceRoomCommandNames = value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(x => x.Trim().TrimStart('/').ToLowerInvariant())
+                                .Where(x => x.Length > 0)
+                                .ToList();
+                    }
                     break;
                 case "event_voice_channel":
                 #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated setter, сохраняем для обратной совместимости /config set
@@ -4078,10 +4128,20 @@ private static BotUI? _ui;
                                 }
                             });
 
-                            // Отправляем уведомление об успешном реконнекте
+                            // Отправляем уведомление об успешном реконнекте.
+                            // Плановый gateway-реконнект (запрошен самим Discord'ом) происходит
+                            // каждые 1-3 часа — уведомление о нём зашумляет канал пустыми
+                            // «ПЕРЕПОДКЛЮЧЕНИЕ УСПЕШНО», поэтому пишем только в лог.
+                            // Остальные реконнекты (реальный дисконнект/ручной) уведомляют как раньше.
                             try
                             {
-                                if (_statusNotifier != null)
+                                if (info.LastWasPlannedGatewayReconnect)
+                                {
+                                    BotLogger.Info(LogCategory.Discord,
+                                        "[Reconnect] Плановый Gateway-реконнект Discord завершён — уведомление в ModerateChannel не отправляем (плановый).");
+                                    info.LastWasPlannedGatewayReconnect = false;
+                                }
+                                else if (_statusNotifier != null)
                                     await _statusNotifier.SendReconnectSuccess(
                                         info.ReconnectAttempts,
                                         info.LastDisconnectReason
@@ -5078,7 +5138,14 @@ await Task.CompletedTask;
                     {
                         var full = DisconnectReasonTranslator.GetFullReason(exception!);
                         var emoji = DisconnectReasonTranslator.GetEmojiForReason(full);
-                        BotLogger.Warn(LogCategory.Discord, $"{emoji} [Disconnect] {full} | exception={exception?.GetType().FullName ?? "null"}");
+                        // При плановом рестарте/остановке client.StopAsync() гасит pending-операции:
+                        // TaskCanceledException в этот момент — штатный шум выключения, а не инцидент.
+                        // Пишем Info без «❌», чтобы он не попадал в сводки по [WARN]/[ERROR].
+                        if (exception is TaskCanceledException && (_shouldExit || _shouldRestart))
+                            BotLogger.Info(LogCategory.Discord,
+                                "✅ [Disconnect] Клиент остановлен штатно (рестарт/остановка) — TaskCanceledException от StopAsync.");
+                        else
+                            BotLogger.Warn(LogCategory.Discord, $"{emoji} [Disconnect] {full} | exception={exception?.GetType().FullName ?? "null"}");
                     }
                     catch { /* лог не должен ломать обработку отключения */ }
 
@@ -6237,6 +6304,7 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                                                                                                                         {
                                                                                                                                                                                                             // 🩹 perf: замер времени DeferAsync — если увидим >100мс,
                                                                                                                                                                                                             // значит, виноват IO/SSL/GC, а не 10062 (NotFound).
+                                                                                                                                                                                                            var gcBefore = RPBot.Common.GcMetrics.Take();
                                                                                                                                                                                                             var sw = System.Diagnostics.Stopwatch.StartNew();
                                                                                                                                                                                                             await command.DeferAsync().ConfigureAwait(false);
                                                                                                                                                                                                             sw.Stop();
@@ -6249,17 +6317,12 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                                                                                                                             }
                                                                                                                                                                                                             else if (sw.Elapsed.TotalMilliseconds > 100)
                                                                                                                                                                                                             {
-                                                                                                                                                                                                                                                                                                                                                                                                                            // 🩹 diag: снимаем GC-счётчики прямо в момент SLOW — если
-                                                                                                                                                                                                                                                                                                                                                                                                                            // gcGen>=2 >0 или pauseDeltaMs > sw.Elapsed, значит виновата GC-пауза.
-                                                                                                                                                                                                                                                                                                                                                                                                                            long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
-                                                                                                                                                                                                                                                                                                                                                                                                                            int gen0 = System.GC.CollectionCount(0);
-                                                                                                                                                                                                                                                                                                                                                                                                                            int gen1 = System.GC.CollectionCount(1);
-                                                                                                                                                                                                                                                                                                                                                                                                                            int gen2 = System.GC.CollectionCount(2);
-                                                                                                                                                                                                                                                                                                                                                                                                                            long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
+                                                                                                                                                                                                                                                                                                                                                                                                                            // 🩹 perf: печатаем дельту GC-метрик за замер (см. Common/GcMetrics):
+                                                                                                                                                                                                                                                                                                                                                                                                                                            // gcPauseDelta > sw.Elapsed → виновата GC-пауза в момент SLOW.
                                                                                                                                                                                                                                                                                                                                                                                                                             BotLogger.Warn(LogCategory.Cmd,
                                                                                                                                                                                                                                                                                                                                                                                                                                 $"[PreDefer:{name}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
                                                                                                                                                                                                                                                                                                                                                                                                                                 $"interaction={command.Id} " +
-                                                                                                                                                                                                                                                                                                                                                                                                                                $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                                                                                                                                                                                                                                                                                                                                                                                                                $"{RPBot.Common.GcMetrics.DeltaSince(gcBefore)} " +
                                                                                                                                                                                                                                                                                                                                                                                                                                 $"— возможна IO/GC пауза.");
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     // 🩹 perf: если DeferAsync занял >1500мс — мы почти уложились, но

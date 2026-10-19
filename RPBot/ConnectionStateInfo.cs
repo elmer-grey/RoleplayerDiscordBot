@@ -32,6 +32,10 @@ namespace RPBot
 
         // Прогнозирование
         public bool IsExpectedDisconnect { get; set; }
+        // Плановый реконнект, который сам запросил Discord (GatewayReconnectException).
+        // Такие происходят каждые 1-3 часа; уведомление в ModerateChannel для них
+        // не отправляем — иначе получается серия пустых «ПЕРЕПОДКЛЮЧЕНИЕ УСПЕШНО».
+        public bool LastWasPlannedGatewayReconnect { get; set; }
         public DateTime? PredictedDisconnectTime { get; set; }
         public string PredictedReason { get; set; } = "";
         public double ConnectionStabilityScore { get; set; } = 100.0;

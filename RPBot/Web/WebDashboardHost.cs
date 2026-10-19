@@ -738,6 +738,17 @@ namespace RPBot.Web
                                 var msg = formatter(state, exception!);
                         if (string.IsNullOrEmpty(msg)) return;
 
+                        // Проглатываем известный безобидный шум Kestrel: клиент дашборда закрывает
+                        // соединение посреди ответа (закрытие вкладки/обрыв poll'а).
+                        // «Connection processing ended abnormally» — это ровно этот случай,
+                        // не инцидент; писать нечего (18.10 18:44:46 — единичный ложный трип).
+                        if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning &&
+                            _category.StartsWith("Microsoft.AspNetCore.Server.Kestrel", StringComparison.Ordinal) &&
+                            msg.Contains("Connection processing ended abnormally", StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+
                         // Только Warning/Error пробрасываем в BotLogger (Info-сообщения Kestrel'а слишком шумные).
                         if (logLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)
                         {

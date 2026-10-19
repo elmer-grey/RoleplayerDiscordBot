@@ -39,6 +39,11 @@ namespace RPBot
                 // Переключатель режима: достаточно поменять значение здесь
                 private const TimerMode CurrentMode = TimerMode.PerUserTimer;
 
+                // Коалесцирование сейвов: пер-юзер-лупы не сохраняют баланс каждые 5 минут
+                // по отдельности (это десятки SaveAsync за тик), а лишь помечают dirty-сейв,
+                // который выполняется один раз за SaveCoalesceInterval.
+                private int _savePending; // 0 = нет планируемого сейва, 1 = есть
+
                 private readonly ConcurrentDictionary<ulong, ConcurrentDictionary<ulong, UserState>> _userStates = new();
                 private readonly CancellationTokenSource _cts = new();
                 private volatile bool _disposed;
@@ -260,6 +265,46 @@ namespace RPBot
                         }
                     }
 
+        /// <summary>
+        /// Планирует один коалесцированный сейв баланса: первая пометка dirty запускает
+        /// отложенный SaveAsync через SaveCoalesceInterval, последующие пометки в это
+        /// окно просто игнорируются. Экономит сотни лишних записей points.json за тик.
+        /// </summary>
+        private void ScheduleSaveAsync()
+        {
+            if (_disposed)
+                return;
+
+            if (Interlocked.Exchange(ref _savePending, 1) != 0)
+                return;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(SaveCoalesceInterval).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Delay без токена не бросает, но подстрахуемся
+                }
+
+                Interlocked.Exchange(ref _savePending, 0);
+
+                if (_disposed)
+                    return;
+
+                try
+                {
+                    await _points.SaveAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // SaveAsync уже логирует свои ошибки
+                }
+            });
+        }
+
         private void StartTrackingUser(ulong guildId, ulong userId, ulong eventChannelId, ConcurrentDictionary<ulong, UserState> guildStates)
         {
             var state = new UserState
@@ -323,7 +368,7 @@ namespace RPBot
                     var amount = CalculatePointsForUser(guildUser, BasePointsPerTick);
                     _points.Add(guildId, userId, amount);
                     var balance = _points.GetBalance(guildId, userId);
-                    await _points.SaveAsync().ConfigureAwait(false);
+                    ScheduleSaveAsync();
 
                     currentState.NextAwardUtc = DateTimeOffset.UtcNow + TickInterval;
                 }
@@ -383,7 +428,7 @@ namespace RPBot
                             var amount = CalculatePointsForUser(guildUser, BasePointsPerTick);
                             _points.Add(guildId, userId, amount);
                             var balance = _points.GetBalance(guildId, userId);
-                            await _points.SaveAsync().ConfigureAwait(false);
+                            ScheduleSaveAsync();
 
                             state.NextAwardUtc = now + TickInterval;
                             guildStates[userId] = state;

@@ -33,6 +33,7 @@ namespace RPBot.Common
             {
                 try
                 {
+                    var gcBefore = GcMetrics.Take();
                     var sw = Stopwatch.StartNew();
                     await component.DeferAsync(ephemeral: ephemeral);
                     sw.Stop();
@@ -44,15 +45,10 @@ namespace RPBot.Common
                     }
                     else if (sw.Elapsed.TotalMilliseconds > 100)
                     {
-                        long totalPauseMs = (long)GC.GetTotalPauseDuration().TotalMilliseconds;
-                        int gen0 = GC.CollectionCount(0);
-                        int gen1 = GC.CollectionCount(1);
-                        int gen2 = GC.CollectionCount(2);
-                        long heapMB = (long)(GC.GetTotalMemory(false) / 1024d / 1024d);
                         BotLogger.Warn(LogCategory.Cmd,
                             $"[{commandName}:DeferAsync] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
                             $"interaction={component.Id} " +
-                            $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                            $"{GcMetrics.DeltaSince(gcBefore)} " +
                             $"— возможна IO/GC пауза.");
                     }
                 }

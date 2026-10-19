@@ -115,6 +115,10 @@ namespace RPBot
         public async Task SaveAsync()
         {
             await _ioLock.WaitAsync().ConfigureAwait(false);
+            // Уникальный tmp-файл на каждый сейв: при параллельных писателях (например,
+            // не остановленные лупы старого инстанса после in-process рестарта) общий
+            // points.json.tmp съедался чужим rename, и второй File.Move падал с FNFE.
+            var tmpPath = $"{_statePath}.{Guid.NewGuid():N}.tmp";
             try
             {
                 var dir = Path.GetDirectoryName(_statePath) ?? AppContext.BaseDirectory;
@@ -128,7 +132,6 @@ namespace RPBot
 
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(snapshot, options);
-                var tmpPath = _statePath + ".tmp";
                 await File.WriteAllTextAsync(tmpPath, json).ConfigureAwait(false);
                 File.Move(tmpPath, _statePath, overwrite: true);
             }
@@ -139,6 +142,16 @@ namespace RPBot
             }
             finally
             {
+                try
+                {
+                    if (File.Exists(tmpPath))
+                        File.Delete(tmpPath);
+                }
+                catch
+                {
+                    // tmp подчистится следующим успешным сейвом/очисткой каталога
+                }
+
                 _ioLock.Release();
             }
         }

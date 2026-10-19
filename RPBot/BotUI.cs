@@ -674,7 +674,8 @@ namespace RPBot
         ("swear_filter", "Фильтр мата включён"),
         ("swear_words", "Слова фильтра мата"),
         ("predictions", "Прогнозы включены"),
-        ("roll_pictures", "Картинки для бросков")
+        ("roll_pictures", "Картинки для бросков"),
+        ("voice_room_commands", "Команды бота в voice-комнатах")
     };
 				
     var labels = keyDefinitions.Select(k => k.label).ToArray();
@@ -706,6 +707,7 @@ namespace RPBot
         "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
         "predictions" => cfg.PredictionsEnabled.ToString(),
         "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
+        "voice_room_commands" => (cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : ""),
         _ => "Неизвестный ключ"
     };
                     AddCommandOutput(res);
@@ -1831,6 +1833,7 @@ namespace RPBot
                                             AddCommandOutput($"swear_words: {(cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : "")}");
                                             AddCommandOutput($"predictions: {cfg.PredictionsEnabled}");
                                             AddCommandOutput($"roll_pictures: {cfg.RollPicturesEnabled}");
+                                            AddCommandOutput($"voice_room_commands: {(cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : "")}");
                                         }
                                     }
                                     else
@@ -1875,6 +1878,7 @@ namespace RPBot
                                             "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
                                             "predictions" => cfg.PredictionsEnabled.ToString(),
                                             "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
+                                            "voice_room_commands" => (cfg.VoiceRoomCommandNames != null ? string.Join(',', cfg.VoiceRoomCommandNames) : ""),
                                             _ => "Неизвестный ключ"
                                         };
                                         AddCommandOutput(res);

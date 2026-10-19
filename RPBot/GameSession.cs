@@ -168,12 +168,9 @@ namespace RPBot
 
         public static async Task SaveSessionsAsync()
         {
-            // 🩹 diag: triple-save-bug. Каждые 5 минут в run.log пишется 3 записи подряд
-            // (14:10:06 + 14:10:11 + 14:10:11), хотя PersistenceFlushLoopAsync — единственный
-            // документированный источник. Добавляем короткий stack-trace с Guid, чтобы за
-            // один цикл увидеть, кто ещё зовёт Save. Снять после локализации источника.
-            var _diagId = Guid.NewGuid().ToString("N").Substring(0, 8);
-            var _diagStack = new System.Diagnostics.StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
+            // diag triple-save-bug снят: источник множественных сейвов локализован и
+            // исправлен (утечка PersistenceFlushLoopAsync при in-process рестартах —
+            // StopPersistenceFlushLoop теперь вызывается в CleanupServices).
             try
             {
                 var dataDir = Path.GetDirectoryName(_sessionsStatePath);
@@ -218,9 +215,7 @@ namespace RPBot
                             {
                                 var totalRolls = _sessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count)
                                     + _stoppedSessions.Values.SelectMany(g => g.Values).Sum(s => s.Rolls.Count);
-                                BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} сессий (активных+архив) ({totalRolls} бросков) [diag={_diagId}]");
-                                if (_diagStack != null)
-                                    BotLogger.Debug(LogCategory.Session, $"[diag={_diagId}] stack:\n{_diagStack}");
+                                BotLogger.Debug(LogCategory.Session, $"Сохранено {sessionsToSave.Count} сессий (активных+архив) ({totalRolls} бросков)");
                             }
                         }
                         finally
@@ -1245,6 +1240,7 @@ namespace RPBot
                             {
                                 try
                                 {
+                                    var gcBefore = RPBot.Common.GcMetrics.Take();
                                     var sw = System.Diagnostics.Stopwatch.StartNew();
                                     await component.DeferAsync();
                                     sw.Stop();
@@ -1256,15 +1252,10 @@ namespace RPBot
                                     }
                                     else if (sw.Elapsed.TotalMilliseconds > 100)
                                     {
-                                        long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
-                                        int gen0 = System.GC.CollectionCount(0);
-                                        int gen1 = System.GC.CollectionCount(1);
-                                        int gen2 = System.GC.CollectionCount(2);
-                                        long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
                                         BotLogger.Warn(LogCategory.Cmd,
                                             $"[GameSessionButton:DeferAsync:{parts[0]}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
                                             $"interaction={component.Id} " +
-                                            $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                            $"{RPBot.Common.GcMetrics.DeltaSince(gcBefore)} " +
                                             $"— возможна IO/GC пауза.");
                                     }
                                 }
@@ -2357,6 +2348,7 @@ namespace RPBot
                     {
                         try
                         {
+                            var gcBefore = RPBot.Common.GcMetrics.Take();
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             await component.DeferAsync(ephemeral: true);
                             sw.Stop();
@@ -2368,15 +2360,10 @@ namespace RPBot
                             }
                             else if (sw.Elapsed.TotalMilliseconds > 100)
                             {
-                                long totalPauseMs = (long)System.GC.GetTotalPauseDuration().TotalMilliseconds;
-                                int gen0 = System.GC.CollectionCount(0);
-                                int gen1 = System.GC.CollectionCount(1);
-                                int gen2 = System.GC.CollectionCount(2);
-                                long heapMB = (long)(System.GC.GetTotalMemory(false) / 1024d / 1024d);
                                 BotLogger.Warn(LogCategory.Cmd,
                                     $"[GameSessionButton:DeferAsync:stats:{customId}] SLOW attempt=1/3 took={sw.Elapsed.TotalMilliseconds:F0}ms " +
                                     $"interaction={component.Id} " +
-                                    $"gcPause={totalPauseMs}ms gen0={gen0} gen1={gen1} gen2={gen2} heap={heapMB:F1}MB " +
+                                    $"{RPBot.Common.GcMetrics.DeltaSince(gcBefore)} " +
                                     $"— возможна IO/GC пауза.");
                             }
                         }
