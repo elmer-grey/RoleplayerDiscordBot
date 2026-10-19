@@ -71,12 +71,12 @@
 
 <div class="grid">
   <div class="card">
-    <h2>Health</h2>
+    <h2>Состояние</h2>
     <div id="health" class="empty">загрузка...</div>
   </div>
 
   <div class="card">
-    <h2>Stats (за сегодня)</h2>
+    <h2>Статистика (за сегодня)</h2>
     <div id="stats" class="empty">загрузка...</div>
   </div>
 
@@ -91,7 +91,7 @@
     </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Servers</h2>
+    <h2>Серверы</h2>
       <div class="legend" id="servers-legend">
         <span class="lg"><span class="sw" style="background:#143;border-color:#1a5"></span>ОК — настроено и работает</span>
         <span class="lg"><span class="sw" style="background:#422;border-color:#a64"></span>Внимание — рекомендуется</span>
@@ -103,41 +103,41 @@
     </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Анонсы (EventOps)</h2>
+    <h2>События (анонсы)</h2>
     <div id="announcements" class="empty">загрузка...</div>
   </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Sessions</h2>
+    <h2>Сессии</h2>
     <div id="sessions" class="empty">загрузка...</div>
   </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Activity (последний час, по минутам)</h2>
+    <h2>Активность (последний час, по минутам)</h2>
     <div id="activity" class="empty">загрузка...</div>
   </div>
 
   <div class="card" style="grid-column:1/-1">
-    <h2>Logs (последние 200)</h2>
+    <h2>Логи (последние 200)</h2>
     <div class="controls">
-      <label><input type="checkbox" id="filter-system" checked /> System</label>
-      <label><input type="checkbox" id="filter-user" checked /> User</label>
+      <label><input type="checkbox" id="filter-system" checked /> Система</label>
+      <label><input type="checkbox" id="filter-user" checked /> Пользователи</label>
       <label><input type="checkbox" id="filter-errors" /> Только ошибки</label>
       <label><input type="checkbox" id="filter-autoscroll" checked /> Автоскролл</label>
       <select id="filter-category">
         <option value="">Все категории</option>
-        <option value="Rolls">Rolls</option>
-        <option value="Music">Music</option>
-        <option value="Predict">Predict</option>
-        <option value="Points">Points</option>
-        <option value="Session">Session</option>
-        <option value="System">System</option>
-        <option value="Boot">Boot</option>
+        <option value="Rolls">Броски</option>
+        <option value="Music">Музыка</option>
+        <option value="Predict">Предсказания</option>
+        <option value="Points">Очки</option>
+        <option value="Session">Сессия</option>
+        <option value="System">Система</option>
+        <option value="Boot">Загрузка</option>
         <option value="Discord">Discord</option>
-        <option value="Sheets">Sheets</option>
-        <option value="Config">Config</option>
-        <option value="Cmd">Cmd</option>
-        <option value="Other">Other</option>
+        <option value="Sheets">Таблицы</option>
+        <option value="Config">Конфиг</option>
+        <option value="Cmd">Команды</option>
+        <option value="Other">Прочее</option>
       </select>
       <input type="text" id="filter-text" placeholder="Поиск по тексту..." />
     </div>
@@ -431,7 +431,7 @@ function renderAnnouncements(d){
     return `<div class="item-card">
       <div class="item-title">${esc(a.Name ?? '—')}</div>
       <div class="item-meta">
-        ${_badge(a.StatusLabel || '—', statusKind)}
+        ${_badge(a.StatusLabel || 'Запланировано', statusKind)}
         <span>Старт (МСК): <b>${esc(start)}</b></span>
         <span>Где: ${esc(loc)}</span>
         <span>Обновлено: ${esc(updated)}</span>

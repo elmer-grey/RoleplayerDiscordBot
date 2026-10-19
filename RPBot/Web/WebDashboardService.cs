@@ -908,7 +908,7 @@ namespace RPBot.Web
             catch (ObjectDisposedException) { /* уже закрыто */ }
         }
 
-        private void OnLog(BotLogRecord record)
+                private void OnLog(BotLogRecord record)
                 {
             // Проставляем монотонный seq ДО добавления в _logs, чтобы
             // он уже был в LinkedList при первом Take()/MapRecord.
@@ -921,14 +921,23 @@ namespace RPBot.Web
                 while (_logs.Count > _maxLogs)
                     _logs.RemoveLast();
             }
-            _streamSignal.Set();
+            // Персональный сигнал каждому открытому стриму. Единый общий
+            // ManualResetEventSlim с Wait→Reset терял wakeup'ы: Reset одного
+            // подписчика съедал сигнал остальных, а Set между Wait и Reset
+            // пропадал навсегда — отсюда «логи зависают в случайный момент».
+            lock (_streamsLock)
+            {
+                foreach (var sub in _streams.Values)
+                {
+                    try
+                    {
+                        var signal = sub.Signal;
+                        if (signal.CurrentCount == 0) signal.Release();
+                    }
+                    catch { /* Signal уже disposed при закрытии стрима */ }
+                }
+            }
         }
-
-                // Сигнал «появились новые записи» для всех открытых /api/logs/stream соединений.
-                // Слабая блокировка (тонкая семафор-нотификация), потому что OnLog вызывается
-                // из BotLogger-обсервера на каждый Write — он не должен стоять в очереди
-                // ожидания дольше микросекунд.
-                private readonly ManualResetEventSlim _streamSignal = new(false);
 
                 // Подписчики стрима: на каждого — свой снепшот логов и ссылка на writer.
                 private readonly object _streamsLock = new();
@@ -939,6 +948,8 @@ namespace RPBot.Web
                     public DateTimeOffset LastSent;   // последний Timestamp, который мы уже отдали
                     public HttpListenerResponse? Response;
                     public CancellationTokenSource? Cts;
+                    // Персональный сигнал «есть новые записи» (max 1 — «флаг»).
+                    public SemaphoreSlim Signal { get; } = new(0, 1);
                 }
 
                 private async Task HandleLogsStreamAsync(HttpListenerContext context, CancellationToken token)
@@ -1001,11 +1012,15 @@ namespace RPBot.Web
 
                     try
                     {
-                        // Цикл: ждём сигнал «есть новые записи» — сливаем их, шлём как NDJSON.
+                        // Цикл: ждём персональный сигнал «есть новые записи» — сливаем их, шлём как NDJSON.
                         while (!subCts.IsCancellationRequested)
                         {
-                            _streamSignal.Wait(subCts.Token);
-                            _streamSignal.Reset();
+                            // Страховочный поллинг 250мс: даже если Set был потерян
+                            // (гонка Release/Dispose), свежие записи подхватываются
+                            // максимум за четверть секунды.
+                            await sub.Signal
+                                .WaitAsync(TimeSpan.FromMilliseconds(250), subCts.Token)
+                                .ConfigureAwait(false);
 
                             // Под нашу подписку собрать только записи новее её LastSent,
                             // потом обновить LastSent, записать в сокет.
@@ -1058,6 +1073,7 @@ namespace RPBot.Web
                     finally
                     {
                         lock (_streamsLock) _streams.Remove(sid);
+                        try { sub.Signal.Dispose(); } catch { }
                         try { subCts.Dispose(); } catch { }
                     }
                 }

@@ -1398,7 +1398,12 @@ private void SaveServerConfigs()
             }
             }
             catch { }
-        return g.Value.Values.Select(s => new
+        // ✅ Завершённая сессия исчезает из дашборда через 24ч после конца
+        // (тот же срок, что и cleanup анонса события). Активные/на паузе — всегда.
+        var stoppedCutoff = DateTime.Now.AddHours(-24);
+        return g.Value.Values
+        .Where(s => !s.IsStopped || (s.EndTime ?? s.StartTime) > stoppedCutoff)
+        .Select(s => new
         {
         s.SessionId,
         GuildId = g.Key,
@@ -1430,21 +1435,17 @@ private void SaveServerConfigs()
         if (_eventAnnouncementStore == null) return "event announcements not ready";
         try
         {
-        var entries = _eventAnnouncementStore.GetEntriesSnapshot();
         var client = _client;
+        // Финальные записи скрываются из дашборда через 24ч (как cleanup анонса);
+        // сам store не трогаем.
+        var entries = _eventAnnouncementStore.GetEntriesSnapshot()
+        .Where(e => !IsEventRecordExpired(e, GetEventStatusLabel(e)))
+        .ToList();
         return entries.Select(e =>
         {
             SocketGuild? g = null;
             try { g = client?.GetGuild(e.GuildId); } catch { }
-            // Локализованная подпись статуса: берём из LastUpdatedMark («▶️ Событие началось: 12.08.2026 14:00»),
-            // оставляя только первую часть строки (смайл + статус) — без даты, она выводится отдельно.
-            string? statusLabel = null;
-            if (!string.IsNullOrEmpty(e.LastUpdatedMark))
-            {
-            var mark = e.LastUpdatedMark!;
-            var colon = mark.IndexOf(':');
-            statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
-            }
+            string? statusLabel = GetEventStatusLabel(e);
             string? whenMsk = null;
             try
             {
@@ -1586,7 +1587,12 @@ private void SaveServerConfigs()
                 SocketGuild? sguild = null;
                 try { sguild = client?.GetGuild(g.Key); } catch { }
                 var guildName = sguild?.Name;
-                return g.Value.Values.Select(s => new
+                // ✅ Завершённая сессия исчезает из дашборда через 24ч после конца
+                // (тот же срок, что и cleanup анонса события). Активные/на паузе — всегда.
+                var stoppedCutoff = DateTime.Now.AddHours(-24);
+                return g.Value.Values
+                .Where(s => !s.IsStopped || (s.EndTime ?? s.StartTime) > stoppedCutoff)
+                .Select(s => new
                 {
                 s.SessionId,
                 GuildId = g.Key,
@@ -1606,19 +1612,17 @@ private void SaveServerConfigs()
             if (_eventAnnouncementStore == null) return "event announcements not ready";
             try
             {
-            var entries = _eventAnnouncementStore.GetEntriesSnapshot();
             var client = _client;
+            // Финальные записи скрываются из дашборда через 24ч (как cleanup анонса);
+            // сам store не трогаем.
+            var entries = _eventAnnouncementStore.GetEntriesSnapshot()
+            .Where(e => !IsEventRecordExpired(e, GetEventStatusLabel(e)))
+            .ToList();
             return entries.Select(e =>
             {
                 SocketGuild? g = null;
                 try { g = client?.GetGuild(e.GuildId); } catch { }
-                string? statusLabel = null;
-                if (!string.IsNullOrEmpty(e.LastUpdatedMark))
-                {
-                var mark = e.LastUpdatedMark!;
-                var colon = mark.IndexOf(':');
-                statusLabel = colon > 0 ? mark.Substring(0, colon).Trim() : mark;
-                }
+                string? statusLabel = GetEventStatusLabel(e);
                 string? whenMsk = null;
                 try
                 {
@@ -7612,6 +7616,44 @@ private Task LogStartup(string message)
                 StartupType.Reconnect => "Переподключение",
                 _ => "Первичный запуск"
             };
+        }
+
+        /// <summary>
+        /// Локализованный статус события для web-дашборда (/api/events).
+        /// Латиница RESYNC ("started"/"completed"/"cancelled"/"scheduled") маппится
+        /// в русский; пустая метка = событие ещё не началось → «Запланировано».
+        /// Запись в сторе НЕ меняется: everFinalized-логика RESYNC сверяется
+        /// по StartsWith с латинскими строками, поэтому русифицируем только показ.
+        /// </summary>
+        private static string? GetEventStatusLabel(EventAnnouncementEntry e)
+        {
+            var markRaw = e.LastUpdatedMark;
+            if (string.IsNullOrEmpty(markRaw)) return "Запланировано";
+            var mark = markRaw.TrimStart();
+            var lower = mark.ToLowerInvariant();
+            string? mapped = lower switch
+            {
+                var m when m.StartsWith("scheduled") => "Запланировано",
+                var m when m.StartsWith("started") || m.StartsWith("start") => "Началось",
+                var m when m.StartsWith("completed") || m.StartsWith("complete") => "Завершено",
+                var m when m.StartsWith("cancelled") || m.StartsWith("cancel") => "Отменено",
+                _ => null,
+            };
+            if (mapped != null) return mapped;
+            // Русские метки вида «▶️ Событие началось: 12.08.2026 14:00» — берём префикс до ':'.
+            var colon = mark.IndexOf(':');
+            return colon > 0 ? mark.Substring(0, colon).Trim() : mark;
+        }
+
+        /// <summary>
+        /// Запись события с финальным статусом скрыта из дашборда, когда прошло
+        /// 24 часа после финализации (тот же срок, что и cleanup анонса).
+        /// «Началось» финальным не является и не скрывается.
+        /// </summary>
+        private static bool IsEventRecordExpired(EventAnnouncementEntry e, string? statusLabel)
+        {
+            if (statusLabel is not ("Завершено" or "Отменено" or "Удалено")) return false;
+            return e.LastUpdatedAtUtc.UtcDateTime < DateTime.UtcNow.AddHours(-24);
         }
 
         private async Task LogError(string errorMessage)
