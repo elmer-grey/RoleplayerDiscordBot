@@ -1485,6 +1485,9 @@ private void SaveServerConfigs()
                 CoverImageUrl = e.LastCoverImageUrl,
                 StatusLabel = statusLabel,
                 LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+                PlannedStartUtc = e.LastStartTimeUtc,
+                ActualStartUtc = e.ActualStartTimeUtc,
+                EndedUtc = endedAt,
             };
         }).ToList();
         }
@@ -1684,6 +1687,9 @@ private void SaveServerConfigs()
                     CoverImageUrl = e.LastCoverImageUrl,
                     StatusLabel = statusLabel,
                     LastUpdatedAtUtc = e.LastUpdatedAtUtc,
+                    PlannedStartUtc = e.LastStartTimeUtc,
+                    ActualStartUtc = e.ActualStartTimeUtc,
+                    EndedUtc = endedAt,
                 };
             }).ToList();
             }

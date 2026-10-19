@@ -688,8 +688,8 @@ namespace RPBot.Web
                                             await WriteJsonAsync(context.Response, BuildSystemsPayload(), token).ConfigureAwait(false);
                                             break;
                     case "/api/servers":
-                        var servers = SafeInvoke(_serverConfigsProvider) as IReadOnlyDictionary<ulong, ServerConfig>;
-                        if (servers == null)
+                        var serversPayload = BuildServersPayload();
+                        if (serversPayload == null)
                         {
                             context.Response.StatusCode = 503;
                             await WriteTextAsync(context.Response, "{\"error\":\"server configs not ready\"}",
@@ -697,55 +697,7 @@ namespace RPBot.Web
                         }
                         else
                         {
-                                                var client = _clientProvider?.Invoke();
-                                                var payload = servers
-                                                    .OrderBy(x => x.Key)
-                                                    .Select(x =>
-                                                    {
-                                                        SocketGuild? g = null;
-                                                                                                            SocketRole? masterRole = null;
-                                                                                                            SocketRole? superRole = null;
-                                                                                                            try
-                                                                                                            {
-                                                                                                                g = client?.GetGuild(x.Key);
-                                                                                                                if (g != null && x.Value.MasterRoleId.HasValue && x.Value.MasterRoleId.Value != 0)
-                                                                                                                {
-                                                                                                                    var mr = g.GetRole(x.Value.MasterRoleId.Value);
-                                                                                                                    masterRole = mr as SocketRole;
-                                                                                                                }
-                                                                                                                if (g != null && x.Value.SuperUserRoleId.HasValue && x.Value.SuperUserRoleId.Value != 0)
-                                                                                                                {
-                                                                                                                    var sr = g.GetRole(x.Value.SuperUserRoleId.Value);
-                                                                                                                    superRole = sr as SocketRole;
-                                                                                                                }
-                                                                                                            }
-                                                                                                            catch { }
-                                                                                                        return new
-                                                                                                        #pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete
-                                                                                                        {
-                                                                                                            GuildId = x.Key,
-                                                                                                            GuildName = g?.Name,
-                                                                                                            x.Value.ModerateChannelID,
-                                                                                                            x.Value.GeneralRGChannelID,
-                                                                                                            x.Value.RecordChannelID,
-                                                                                                            x.Value.WelcomeChannelID,
-                                                                                                            x.Value.RollChannelID,
-                                                                                                            x.Value.StatsChannelID,
-                                                                                                            x.Value.EventVoiceChannelID,
-                                                                                                            MasterRoleId = x.Value.MasterRoleId,
-                                                                                                            MasterRoleName = masterRole?.Name,
-                                                                                                            x.Value.SuperUserRoleId,
-                                                                                                            SuperUserRoleName = superRole?.Name,
-                                                                                                            x.Value.TelegramEnabled,
-                                                                                                            x.Value.PredictionsEnabled,
-                                                                                                            x.Value.RollPicturesEnabled,
-                                                                                                            x.Value.SwearFilterEnabled,
-                                                                                                            x.Value.MasterGuideEnabled,
-                                                                                                            #pragma warning restore CS0618
-                                                                                                        };
-                                                                                                    })
-                                                                                                    .ToList();
-                                                await WriteJsonAsync(context.Response, payload, token).ConfigureAwait(false);
+                                                await WriteJsonAsync(context.Response, serversPayload, token).ConfigureAwait(false);
                                             }
                                             break;
                                         case "/api/sessions":
@@ -809,29 +761,10 @@ namespace RPBot.Web
                                             await WriteJsonAsync(context.Response, logs, token).ConfigureAwait(false);
                                             break;
                     case "/api/stats":
-                        int rolls = SafeInvokeInt(_rollsTodayProvider);
-                        int sess  = SafeInvokeInt(_activeSessionsProvider);
-                        int chat  = SafeInvokeInt(_chatMessagesTodayProvider);
-                        int voice = SafeInvokeInt(_usersInVoiceProvider);
-                        int totalLogs;
-                        lock (_logsLock) totalLogs = _logs.Count;
-                        await WriteJsonAsync(context.Response, new
-                        {
-                            RollsToday = rolls,
-                            ChatMessagesToday = chat,
-                            ActiveSessions = sess,
-                            UsersInVoice = voice,
-                            LogRecords = totalLogs,
-                        }, token).ConfigureAwait(false);
+                        await WriteJsonAsync(context.Response, BuildStatsPayload(), token).ConfigureAwait(false);
                         break;
                     case "/api/activity":
-                        var activity = SafeInvoke(_activityProvider) as IReadOnlyList<ActivityBucket>
-                                        ?? Array.Empty<ActivityBucket>();
-                        await WriteJsonAsync(context.Response, activity.Select(b => new
-                        {
-                            Minute = b.Minute.ToString("HH:mm"),
-                            b.Count,
-                        }), token).ConfigureAwait(false);
+                        await WriteJsonAsync(context.Response, BuildActivityPayload(), token).ConfigureAwait(false);
                         break;
                     default:
                         context.Response.StatusCode = 404;
@@ -955,6 +888,8 @@ namespace RPBot.Web
                 private async Task HandleLogsStreamAsync(HttpListenerContext context, CancellationToken token)
                 {
                     var sid = Guid.NewGuid();
+                    var cardsTicks = 20; // каждые N тиков (250мс) — пуш карточек
+                    var cardCounter = 0;
                     var subCts = CancellationTokenSource.CreateLinkedTokenSource(token);
                     StreamSubscription sub;
 
@@ -990,6 +925,23 @@ namespace RPBot.Web
                         // накопится достаточно данных. У нас bootstrap — ровно один
                         // массив, и без flush клиент может долго ждать первого чанка.
                         try { await context.Response.OutputStream.FlushAsync(subCts.Token).ConfigureAwait(false); }
+                        catch (HttpListenerException) { return; }
+                        catch (ObjectDisposedException) { return; }
+
+                        // Bootstrap-карточки: снапшот всех карточек сразу после bootstrap —
+                        // клиент рендерит их мгновенно, не дожидаясь 5-секундного цикла.
+                        try
+                        {
+                            var cardsBootstrapJson = "{\"type\":\"cards\",\"data\":"
+                                + JsonSerializer.Serialize(BuildCardsPayload()) + "}\n";
+                            var cardsBootstrapBytes = Encoding.UTF8.GetBytes(cardsBootstrapJson);
+                            await context.Response.OutputStream
+                                .WriteAsync(cardsBootstrapBytes, 0, cardsBootstrapBytes.Length, subCts.Token)
+                                .ConfigureAwait(false);
+                            try { await context.Response.OutputStream.FlushAsync(subCts.Token).ConfigureAwait(false); }
+                            catch (HttpListenerException) { return; }
+                            catch (ObjectDisposedException) { return; }
+                        }
                         catch (HttpListenerException) { return; }
                         catch (ObjectDisposedException) { return; }
 
@@ -1040,6 +992,25 @@ namespace RPBot.Web
                                                                     payloads = fresh.Select(x => JsonSerializer.Serialize(MapRecord(x))).ToList();
                                                                     sub.LastSent = fresh[0].Timestamp;
                                                                 }
+                            }
+                            // Карточки (health/stats/systems/servers/sessions/events/activity)
+                            // пушатся периодически, независимо от свежести логов.
+                            if (++cardCounter >= cardsTicks)
+                            {
+                                cardCounter = 0;
+                                try
+                                {
+                                    var cardsChunk = Encoding.UTF8.GetBytes(
+                                        "{\"type\":\"cards\",\"data\":"
+                                        + JsonSerializer.Serialize(BuildCardsPayload()) + "}\n");
+                                    await context.Response.OutputStream
+                                        .WriteAsync(cardsChunk, 0, cardsChunk.Length, subCts.Token)
+                                        .ConfigureAwait(false);
+                                    await context.Response.OutputStream.FlushAsync(subCts.Token)
+                                        .ConfigureAwait(false);
+                                }
+                                catch (HttpListenerException) { return; }
+                                catch (ObjectDisposedException) { return; }
                             }
                             if (payloads == null) continue;
                             foreach (var line in payloads)
@@ -1139,6 +1110,107 @@ namespace RPBot.Web
                         try { raw = _systemsProvider(); }
                         catch (Exception ex) { raw = new { Error = ex.Message }; }
                         return raw;
+                    }
+
+                    private object BuildStatsPayload()
+                    {
+                        int rolls = SafeInvokeInt(_rollsTodayProvider);
+                        int sess = SafeInvokeInt(_activeSessionsProvider);
+                        int chat = SafeInvokeInt(_chatMessagesTodayProvider);
+                        int voice = SafeInvokeInt(_usersInVoiceProvider);
+                        int totalLogs;
+                        lock (_logsLock) totalLogs = _logs.Count;
+                        return new
+                        {
+                            RollsToday = rolls,
+                            ChatMessagesToday = chat,
+                            ActiveSessions = sess,
+                            UsersInVoice = voice,
+                            LogRecords = totalLogs,
+                        };
+                    }
+
+                    private object BuildServersPayload()
+                    {
+                        // null = конфиги серверов ещё не готовы (REST-версия отвечала 503).
+                        var servers = SafeInvoke(_serverConfigsProvider) as IReadOnlyDictionary<ulong, ServerConfig>;
+                        if (servers == null) return null;
+
+                        var client = _clientProvider?.Invoke();
+                        return servers
+                            .OrderBy(x => x.Key)
+                            .Select(x =>
+                            {
+                                SocketGuild? g = null;
+                                SocketRole? masterRole = null;
+                                SocketRole? superRole = null;
+                                try
+                                {
+                                    g = client?.GetGuild(x.Key);
+                                    if (g != null && x.Value.MasterRoleId.HasValue && x.Value.MasterRoleId.Value != 0)
+                                    {
+                                        var mr = g.GetRole(x.Value.MasterRoleId.Value);
+                                        masterRole = mr as SocketRole;
+                                    }
+                                    if (g != null && x.Value.SuperUserRoleId.HasValue && x.Value.SuperUserRoleId.Value != 0)
+                                    {
+                                        var sr = g.GetRole(x.Value.SuperUserRoleId.Value);
+                                        superRole = sr as SocketRole;
+                                    }
+                                }
+                                catch { }
+                                return new
+#pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete
+                                {
+                                    GuildId = x.Key,
+                                    GuildName = g?.Name,
+                                    x.Value.ModerateChannelID,
+                                    x.Value.GeneralRGChannelID,
+                                    x.Value.RecordChannelID,
+                                    x.Value.WelcomeChannelID,
+                                    x.Value.RollChannelID,
+                                    x.Value.StatsChannelID,
+                                    x.Value.EventVoiceChannelID,
+                                    MasterRoleId = x.Value.MasterRoleId,
+                                    MasterRoleName = masterRole?.Name,
+                                    x.Value.SuperUserRoleId,
+                                    SuperUserRoleName = superRole?.Name,
+                                    x.Value.TelegramEnabled,
+                                    x.Value.PredictionsEnabled,
+                                    x.Value.RollPicturesEnabled,
+                                    x.Value.SwearFilterEnabled,
+                                    x.Value.MasterGuideEnabled,
+#pragma warning restore CS0618
+                                };
+                            })
+                            .ToList();
+                    }
+
+                    private object BuildActivityPayload()
+                    {
+                        var activity = SafeInvoke(_activityProvider) as IReadOnlyList<ActivityBucket>
+                                        ?? Array.Empty<ActivityBucket>();
+                        return activity.Select(b => new
+                        {
+                            Minute = b.Minute.ToString("HH:mm"),
+                            b.Count,
+                        }).ToList();
+                    }
+
+                    private object BuildCardsPayload()
+                    {
+                        // Единый снапшот всех карточек для карточного потока /api/logs/stream.
+                        // Данные — те же самые, что отдаёт соответствующий REST-эндпоинт.
+                        return new
+                        {
+                            Health = BuildHealthPayload(),
+                            Stats = BuildStatsPayload(),
+                            Systems = BuildSystemsPayload(),
+                            Servers = BuildServersPayload(),
+                            Sessions = SafeInvoke(_sessionsProvider),
+                            Events = SafeInvoke(_eventsProvider),
+                            Activity = BuildActivityPayload(),
+                        };
                     }
 
         private bool CheckRateLimit(string clientIp)
