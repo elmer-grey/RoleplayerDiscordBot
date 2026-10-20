@@ -278,11 +278,17 @@ namespace RPBot.EventOps
                                             {
                                                 // Окно уже прошло (бот был оффлайн всю часовую пометку).
                                                 // Если reminder ещё не отправлен (Dm ids пуст ИЛИ Announce-id=0) — шлём сразу.
+                                                // 🩹 reminder-lead-text: но только если событие ещё НЕ началось —
+                                                // напоминание «уже началось» после старта рассылать нельзя
+                                                // (кейс 2026-10-20: напоминание 12:00Z не ушло, событие 13:00Z
+                                                // стартовало, следующий реконнект шлал бы пост-стартовый reminder).
+                                                var eventAlreadyStarted = entry.LastStartTimeUtc.HasValue
+                                                                          && nowUtc >= entry.LastStartTimeUtc.Value;
                                                 var dmIds = entry.ReminderDmMessageIdsByUserId;
                                                 var alreadySent = (dmIds != null && dmIds.Count > 0)
                                                                   || entry.ReminderAnnounceMessageId != 0
                                                                   || entry.ReminderTelegramMessageId != 0;
-                                                if (!alreadySent)
+                                                if (!alreadySent && !eventAlreadyStarted)
                                                 {
                                                     BotLogger.Info(LogCategory.Discord,
                                                         $"[EventOpsLifecycle] RehydrateTimers: шлю reminder1h (окно прошло в оффлайне) guild={entry.GuildId} event={entry.EventId} reminderAt={reminderAt:o} now={nowUtc:o}");
@@ -1272,6 +1278,39 @@ namespace RPBot.EventOps
         //  Действия
         // ════════════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// 🩹 reminder-lead-text: честный остаток до события вместо жёсткого «через час».
+        /// Плановая отправка идёт на start−1ч (остаток ~60 мин → «через час»), но
+        /// catch-up/восстановление после оффлайна шлют позже — тогда пишем реальный
+        /// остаток. Если событие уже началось — об этом прямо и пишем.
+        /// </summary>
+        private static string BuildReminderLeadText(EventAnnouncementEntry entry)
+        {
+            if (entry.LastStartTimeUtc is not { } start)
+                return "через час";
+
+            var remaining = start - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                return "событие уже началось";
+            if (remaining >= TimeSpan.FromMinutes(50))
+                return "через час"; // плановая отправка (запас на джиттер планировщика)
+
+            var minutes = (int)Math.Ceiling(remaining.TotalMinutes);
+            return minutes <= 1 ? "прямо сейчас" : $"через {minutes} мин";
+        }
+
+        /// <summary>
+        /// Собирает тело напоминания. <paramref name="formattedName"/> уже размечен
+        /// под конкретный формат (Markdown **…** или Telegram &lt;b&gt;…&lt;/b&gt;).
+        /// </summary>
+        private static string BuildReminderPhrase(EventAnnouncementEntry entry, string formattedName)
+        {
+            var lead = BuildReminderLeadText(entry);
+            if (lead == "событие уже началось")
+                return $"событие {formattedName} уже началось";
+            return $"{lead} начнётся событие {formattedName}";
+        }
+
         private async Task SendReminderAsync(EventAnnouncementEntry entry)
         {
             var client = SafeGetClient();
@@ -1408,7 +1447,7 @@ namespace RPBot.EventOps
                         var dmEmbed = new EmbedBuilder()
                             .WithTitle("⏰ Напоминание о событии")
                             .WithDescription(
-                                $"**Напоминание:** через час начнётся событие **{eventName}** — не пропустите!")
+                                $"**Напоминание:** {BuildReminderPhrase(entry, $"**{eventName}**")} — не пропустите!")
                             .WithColor(Color.Orange)
                             .AddField("🕒 Когда", startUnix > 0 ? $"<t:{startUnix}:F>" : "—", true)
                             .AddField("📍 Где", whereText, true)
@@ -1456,7 +1495,7 @@ namespace RPBot.EventOps
                         var announceEmbed = new EmbedBuilder()
                             .WithTitle("⏰ Напоминание о событии")
                             .WithDescription(
-                                $"**Напоминание:** через час начнётся событие **{eventName}**, не пропустите!")
+                                $"**Напоминание:** {BuildReminderPhrase(entry, $"**{eventName}**")}, не пропустите!")
                             .WithColor(Color.Orange)
                             .AddField("🕒 Когда", startUnix > 0 ? $"<t:{startUnix}:F>" : "—", true)
                             .AddField("📍 Где", whereText, true)
@@ -1572,7 +1611,7 @@ namespace RPBot.EventOps
                                         // подставляем eventName/whenText/whereTextTg/eventUrl без
                                         // предварительного EscapeHtml (двойное экранирование ломает вывод).
                                         var tgText =
-                                            $"⏰ <b>Напоминание:</b> через час начнётся событие <b>{eventName}</b>, не пропустите!\n\n" +
+                                                            $"⏰ <b>Напоминание:</b> {BuildReminderPhrase(entry, $"<b>{eventName}</b>")}, не пропустите!\n\n" +
                                             $"🕒 <b>Когда:</b> {whenText}\n" +
                                             $"📍 <b>Где:</b> {whereTextTg}\n\n" +
                                             $"🔗 <a href=\"{eventUrl}\">Ссылка на событие в Discord</a>";
