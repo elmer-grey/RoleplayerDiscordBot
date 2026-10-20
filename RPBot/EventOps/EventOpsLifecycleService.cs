@@ -52,7 +52,7 @@ namespace RPBot.EventOps
                 private readonly object _telegramNotifierLock = new();
 
         private readonly ConcurrentDictionary<(ulong guildId, ulong eventId), ScheduledTimers> _timers = new();
-        private readonly CancellationTokenSource _shutdownCts = new();
+        private CancellationTokenSource _shutdownCts = new();
 
         // Single-flight guard: запрещает двойной запуск RebuildFromStoreAsync при reconnect/Ready.
         private int _running;
@@ -90,6 +90,17 @@ namespace RPBot.EventOps
         public void Cancel()
         {
             try { _shutdownCts.Cancel(); } catch { }
+
+            // 🩹 reminder-lost-after-reconnect: Cancel() вызывается не только при
+            // shutdown, но и на КАЖДОМ OnDisconnected (плановые gateway-реконнекты
+            // Discord — каждые 1–3 часа). Отменённый _shutdownCts без пересоздания
+            // навсегда рвал linkedCts у последующих RehydrateTimersAsync/
+            // RebuildFromStoreAsync: их цикл разрывался на первой итерации
+            // (ct.IsCancellationRequested), сводки выходили со всеми нулями, а
+            // reminder1h/deleteReminder15m/cleanup24h после реконнекта никогда
+            // не восстанавливались (потеря напоминания 2026-10-20 12:00Z).
+            // Пересоздаём чистый токен — будущие вызовы снова рабочие.
+            _shutdownCts = new CancellationTokenSource();
 
                     // ВАЖНО: _shutdownCts сам по себе не связан с per-event CTSs в _timers
                     // (они живут независимыми CancellationTokenSource'ами на каждое
