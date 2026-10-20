@@ -57,6 +57,16 @@ namespace RPBot.EventOps
         // Single-flight guard: запрещает двойной запуск RebuildFromStoreAsync при reconnect/Ready.
         private int _running;
 
+        // 🐕 reminder-watchdog-sweep: периодическая страховка таймеров EventOps (запрос
+        // владельца 2026-10-20 «каждые ~30 минут проверять, ушло ли напоминание»).
+        // Раз в этот интервал стор проверяется независимо от rehydrate/rebuild:
+        // просроченное неотправленное напоминание — досылается, таймеры на будущее —
+        // ставятся заново, если слот пуст (Cancel() чистит слоты, живой таймер держит CTS).
+        private static readonly TimeSpan ReminderSweepInterval = TimeSpan.FromMinutes(30);
+
+        // Single-flight guard свипа: не более одного живого фонового цикла одновременно.
+        private int _sweepRunning;
+
         public EventOpsLifecycleService(
             EventAnnouncementStore store,
             Func<DiscordSocketClient> clientProvider,
@@ -429,6 +439,11 @@ namespace RPBot.EventOps
 
                                     BotLogger.Info(LogCategory.Discord,
                                         $"[EventOpsLifecycle] RehydrateTimers завершено: reminderDelay={rehydratedReminder}, deleteDelay={rehydratedDelete}, cleanupDelay={rehydratedCleanup}, reminderNow={sentNowReminder}, deleteNow={sentNowDelete}, cleanupNow={sentNowCleanup}");
+
+                                    // 🐕 reminder-watchdog-sweep: после rehydrate поддерживаем
+                                    // постоянный периодический контроль (умирает при Cancel(),
+                                    // перезапускается на следующем RehydrateTimersAsync).
+                                    StartReminderSweep();
                                 }
                                 catch (Exception ex)
                                 {
@@ -708,11 +723,251 @@ namespace RPBot.EventOps
 
                 BotLogger.Info(LogCategory.Discord,
                     $"[EventOpsLifecycle] RebuildFromStoreAsync завершено: cleanup={scheduledCleanup}, reminder={scheduledReminder}, backfillCompleted={scheduledBackfillCompleted}, catchup={sentCatchupReminder}, catchupDel={sentCatchupReminderDelete}, skipped={skipped}");
+
+                // 🐕 reminder-watchdog-sweep: страховка запускается и на старте бота,
+                // не только после реконнекта (single-flight исключит дубль).
+                StartReminderSweep();
             }
             finally
             {
                 Interlocked.Exchange(ref _running, 0);
             }
+        }
+
+        // ════════════════════════════════════════════════════════════════════
+        //  Watchdog-свайп напоминаний
+        // ════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Пер-канальная проверка «напоминание уже уходило» — та же логика, что в
+        /// <see cref="RehydrateTimersAsync"/> и <see cref="SendReminderAsync"/>.
+        /// </summary>
+        internal static bool ReminderWasPerChannelSent(EventAnnouncementEntry entry)
+            => (entry.ReminderDmMessageIdsByUserId != null && entry.ReminderDmMessageIdsByUserId.Count > 0)
+               || entry.ReminderAnnounceMessageId != 0
+               || entry.ReminderTelegramMessageId != 0;
+
+        /// <summary>Событие уже началось (по <c>LastStartTimeUtc</c>)?</summary>
+        internal static bool EventAlreadyStarted(EventAnnouncementEntry entry, DateTimeOffset nowUtc)
+            => entry.LastStartTimeUtc.HasValue && nowUtc >= entry.LastStartTimeUtc.Value;
+
+        /// <summary>
+        /// Запускает фоновый watchdog-цикл: раз в <see cref="ReminderSweepInterval"/>
+        /// проходит по свежему снапшоту стора и восстанавливает напоминания:
+        /// <list type="bullet">
+        ///   <item>момент reminder1h в прошлом, факт отправки не зафиксирован, событие
+        ///   ещё не началось — напоминание досылается (с защитой от дублей: живой
+        ///   таймер держит CTS в слоте; Cancel() чистит слоты — пустой слот = можно шлать);</item>
+        ///   <item>момент в прошлом, но событие уже началось — напоминание рассылать нельзя,
+        ///   заброшенный таймер снимается (кейс 2026-10-20 12:00Z);</item>
+        ///   <item>момент в будущем — таймер ставится, если слот пуст (потерялся
+        ///   из-за Cancel/ошибки планирования);</item>
+        ///   <item>то же для deleteReminder15m, но удаление — только после старта события.</item>
+        /// </list>
+        /// Цикл связан с <c>_shutdownCts</c>: на Cancel() умирает вместе с rehydrate-таймерами
+        /// и перезапускается при следующем RehydrateTimersAsync/RebuildFromStoreAsync.
+        /// </summary>
+        private void StartReminderSweep()
+        {
+            if (Interlocked.CompareExchange(ref _sweepRunning, 1, 0) != 0)
+                return;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var rootCt = _shutdownCts.Token;
+                    BotLogger.Info(LogCategory.Discord,
+                        $"[EventOpsLifecycle] Watchdog-свайп запущен: интервал={(int)ReminderSweepInterval.TotalMinutes} мин");
+                    while (!rootCt.IsCancellationRequested)
+                    {
+                        try { await SweepOnceAsync(rootCt); }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            BotLogger.Warn(LogCategory.Discord,
+                                $"[EventOpsLifecycle] Watchdog-свайп: ошибка прохода: {ex.GetType().Name}: {ex.Message}");
+                        }
+
+                        try { await Task.Delay(ReminderSweepInterval, rootCt); }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    BotLogger.Warn(LogCategory.Discord,
+                        $"[EventOpsLifecycle] Watchdog-свайп цикл прерван: {ex.GetType().Name}: {ex.Message}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _sweepRunning, 0);
+                }
+            });
+        }
+
+        /// <summary>Одиночный проход watchdog-свайпа по свежему снапшоту стора.</summary>
+        private async Task SweepOnceAsync(CancellationToken ct)
+        {
+            var entries = _store.GetEntriesSnapshot();
+            var nowUtc = DateTimeOffset.UtcNow;
+
+            int sentReminder = 0, scheduledReminder = 0, skippedStarted = 0,
+                sentDelete = 0, scheduledDelete = 0;
+
+            bool HasLiveTimer(ScheduledTimers slot, bool forDelete)
+            {
+                lock (slot.Lock)
+                {
+                    return forDelete ? slot.DeleteReminder15mCts != null : slot.Reminder1hCts != null;
+                }
+            }
+
+            foreach (var entry in entries)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                // ── (1) reminder1h ────────────────────────────────────────────
+                if (entry.Reminder1hAtUtc.HasValue && !ReminderWasPerChannelSent(entry))
+                {
+                    var reminderAt = entry.Reminder1hAtUtc.Value;
+                    var started = EventAlreadyStarted(entry, nowUtc);
+
+                    if (nowUtc >= reminderAt)
+                    {
+                        // Момент прошёл. Если живой таймер существует — он сам отправляет;
+                        // голый просроченный кейс (слот пуст, поле в сторе есть) — досылаем.
+                        var slot = _timers.GetOrAdd((entry.GuildId, entry.EventId), _ => new ScheduledTimers());
+                        if (!HasLiveTimer(slot, forDelete: false))
+                        {
+                            var fresh = _store.TryGet(entry.GuildId, entry.EventId);
+                            if (fresh == null) continue;
+
+                            if (EventAlreadyStarted(fresh, nowUtc))
+                            {
+                                // 🩹 reminder-lead-text: пост-стартовые напоминания запрещены
+                                // (кейс 2026-10-20). Снимаем заброшенный план и чистим поле.
+                                CancelReminder1h(fresh);
+                                skippedStarted++;
+                            }
+                            else
+                            {
+                                BotLogger.Info(LogCategory.Discord,
+                                    $"[EventOpsLifecycle] Watchdog-свайп: досылаю reminder1h guild={fresh.GuildId} event={fresh.EventId} reminderAt={reminderAt:o} now={nowUtc:o}");
+                                try { await SendReminderAsync(fresh); sentReminder++; }
+                                catch (Exception exR)
+                                {
+                                    BotLogger.Warn(LogCategory.Discord,
+                                        $"[EventOpsLifecycle] Watchdog-свайп: SendReminderAsync failed: {exR.Message}");
+                                }
+                            }
+                        }
+                    }
+                    else if (!started)
+                    {
+                        // Будущее: таймер должен стоять; пустой слот (после Cancel())
+                        // — ставим заново. Живой таймер не трогаем (сбивать delay нельзя).
+                        var slot = _timers.GetOrAdd((entry.GuildId, entry.EventId), _ => new ScheduledTimers());
+                        if (!HasLiveTimer(slot, forDelete: false))
+                        {
+                            var delay = reminderAt - nowUtc;
+                            var cts = new CancellationTokenSource();
+                            bool placed;
+                            lock (slot.Lock)
+                            {
+                                if (slot.Reminder1hCts == null)
+                                {
+                                    slot.Reminder1hCts = cts;
+                                    slot.Reminder1hAtUtc = reminderAt;
+                                    placed = true;
+                                }
+                                else
+                                {
+                                    placed = false;
+                                }
+                            }
+
+                            if (placed)
+                            {
+                                _ = Task.Run(() => RunReminder1hAsync(entry, cts.Token, delay), cts.Token);
+                                scheduledReminder++;
+                                BotLogger.Info(LogCategory.Discord,
+                                    $"[EventOpsLifecycle] Watchdog-свайп: восстановлен таймер reminder1h guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {reminderAt:u})");
+                            }
+                            else
+                            {
+                                try { cts.Dispose(); } catch { }
+                            }
+                        }
+                    }
+                }
+
+                // ── (2) deleteReminder15m ─────────────────────────────────────
+                if (entry.DeleteReminder15mAtUtc.HasValue)
+                {
+                    var deleteAt = entry.DeleteReminder15mAtUtc.Value;
+                    var slot = _timers.GetOrAdd((entry.GuildId, entry.EventId), _ => new ScheduledTimers());
+
+                    if (nowUtc >= deleteAt)
+                    {
+                        // Удаление reminder-сообщений имеет смысл только после старта
+                        // события (иначе можно снести напоминание, которое ещё уйдёт).
+                        // DeleteReminderMessagesAsync идемпотентен и сам чистит поле в сторе.
+                        if (EventAlreadyStarted(entry, nowUtc) && !HasLiveTimer(slot, forDelete: true))
+                        {
+                            var fresh = _store.TryGet(entry.GuildId, entry.EventId);
+                            if (fresh == null) continue;
+
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsLifecycle] Watchdog-свайп: досылаю deleteReminder15m guild={fresh.GuildId} event={fresh.EventId} deleteAt={deleteAt:o} now={nowUtc:o}");
+                            try { await DeleteReminderMessagesAsync(fresh); sentDelete++; }
+                            catch (Exception exD)
+                            {
+                                BotLogger.Warn(LogCategory.Discord,
+                                    $"[EventOpsLifecycle] Watchdog-свайп: DeleteReminderMessagesAsync failed: {exD.Message}");
+                            }
+                        }
+                    }
+                    else if (!HasLiveTimer(slot, forDelete: true))
+                    {
+                        var delay = deleteAt - nowUtc;
+                        var cts = new CancellationTokenSource();
+                        bool placed;
+                        lock (slot.Lock)
+                        {
+                            if (slot.DeleteReminder15mCts == null)
+                            {
+                                slot.DeleteReminder15mCts = cts;
+                                placed = true;
+                            }
+                            else
+                            {
+                                placed = false;
+                            }
+                        }
+
+                        if (placed)
+                        {
+                            _ = Task.Run(() => RunDeleteReminder15mAsync(entry, cts.Token, delay), cts.Token);
+                            scheduledDelete++;
+                            BotLogger.Info(LogCategory.Discord,
+                                $"[EventOpsLifecycle] Watchdog-свайп: восстановлен таймер deleteReminder15m guild={entry.GuildId} event={entry.EventId} через {(int)delay.TotalMinutes} мин (at {deleteAt:u})");
+                        }
+                        else
+                        {
+                            try { cts.Dispose(); } catch { }
+                        }
+                    }
+                }
+            }
+
+            BotLogger.Info(LogCategory.Discord,
+                $"[EventOpsLifecycle] Watchdog-свайп завершён: checked={entries.Count}, reminderSent={sentReminder}, reminderScheduled={scheduledReminder}, reminderSkipStarted={skippedStarted}, deleteSent={sentDelete}, deleteScheduled={scheduledDelete}");
         }
 
         // ════════════════════════════════════════════════════════════════════
