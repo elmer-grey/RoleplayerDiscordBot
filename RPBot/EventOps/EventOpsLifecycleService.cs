@@ -54,6 +54,14 @@ namespace RPBot.EventOps
         private readonly ConcurrentDictionary<(ulong guildId, ulong eventId), ScheduledTimers> _timers = new();
         private CancellationTokenSource _shutdownCts = new();
 
+        // 🩹 reminder-send-gate: семафор на (guild,event) — сериализует ВСЕ пути
+        // отправки напоминаний (RunReminder1h, rehydrate-past, rebuild catch-up,
+        // watchdog-свайп). Исключает параллельный дубликат сообщения, когда
+        // reconnect-реридрат стартует ровно в момент отправки свипа/таймера:
+        // в сторе записался бы id только одной из двух отправок, вторая осталась
+        // бы «виртуальной» — не удалённой через 15 мин после старта события.
+        private readonly ConcurrentDictionary<(ulong guildId, ulong eventId), SemaphoreSlim> _sendGates = new();
+
         // Single-flight guard: запрещает двойной запуск RebuildFromStoreAsync при reconnect/Ready.
         private int _running;
 
@@ -1567,6 +1575,25 @@ namespace RPBot.EventOps
         }
 
         private async Task SendReminderAsync(EventAnnouncementEntry entry)
+        {
+            // 🩹 reminder-send-gate: каждый путь отправки дожидается своей очереди
+            // по событию; внутри — перечитываем мастер-запись из стора, потому что
+            // снапшотные копии (GetEntriesSnapshot) могли не увидеть per-channel ids,
+            // записанные предыдущей отправкой прямо перед нами (per-channel skip ниже).
+            var gate = _sendGates.GetOrAdd((entry.GuildId, entry.EventId), _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var fresh = _store.TryGet(entry.GuildId, entry.EventId);
+                await SendReminderAsyncCore(fresh ?? entry).ConfigureAwait(false);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private async Task SendReminderAsyncCore(EventAnnouncementEntry entry)
         {
             var client = SafeGetClient();
             if (client == null)
