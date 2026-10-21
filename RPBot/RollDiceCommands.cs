@@ -55,6 +55,12 @@ namespace RPBot
         // дважды: 16:30 и 17:31, броски 2d6). Все загружаемые PNG — MemoryStream (byte[]-кэш
         // или strip-склейка), поэтому один ретрай со сбросом Position переживает разрыв
         // соединения без потери результата броска.
+        // 🩹 retry-closed-stream: ретрай НЕ может переиспользовать переданный MemoryStream —
+        // HTTP-слой Discord.NET закрывает стрим вложения сразу после отправки, в т.ч.
+        // НЕуспешной (обрыв посреди multipart: HttpRequestException уже при dispose).
+        // Тогда retry упирался в stream.Position=0 закрытого стрима → ObjectDisposedException
+        // «Ошибка при броске. Подробности в логах» (2026-10-20 23:29, Gri_go, 3d6). Снимаем
+        // payload в byte[] один раз на входе и на каждую попытку отдаём свежий MemoryStream.
         private static async Task SendFilesWithRetryAsync(
             SocketSlashCommand command,
             MemoryStream stream,
@@ -62,12 +68,12 @@ namespace RPBot
             string? text = null,
             Embed[]? embeds = null)
         {
+            var payload = stream.ToArray();
             for (int attempt = 0; ; attempt++)
             {
                 try
                 {
-                    stream.Position = 0;
-                    var attachment = new FileAttachment(stream, fileName);
+                    var attachment = new FileAttachment(new MemoryStream(payload, writable: false), fileName);
                     await command.FollowupWithFilesAsync(
                         attachments: new[] { attachment },
                         text: text,
@@ -567,13 +573,13 @@ namespace RPBot
                                                 .WithColor(DiceStripComposer.ColorForAverage(avg, min, max))
                                                 .Build();
 
-                                            var label = count == 2
-                                                ? "Результаты броска (помеха/преимущество):"
-                                                : $"Результаты {count} бросков:";
-
+                                            // 🩹 strip-labels-removed (запрос владельца): подписи
+                                            // «Результаты N бросков:» и «Результаты броска
+                                            // (помеха/преимущество):» убраны — strip-картинка
+                                            // с гранями кубиков говорит сама за себя.
                                             await SendFilesWithRetryAsync(
                                                 command, _stripHolder, "roll_strip.png",
-                                                text: label, embeds: new[] { embed });
+                                                embeds: new[] { embed });
 
                                             await TrySendPauseFollowupAsync(command, pauseMsg);
 
