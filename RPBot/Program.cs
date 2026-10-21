@@ -7664,11 +7664,38 @@ private Task LogStartup(string message)
         /// в русский; пустая метка = событие ещё не началось → «Запланировано».
         /// Запись в сторе НЕ меняется: everFinalized-логика RESYNC сверяется
         /// по StartsWith с латинскими строками, поэтому русифицируем только показ.
+        /// 🩹 dashboard-live-status (2026-10-21): метка LastUpdatedMark может остаться
+        /// пустой или «scheduled», когда Started-апдейт не долёг до стора (gateway-
+        /// реконнект, рестарт бота) — дашборд показывал «Запланировано» для уже
+        /// идущего события, хотя Discord-клиент показывает «Идёт». Пустая/не-финальная
+        /// метка при прошедшем старт-времени показывается как «Началось»; стор не трогаем.
         /// </summary>
         private static string? GetEventStatusLabel(EventAnnouncementEntry e)
         {
             var markRaw = e.LastUpdatedMark;
-            if (string.IsNullOrEmpty(markRaw)) return "Запланировано";
+            var label = string.IsNullOrEmpty(markRaw)
+                ? "Запланировано"
+                : MapEventStatusLabel(markRaw);
+
+            // 🩹 dashboard-live-status: для не-финальной метки сверяемся с фактами:
+            // финальные таймстемпы записи перебивают метку; иначе «Запланировано» при
+            // прошедшем старте — идущее событие. Только показ: стор не трогаем.
+            if (label == "Запланировано")
+            {
+                if (e.CompletedAtUtc.HasValue) label = "Завершено";
+                else if (e.CancelledAtUtc.HasValue) label = "Отменено";
+                else if (e.LastStartTimeUtc.HasValue
+                         && DateTimeOffset.UtcNow >= e.LastStartTimeUtc.Value)
+                {
+                    label = "Началось";
+                }
+            }
+            return label;
+        }
+
+        /// <summary>Маппинг латинского маркера RESYNC/Announcer в русский показ.</summary>
+        private static string? MapEventStatusLabel(string markRaw)
+        {
             var mark = markRaw.TrimStart();
             var lower = mark.ToLowerInvariant();
             string? mapped = lower switch
