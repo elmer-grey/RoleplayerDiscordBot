@@ -148,6 +148,7 @@
       <label><input type="checkbox" id="filter-system" checked /> Система</label>
       <label><input type="checkbox" id="filter-user" checked /> Пользователи</label>
       <label><input type="checkbox" id="filter-errors" /> Только ошибки</label>
+      <label><input type="checkbox" id="filter-warns" /> Только предупреждения</label>
       <label><input type="checkbox" id="filter-autoscroll" checked /> Автоскролл</label>
       <select id="filter-category">
         <option value="">Все категории</option>
@@ -445,30 +446,39 @@ function logLevelKind(raw){
   return 'info';
 }
 
-// Панель «Проблемы»: Warn/Error из клиентского буфера логов.
+// Панель «Проблемы»: Warn и Error из клиентского буфера логов, разведённые
+// по отдельным секциям (запрос владельца 2026-10-21: «нужно разводить Error
+// и Warn»). Клик по строке ставит галочку ИМЕННО этого уровня в блоке логов:
+// ошибка → «Только ошибки», предупреждение → «Только предупреждения».
 // Ограничение: буфер 200–500 строк покрывает «видимую историю», а не точные 24ч.
 function updateIssues(){
   const node = $('issues');
   if (!node) return;
   const all = window._allLogs || [];
-  const issues = all.filter(rec => logLevelKind(rec.level) !== 'info').slice(0, 3);
   const errs = all.filter(rec => logLevelKind(rec.level) === 'error').length;
   const warns = all.filter(rec => logLevelKind(rec.level) === 'warn').length;
-  if (issues.length === 0){
+  if (errs === 0 && warns === 0){
     node.classList.add('empty');
     node.innerHTML = 'проблем не зафиксировано ✅';
     return;
   }
   node.classList.remove('empty');
-  const summary = `<div class="small" style="margin-bottom:6px">❌ ${errs} ${pluralRu(errs, 'ошибка', 'ошибки', 'ошибок')}, ⚠️ ${warns} ${pluralRu(warns, 'предупреждение', 'предупреждения', 'предупреждений')}</div>`;
-  const lines = issues.map(rec => {
-    const lvCls = logLevelKind(rec.level) === 'error' ? 'err' : 'lv-warn';
-    return `<div class="issue-line" title="Нажмите, чтобы открыть ошибки в логах" onclick="document.getElementById('filter-errors').checked = true; renderLogs();">
+  const issueLineHtml = (rec, clickHint, checkboxId) => {
+    const isErr = logLevelKind(rec.level) === 'error';
+    const lvCls = isErr ? 'err' : 'lv-warn';
+    return `<div class="issue-line" title="${esc(clickHint)}" onclick="document.getElementById('${checkboxId}').checked = true; renderLogs();">
       <span class="ts" style="color:#888">[${esc(rec.timestamp ?? '')}]</span>
       <span class="${lvCls}">[${esc(rec.level ?? '')}]</span> ${esc((rec.message ?? '').length > 200 ? rec.message.slice(0, 200) + '…' : rec.message ?? '')}
     </div>`;
-  }).join('');
-  setHtml('issues', summary + lines);
+  };
+  const errRecs = all.filter(rec => logLevelKind(rec.level) === 'error').slice(0, 3);
+  const warnRecs = all.filter(rec => logLevelKind(rec.level) === 'warn').slice(0, 3);
+  const summary = `<div class="small" style="margin-bottom:6px">❌ ${errs} ${pluralRu(errs, 'ошибка', 'ошибки', 'ошибок')}, ⚠️ ${warns} ${pluralRu(warns, 'предупреждение', 'предупреждения', 'предупреждений')}</div>`;
+  const errSection = `<div class="small" style="margin-top:4px;font-weight:600">❌ Ошибки ${errs === 0 ? '<span style="color:#777">— нет</span>' : ''}</div>`
+    + errRecs.map(rec => issueLineHtml(rec, 'Нажмите, чтобы открыть ошибки в логах', 'filter-errors')).join('');
+  const warnSection = `<div class="small" style="margin-top:4px;font-weight:600">⚠️ Предупреждения ${warns === 0 ? '<span style="color:#777">— нет</span>' : ''}</div>`
+    + warnRecs.map(rec => issueLineHtml(rec, 'Нажмите, чтобы открыть предупреждения в логах', 'filter-warns')).join('');
+  setHtml('issues', summary + errSection + warnSection);
 }
 
 // Таймлайн события: план → реальный старт → завершение.
@@ -608,6 +618,7 @@ function renderLogs(){
   const showSys = $('filter-system')?.checked !== false;
   const showUsr = $('filter-user')?.checked !== false;
   const errOnly = $('filter-errors')?.checked === true;
+  const warnOnly = $('filter-warns')?.checked === true;
   const autoscroll = $('filter-autoscroll')?.checked !== false;
   const cat = ($('filter-category')?.value || '');
   const q = ($('filter-text')?.value || '').toLowerCase();
@@ -618,6 +629,7 @@ function renderLogs(){
     if (!isUser && !showSys) return false;
     const lvl = (rec.level || '');
     if (errOnly && !/error/i.test(lvl)) return false;
+    if (warnOnly && !/warn/i.test(lvl)) return false;
     const recCat = rec.category ?? rec.Category ?? '';
     if (cat && recCat !== cat) return false;
     const msg = rec.message ?? rec.Message ?? '';
@@ -868,7 +880,7 @@ async function tick(){
     await loadCard('activity','/api/activity', renderActivity);
 }
 
-['filter-system','filter-user','filter-errors','filter-autoscroll'].forEach(id => {
+['filter-system','filter-user','filter-errors','filter-warns','filter-autoscroll'].forEach(id => {
   const n = $(id); if (n) n.addEventListener('change', renderLogs);
 });
 const fc = $('filter-category'); if (fc) fc.addEventListener('change', renderLogs);
