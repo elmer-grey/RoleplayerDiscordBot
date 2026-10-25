@@ -25,6 +25,9 @@ namespace RPBot
     ///   H – Продолжительность (формула таблицы, не трогаем)
     ///   I – Место проведения (ручное, не трогаем)
     ///   J – Примечание     (ручное, не трогаем)
+    ///   K – Обложка события: картинка (формула =IMAGE) или, если обложки нет,
+    ///       текст описания события. При картинке описание ещё кладётся
+    ///       примечанием к этой ячейке.
     ///
     /// Стратегия поиска строки для записи:
     ///   Ищем первую строку начиная с GoogleSheetDataStartRow, у которой
@@ -42,12 +45,14 @@ namespace RPBot
         // G (6) и H (7) — формулы таблицы, не пишем
         // I (8) — место проведения, не пишем
         // J (9) — примечание, не пишем
+        private const int ColImage = 10; // K – обложка события (формула =IMAGE)
 
         private readonly SpreadsheetsResource _sheets;
         private readonly string _spreadsheetId;
         private readonly string _sheetName;
         private readonly int _dataStartRow; // 1-based (обычно 2)
         private readonly SemaphoreSlim _lock = new(1, 1);
+        private int? _cachedSheetId; // числовой ID листа (для batchUpdate: примечания)
 
         public Action<string>? LogSink { get; set; }
 
@@ -200,6 +205,7 @@ namespace RPBot
                 var values = BuildRowValues(session);
                 Log($"[Sheets] Запись в строку {row}: {string.Join(" | ", values.Select(v => v?.ToString() ?? "-"))}");
                 await WriteRowAsync(row, values).ConfigureAwait(false);
+                await WriteEventDetailsAsync(session, row).ConfigureAwait(false);
 
                 Log($"[Sheets] Запись завершена, строка {row}.");
                 return row;
@@ -403,6 +409,147 @@ namespace RPBot
             var request = _sheets.Values.Update(body, _spreadsheetId, range);
             request.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
             await request.ExecuteAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Дописывает в строку обложку события и описание события в столбце K:
+        ///   • есть обложка  → K = формула =IMAGE(url) (картинка рисуется внутри
+        ///     ячейки, USER_ENTERED), описание при наличии — примечанием к K;
+        ///   • обложки нет   → K = текст описания (RAW — чтобы текст не превратился
+        ///     в формулу), примечание не используется;
+        ///   • нет ни того, ни другого → K не трогается (ручные данные не затираются).
+        /// </summary>
+        private async Task WriteEventDetailsAsync(GameSession session, int row)
+        {
+            var coverUrl = session.EventCoverImageUrl?.Trim() ?? string.Empty;
+            var description = SanitizeSessionNote(session.EventDescription);
+
+            if (coverUrl.Length == 0 && description.Length == 0)
+                return;
+
+            var range = $"'{_sheetName}'!K{row}";
+            try
+            {
+                if (coverUrl.Length > 0)
+                {
+                    var body = new ValueRange
+                    {
+                        Range = range,
+                        Values = new List<IList<object>> { new List<object> { BuildImageFormula(coverUrl) } }
+                    };
+                    var req = _sheets.Values.Update(body, _spreadsheetId, range);
+                    req.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+                    await req.ExecuteAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    var body = new ValueRange
+                    {
+                        Range = range,
+                        Values = new List<IList<object>> { new List<object> { description } }
+                    };
+                    var req = _sheets.Values.Update(body, _spreadsheetId, range);
+                    req.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.RAW;
+                    await req.ExecuteAsync().ConfigureAwait(false);
+                    return; // описанию текстом примечание не нужно
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[Sheets] Не удалось записать обложку/описание в K{row}: {ex.Message}");
+                return;
+            }
+
+            if (description.Length > 0)
+            {
+                try
+                {
+                    var sheetId = await GetSheetIdAsync().ConfigureAwait(false);
+                    if (sheetId == null)
+                    {
+                        Log("[Sheets] Лист не найден — примечание с описанием не записано.");
+                        return;
+                    }
+
+                    var update = new BatchUpdateSpreadsheetRequest
+                    {
+                        Requests = new List<Request>
+                        {
+                            new Request
+                            {
+                                UpdateCells = new UpdateCellsRequest
+                                {
+                                    Start = new GridCoordinate { SheetId = sheetId.Value, RowIndex = row - 1, ColumnIndex = ColImage },
+                                    Rows = new List<RowData>
+                                    {
+                                        new RowData
+                                        {
+                                            Values = new List<CellData> { new CellData { Note = description } }
+                                        }
+                                    },
+                                    Fields = "userEnteredValue.note"
+                                }
+                            }
+                        }
+                    };
+                    await _sheets.BatchUpdate(update, _spreadsheetId).ExecuteAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[Sheets] Не удалось записать примечание с описанием в K{row}: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Возвращает числовой ID листа по имени (для batchUpdate-запросов).
+        /// Результат кешируется — имя листа меняется редко.
+        /// </summary>
+        private async Task<int?> GetSheetIdAsync()
+        {
+            if (_cachedSheetId.HasValue)
+                return _cachedSheetId.Value;
+
+            try
+            {
+                var meta = await _sheets.Get(_spreadsheetId).ExecuteAsync().ConfigureAwait(false);
+                var match = meta.Sheets?
+                    .FirstOrDefault(s => s.Properties?.Title == _sheetName);
+
+                if (match?.Properties?.SheetId == null)
+                    return null;
+
+                _cachedSheetId = match.Properties.SheetId;
+                return _cachedSheetId.Value;
+            }
+            catch (Exception ex)
+            {
+                Log($"[Sheets] Не удалось получить ID листа «{_sheetName}»: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Формула =IMAGE(url) — Google рисует картину внутри ячейки (режим
+        /// «вписать в ячейку» по умолчанию). Кавычки и переводы строк вырезаются,
+        /// чтобы формула не разъезжалась.
+        /// </summary>
+        internal static string BuildImageFormula(string url)
+        {
+            var safe = (url ?? string.Empty).Replace("\"", "").Replace("\n", "").Replace("\r", "").Trim();
+            return $"=IMAGE(\"{safe}\")";
+        }
+
+        /// <summary>
+        /// Описание события → текст примечания: трим обвязки, лимит 4000 символов
+        /// (лимит примечания ячейки в Google Sheets — 49 999, берём с запасом).
+        /// </summary>
+        internal static string SanitizeSessionNote(string? text)
+        {
+            var clean = (text ?? string.Empty).Replace("\r\n", "\n").Trim();
+            if (clean.Length <= 4000)
+                return clean;
+            return clean.Substring(0, 4000) + "…";
         }
 
         private void Log(string message)

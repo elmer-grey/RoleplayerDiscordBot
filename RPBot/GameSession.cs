@@ -42,6 +42,8 @@ namespace RPBot
                 public bool IsStopped => EndTime.HasValue;
                 public List<RollStatistic> Rolls { get; set; } = new();
                 public string EventDescription { get; set; } = string.Empty;
+                /// <summary>Обложка Discord-события (если сессия начата от события). Пишется в Google Sheets (столбец K).</summary>
+                public string EventCoverImageUrl { get; set; } = string.Empty;
                 public ulong ControlMessageId { get; set; }
                 /// <summary>Канал, в котором было отправлено сообщение управления. Записывается при создании control message.</summary>
                 public ulong ControlChannelId { get; set; }
@@ -240,6 +242,7 @@ namespace RPBot
                     session.StartTime,
                     session.ActiveStartTime,
                     session.EventDescription,
+                    session.EventCoverImageUrl,
                     session.GameComment,
                     session.EventId,
                     session.ControlMessageId,
@@ -311,6 +314,7 @@ namespace RPBot
                             continue;
                         }
                         var eventDescription = elem.TryGetProperty("EventDescription", out var ed) ? ed.GetString() : null;
+                        var eventCoverUrl = elem.TryGetProperty("EventCoverImageUrl", out var ecu) ? ecu.GetString() : null;
                         var gameComment = elem.TryGetProperty("GameComment", out var gc) ? gc.GetString() : null;
                         var eventId = elem.TryGetProperty("EventId", out var eid) && eid.ValueKind != System.Text.Json.JsonValueKind.Null ? (ulong?)eid.GetUInt64() : null;
                         var controlMessageId = elem.GetProperty("ControlMessageId").GetUInt64();
@@ -374,6 +378,7 @@ namespace RPBot
                                                     StartTime = startTime,
                                                                                                     ActiveStartTime = isPaused ? startTime : (activeStartTime == startTime ? DateTime.Now : activeStartTime),
                                                                                                     EventDescription = eventDescription ?? string.Empty,
+                                                                                                    EventCoverImageUrl = eventCoverUrl ?? string.Empty,
                                                                                                     GameComment = gameComment ?? string.Empty,
                                                                                                     EventId = eventId,
                                                                                                     ControlMessageId = controlMessageId,
@@ -720,6 +725,7 @@ namespace RPBot
         SocketGuildUser master,
                 string? gameComment = null,
                 string? eventDescription = null,
+                string? eventCoverUrl = null,
         ulong? eventId = null,
         ulong channelId = 0)
         {
@@ -759,6 +765,7 @@ namespace RPBot
                     MasterId = master?.Id ?? 0,
                     GameComment = gameComment ?? string.Empty,
                     EventDescription = eventDescription ?? string.Empty,
+                    EventCoverImageUrl = eventCoverUrl ?? string.Empty,
                     StartTime = DateTime.Now,
                                     ActiveStartTime = DateTime.Now,
                                     EventId = eventId,
@@ -1040,6 +1047,7 @@ namespace RPBot
                 guildEvent.Name,
                 creator,
                 eventDescription: guildEvent.Description,
+                eventCoverUrl: guildEvent.GetCoverImageUrl(),
                 eventId: guildEvent.Id);
 
             if (session == null)
