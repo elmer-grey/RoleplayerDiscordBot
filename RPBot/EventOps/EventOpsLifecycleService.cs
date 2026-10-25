@@ -290,6 +290,22 @@ namespace RPBot.EventOps
                                         // (1) Reminder1h: если момент в сторе — решаем немедленно/Task.Delay.
                                         if (entry.Reminder1hAtUtc.HasValue)
                                         {
+                                            // 🩹 reminder-follows-reschedule (2): инвариант
+                                            // Reminder1hAtUtc == LastStartTimeUtc − 1ч. Если стор хранит
+                                            // момент от СТАРОГО старта (событие перенесли, а reschedule
+                                            // не сработал/не дошёл) — пересчитываем от нового старта,
+                                            // иначе таймер сработает в уже несуществующее окно.
+                                            if (entry.LastStartTimeUtc.HasValue)
+                                            {
+                                                var expectedAt = entry.LastStartTimeUtc.Value.AddHours(-1);
+                                                if (entry.Reminder1hAtUtc.Value != expectedAt)
+                                                {
+                                                    BotLogger.Warn(LogCategory.Discord,
+                                                        $"[EventOpsLifecycle] RehydrateTimers: Reminder1hAtUtc {entry.Reminder1hAtUtc.Value:u} не совпадает с LastStartTimeUtc−1h {expectedAt:u} — корректирую по новому старту guild={entry.GuildId} event={entry.EventId}");
+                                                    entry.Reminder1hAtUtc = expectedAt;
+                                                    try { _store.UpdateEntry(entry); } catch { }
+                                                }
+                                            }
                                             var reminderAt = entry.Reminder1hAtUtc.Value;
                                             var nowUtc = DateTimeOffset.UtcNow;
                                             if (nowUtc >= reminderAt)
@@ -1003,11 +1019,23 @@ namespace RPBot.EventOps
                     return;
                 }
 
-                // Перепланируем reminder1h: время могло сдвинуться.
-                ScheduleReminder1h(entry);
+                var startChanged = previous != null
+                    && previous.StartTime.ToUniversalTime() != current.StartTime.ToUniversalTime();
+                if (startChanged)
+                {
+                    // 🩹 reminder-follows-reschedule: старт (время/дата) сдвинулся —
+                    // reminder обязан уехать за новым временем, а не за старым.
+                    await RescheduleReminderForStartChangeAsync(entry);
+                }
+                else
+                {
+                    // Время не менялось; штатно переставляем от текущего LastStartTimeUtc
+                    // (Created мог прийти раньше анонса — reminder мог не стоять).
+                    ScheduleReminder1h(entry);
+                }
 
                 BotLogger.Info(LogCategory.Discord,
-                    $"[EventOpsLifecycle] HandleUpdatedAsync guild={current.Guild.Id} event={current.Id} (reminder1h перепланирован)");
+                    $"[EventOpsLifecycle] HandleUpdatedAsync guild={current.Guild.Id} event={current.Id} (reminder1h перепланирован{(startChanged ? ", старт перенесён" : "")})");
             }
             catch (Exception ex)
             {
@@ -1015,6 +1043,36 @@ namespace RPBot.EventOps
                     $"[EventOpsLifecycle] HandleUpdatedAsync error: {ex.Message}");
             }
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// 🩹 reminder-follows-reschedule (2026-10-25, событие «Wings of Nova: Project
+        /// "Darkweb"»): при переносе времени/даты события reminder1h обязан уехать
+        /// за новым стартом. Раньше reminder отправлялся по старому времени: подмена
+        /// multicast-делегата в Program не пускала сюда lifecycle, а все-канальный
+        /// guard «reminder уже отправлялся» блокировал и пере-планирование.
+        /// Порядок: снять старый таймер → удалить старые reminder-сообщения (их время
+        /// уже неверно; <see cref="DeleteReminderMessagesAsync"/> идемпотентен и сам
+        /// чистит sent-поля) → страховочно сбросить sent-поля (delete молча выходит,
+        /// если клиент недоступен) → запланировать reminder заново от нового
+        /// LastStartTimeUtc (<see cref="ScheduleReminder1h"/> пишет новое окно в стор).
+        /// </summary>
+        private async Task RescheduleReminderForStartChangeAsync(EventAnnouncementEntry entry)
+        {
+            CancelReminder1h(entry);
+
+            await DeleteReminderMessagesAsync(entry);
+            entry.ReminderDmMessageIdsByUserId = null;
+            entry.ReminderAnnounceMessageId = 0;
+            entry.ReminderTelegramMessageId = 0;
+            entry.ReminderTelegramChatId = 0;
+            entry.ReminderTelegramThreadId = 0;
+            try { _store.UpdateEntry(entry); } catch { }
+
+            ScheduleReminder1h(entry);
+
+            BotLogger.Info(LogCategory.Discord,
+                $"[EventOpsLifecycle] RescheduleReminderForStartChange: старт перенесён — старый reminder снят, sent-поля сброшены, reminder1h пере-планирован от {entry.LastStartTimeUtc:u} guild={entry.GuildId} event={entry.EventId}");
         }
 
         private async Task HandleCreatedAsync(SocketGuildEvent ev)

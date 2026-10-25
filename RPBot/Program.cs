@@ -1315,7 +1315,17 @@ private void SaveServerConfigs()
     _eventAnnouncementStore,
     _eventNotifications!);
     _eventOpsOrchestrator.OnCreatedAsync = AnnouncerOnCreatedAsync;
-        _eventOpsOrchestrator.OnUpdatedAsync = AnnouncerOnUpdatedAsync;
+        // 🩹 event-update-delegate-wipe: OnUpdatedAsync здесь НЕ назначаем. Раньше
+        // `= AnnouncerOnUpdatedAsync` (с default-кэшем) стоял в ините, а
+        // OnGuildScheduledEventUpdated на каждом gateway-апдейте перезаписывал
+        // multicast лямбдой `= (…, previous) => AnnounceUpdatedAsync(capturedBefore, …)`.
+        // В обоих случаях вытирался ВЕСЬ multicast — включая
+        // Lifecycle.HandleUpdatedAsync, добавленный через Attach (+=). По логам прода
+        // 2026-10-25: при переносе события (op=Updated) ScheduleReminder1h не
+        // вызывался вовсе, reminder1h уехал по старому времени (13:00Z) после того,
+        // как старт перенесли на новую дату (10:57:09 op=Updated, отправка 13:00:00).
+        // Теперь анонс при Updated вызывается явно в OnGuildScheduledEventUpdated
+        // (с настоящим before-кэшем), multicast-подписка Lifecycle сохраняется.
         _eventOpsOrchestrator.OnStartedAsync = AnnouncerOnStartedAsync;
     // ВАЖНО: Announcer назначается первым (=), а Lifecycle подключается ПОСЛЕ через +=.
     // Тогда multicast-делегат = [Announcer → Lifecycle]. Announcer успевает
@@ -3380,10 +3390,23 @@ private static BotUI? _ui;
 
                 if (_eventOpsOrchestrator != null)
                 {
-                    // Подменяем делегат на лету, чтобы передать beforeCache — иначе теряется previous.
-                    // Само назначение OnUpdatedAsync безопасно: orchestrator не лезет в это поле параллельно.
                     var capturedBefore = before;
-                    _eventOpsOrchestrator.OnUpdatedAsync = (current, previous) => _eventAnnouncer!.AnnounceUpdatedAsync(capturedBefore, current);
+                    // 🩹 event-update-delegate-wipe: анонсер вызывается ЯВНО (с настоящим
+                    // before-кэшем), а не подменой multicast `=`. Подмена стирала
+                    // подписку Lifecycle.HandleUpdatedAsync — reminder1h не перепланировался
+                    // при переносе события (прод 2026-10-25: перенос в 10:57:09,
+                    // напоминание по старому времени ушло в 13:00:00).
+                    if (_eventAnnouncer != null)
+                    {
+                        try
+                        {
+                            await _eventAnnouncer.AnnounceUpdatedAsync(capturedBefore, after);
+                        }
+                        catch (Exception exAnnounce)
+                        {
+                            await LogError($"Ошибка AnnounceUpdatedAsync: {exAnnounce.Message}");
+                        }
+                    }
                     await _eventOpsOrchestrator.HandleUpdatedAsync(after, beforeEvent);
                 }
                 else
@@ -3512,12 +3535,6 @@ private static BotUI? _ui;
                         {
                             if (_eventAnnouncer == null) return Task.CompletedTask;
                             return _eventAnnouncer.AnnounceCreatedAsync(e);
-                        }
-
-                        private Task AnnouncerOnUpdatedAsync(SocketGuildEvent current, SocketGuildEvent? previous)
-                        {
-                            if (_eventAnnouncer == null) return Task.CompletedTask;
-                            return _eventAnnouncer.AnnounceUpdatedAsync(default, current);
                         }
 
                         private Task AnnouncerOnStartedAsync(SocketGuildEvent e)
