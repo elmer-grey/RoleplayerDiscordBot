@@ -55,6 +55,7 @@ namespace RPBot
         private int? _cachedSheetId; // числовой ID листа (для batchUpdate: примечания)
 
         public Action<string>? LogSink { get; set; }
+        public Action<string>? WarnSink { get; set; }
 
         private GoogleSheetsService(
             SpreadsheetsResource sheets,
@@ -456,7 +457,7 @@ namespace RPBot
             }
             catch (Exception ex)
             {
-                Log($"[Sheets] Не удалось записать обложку/описание в K{row}: {ex.Message}");
+                LogWarn($"Не удалось записать обложку/описание в K{row}: {ex.Message}");
                 return;
             }
 
@@ -487,7 +488,7 @@ namespace RPBot
                                             Values = new List<CellData> { new CellData { Note = description } }
                                         }
                                     },
-                                    Fields = "userEnteredValue.note"
+                                    Fields = "note"
                                 }
                             }
                         }
@@ -496,7 +497,7 @@ namespace RPBot
                 }
                 catch (Exception ex)
                 {
-                    Log($"[Sheets] Не удалось записать примечание с описанием в K{row}: {ex.Message}");
+                    LogWarn($"Не удалось записать примечание с описанием в K{row}: {ex.Message}");
                 }
             }
         }
@@ -555,6 +556,12 @@ namespace RPBot
         private void Log(string message)
         {
             LogSink?.Invoke($"[GoogleSheets] {message}");
+        }
+
+        private void LogWarn(string message)
+        {
+            var sink = WarnSink ?? LogSink;
+            sink?.Invoke($"[GoogleSheets] {message}");
         }
     }
 }

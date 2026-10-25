@@ -1801,6 +1801,8 @@ private void SaveServerConfigs()
     _googleSheetsService = GoogleSheetsService.TryCreate(_config!);
     if (_googleSheetsService != null)
     _googleSheetsService.LogSink = msg => BotLogger.Info(LogCategory.Sheets, msg);
+    if (_googleSheetsService != null)
+    _googleSheetsService.WarnSink = msg => BotLogger.Warn(LogCategory.Sheets, msg);
 
     // Сервисы для костяшек
     var pointsPath = BotConfig.ResolvePath(Path.Combine(BotConfig.DataFolderName, "points.json"));
