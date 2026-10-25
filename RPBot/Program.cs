@@ -7106,6 +7106,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
         sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
         sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
+        sb.AppendLine("- В welcome_message поддерживаются плейсхолдеры: {mention} — упоминание новичка, {server} — имя сервера, {user} — ник. Пустое значение — зашитый текст по умолчанию.");
         sb.AppendLine("- Для swear_words укажите слова через запятую в value (например: слово1,слово2). value:clear — очистить список.");
         sb.AppendLine();
         sb.AppendLine("Примеры:");
@@ -7116,7 +7117,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         sb.AppendLine("/settings action:set key:swear_filter toggle:true");
         sb.AppendLine("/settings action:set key:swear_words value:слово1,слово2,слово3");
         sb.AppendLine("/settings action:set key:swear_words value:clear");
-        sb.AppendLine("/settings action:set key:welcome_message value:Добро пожаловать!");
+        sb.AppendLine("/settings action:set key:welcome_message value:{mention}, добро пожаловать на {server}!");
         await command.RespondAsync(sb.ToString(), ephemeral: true);
         ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения справки
     }
@@ -7752,6 +7753,20 @@ private Task LogStartup(string message)
             return e.LastUpdatedAtUtc.UtcDateTime < DateTime.UtcNow.AddHours(-24);
         }
 
+        /// <summary>
+        /// Подстановка плейсхолдеров в тексте welcome_message: {mention} — упоминание
+        /// новичка, {server} — имя сервера, {user} — ник. Поддержаны также
+        /// legacy-плейсхолдеры из старых конфигов, которые годами не подставлялись:
+        /// {user.Mention} == {mention}, {guild.Name} == {server}.
+        /// Неизвестные плейсхолдеры и их отсутствие текст не ломают.
+        /// </summary>
+        internal static string ApplyWelcomePlaceholders(string text, string mention, string serverName, string username) =>
+            text.Replace("{mention}", mention)
+                .Replace("{user.Mention}", mention)
+                .Replace("{server}", serverName)
+                .Replace("{guild.Name}", serverName)
+                .Replace("{user}", username);
+
         private async Task LogError(string errorMessage)
             => await BotLogger.ErrorAsync(LogCategory.System, errorMessage).ConfigureAwait(false);
 
@@ -7789,6 +7804,28 @@ private Task LogStartup(string message)
                     {
                         await LogInfo($"Отправка приветственного сообщения в {welcomeChannel.Name}");
 
+                        // Текст приветствия: настройка сервера welcome_message имеет приоритет
+                        // (/settings action:set key:welcome_message value:{текст}); пустая —
+                        // зашитый текст ниже (прежнее поведение). Плейсхолдеры в настройке:
+                        // {mention} — упоминание новичка, {server} — имя сервера, {user} — ник.
+                        var welcomeDescription = config.WelcomeMessage;
+                        if (string.IsNullOrWhiteSpace(welcomeDescription))
+                        {
+                            welcomeDescription =
+                                $"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
+                                "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
+                                "На сервере помимо команд через `/` также действует несколько команд через `!` с важной информацией:\n" +
+                                "   • `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
+                                "   • `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
+                                "   • `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи;\n" +
+                                "   • `!команды` — здесь указаны все дополнительные пасты.\n\n" +
+                                "*При возникновении вопросов по серверу обратитесь к @domen_ или @perekrestok_mirov *";
+                        }
+                        else
+                        {
+                            welcomeDescription = ApplyWelcomePlaceholders(welcomeDescription, user.Mention, user.Guild.Name, user.Username);
+                        }
+
                         // Создаем EmbedBuilder
                         var embed = new EmbedBuilder()
                             .WithAuthor(new EmbedAuthorBuilder()
@@ -7800,14 +7837,7 @@ private Task LogStartup(string message)
                                             "1. `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
                                             "2. `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
                                             "3. `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи.")*/
-                            .WithDescription($"**{user.Guild.Name}** приветствует тебя, Путник {user.Mention}, проходи, присаживайся к нашему тёплому огню да расскажи откуда к нам!\n\n" +
-                                                "Если нужно очутиться в каком-то определённом мире ||принять участие в какой-либо настольно-ролевой игре||, то обратитесь __напрямую к мастеру__ и он выдаст необходимую роль.\n\n" +
-                                                "На сервере помимо команд через `/` также действует несколько команд через `!` с важной информацией:\n" +
-                                                "   • `!правила` — здесь описан свод правил, который действует на данном сервере;\n" +
-                                                "   • `!ссылки` — здесь представлены ссылки на все социальные сети, где можно найти \"Костёр на распутье\";\n" +
-                                                "   • `!запись` — здесь находится ссылка на документ, в котором вся ||(или почти вся)|| информация о том, как можно записывать игры, начиная от установки и заканчивая настройкой. К тому же там описаны базовые правила для чистоты записи;\n" +
-                                                "   • `!команды` — здесь указаны все дополнительные пасты.\n\n" +
-                                                "*При возникновении вопросов по серверу обратитесь к @domen_ или @perekrestok_mirov *")
+                            .WithDescription(welcomeDescription)
                             .WithColor(new Color(0xE67E22)) // Оранжевый цвет, как у огня
                             .WithImageUrl("https://media.discordapp.net/attachments/710469293996769405/1241392720883482674/fe5ff45b6397f151c147b890c29eaa26af6741f60a592d7baf3594ff7b424f24.gif?ex=664a0890&is=6648b710&hm=4b766b8801c0ad863731c4f3")
                             .WithFooter(new EmbedFooterBuilder()
