@@ -519,11 +519,38 @@ namespace RPBot
             }
         }
 
-        private static string GuessMediaFileName(TgChannelPost p)
+        /// <summary>Имя файла Discord-вложения по медиа-посту. Оригинальное название
+        /// (title трека / file_name) санитизируется: недопустимые в имени файла Windows
+        /// символы (кавычки, |, :, *) замещаются подчёркиванием, длина капится 64;
+        /// при пустом названии — заглушка по типу медиа («звук.mp3», «видео.mp4»...).
+        /// Без расширения — добавляется по типу, иначе Discord не распознает медиа.</summary>
+        public static string GuessMediaFileName(TgChannelPost p)
         {
             var name = (p.MediaName ?? "").Trim();
-            if (name.Length > 0 && name.Length <= 64 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
-                return name;
+            if (name.Length > 0)
+            {
+                var badChars = Path.GetInvalidFileNameChars();
+                name = new string(name.Select(ch => badChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
+                if (name.Length > 64)
+                {
+                    // Кап 64 — но расширение сохраняем на конце (иначе теряется тип файла).
+                    var ext = Path.GetExtension(name);
+                    name = name[..Math.Max(1, 64 - ext.Length)].TrimEnd() + ext;
+                }
+                // Точка-имя (".", "..") и пустой результат — не годятся.
+                if (name.Replace("_", "").Trim('.').Length > 0)
+                {
+                    if (name.IndexOf('.') < 0)
+                        name += p.MediaKind switch
+                        {
+                            "audio" or "voice" => ".mp3",
+                            "video" or "animation" or "video_note" => ".mp4",
+                            "sticker" => ".webp",
+                            _ => ".bin"
+                        };
+                    return name;
+                }
+            }
             return p.MediaKind switch
             {
                 "video" => "видео.mp4",
@@ -932,10 +959,20 @@ namespace RPBot
                     if (!mEl.TryGetProperty("file_id", out var fidEl) || fidEl.ValueKind != JsonValueKind.String) continue;
                     post.MediaFileId = fidEl.GetString();
                     post.MediaKind = kind;
-                    if (kind == "document" && mEl.TryGetProperty("file_name", out var fnEl) && fnEl.ValueKind == JsonValueKind.String)
-                        post.MediaName = fnEl.GetString() ?? "";
-                    else if (kind == "audio" && mEl.TryGetProperty("title", out var tEl) && tEl.ValueKind == JsonValueKind.String)
-                        post.MediaName = tEl.GetString() ?? "";
+                    // Имя файла для Discord-вложения: человекочитаемое название, где есть:
+                    // аудио — title (название трека), иначе file_name; у видео/GIF/документа
+                    // — file_name. Оба пусты → GuessMediaFileName подставит заглушку.
+                    if (kind == "audio")
+                    {
+                        if (mEl.TryGetProperty("title", out var tEl) && tEl.ValueKind == JsonValueKind.String &&
+                            tEl.GetString() is { } t && t.Trim().Length > 0)
+                            post.MediaName = t.Trim();
+                        else if (mEl.TryGetProperty("file_name", out var fnEl) && fnEl.ValueKind == JsonValueKind.String)
+                            post.MediaName = fnEl.GetString() ?? "";
+                    }
+                    else if (kind is "document" or "video" or "animation" &&
+                             mEl.TryGetProperty("file_name", out var fNameEl) && fNameEl.ValueKind == JsonValueKind.String)
+                        post.MediaName = fNameEl.GetString() ?? "";
                     break;
                 }
 

@@ -244,6 +244,36 @@ public class TelegramMirrorServiceTests
         Assert.False(doc.RootElement.TryGetProperty("attachments", out _));
     }
 
+    // --- GuessMediaFileName ---
+
+    [Fact]
+    public void GuessMediaFileName_AudioTitle_SanitizesIllegalCharsAndAddsExtension()
+    {
+        // «|», «:», кавычки недопустимы в имени файла Windows — замещаются подчёркиванием;
+        // без расширения добавляется .mp3 по типу медиа.
+        var post = new TelegramMirrorService.TgChannelPost
+        { MessageId = 1, ChatId = -100123, MediaKind = "audio", MediaName = "Artist | Track: Final \"x\"" };
+        Assert.Equal("Artist _ Track_ Final _x_.mp3", TelegramMirrorService.GuessMediaFileName(post));
+    }
+
+    [Fact]
+    public void GuessMediaFileName_EmptyName_FallsBackToKindStub()
+    {
+        var post = new TelegramMirrorService.TgChannelPost
+        { MessageId = 2, ChatId = -100123, MediaKind = "audio" };
+        Assert.Equal("звук.mp3", TelegramMirrorService.GuessMediaFileName(post));
+    }
+
+    [Fact]
+    public void GuessMediaFileName_LongName_CappedTo64()
+    {
+        var post = new TelegramMirrorService.TgChannelPost
+        { MessageId = 3, ChatId = -100123, MediaKind = "document", MediaName = new string('а', 80) + ".pdf" };
+        var name = TelegramMirrorService.GuessMediaFileName(post);
+        Assert.True(name.Length <= 64, $"имя слишком длинное: {name.Length}");
+        Assert.EndsWith(".pdf", name);
+    }
+
     // --- ExtractLargestPhotoFileId ---
 
     private static JsonElement Json(string s) => JsonDocument.Parse(s).RootElement;
