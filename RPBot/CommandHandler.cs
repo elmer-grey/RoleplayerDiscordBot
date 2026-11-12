@@ -1,4 +1,4 @@
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using System;
@@ -244,6 +244,9 @@ new SlashCommandBuilder()
                         .AddChoice("Картинки для бросков (вкл/выкл)", "roll_pictures")
                         .AddChoice("Команды бота в voice-комнатах (список)", "voice_room_commands")
         .AddChoice("Голосовой канал события", "event_voice_channel")
+        .AddChoice("Зеркало ТГ-канала (вкл/выкл)", "tg_mirror")
+        .AddChoice("Канал зеркала ТГ (посты из Telegram)", "tg_mirror_channel")
+        .AddChoice("Ссылка на ТГ-канал зеркала", "tg_mirror_link")
         .WithRequired(false))
     .AddOption("value", ApplicationCommandOptionType.String, "Новое значение настройки")
     .AddOption("channel", ApplicationCommandOptionType.Channel, "Выбор канала из списка")

@@ -1,4 +1,4 @@
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -48,6 +48,14 @@ public bool PredictionsEnabled { get; set; } = true;
         public string? TelegramBotToken { get; set; } = null;
         public long TelegramChatId { get; set; } = 0;
             public int TelegramMessageThreadId { get; set; } = 0;
+
+        // === TELEGRAM-ЗЕРКАЛО (посты канала → Discord) ===
+        /// <summary>Вкл/выкл зеркалирования постов Telegram-канала в Discord (TelegramMirrorService).</summary>
+        public bool TelegramMirrorEnabled { get; set; } = false;
+        /// <summary>Discord-канал приёма зеркалируемых постов (текстовый или ветка).</summary>
+        public ulong TelegramMirrorChannelID { get; set; } = 0;
+        /// <summary>База ссылки на ТГ-канал для приписки (например https://t.me/my_channel); пусто — приписка без ссылки.</summary>
+        public string? TelegramMirrorLink { get; set; } = null;
 
         /// <summary>
         /// Маппинг Discord userId (строка) → имя мастера для Google Sheets.

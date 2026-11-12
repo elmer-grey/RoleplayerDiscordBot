@@ -675,7 +675,9 @@ namespace RPBot
         ("swear_words", "Слова фильтра мата"),
         ("predictions", "Прогнозы включены"),
         ("roll_pictures", "Картинки для бросков"),
-        ("voice_room_commands", "Команды бота в voice-комнатах")
+        ("tg_mirror", "Зеркало ТГ-канала (вкл/выкл)"),
+        ("tg_mirror_channel", "Канал зеркала ТГ (посты из Telegram)"),
+        ("tg_mirror_link", "Ссылка на ТГ-канал зеркала")
     };
 				
     var labels = keyDefinitions.Select(k => k.label).ToArray();
@@ -707,6 +709,9 @@ namespace RPBot
         "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
         "predictions" => cfg.PredictionsEnabled.ToString(),
         "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
+        "tg_mirror" => cfg.TelegramMirrorEnabled.ToString(),
+        "tg_mirror_channel" => cfg.TelegramMirrorChannelID.ToString(),
+        "tg_mirror_link" => (cfg.TelegramMirrorLink ?? ""),
         _ => "Неизвестный ключ"
     };
                     AddCommandOutput(res);
@@ -761,13 +766,14 @@ namespace RPBot
     if (rIndex < 0) { AddCommandOutput("Операция отменена."); return; }
     value = roles[rIndex].Id.ToString();
     }
-    else if (key == "swear_filter" || key == "predictions" || key == "roll_pictures")
+    else if (key == "swear_filter" || key == "predictions" || key == "roll_pictures" || key == "tg_mirror")
     {
     var opts = new[] { "true", "false" };
     string prompt = key switch
     {
         "swear_filter" => "Включить фильтр мата?",
         "predictions" => "Включить прогнозы?",
+        "tg_mirror" => "Включить зеркало Telegram→Discord?",
         _ => "Включить картинки для бросков?"
     };
     int idx = await ShowSelectionDialog(prompt, opts);
@@ -1876,6 +1882,9 @@ namespace RPBot
                                             "swear_words" => (cfg.SwearWords != null ? string.Join(',', cfg.SwearWords) : ""),
                                             "predictions" => cfg.PredictionsEnabled.ToString(),
                                             "roll_pictures" => cfg.RollPicturesEnabled.ToString(),
+                                            "tg_mirror" => cfg.TelegramMirrorEnabled.ToString(),
+                                            "tg_mirror_channel" => cfg.TelegramMirrorChannelID.ToString(),
+                                            "tg_mirror_link" => (cfg.TelegramMirrorLink ?? ""),
                                             _ => "Неизвестный ключ"
                                         };
                                         AddCommandOutput(res);

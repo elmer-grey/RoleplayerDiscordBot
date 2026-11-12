@@ -1,4 +1,4 @@
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
@@ -136,8 +136,12 @@ private Task? _dailyRestartTask;
                     // ВНИМАНИЕ: легкие команды сюда НЕ добавлять — PreDefer сам идёт
                     // в Discord API за 200-500мс (Cloudflare), что отъедает 1/6 от окна ACK.
                     // Если команда укладывается в 3с без PreDefer — оставляем обычный путь.
-                    // Текущий список пуст: roll/roll20 и подобные обрабатываются быстро и
+                    // roll/roll20 и подобные обрабатываются быстро и
                     // PreDefer для них создаёт SLOW-предупреждения и риск таймаута ACK.
+                    // settings убран: после DeferAsync RespondAsync внутри SettingsCommand
+                    // падает «Cannot respond twice to the same interaction» (interaction
+                    // уже ACK-нут pre-defer, а RespondAsync с new message дважды нельзя).
+                    // Реальный лаг dispatch ~200мс (замер DispatchLag), окно 3с хватает.
                 };
 
         /// <summary>
@@ -328,6 +332,7 @@ private Task? _dailyRestartTask;
                 // points.json: протухший луп сейвил старый инстанс _pointsService
                 // с устаревшим состоянием, перетирая свежий баланс.
                 StopPersistenceFlushLoop();
+                StopTelegramMirrorService();
 
                 if (_reconnectionService != null)
                 {
@@ -2068,6 +2073,7 @@ public Task RestartAsync()
         // Persistence-flush fix: гасим и луп флаша — новый инстанс после рестарта
         // поднимет свой, а старый не должен доживать до Dispose.
         StopPersistenceFlushLoop();
+        StopTelegramMirrorService();
 
         // ✅ Bug 6 / Round 7-A2: сообщаем PredictionService, что это restart, а не offline.
         WriteRestartPendingFlag();
@@ -2245,6 +2251,7 @@ public async Task GracefulShutdownAsync(string reason)
         try { _backgroundMonitoringCts?.Cancel(); } catch { }
         StopDailyRestartScheduler();
                 StopPersistenceFlushLoop();
+                StopTelegramMirrorService();
 
             try { _reconnectionService?.Shutdown(); } catch { }
 
@@ -2308,6 +2315,53 @@ private void StopPersistenceFlushLoop()
     // не успел выбросить OperationCanceledException), и guard в Start-методе со
     // старой ссылкой решил бы, что луп ещё жив, и не поднял новый.
     _persistenceFlushTask = null;
+}
+
+// ✅ TG-mirror: дублирование постов Telegram-канала в Discord (кроме анонсов бота).
+private TelegramMirrorService? _telegramMirrorService;
+private CancellationTokenSource? _telegramMirrorCts;
+private Task? _telegramMirrorTask;
+
+private void StartTelegramMirrorService()
+{
+    if (_telegramMirrorTask != null && !_telegramMirrorTask.IsCompleted) return;
+    StopTelegramMirrorService();
+    _telegramMirrorCts = new CancellationTokenSource();
+    // Сервис сам собирает цели каждый цикл через делегат: включение зеркала
+    // в /settings на новом сервере подхватывается без рестарта бота.
+    var service = new TelegramMirrorService(_client!, CollectMirrorTargets, GetBotToken());
+    _telegramMirrorService = service;
+    _telegramMirrorTask = Task.Run(() => service.RunAsync(_telegramMirrorCts.Token));
+}
+
+private void StopTelegramMirrorService()
+{
+    try { _telegramMirrorCts?.Cancel(); } catch { }
+    try { _telegramMirrorCts?.Dispose(); } catch { }
+    _telegramMirrorCts = null;
+    try { _telegramMirrorService?.Dispose(); } catch { }
+    _telegramMirrorService = null;
+    // По образцу StopPersistenceFlushLoop: чистим ссылку, т.к. сразу после Cancel
+    // IsCompleted ещё false и guard в Start-методе счесть луп живым.
+    _telegramMirrorTask = null;
+}
+
+/// <summary>Цели зеркала по всем серверам: включённое зеркало + ТГ-данные + Discord-канал приёма.</summary>
+private IReadOnlyList<TelegramMirrorService.MirrorTarget> CollectMirrorTargets()
+{
+    var targets = new List<TelegramMirrorService.MirrorTarget>();
+    foreach (var kvp in _serverConfigs)
+    {
+        var cfg = kvp.Value;
+        if (!cfg.TelegramMirrorEnabled) continue;
+        targets.Add(new TelegramMirrorService.MirrorTarget(
+            kvp.Key,
+            cfg.TelegramBotToken ?? "",
+            cfg.TelegramChatId,
+            cfg.TelegramMirrorChannelID,
+            cfg.TelegramMirrorLink));
+    }
+    return targets;
 }
 
 private async Task PersistenceFlushLoopAsync(CancellationToken ct)
@@ -2561,6 +2615,28 @@ public Task ReloadServerConfigsAsync()
                 case "roll_pictures":
                     if (toggle.HasValue) sconfig.RollPicturesEnabled = toggle.Value;
                     else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var rp)) sconfig.RollPicturesEnabled = rp;
+                    break;
+                case "tg_mirror_channel":
+                    {
+                        var resolved = await ResolveChannelIdAsync(guildId, channelId, value);
+                        if (resolved.HasValue) sconfig.TelegramMirrorChannelID = resolved.Value;
+                    }
+                    break;
+                case "tg_mirror_link":
+                    {
+                        var link = (value ?? "").Trim();
+                        if (link.Length > 0 && (!Uri.TryCreate(link, UriKind.Absolute, out var linkUri) ||
+                                                (linkUri.Scheme != "http" && linkUri.Scheme != "https")))
+                        {
+                            _ = LogInfo($"tg_mirror_link: не сохранено — ожидается абсолютная ссылка http(s)://..., получено '{link}'.");
+                            break;
+                        }
+                        sconfig.TelegramMirrorLink = link.Length == 0 ? null : link;
+                    }
+                    break;
+                case "tg_mirror":
+                    if (toggle.HasValue) sconfig.TelegramMirrorEnabled = toggle.Value;
+                    else if (!string.IsNullOrWhiteSpace(value) && bool.TryParse(value, out var tm)) sconfig.TelegramMirrorEnabled = tm;
                     break;
                 case "voice_room_commands":
                     // Фича убрана (Discord 20001): ключ игнорируется, "clear"/"default"-поведение не действует.
@@ -3285,6 +3361,9 @@ private static BotUI? _ui;
                 // записать, периодический loop гарантирует снимок состояния на диске
                 // с задержкой не более минуты.
                 StartPersistenceFlushLoop();
+
+                // ✅ TG-mirror: фоновый long polling постов Telegram-канала.
+                StartTelegramMirrorService();
 
                                 // Запускаем фоновый мониторинг (с обёрткой для логирования ошибок)
                                 _backgroundMonitoringCts?.Cancel();
@@ -6340,6 +6419,14 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                                                                                                     return;
                                                                                                 }
 
+                                                                                                    // 🩹 dispatch-lag: CreatedAt — момент нажатия Enter (timestamp снежинки
+                                                                                                    // interaction). Задержка до хендлера >1.5с означает лаг dispatch/сети,
+                                                                                                    // а не медленный REST в самой команде.
+                                                                                                    var dispatchLagMs = (DateTimeOffset.UtcNow - command.CreatedAt).TotalMilliseconds;
+                                                                                                    BotLogger.Debug(LogCategory.Cmd, $"[DispatchLag] {name}: {dispatchLagMs:F0}ms interaction={command.Id}");
+                                                                                                    if (dispatchLagMs > 1500)
+                                                                                                        BotLogger.Warn(LogCategory.Cmd, $"[DispatchLag] {name}: {dispatchLagMs:F0}ms от нажатия до хендлера — лаг dispatch/сети (interaction={command.Id})");
+
                                                                                                 // Предварительный ACK для «тяжёлых» команд — должен пройти
                                                                                                 // ДО switch и до получения сервиса из DI. Discord требует
                                                                                                 // ответ в течение 3 секунд; раньше при GC/IO-паузах
@@ -6542,7 +6629,8 @@ private async Task<bool> TryHandleEventNotifyDirectMessageAsync(SocketUserMessag
                 // Категория Predict использовалась исторически — это давало путаницу при разборе логов
                 // (см. рефакторинг 2026-10-10, issue: «[Predict] RollDice» в логах бросков).
                 try { await PredictionErrorLogger.LogAsync("OnSlashCommandExecuted", ex, $"cmd={name} user={command.User?.Id} guild={command.GuildId}", LogCategory.Cmd).ConfigureAwait(false); } catch { }
-                BotLogger.Error(LogCategory.Cmd, $"[SlashCommand:{name}] {ex.GetType().Name}: {ex.Message}");
+                var errorLagMs = (DateTimeOffset.UtcNow - command.CreatedAt).TotalMilliseconds;
+                BotLogger.Error(LogCategory.Cmd, $"[SlashCommand:{name}] {ex.GetType().Name}: {ex.Message} | lag={errorLagMs:F0}ms (нажатие→сбой)");
 
                 // Пытаемся ответить пользователю, чтобы Discord не показывал «Приложение не отвечает».
                 // RespondAsync можно вызвать только один раз — поэтому пробуем и через Respond, и через Followup.
@@ -7105,7 +7193,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                         sb.AppendLine("  используйте либо параметр channel (выбор канала из списка), либо value с ID или названием канала.");
         sb.AppendLine("  Если указаны оба, приоритет у channel.");
                         sb.AppendLine("- Для ролей (default_role, master_role, super_user_role) указывайте ID роли или её название в value.");
-        sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures) используйте toggle:true/false или value:true/false.");
+        sb.AppendLine("- Для логических переключателей (swear_filter, predictions, roll_pictures, tg_mirror) используйте toggle:true/false или value:true/false.");
         sb.AppendLine("- Для event_voice_channel укажите ID или название голосового канала в value.");
         sb.AppendLine("- Для текстовых параметров (welcome_message, line_message) используйте value с текстом.");
         sb.AppendLine("- В welcome_message поддерживаются плейсхолдеры: {mention} — упоминание новичка, {server} — имя сервера, {user} — ник. Пустое значение — зашитый текст по умолчанию.");
@@ -7154,6 +7242,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                         #pragma warning disable CS0618 // ✅ pred-parallelization: EventVoiceChannelID obsolete, но поле отображается в info о сервере
                                 sb.AppendLine($"event_voice_channel (deprecated): {sconfig.EventVoiceChannelID}");
                         #pragma warning restore CS0618
+                        sb.AppendLine($"tg_mirror: {sconfig.TelegramMirrorEnabled}");
+                        sb.AppendLine($"tg_mirror_channel: {sconfig.TelegramMirrorChannelID}");
+                        sb.AppendLine($"tg_mirror_link: {sconfig.TelegramMirrorLink ?? ""}");
         await command.RespondAsync(sb.ToString(), ephemeral: true);
         ScheduleDeleteOriginalResponse(command, delaySeconds: 60); // Увеличено время для чтения списка настроек
     }
@@ -7184,6 +7275,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
         "swear_words" => (sconfig.SwearWords != null ? string.Join(',', sconfig.SwearWords) : ""),
         "predictions" => sconfig.PredictionsEnabled.ToString(),
                             "roll_pictures" => sconfig.RollPicturesEnabled.ToString(),
+        "tg_mirror" => sconfig.TelegramMirrorEnabled.ToString(),
+        "tg_mirror_channel" => sconfig.TelegramMirrorChannelID.ToString(),
+        "tg_mirror_link" => sconfig.TelegramMirrorLink ?? "",
         #pragma warning disable CS0618 // ✅ pred-parallelization: deprecated, но /config get продолжает работать
                                     "event_voice_channel" => sconfig.EventVoiceChannelID.ToString() + " (deprecated)",
         #pragma warning restore CS0618
@@ -7211,6 +7305,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                             case "general_rg_channel":
                             case "record_channel":
                             case "event_voice_channel":
+                            case "tg_mirror_channel":
                                 {
                                     var requireVoice = keyOpt == "event_voice_channel";
                                     var id = await ResolveChannelIdAsync(guildId, channelOpt, valueOpt, requireVoice);
@@ -7249,6 +7344,9 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                                                                                     sconfig.EventVoiceChannelID = id.Value;
                                         #pragma warning restore CS0618
                                                                                     break;
+                                        case "tg_mirror_channel":
+                                            sconfig.TelegramMirrorChannelID = id.Value;
+                                            break;
                                     }
 
                                     SaveServerConfigs();
@@ -7267,6 +7365,28 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                                     sconfig.LineMessage = valueOpt ?? "";
                                     SaveServerConfigs();
                                     await command.RespondAsync($"line_message установлен.", ephemeral: true);
+                                }
+                                break;
+                            case "tg_mirror_link":
+                                {
+                                    var link = (valueOpt ?? "").Trim();
+                                    var linkValid = link.Length == 0;
+                                    if (!linkValid)
+                                    {
+                                        linkValid = Uri.TryCreate(link, UriKind.Absolute, out var linkUri) &&
+                                                    (linkUri.Scheme == "http" || linkUri.Scheme == "https");
+                                    }
+                                    if (!linkValid)
+                                    {
+                                        await command.RespondAsync("Ошибка: tg_mirror_link должен быть абсолютной ссылкой http(s)://...", ephemeral: true);
+                                        return;
+                                    }
+
+                                    sconfig.TelegramMirrorLink = link.Length == 0 ? null : link;
+                                    SaveServerConfigs();
+                                    await command.RespondAsync(link.Length == 0
+                                        ? "tg_mirror_link очищен — приписка будет без ссылки."
+                                        : $"tg_mirror_link установлен: {link}", ephemeral: true);
                                 }
                                 break;
                             case "default_role":
@@ -7350,6 +7470,7 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
                                 break;
                             case "predictions":
                             case "roll_pictures":
+                            case "tg_mirror":
                                 {
                                     bool state = false;
                                     if (toggleOpt != null)
@@ -7359,8 +7480,10 @@ private async Task EventNotifyCommand(SocketSlashCommand command)
 
                                     if (keyOpt == "predictions")
                                         sconfig.PredictionsEnabled = state;
-                                    else
+                                    else if (keyOpt == "roll_pictures")
                                         sconfig.RollPicturesEnabled = state;
+                                    else
+                                        sconfig.TelegramMirrorEnabled = state;
 
                                     SaveServerConfigs();
                                     await command.RespondAsync($"{keyOpt} установлен: {state}", ephemeral: true);
