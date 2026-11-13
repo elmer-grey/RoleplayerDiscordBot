@@ -215,8 +215,15 @@ namespace RPBot
             var posts = ParseChannelPosts(json);
             if (posts.Count == 0)
             {
+                // Апдейты посторонних типов (my_chat_member, message и пр.) ОБЯЗАТЕЛЬНО
+                // подтверждаем смещением offset'а. Иначе Telegram возвращает их каждый
+                // тик, long-poll отвечает мгновенно, цикл разгоняется до десятков
+                // опросов в секунду и заваливает логи (1.5+ млн строк/день).
+                var foreignCount = ConfirmAllUpdateIds(token, json);
                 BotLogger.Debug(LogCategory.System,
-                    $"[tg_mirror] poll: json {json.Length} байт, channel_post не найдены (updates других типов)");
+                    foreignCount > 0
+                        ? $"[tg_mirror] poll: json {json.Length} байт, channel_post не найдены — подтверждено {foreignCount} посторонних апдейтов"
+                        : $"[tg_mirror] poll: json {json.Length} байт, пусто");
                 return;
             }
 
@@ -899,6 +906,49 @@ namespace RPBot
                     return Uri.IsWellFormedUriString(inner, UriKind.Absolute) ? inner : $"<{inner}>";
                 default:
                     return inner; // mention, hashtag, bot_command, text_mention, email, phone_number и пр.
+            }
+        }
+
+        /// <summary>
+        /// Подтверждает (смещает offset) ВСЕ апдейты из ответа getUpdates, включая
+        /// непостовые (my_chat_member, message, chat_member и пр.), которые мы не
+        /// обрабатываем. Без этого Telegram возвращает зависшие апдейты каждый тик.
+        /// Возвращает число посторонних апдейтов (0 — ответ пуст).
+        /// </summary>
+        private int ConfirmAllUpdateIds(string token, string json)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(json)) return 0;
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("result", out var updates) ||
+                    updates.ValueKind != JsonValueKind.Array ||
+                    updates.GetArrayLength() == 0)
+                    return 0;
+
+                long maxUpdateId = -1;
+                var total = 0;
+                foreach (var update in updates.EnumerateArray())
+                {
+                    if (update.TryGetProperty("update_id", out var idEl) && idEl.TryGetInt64(out var id))
+                    {
+                        if (id > maxUpdateId) maxUpdateId = id;
+                        total++;
+                    }
+                }
+                if (maxUpdateId >= 0)
+                {
+                    _offsetsByToken[token] = maxUpdateId + 1;
+                    SaveOffsets();
+                }
+                return total;
+            }
+            catch (Exception ex)
+            {
+                BotLogger.Warn(LogCategory.System,
+                    $"[tg_mirror] подтверждение посторонних апдейтов: {ex.GetType().Name}: {ex.Message}");
+                return 0;
             }
         }
 
