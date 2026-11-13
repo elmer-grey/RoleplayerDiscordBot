@@ -1362,7 +1362,14 @@ private void SaveServerConfigs()
         // Для Lifecycle подписчиков он работает так же (HandleCreatedAsync/HandleUpdatedAsync/...),
         // потому что Attach делает += на методы напрямую.
 
-    BotLogger.Info(LogCategory.System, $"[WebDashboard] Program constructor: создаю web dashboard на 0.0.0.0:5057 (платформа={(OperatingSystem.IsWindows() ? "Windows → WebDashboardService/HttpListener" : "Linux → WebDashboardHost/Kestrel")})");
+        // Порт дашборда: по умолчанию 5057, переопределяется переменной окружения
+        // RPBOT_WEB_PORT (нужно, чтобы тест-инстансы не спорили с продом за порт).
+        var webDashboardPort = int.TryParse(
+            Environment.GetEnvironmentVariable("RPBOT_WEB_PORT"),
+            out var parsedWebPort) && parsedWebPort is > 0 and <= 65535
+        ? parsedWebPort : 5057;
+
+    BotLogger.Info(LogCategory.System, $"[WebDashboard] Program constructor: создаю web dashboard на 0.0.0.0:{webDashboardPort} (платформа={(OperatingSystem.IsWindows() ? "Windows → WebDashboardService/HttpListener" : "Linux → WebDashboardHost/Kestrel")})");
         // ✅ Linux-деплой использует WebDashboardHost (Kestrel) — HttpListener в .NET 8 на Linux
         // имеет хронические баги (ErrorCode=400 на loopback-префиксах, ломаный Authorization) и
         // требует root для не-loopback. Kestrel корректно работает на 127.0.0.1 без urlacl.
@@ -1371,7 +1378,7 @@ private void SaveServerConfigs()
         {
             _webDashboard = new WebDashboardService(
             host: "0.0.0.0",
-    port: 5057,
+    port: webDashboardPort,
     healthProvider: () => new
     {
     Connected = _client?.ConnectionState == ConnectionState.Connected,
@@ -1603,7 +1610,7 @@ private void SaveServerConfigs()
         // синхронизируй обе ветки.
         _webDashboard = new WebDashboardHost(
         host: "0.0.0.0",
-        port: 5057,
+        port: webDashboardPort,
         healthProvider: () => new
         {
         Connected = _client?.ConnectionState == ConnectionState.Connected,
