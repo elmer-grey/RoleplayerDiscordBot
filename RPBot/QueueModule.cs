@@ -167,7 +167,7 @@ namespace RPBot
             // Сбрасываем таймер при каждом броске
             state.RollTimer?.Change(TimeSpan.FromMinutes(1), Timeout.InfiniteTimeSpan);
 
-            int result = new Random().Next(1, y + 1);
+            int result = SecureDice.Next(1, y);
             if (!state.UserRolls.ContainsKey(user))
                 state.UserRolls[user] = new List<int>();
 

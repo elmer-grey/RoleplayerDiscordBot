@@ -460,9 +460,8 @@ namespace RPBot
                             }
                         }
 
-            Random random = Random.Shared;
             List<int> results = Enumerable.Range(0, count)
-                .Select(_ => random.Next(min, max + 1))
+                .Select(_ => SecureDice.Next(min, max))
                 .ToList();
 
             var numbersDir = BotConfig.ResolvePath(BotConfig.Current?.NumbersDirectory ?? "Numbers");
@@ -691,8 +690,7 @@ namespace RPBot
             bool isStatsChannel = statsChannelId != 0 && channelId == statsChannelId;
             bool isRollChannel  = rollChannelId  != 0 && channelId == rollChannelId;
 
-            Random random = Random.Shared;
-            int result = random.Next(1, 21);
+            int result = SecureDice.Next(1, 20);
 
             string? pauseMsg = null;
 
