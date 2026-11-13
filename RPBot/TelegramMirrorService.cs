@@ -215,15 +215,12 @@ namespace RPBot
             var posts = ParseChannelPosts(json);
             if (posts.Count == 0)
             {
-                // Апдейты посторонних типов (my_chat_member, message и пр.) ОБЯЗАТЕЛЬНО
-                // подтверждаем смещением offset'а. Иначе Telegram возвращает их каждый
-                // тик, long-poll отвечает мгновенно, цикл разгоняется до десятков
-                // опросов в секунду и заваливает логи (1.5+ млн строк/день).
-                var foreignCount = ConfirmAllUpdateIds(token, json);
-                BotLogger.Debug(LogCategory.System,
-                    foreignCount > 0
-                        ? $"[tg_mirror] poll: json {json.Length} байт, channel_post не найдены — подтверждено {foreignCount} посторонних апдейтов"
-                        : $"[tg_mirror] poll: json {json.Length} байт, пусто");
+                // Апдейты посторонних типов (my_chat_member, edited_message и пр.)
+                // ОБЯЗАТЕЛЬНО подтверждаем смещением offset'а: иначе Telegram возвращает
+                // их каждый тик, long-poll отвечает мгновенно и цикл разгоняется до
+                // десятков опросов в секунду. Без лога: это штатный случай, а тикать
+                // он может раз в 30-90 секунд — в лог попадал чистый шум.
+                ConfirmAllUpdateIds(token, json);
                 return;
             }
 
