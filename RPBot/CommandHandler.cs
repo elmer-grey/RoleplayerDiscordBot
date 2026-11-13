@@ -121,18 +121,20 @@ namespace RPBot
                 bool needsOverwrite = true;
                 if (existing != null)
                 {
-                    // Сравниваем только по Name+Description: опции и choices при изменении
-                    // будут перезаписаны — BulkOverwrite идемпотентен.
-                    // localCmd — SlashCommandBuilder, его .Name/.Description — обычные string.
+                    // Сравниваем Name+Description+опции (тип, choices, required, min/max,
+                    // вложенные опции). Одного Name+Description мало: BulkOverwrite
+                    // отправляется ТОЛЬКО при needsOverwrite=true, поэтому несовпавшие
+                    // опции без глубокого сравнения вообще не попадут в Discord
+                    // (пример: новые опции в /settings).
                     needsOverwrite = false;
                     foreach (var localCmd in allCommands)
                     {
                         var remote = existing.FirstOrDefault(c =>
                             string.Equals(c.Name, localCmd.Name, StringComparison.Ordinal) &&
                             string.Equals(c.Description, localCmd.Description, StringComparison.Ordinal));
-                        if (remote == null)
+                        if (remote == null || CommandOptionsDiffer(localCmd, remote))
                         {
-                            // Нашли команду, которой нет или описание отличается — нужна перезапись.
+                            // Команды нет, описание отличается или опции отличаются — нужна перезапись.
                             needsOverwrite = true;
                             break;
                         }
@@ -169,6 +171,56 @@ namespace RPBot
 
             var totalTime = DateTime.UtcNow - _registrationStartTime;
             BotLogger.Info(LogCategory.Cmd, $"└─────────────────────────────────── ({totalTime:mm\\:ss} сек) ────────────────────┘\n");
+        }
+
+        // Глубокое сравнение опций локального SlashCommandBuilder с зарегистрированной
+        // в Discord командой. Возвращает true, если опции отличаются и нужен
+        // BulkOverwrite. Сравнивается порядок и содержимое: name/type/description/
+        // required/min-max/choices/вложенные опции. Локализации и прочие декоративные
+        // поля игнорируются — Discord при BulkOverwrite присылает их сам.
+        private static bool CommandOptionsDiffer(SlashCommandBuilder localCmd, IApplicationCommand remoteCmd)
+        {
+            var localOptions = localCmd.Options ?? new List<SlashCommandOptionBuilder>();
+            IReadOnlyCollection<IApplicationCommandOption> remoteOptions =
+                remoteCmd.Options ?? Array.Empty<IApplicationCommandOption>();
+            if (localOptions.Count != remoteOptions.Count)
+                return true;
+            for (var i = 0; i < localOptions.Count; i++)
+            {
+                if (OptionDiffers(localOptions[i], remoteOptions.ElementAt(i)))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool OptionDiffers(SlashCommandOptionBuilder local, IApplicationCommandOption remote)
+        {
+            if (!string.Equals(local.Name, remote.Name, StringComparison.Ordinal)) return true;
+            if (local.Type != remote.Type) return true;
+            if (!string.Equals(local.Description, remote.Description, StringComparison.Ordinal)) return true;
+            if ((local.IsRequired ?? false) != (remote.IsRequired ?? false)) return true;
+            if (local.MinValue != remote.MinValue || local.MaxValue != remote.MaxValue) return true;
+            if (local.MinLength != remote.MinLength || local.MaxLength != remote.MaxLength) return true;
+
+            var localChoices = local.Choices ?? new List<ApplicationCommandOptionChoiceProperties>();
+            IReadOnlyCollection<IApplicationCommandOptionChoice> remoteChoices =
+                remote.Choices ?? Array.Empty<IApplicationCommandOptionChoice>();
+            if (localChoices.Count != remoteChoices.Count) return true;
+            for (var i = 0; i < localChoices.Count; i++)
+            {
+                if (!string.Equals(localChoices[i].Name, remoteChoices.ElementAt(i).Name, StringComparison.Ordinal)) return true;
+                if (!string.Equals(localChoices[i].Value?.ToString(), remoteChoices.ElementAt(i).Value?.ToString(), StringComparison.Ordinal)) return true;
+            }
+
+            var localSubOptions = local.Options ?? new List<SlashCommandOptionBuilder>();
+            IReadOnlyCollection<IApplicationCommandOption> remoteSubOptions =
+                remote.Options ?? Array.Empty<IApplicationCommandOption>();
+            if (localSubOptions.Count != remoteSubOptions.Count) return true;
+            for (var i = 0; i < localSubOptions.Count; i++)
+            {
+                if (OptionDiffers(localSubOptions[i], remoteSubOptions.ElementAt(i))) return true;
+            }
+            return false;
         }
 
         private List<SlashCommandBuilder> GetAllCommands()
